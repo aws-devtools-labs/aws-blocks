@@ -880,11 +880,17 @@ void main() {
       },
     );
 
-    test('signOut clears the session cookie', () async {
+    test('signOut clears the session cookie the server expires', () async {
       final session = InMemorySessionStore();
       session.setCookies('blocks_session=live; Path=/');
 
-      final httpClient = MockClient((_) async => http.Response('{}', 200));
+      final httpClient = MockClient(
+        (_) async => http.Response(
+          '{}',
+          200,
+          headers: {'set-cookie': 'blocks_session=; Path=/; Max-Age=0'},
+        ),
+      );
       final client = OidcClient(
         exchangePath: '/auth/exchange',
         refreshPath: '/auth/refresh',
