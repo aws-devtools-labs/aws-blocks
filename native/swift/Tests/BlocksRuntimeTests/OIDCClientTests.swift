@@ -1104,6 +1104,27 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testOIDCUserFromJSONReadsTheOptionalFields() throws {
+        let user = try OIDCUser.fromJSON([
+            "userId": "https://idp.example.com:sub-1",
+            "username": "alice",
+            "userSub": "https://idp.example.com:sub-1",
+            "signInProvider": "google",
+            "groups": ["admins"],
+            "attributes": ["email": "alice@example.com", "custom:team": "platform"]
+        ])
+        XCTAssertEqual(user.userSub, "https://idp.example.com:sub-1")
+        XCTAssertEqual(user.signInProvider, "google")
+        XCTAssertEqual(user.groups, ["admins"])
+        XCTAssertEqual(user.attributes, ["email": "alice@example.com", "custom:team": "platform"])
+
+        let minimal = try OIDCUser.fromJSON(["userId": "u1", "username": "bob"])
+        XCTAssertNil(minimal.userSub)
+        XCTAssertNil(minimal.signInProvider)
+        XCTAssertNil(minimal.attributes)
+        XCTAssertEqual(minimal.groups, [])
+    }
+
     func testOIDCProviderConfigFromJSONThrowsOnMissingFields() {
         XCTAssertThrowsError(try OIDCProviderConfig.fromJSON(["authorizeUrl": "x", "clientId": "y", "scopes": [String]()])) { error in
             guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
