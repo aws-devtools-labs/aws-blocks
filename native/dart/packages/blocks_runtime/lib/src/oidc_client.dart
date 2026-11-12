@@ -237,6 +237,26 @@ class OidcClient implements AuthProvider {
     _controller.add(state);
   }
 
+  /// The provider id of an `Auth` sign-in action: `google` for an action
+  /// named `signIn:google`, from `getAuthState()`. Null for any other action
+  /// name, including `signIn` (email and password) and `signIn:` with no id.
+  ///
+  /// A native app signs in with that provider through [signInRelay] instead
+  /// of opening the action's `url`, which starts a browser-cookie sign-in
+  /// whose cookie never reaches the app:
+  ///
+  /// ```dart
+  /// final id = OidcClient.providerIdOf(action.name);
+  /// if (id != null) await oidc.signInRelay(id, launcher: launcher);
+  /// ```
+  static String? providerIdOf(String actionName) {
+    const prefix = 'signIn:';
+    if (!actionName.startsWith(prefix) || actionName.length == prefix.length) {
+      return null;
+    }
+    return actionName.substring(prefix.length);
+  }
+
   // --- PKCE ---
 
   static String generateVerifier() {
@@ -269,6 +289,9 @@ class OidcClient implements AuthProvider {
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], or [providerConfigs] has no entry for it.
+  ///
+  /// A client built with [OidcClient.forAuth] has no provider configs; use
+  /// [signInRelay].
   Future<OidcUser> signIn(
     String provider, {
     required BrowserLauncher launcher,

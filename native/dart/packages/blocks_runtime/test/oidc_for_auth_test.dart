@@ -323,6 +323,23 @@ void main() {
     });
   });
 
+  group('OidcClient.providerIdOf', () {
+    test('returns the id of a federated sign-in action', () {
+      expect(OidcClient.providerIdOf('signIn:google'), 'google');
+      expect(OidcClient.providerIdOf('signIn:corp sso'), 'corp sso');
+      expect(OidcClient.providerIdOf('signIn:a:b'), 'a:b');
+    });
+
+    test('returns null for any other action', () {
+      expect(OidcClient.providerIdOf('signIn'), isNull);
+      expect(OidcClient.providerIdOf('signIn:'), isNull);
+      expect(OidcClient.providerIdOf('signOut'), isNull);
+      expect(OidcClient.providerIdOf('signUp'), isNull);
+      expect(OidcClient.providerIdOf('signin:google'), isNull);
+      expect(OidcClient.providerIdOf(''), isNull);
+    });
+  });
+
   group('OidcClient.forAuth token keys', () {
     /// Answers like `_AuthServer`, with bearer tokens named after the block
     /// whose exchange route was called.

@@ -6,6 +6,12 @@ The next release is 0.2.0, because of the breaking changes marked below.
   recently added to `authStateChanges`, or `OidcLoading` before the first one.
   An app can read it once, such as on launch after `restore()`, without
   subscribing to the stream. This matches Kotlin's `authState.value`.
+- Add `OidcClient.providerIdOf(actionName)`, which returns the provider id of
+  an `Auth` state-machine action named `signIn:<id>`, or null for any other
+  action. An app signs in with that id through `signInRelay`.
+- The README gains a "Using Auth" section: `getAuthState()` and
+  `setAuthState` for plain actions, `forAuth` with `signInRelay` and
+  `signOut()` for federated ones, and `getAuthState()` on launch.
 - `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
   in its envelope before it reads an IdP `error`. A redirect to the app's
   scheme that didn't come from this sign-in now fails the state check

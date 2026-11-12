@@ -91,6 +91,108 @@ final greeting = await blocks.hello.greet(name: 'World');
 print(greeting.message); // "Hello, World!"
 ```
 
+## Using Auth
+
+An `Auth` block's `createApi()` export (here `authApi`) is a state machine: `getAuthState()` returns the current `state`, the signed-in `user` and the `actions` the user can take next, and `setAuthState(input: ...)` submits one of them. Render the actions and submit the plain ones (email and password sign-in, sign-up, confirmation codes) through `setAuthState`. Its result is the next state: the confirmation, MFA and password-reset steps only appear there, never in `getAuthState()`, which returns only `signedIn` or `signedOut`. Call `getAuthState()` on launch and after a federated sign-in or sign-out. Federated sign-in and sign-out go through an `OidcClient` built with `OidcClient.forAuth`, because the action's `url` starts a browser-cookie flow whose cookie never reaches the app.
+
+```dart
+import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
+import 'package:flutter/widgets.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'blocks.blocks.dart'; // the generated client
+
+const rpcUrl = 'https://api.example.com/aws-blocks/api';
+
+// FlutterSecureStore uses a platform channel: in main(), before it.
+WidgetsFlutterBinding.ensureInitialized();
+final session = PersistentSessionStore(store: FlutterSecureStore());
+await session.load();
+final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
+final oidc = OidcClient.forAuth(
+  BlocksClient(baseUrl: rpcUrl, sessionStore: session),
+  providers: ['google'],
+  relayTo: 'com.example.app://auth', // listed in the block's redirects.allowedRelayOrigins
+);
+
+// On launch: the state of the session the cookie store kept. It throws when
+// the backend can't be reached, so show the error and offer a retry.
+AuthState? state;
+String? error;
+try {
+  state = await blocks.authApi.getAuthState();
+} on Exception catch (e) {
+  error = 'Could not reach the server: $e';
+}
+
+/// Runs [action] with the [values] the user typed into its fields.
+Future<void> run(AuthAction action, Map<String, String> values) async {
+  error = null;
+  // Render an action that carries `unavailable` disabled, with that text,
+  // so it never gets here.
+  final providerId = OidcClient.providerIdOf(action.name);
+  if (providerId != null) {
+    // A `signIn:<id>` action.
+    await oidc.signInRelay(providerId, launcher: FlutterBrowserLauncher());
+    state = await blocks.authApi.getAuthState();
+  } else if (action.name == 'signOut' && action.url != null) {
+    // A federated sign-out. Never submit it through setAuthState, which
+    // drops the IdP's logout URL. Open that URL to end the IdP's session too.
+    final logoutUrl = await oidc.signOut();
+    if (logoutUrl != null) await launchUrl(logoutUrl);
+    state = await blocks.authApi.getAuthState();
+  } else {
+    // A plain action. Its result is the next state, such as
+    // confirmingSignUp after a sign-up.
+    final next = await blocks.authApi.setAuthState(
+      input: switch (action.name) {
+        'signIn' => SignInInput(
+          username: values['username']!,
+          password: values['password']!,
+        ),
+        'signUp' => SignUpInput(
+          username: values['username']!,
+          password: values['password']!,
+          // Every field other than username and password, such as `email`,
+          // goes in additionalProperties.
+          additionalProperties: {'email': values['email']!},
+        ),
+        'confirmSignUp' => ConfirmSignUpInput(
+          username: values['username']!,
+          code: values['code']!,
+        ),
+        // Offered after confirmSignUp when the block signs the user in
+        // automatically: submit it to finish signing in.
+        'autoSignIn' => AutoSignInInput(username: values['username']!),
+        // ...one case for each other action the block offers.
+        _ => throw UnsupportedError(action.name),
+      },
+    );
+    // Either way, show the error, if any: a wrong password, for example.
+    error = next.error;
+    // A retriable failure, such as a wrong confirmation code, keeps the
+    // current state and form. Anything else, including a failed sign-in, is
+    // the next state.
+    if (next.retriable == true) return;
+    state = next;
+  }
+  // Render state?.state, state?.user, state?.actions and error.
+}
+```
+
+- `forAuth` shares the session store with the generated client, so the session cookie the sign-in sets is the one every RPC call sends. It makes no network call.
+- Pass `callbackPath` and `signOutPath` when the block sets `redirects.callbackPath` or `redirects.signOutPath`. The other routes are derived from `callbackPath`. Each `forAuth` client keeps its tokens under keys of its own block, so several `Auth` blocks can share one token store and one session store.
+- A retriable failure comes back as `{state: signedOut, actions: [], retriable: true, error, errorName}`. It doesn't mean the user was signed out: keep the current form and show `error`. A wrong confirmation or MFA code, a password that fails the policy, an invalid field and a server fault are retriable. A wrong password is not: it comes back as a signed-out state with the sign-in actions and an `error` to show.
+- A confirmation step lives only in the app: `getAuthState()` can't bring it back after the app is killed. To let the user finish confirming a sign-up, save the username when you get `confirmingSignUp`, and after a restart show the code form and submit `ConfirmSignUpInput` with it, or `ResendSignUpCodeInput` for a new code. An interrupted MFA or new-password challenge can't be resumed: sign in again.
+- On launch, call `getAuthState()`. It works for every `Auth` block. `oidc.restore()` returns the same user, but only a block with sign-in providers serves its session route; any other answers 404.
+- Disable an action that carries `unavailable`, and show its text.
+- Never submit a `signOut` action that has a `url` through `setAuthState`: that drops the identity provider's logout URL. Call `oidc.signOut()` instead.
+- `signOut()` returns the identity provider's logout URL, or null. The SDK doesn't open it. A 503 `SignOutIncompleteException` still signs out locally, then throws an `OidcRequestException` with that `errorName`.
+- Hide actions whose `capability` is `webauthn-get` or `webauthn-create` (passkeys). This SDK doesn't run WebAuthn ceremonies.
+- New actions can appear in a later version of the block. Render or skip actions you don't know by `name`, and don't fail on them.
+- For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
+- Sign in with `signInRelay`. A `forAuth` client has no provider configs, so the direct `signIn` flow, which custom blocks that return provider configs still use, doesn't apply to it.
+
 ## Features
 
 **Type-safe API calls** — every method, parameter, and return type is generated from your spec. Typos and type mismatches are caught at compile time.
@@ -101,7 +203,7 @@ print(greeting.message); // "Hello, World!"
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
-**Typed OIDC providers**: when a method returns an OIDC client and the spec names its providers, the method returns a `TypedOidcClient` of an enum generated for it, so `signInRelay` accepts only those providers and a typo doesn't compile:
+**Typed OIDC providers**: for a custom block whose method returns an OIDC client, when the spec names its providers, the method returns a `TypedOidcClient` of an enum generated for it, so `signInRelay` accepts only those providers and a typo doesn't compile:
 
 ```dart
 final oidc = await blocks.auth.getClient(); // TypedOidcClient<AuthApiGetClientProvider>
