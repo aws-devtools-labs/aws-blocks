@@ -959,7 +959,8 @@ sealed class GetEventResult {
     switch (json['kind'] as String) {
       case 'moved': return MovedGetEventResult.fromJson(json);
       case 'flagged': return FlaggedGetEventResult.fromJson(json);
-      default: return UnknownGetEventResult(json);
+      case 'unknown': return UnknownGetEventResult.fromJson(json);
+      default: return GetEventResultUnknown(json);
     }
   }
 }
@@ -1032,28 +1033,62 @@ class FlaggedGetEventResult extends GetEventResult {
   String toString() => 'FlaggedGetEventResult(severity: $severity)';
 }
 
+class UnknownGetEventResult extends GetEventResult {
+  final String note;
+
+  const UnknownGetEventResult({
+    required this.note,
+  });
+
+  factory UnknownGetEventResult.fromJson(Map<String, dynamic> json) {
+    return UnknownGetEventResult(
+      note: json['note'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'kind': 'unknown',
+      'note': note,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UnknownGetEventResult &&
+          note == other.note;
+
+  @override
+  int get hashCode => note.hashCode;
+
+  @override
+  String toString() => 'UnknownGetEventResult(note: $note)';
+}
+
 /// A `GetEventResult` arm this client was generated without.
-final class UnknownGetEventResult extends GetEventResult {
+final class GetEventResultUnknown extends GetEventResult {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownGetEventResult(this.json);
+  const GetEventResultUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['kind'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownGetEventResult && blocksDeepEquals(json, other.json);
+      other is GetEventResultUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownGetEventResult' '($json)';
+  String toString() => 'GetEventResultUnknown' '($json)';
 }
 
 

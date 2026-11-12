@@ -430,7 +430,7 @@ sealed class ContinueSignInCognitoConfirmSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
-      default: return UnknownContinueSignInCognitoConfirmSignInResultNextStep(json);
+      default: return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(json);
     }
   }
 }
@@ -990,27 +990,27 @@ class CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep extends Co
 }
 
 /// A `ContinueSignInCognitoConfirmSignInResultNextStep` arm this client was generated without.
-final class UnknownContinueSignInCognitoConfirmSignInResultNextStep extends ContinueSignInCognitoConfirmSignInResultNextStep {
+final class ContinueSignInCognitoConfirmSignInResultNextStepUnknown extends ContinueSignInCognitoConfirmSignInResultNextStep {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownContinueSignInCognitoConfirmSignInResultNextStep(this.json);
+  const ContinueSignInCognitoConfirmSignInResultNextStepUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['name'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownContinueSignInCognitoConfirmSignInResultNextStep && blocksDeepEquals(json, other.json);
+      other is ContinueSignInCognitoConfirmSignInResultNextStepUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownContinueSignInCognitoConfirmSignInResultNextStep' '($json)';
+  String toString() => 'ContinueSignInCognitoConfirmSignInResultNextStepUnknown' '($json)';
 }
 
 
@@ -1164,7 +1164,7 @@ sealed class ContinueSignInCognitoSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep.fromJson(json);
-      default: return UnknownContinueSignInCognitoSignInResultNextStep(json);
+      default: return ContinueSignInCognitoSignInResultNextStepUnknown(json);
     }
   }
 }
@@ -1724,27 +1724,27 @@ class CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep extends ContinueS
 }
 
 /// A `ContinueSignInCognitoSignInResultNextStep` arm this client was generated without.
-final class UnknownContinueSignInCognitoSignInResultNextStep extends ContinueSignInCognitoSignInResultNextStep {
+final class ContinueSignInCognitoSignInResultNextStepUnknown extends ContinueSignInCognitoSignInResultNextStep {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownContinueSignInCognitoSignInResultNextStep(this.json);
+  const ContinueSignInCognitoSignInResultNextStepUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['name'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownContinueSignInCognitoSignInResultNextStep && blocksDeepEquals(json, other.json);
+      other is ContinueSignInCognitoSignInResultNextStepUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownContinueSignInCognitoSignInResultNextStep' '($json)';
+  String toString() => 'ContinueSignInCognitoSignInResultNextStepUnknown' '($json)';
 }
 
 
@@ -1758,7 +1758,7 @@ sealed class CognitoConfirmSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoConfirmSignInResult.fromJson(json);
-      default: return UnknownCognitoConfirmSignInResult(json);
+      default: return CognitoConfirmSignInResultUnknown(json);
     }
   }
 }
@@ -1832,27 +1832,27 @@ class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
 }
 
 /// A `CognitoConfirmSignInResult` arm this client was generated without.
-final class UnknownCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
+final class CognitoConfirmSignInResultUnknown extends CognitoConfirmSignInResult {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownCognitoConfirmSignInResult(this.json);
+  const CognitoConfirmSignInResultUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['status'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownCognitoConfirmSignInResult && blocksDeepEquals(json, other.json);
+      other is CognitoConfirmSignInResultUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownCognitoConfirmSignInResult' '($json)';
+  String toString() => 'CognitoConfirmSignInResultUnknown' '($json)';
 }
 
 
@@ -1864,7 +1864,7 @@ sealed class CognitoSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoSignInResult.fromJson(json);
-      default: return UnknownCognitoSignInResult(json);
+      default: return CognitoSignInResultUnknown(json);
     }
   }
 }
@@ -1938,27 +1938,27 @@ class SignedInCognitoSignInResult extends CognitoSignInResult {
 }
 
 /// A `CognitoSignInResult` arm this client was generated without.
-final class UnknownCognitoSignInResult extends CognitoSignInResult {
+final class CognitoSignInResultUnknown extends CognitoSignInResult {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownCognitoSignInResult(this.json);
+  const CognitoSignInResultUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['status'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownCognitoSignInResult && blocksDeepEquals(json, other.json);
+      other is CognitoSignInResultUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownCognitoSignInResult' '($json)';
+  String toString() => 'CognitoSignInResultUnknown' '($json)';
 }
 
 

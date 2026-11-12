@@ -113,6 +113,24 @@
                 "kind",
                 "severity"
               ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "unknown"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "note"
+              ]
             }
           ]
         }

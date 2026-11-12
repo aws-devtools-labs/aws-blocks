@@ -149,7 +149,7 @@ sealed class GetSessionResultEvent {
     switch (json['kind'] as String) {
       case 'message': return MessageGetSessionResultEvent.fromJson(json);
       case 'presence': return PresenceGetSessionResultEvent.fromJson(json);
-      default: return UnknownGetSessionResultEvent(json);
+      default: return GetSessionResultEventUnknown(json);
     }
   }
 }
@@ -223,27 +223,27 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
 }
 
 /// A `GetSessionResultEvent` arm this client was generated without.
-final class UnknownGetSessionResultEvent extends GetSessionResultEvent {
+final class GetSessionResultEventUnknown extends GetSessionResultEvent {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownGetSessionResultEvent(this.json);
+  const GetSessionResultEventUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['kind'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownGetSessionResultEvent && blocksDeepEquals(json, other.json);
+      other is GetSessionResultEventUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownGetSessionResultEvent' '($json)';
+  String toString() => 'GetSessionResultEventUnknown' '($json)';
 }
 
 
