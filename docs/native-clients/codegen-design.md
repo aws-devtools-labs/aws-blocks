@@ -199,6 +199,18 @@ The `AWSBLOCKS-NATIVE-` numbers are one namespace shared by the Dart, Swift and 
 | `AWSBLOCKS-NATIVE-005` | A binding whose `tag` is a built-in transferable tag (`realtime/channel`, `file-bucket/download`, `file-bucket/upload`, `oidc/client`), which cannot be re-bound; the binding is skipped. | — | Yes | — | live |
 | `AWSBLOCKS-NATIVE-006` | An opt-out that names a package the spec does not declare; nothing is opted out for it. | Yes | Yes | Yes | live |
 
+#### Open enums: values a client doesn't know
+
+A string enum that a response can carry is generated *open*: a value the client was generated without decodes instead of failing, keeps the string as the server sent it, and encodes back as that string. A server can add a value (a new auth state, field type or action capability) without breaking clients already shipped. "Response" is decided per generator from the spec: an enum is open when a method's result reaches it at any depth, through models, union arms, lists, maps, optionals, tuples and a transferable's type arguments. An `oidc/client`'s type argument is the set of providers a caller may pass, so it is not a response position. An enum only parameters use stays closed, so a client can't send a value the server doesn't accept. There is no spec marker for this; position is enough.
+
+| SDK | Open enum `X` | Unknown value | Exhaustive match |
+|---|---|---|---|
+| Dart | `sealed class X`; known values are the constants of `enum XKnown implements X`, which `X.a` and `X.values` alias | `XUnknown(value)` | `switch` needs an `XUnknown()` case |
+| Swift | `enum X: RawRepresentable, Codable, Hashable` with a non-failable `init(rawValue:)` | `case unknown(String)` | `switch` needs `.unknown` |
+| Kotlin | `sealed class X` with a string serializer; known values are `data object`s named as enum constants, listed in `X.entries` | `X.Unknown(value)` | `when` needs `is X.Unknown` |
+
+When a spec value already takes the fallback's name, the spec value keeps it and the fallback steps aside: Dart `XUnknown$`, Swift `unknownValue`, Kotlin `UnknownValue`. Decoding maps a known string to its known case, so a hand-built unknown case holding a known string (`X.Unknown("a")`) is not equal to that case. Swift keeps an enum arm of a union without a discriminator closed: that union decodes by trying each arm in turn, and an open enum arm would accept every string.
+
 ---
 
 ## Authoring progression: plain TypeScript → Zod
