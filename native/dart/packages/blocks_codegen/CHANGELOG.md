@@ -55,6 +55,15 @@
   `OidcProvider` is a generation error, as for every other public
   `blocks_runtime` type, because the generated library imports the runtime
   wholesale and the name would be ambiguous.
+- **Breaking:** a string enum that a response can carry is now open, so a
+  value a newer backend adds no longer makes decoding throw. Such an enum
+  `X` (reachable from a method result, at any depth) is a sealed class:
+  its known values are the constants of the enum `XKnown`, which `X.a` and
+  `X.values` still name, and any other value decodes to `XUnknown`, whose
+  `value` is the string as sent. `toJson()` writes that string back, so an
+  unknown value round-trips. An exhaustive `switch` over `X` needs an
+  `XUnknown()` case, and `name`, `index` and `values.byName` are on `XKnown`
+  only. An enum that only parameters use stays a closed Dart enum.
 
 ## 0.2.0
 

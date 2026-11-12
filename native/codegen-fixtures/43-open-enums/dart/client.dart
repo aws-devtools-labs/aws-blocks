@@ -10,53 +10,208 @@ export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDo
 
 // --- Models ---
 
-enum TaskLabels {
+sealed class TaskLabels {
+  static const red = TaskLabelsKnown.red;
+  static const green = TaskLabelsKnown.green;
+  static const values = TaskLabelsKnown.values;
+  static final Map<String, TaskLabelsKnown> _byJson = TaskLabelsKnown.values.asNameMap();
+
+  String toJson();
+  static TaskLabels fromJson(String json) => _byJson[json] ?? TaskLabelsUnknown(json);
+}
+
+enum TaskLabelsKnown implements TaskLabels {
   red,
   green
 ;
 
+  @override
   String toJson() => name;
-  static TaskLabels fromJson(String json) => values.byName(json);
+}
+
+/// A `TaskLabels` value this client was generated without.
+final class TaskLabelsUnknown implements TaskLabels {
+  /// The value as the server sent it.
+  final String value;
+
+  const TaskLabelsUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaskLabelsUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TaskLabelsUnknown' '($value)';
 }
 
 
-enum TaskPriority {
+sealed class TaskPriority {
+  static const low = TaskPriorityKnown.low;
+  static const high = TaskPriorityKnown.high;
+  static const values = TaskPriorityKnown.values;
+  static final Map<String, TaskPriorityKnown> _byJson = TaskPriorityKnown.values.asNameMap();
+
+  String toJson();
+  static TaskPriority fromJson(String json) => _byJson[json] ?? TaskPriorityUnknown(json);
+}
+
+enum TaskPriorityKnown implements TaskPriority {
   low,
   high
 ;
 
+  @override
   String toJson() => name;
-  static TaskPriority fromJson(String json) => values.byName(json);
+}
+
+/// A `TaskPriority` value this client was generated without.
+final class TaskPriorityUnknown implements TaskPriority {
+  /// The value as the server sent it.
+  final String value;
+
+  const TaskPriorityUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaskPriorityUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TaskPriorityUnknown' '($value)';
 }
 
 
-enum TaskSource {
+sealed class TaskSource {
+  static const web = TaskSourceKnown.web;
+  static const unknown = TaskSourceKnown.unknown;
+  static const values = TaskSourceKnown.values;
+  static final Map<String, TaskSourceKnown> _byJson = TaskSourceKnown.values.asNameMap();
+
+  String toJson();
+  static TaskSource fromJson(String json) => _byJson[json] ?? TaskSourceUnknown(json);
+}
+
+enum TaskSourceKnown implements TaskSource {
   web,
   unknown
 ;
 
+  @override
   String toJson() => name;
-  static TaskSource fromJson(String json) => values.byName(json);
+}
+
+/// A `TaskSource` value this client was generated without.
+final class TaskSourceUnknown implements TaskSource {
+  /// The value as the server sent it.
+  final String value;
+
+  const TaskSourceUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaskSourceUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TaskSourceUnknown' '($value)';
 }
 
 
-enum FlaggedGetEventResultSeverity {
+sealed class FlaggedGetEventResultSeverity {
+  static const low = FlaggedGetEventResultSeverityKnown.low;
+  static const high = FlaggedGetEventResultSeverityKnown.high;
+  static const values = FlaggedGetEventResultSeverityKnown.values;
+  static final Map<String, FlaggedGetEventResultSeverityKnown> _byJson = FlaggedGetEventResultSeverityKnown.values.asNameMap();
+
+  String toJson();
+  static FlaggedGetEventResultSeverity fromJson(String json) => _byJson[json] ?? FlaggedGetEventResultSeverityUnknown(json);
+}
+
+enum FlaggedGetEventResultSeverityKnown implements FlaggedGetEventResultSeverity {
   low,
   high
 ;
 
+  @override
   String toJson() => name;
-  static FlaggedGetEventResultSeverity fromJson(String json) => values.byName(json);
+}
+
+/// A `FlaggedGetEventResultSeverity` value this client was generated without.
+final class FlaggedGetEventResultSeverityUnknown implements FlaggedGetEventResultSeverity {
+  /// The value as the server sent it.
+  final String value;
+
+  const FlaggedGetEventResultSeverityUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is FlaggedGetEventResultSeverityUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'FlaggedGetEventResultSeverityUnknown' '($value)';
 }
 
 
-enum WatchTasksResultMessageChange {
+sealed class WatchTasksResultMessageChange {
+  static const created = WatchTasksResultMessageChangeKnown.created;
+  static const deleted = WatchTasksResultMessageChangeKnown.deleted;
+  static const values = WatchTasksResultMessageChangeKnown.values;
+  static final Map<String, WatchTasksResultMessageChangeKnown> _byJson = WatchTasksResultMessageChangeKnown.values.asNameMap();
+
+  String toJson();
+  static WatchTasksResultMessageChange fromJson(String json) => _byJson[json] ?? WatchTasksResultMessageChangeUnknown(json);
+}
+
+enum WatchTasksResultMessageChangeKnown implements WatchTasksResultMessageChange {
   created,
   deleted
 ;
 
+  @override
   String toJson() => name;
-  static WatchTasksResultMessageChange fromJson(String json) => values.byName(json);
+}
+
+/// A `WatchTasksResultMessageChange` value this client was generated without.
+final class WatchTasksResultMessageChangeUnknown implements WatchTasksResultMessageChange {
+  /// The value as the server sent it.
+  final String value;
+
+  const WatchTasksResultMessageChangeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WatchTasksResultMessageChangeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'WatchTasksResultMessageChangeUnknown' '($value)';
 }
 
 
@@ -100,24 +255,55 @@ class WatchTasksResultMessage {
 
 // --- API Namespaces ---
 
-enum Status {
+sealed class Status {
+  static const todo = StatusKnown.todo;
+  static const inProgress = StatusKnown.inProgress;
+  static const done = StatusKnown.done;
+  static const values = StatusKnown.values;
+
+  String toJson();
+  static Status fromJson(String json) => StatusKnown._jsonMap[json] ?? StatusUnknown(json);
+}
+
+enum StatusKnown implements Status {
   todo,
   inProgress,
   done
 ;
 
-  static const _jsonMap = <String, Status>{
+  static const _jsonMap = <String, StatusKnown>{
     'todo': todo,
     'in-progress': inProgress,
     'done': done,
   };
-  static const _toJsonMap = <Status, String>{
+  static const _toJsonMap = <StatusKnown, String>{
     todo: 'todo',
     inProgress: 'in-progress',
     done: 'done',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static Status fromJson(String json) => _jsonMap[json]!;
+}
+
+/// A `Status` value this client was generated without.
+final class StatusUnknown implements Status {
+  /// The value as the server sent it.
+  final String value;
+
+  const StatusUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is StatusUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'StatusUnknown' '($value)';
 }
 
 

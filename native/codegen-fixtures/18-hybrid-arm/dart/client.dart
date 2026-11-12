@@ -67,7 +67,21 @@ class Todo {
 }
 
 
-enum AuthStateState {
+sealed class AuthStateState {
+  static const signedOut = AuthStateStateKnown.signedOut;
+  static const signedIn = AuthStateStateKnown.signedIn;
+  static const confirmingSignUp = AuthStateStateKnown.confirmingSignUp;
+  static const confirmingSignIn = AuthStateStateKnown.confirmingSignIn;
+  static const confirmingMfa = AuthStateStateKnown.confirmingMfa;
+  static const confirmingPasswordReset = AuthStateStateKnown.confirmingPasswordReset;
+  static const values = AuthStateStateKnown.values;
+  static final Map<String, AuthStateStateKnown> _byJson = AuthStateStateKnown.values.asNameMap();
+
+  String toJson();
+  static AuthStateState fromJson(String json) => _byJson[json] ?? AuthStateStateUnknown(json);
+}
+
+enum AuthStateStateKnown implements AuthStateState {
   signedOut,
   signedIn,
   confirmingSignUp,
@@ -76,8 +90,29 @@ enum AuthStateState {
   confirmingPasswordReset
 ;
 
+  @override
   String toJson() => name;
-  static AuthStateState fromJson(String json) => values.byName(json);
+}
+
+/// A `AuthStateState` value this client was generated without.
+final class AuthStateStateUnknown implements AuthStateState {
+  /// The value as the server sent it.
+  final String value;
+
+  const AuthStateStateUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthStateStateUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'AuthStateStateUnknown' '($value)';
 }
 
 
@@ -124,31 +159,92 @@ class AuthUser {
 }
 
 
-enum AuthActionMethod {
+sealed class AuthActionMethod {
+  static const GET = AuthActionMethodKnown.GET;
+  static const POST = AuthActionMethodKnown.POST;
+  static const values = AuthActionMethodKnown.values;
+  static final Map<String, AuthActionMethodKnown> _byJson = AuthActionMethodKnown.values.asNameMap();
+
+  String toJson();
+  static AuthActionMethod fromJson(String json) => _byJson[json] ?? AuthActionMethodUnknown(json);
+}
+
+enum AuthActionMethodKnown implements AuthActionMethod {
   GET,
   POST
 ;
 
+  @override
   String toJson() => name;
-  static AuthActionMethod fromJson(String json) => values.byName(json);
+}
+
+/// A `AuthActionMethod` value this client was generated without.
+final class AuthActionMethodUnknown implements AuthActionMethod {
+  /// The value as the server sent it.
+  final String value;
+
+  const AuthActionMethodUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthActionMethodUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'AuthActionMethodUnknown' '($value)';
 }
 
 
-enum AuthActionCapability {
+sealed class AuthActionCapability {
+  static const webauthnGet = AuthActionCapabilityKnown.webauthnGet;
+  static const webauthnCreate = AuthActionCapabilityKnown.webauthnCreate;
+  static const values = AuthActionCapabilityKnown.values;
+
+  String toJson();
+  static AuthActionCapability fromJson(String json) => AuthActionCapabilityKnown._jsonMap[json] ?? AuthActionCapabilityUnknown(json);
+}
+
+enum AuthActionCapabilityKnown implements AuthActionCapability {
   webauthnGet,
   webauthnCreate
 ;
 
-  static const _jsonMap = <String, AuthActionCapability>{
+  static const _jsonMap = <String, AuthActionCapabilityKnown>{
     'webauthn-get': webauthnGet,
     'webauthn-create': webauthnCreate,
   };
-  static const _toJsonMap = <AuthActionCapability, String>{
+  static const _toJsonMap = <AuthActionCapabilityKnown, String>{
     webauthnGet: 'webauthn-get',
     webauthnCreate: 'webauthn-create',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static AuthActionCapability fromJson(String json) => _jsonMap[json]!;
+}
+
+/// A `AuthActionCapability` value this client was generated without.
+final class AuthActionCapabilityUnknown implements AuthActionCapability {
+  /// The value as the server sent it.
+  final String value;
+
+  const AuthActionCapabilityUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthActionCapabilityUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'AuthActionCapabilityUnknown' '($value)';
 }
 
 
@@ -215,7 +311,21 @@ class AuthAction {
 }
 
 
-enum AuthFieldType {
+sealed class AuthFieldType {
+  static const number = AuthFieldTypeKnown.number;
+  static const password = AuthFieldTypeKnown.password;
+  static const email = AuthFieldTypeKnown.email;
+  static const text = AuthFieldTypeKnown.text;
+  static const tel = AuthFieldTypeKnown.tel;
+  static const hidden = AuthFieldTypeKnown.hidden;
+  static const values = AuthFieldTypeKnown.values;
+  static final Map<String, AuthFieldTypeKnown> _byJson = AuthFieldTypeKnown.values.asNameMap();
+
+  String toJson();
+  static AuthFieldType fromJson(String json) => _byJson[json] ?? AuthFieldTypeUnknown(json);
+}
+
+enum AuthFieldTypeKnown implements AuthFieldType {
   number,
   password,
   email,
@@ -224,8 +334,29 @@ enum AuthFieldType {
   hidden
 ;
 
+  @override
   String toJson() => name;
-  static AuthFieldType fromJson(String json) => values.byName(json);
+}
+
+/// A `AuthFieldType` value this client was generated without.
+final class AuthFieldTypeUnknown implements AuthFieldType {
+  /// The value as the server sent it.
+  final String value;
+
+  const AuthFieldTypeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthFieldTypeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'AuthFieldTypeUnknown' '($value)';
 }
 
 

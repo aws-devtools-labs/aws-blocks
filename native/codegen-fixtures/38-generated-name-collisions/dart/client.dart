@@ -108,21 +108,51 @@ class ProfileMeta {
 }
 
 
-enum ProfileState {
+sealed class ProfileState {
+  static const inProgress = ProfileStateKnown.inProgress;
+  static const in_progress = ProfileStateKnown.in_progress;
+  static const values = ProfileStateKnown.values;
+
+  String toJson();
+  static ProfileState fromJson(String json) => ProfileStateKnown._jsonMap[json] ?? ProfileStateUnknown(json);
+}
+
+enum ProfileStateKnown implements ProfileState {
   inProgress,
   in_progress
 ;
 
-  static const _jsonMap = <String, ProfileState>{
+  static const _jsonMap = <String, ProfileStateKnown>{
     'in-progress': inProgress,
     'in_progress': in_progress,
   };
-  static const _toJsonMap = <ProfileState, String>{
+  static const _toJsonMap = <ProfileStateKnown, String>{
     inProgress: 'in-progress',
     in_progress: 'in_progress',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static ProfileState fromJson(String json) => _jsonMap[json]!;
+}
+
+/// A `ProfileState` value this client was generated without.
+final class ProfileStateUnknown implements ProfileState {
+  /// The value as the server sent it.
+  final String value;
+
+  const ProfileStateUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ProfileStateUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'ProfileStateUnknown' '($value)';
 }
 
 

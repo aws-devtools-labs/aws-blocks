@@ -9,7 +9,19 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 
 // --- Models ---
 
-enum WidgetKind {
+sealed class WidgetKind {
+  static const cost$ = WidgetKindKnown.cost$;
+  static const a$b = WidgetKindKnown.a$b;
+  static const x$$y = WidgetKindKnown.x$$y;
+  static const b$c = WidgetKindKnown.b$c;
+  static const d_$e = WidgetKindKnown.d_$e;
+  static const values = WidgetKindKnown.values;
+
+  String toJson();
+  static WidgetKind fromJson(String json) => WidgetKindKnown._jsonMap[json] ?? WidgetKindUnknown(json);
+}
+
+enum WidgetKindKnown implements WidgetKind {
   cost$,
   a$b,
   x$$y,
@@ -17,22 +29,43 @@ enum WidgetKind {
   d_$e
 ;
 
-  static const _jsonMap = <String, WidgetKind>{
+  static const _jsonMap = <String, WidgetKindKnown>{
     'cost\$': cost$,
     'a\$b': a$b,
     'x\$\$y': x$$y,
     'b-\$c': b$c,
     'd_\$e': d_$e,
   };
-  static const _toJsonMap = <WidgetKind, String>{
+  static const _toJsonMap = <WidgetKindKnown, String>{
     cost$: 'cost\$',
     a$b: 'a\$b',
     x$$y: 'x\$\$y',
     b$c: 'b-\$c',
     d_$e: 'd_\$e',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static WidgetKind fromJson(String json) => _jsonMap[json]!;
+}
+
+/// A `WidgetKind` value this client was generated without.
+final class WidgetKindUnknown implements WidgetKind {
+  /// The value as the server sent it.
+  final String value;
+
+  const WidgetKindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WidgetKindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'WidgetKindUnknown' '($value)';
 }
 
 

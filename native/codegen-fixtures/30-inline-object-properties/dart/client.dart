@@ -9,13 +9,44 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 
 // --- Models ---
 
-enum ShipmentDestinationGeoAccuracySource {
+sealed class ShipmentDestinationGeoAccuracySource {
+  static const gps = ShipmentDestinationGeoAccuracySourceKnown.gps;
+  static const cell = ShipmentDestinationGeoAccuracySourceKnown.cell;
+  static const values = ShipmentDestinationGeoAccuracySourceKnown.values;
+  static final Map<String, ShipmentDestinationGeoAccuracySourceKnown> _byJson = ShipmentDestinationGeoAccuracySourceKnown.values.asNameMap();
+
+  String toJson();
+  static ShipmentDestinationGeoAccuracySource fromJson(String json) => _byJson[json] ?? ShipmentDestinationGeoAccuracySourceUnknown(json);
+}
+
+enum ShipmentDestinationGeoAccuracySourceKnown implements ShipmentDestinationGeoAccuracySource {
   gps,
   cell
 ;
 
+  @override
   String toJson() => name;
-  static ShipmentDestinationGeoAccuracySource fromJson(String json) => values.byName(json);
+}
+
+/// A `ShipmentDestinationGeoAccuracySource` value this client was generated without.
+final class ShipmentDestinationGeoAccuracySourceUnknown implements ShipmentDestinationGeoAccuracySource {
+  /// The value as the server sent it.
+  final String value;
+
+  const ShipmentDestinationGeoAccuracySourceUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ShipmentDestinationGeoAccuracySourceUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'ShipmentDestinationGeoAccuracySourceUnknown' '($value)';
 }
 
 
