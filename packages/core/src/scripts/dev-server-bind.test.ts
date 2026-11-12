@@ -42,6 +42,19 @@ describe('dev server bind host', () => {
     }
   });
 
+  it('serves the FQDN form of a loopback name (trailing root dot)', () => {
+    for (const h of ['localhost.', 'localhost.:3000', 'LOCALHOST.:3000', '127.0.0.1.:3000']) {
+      assert.strictEqual(isAllowedDevRequestHost(h, '127.0.0.1', undefined), true, h);
+    }
+  });
+
+  it('refuses a Host whose port is out of range', () => {
+    for (const h of ['localhost:65536', 'localhost:99999', '[::1]:70000']) {
+      assert.strictEqual(isAllowedDevRequestHost(h, '127.0.0.1', undefined), false, h);
+    }
+    assert.strictEqual(isAllowedDevRequestHost('localhost:65535', '127.0.0.1', undefined), true);
+  });
+
   it('refuses a non-loopback, missing or malformed Host on the default bind', () => {
     for (const h of [undefined, '', 'evil.example', 'evil.example:3000', 'localhost.evil.example', '192.168.1.10:3000',
       'localhost@evil.example', 'evil.example/localhost', 'localhost:3000:3000', '[::1', 'local host']) {
