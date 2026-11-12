@@ -13,21 +13,31 @@ private fun json(text: String): JsonElement = Json.parseToJsonElement(text)
 
 /**
  * Fixture 45: `GetEvent.Result` is a result union discriminated by `kind`, so it is open. An
- * object whose `kind` names no arm decodes to `Unknown`, which keeps the object and writes it back.
+ * object whose `kind` names no arm decodes to `UnknownValue` (an arm is tagged `unknown`), which
+ * keeps the object and writes it back.
  */
 class OpenUnionRoundTripTest : FunSpec({
 
     fun label(event: GetEvent.Result): String = when (event) {
         is GetEvent.Result.Moved -> "moved"
         is GetEvent.Result.Flagged -> "flagged"
-        is GetEvent.Result.Unknown -> "unknown ${event.json["kind"]}"
+        is GetEvent.Result.Unknown -> "arm tagged unknown"
+        is GetEvent.Result.UnknownValue -> "unknown ${event.discriminator}"
     }
 
     test("an unknown arm decodes and round-trips") {
         val wire = json("""{"kind":"archived","by":"someone","at":{"day":3}}""")
         val event = BlocksJson.decodeFromJsonElement(GetEvent.Result.serializer(), wire)
-        event shouldBe GetEvent.Result.Unknown(wire.jsonObject)
-        label(event) shouldBe "unknown \"archived\""
+        // An arm is tagged `unknown`, so the fallback is `UnknownValue`.
+        event shouldBe GetEvent.Result.UnknownValue(wire.jsonObject)
+        label(event) shouldBe "unknown archived"
+        BlocksJson.encodeToJsonElement(GetEvent.Result.serializer(), event) shouldBe wire
+    }
+
+    test("an arm tagged unknown is a known arm") {
+        val wire = json("""{"kind":"unknown","note":"n"}""")
+        val event = BlocksJson.decodeFromJsonElement(GetEvent.Result.serializer(), wire)
+        label(event) shouldBe "arm tagged unknown"
         BlocksJson.encodeToJsonElement(GetEvent.Result.serializer(), event) shouldBe wire
     }
 

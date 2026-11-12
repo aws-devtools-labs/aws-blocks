@@ -93,14 +93,32 @@ internal object UnionSerializerGenerator {
         return candidate
     }
 
-    /** `data class <name>(val json: JsonObject) : <unionName>()`: an arm this client doesn't know. */
-    fun unknownArm(unionName: String, name: String): TypeSpec =
+    /**
+     * `data class <name>(val json: JsonObject) : <unionName>()`: an arm this client doesn't know.
+     * Its `discriminator` is the arm's tag, read from [discriminatorKey], as Dart's
+     * `XUnknown.discriminator` and Swift's `unknownDiscriminator` give it.
+     */
+    fun unknownArm(unionName: String, name: String, discriminatorKey: String): TypeSpec =
         TypeSpec.classBuilder(name)
             .addModifiers(KModifier.DATA)
             .addKdoc("An arm this client was generated without: the object as the server sent it.\n")
             .superclass(ClassName("", unionName))
             .primaryConstructor(FunSpec.constructorBuilder().addParameter("json", jsonObjectClass).build())
             .addProperty(PropertySpec.builder("json", jsonObjectClass).initializer("json").build())
+            .addProperty(
+                PropertySpec.builder("discriminator", STRING.copy(nullable = true))
+                    .addKdoc("The discriminator value that names no known arm.\n")
+                    .getter(
+                        FunSpec.getterBuilder()
+                            .addStatement(
+                                "return (json[%S] as? %T)?.takeIf { it.isString }?.content",
+                                discriminatorKey,
+                                ClassNames.jsonPrimitive,
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
             .build()
 
     /** A value or literal arm: on the wire it is a bare JSON value, not an object. */

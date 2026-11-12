@@ -360,7 +360,13 @@ public data class Ticket(
      */
     public data class Unknown(
       public val json: JsonObject,
-    ) : Payload()
+    ) : Payload() {
+      /**
+       * The discriminator value that names no known arm.
+       */
+      public val discriminator: String?
+        get() = (json["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }
 
     @Serializable
     @SerialName("text")
@@ -420,7 +426,13 @@ public data class Ticket(
      */
     public data class Unknown(
       public val json: JsonObject,
-    ) : Payloads()
+    ) : Payloads() {
+      /**
+       * The discriminator value that names no known arm.
+       */
+      public val discriminator: String?
+        get() = (json["format"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }
 
     @Serializable
     @SerialName("plain")

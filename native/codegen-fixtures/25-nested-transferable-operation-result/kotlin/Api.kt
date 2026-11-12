@@ -119,7 +119,13 @@ public class Api(
          */
         public data class Unknown(
           public val json: JsonObject,
-        ) : Event()
+        ) : Event() {
+          /**
+           * The discriminator value that names no known arm.
+           */
+          public val discriminator: String?
+            get() = (json["kind"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        }
 
         @Serializable
         @SerialName("message")

@@ -178,7 +178,13 @@ public class Api(
        */
       public data class Unknown(
         public val json: JsonObject,
-      ) : Result()
+      ) : Result() {
+        /**
+         * The discriminator value that names no known arm.
+         */
+        public val discriminator: String?
+          get() = (json["action"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+      }
 
       @Serializable
       @SerialName("pick")

@@ -1103,7 +1103,9 @@ class KotlinCodeGenerator(
                     unionValueCoding(variant, index, opContext, serializerRegistry, serializerContext)
                 },
             )
-            if (unknown != null) sealedBuilder.addType(UnionSerializerGenerator.unknownArm(name, unknown))
+            if (unknown != null) {
+                sealedBuilder.addType(UnionSerializerGenerator.unknownArm(name, unknown, discriminator!!.fieldName))
+            }
         } else {
             sealedBuilder.addAnnotation(ClassNames.serializable)
             if (discriminator != null) {

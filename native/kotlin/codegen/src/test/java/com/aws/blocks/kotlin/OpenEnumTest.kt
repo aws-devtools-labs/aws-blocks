@@ -110,9 +110,11 @@ class OpenEnumTest : FunSpec({
 
     test("a result union with a string discriminator falls back to an Unknown arm") {
         val source = fixture("45-open-enums")
-        source shouldContain "public data class Unknown(\n        public val json: JsonObject,\n      ) : Result()"
-        source shouldContain "else -> return Unknown(element)"
-        source shouldContain "is Unknown -> value.json"
+        // An arm is tagged `unknown`, so the fallback is `UnknownValue`.
+        source shouldContain "public data class UnknownValue(\n        public val json: JsonObject,\n      ) : Result()"
+        source shouldContain "else -> return UnknownValue(element)"
+        source shouldContain "is UnknownValue -> value.json"
+        source shouldContain "get() = (json[\"kind\"] as? JsonPrimitive)?.takeIf { it.isString }?.content"
     }
 
     test("a union only parameters use, or with a boolean discriminator, stays closed") {
