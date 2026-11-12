@@ -148,6 +148,23 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 		assert.strictEqual(result.source, 'sandbox-config');
 	});
 
+	it("reads the stage's own config file, never the dev server's config.json", async () => {
+		const root = deployedProject({
+			'.blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'sandbox' }),
+			'.blocks-sandbox/config.production.json': JSON.stringify({
+				apiUrl: 'https://prod.example.com/aws-blocks/api',
+				environment: 'production',
+			}),
+		});
+		const resolve = (stage: string): Promise<EndpointResolution> =>
+			resolveRpcEndpoint({ projectRoot: root, stage, mode: 'cloud', describeStackOutputs: outputs({}) });
+		const production = assertOk(await resolve('production'));
+		assert.strictEqual(production.endpoint, 'https://prod.example.com/aws-blocks/api');
+		assert.strictEqual(production.source, 'sandbox-config');
+		// No sandbox deploy recorded a URL, and the dev server's local one is not a deployed endpoint.
+		assertNoEndpoint(await resolve('sandbox'));
+	});
+
 	it('passes the stage stack name and region through to the lookup', async () => {
 		const root = deployedProject();
 		const seen: Array<[string, string | undefined]> = [];
@@ -315,6 +332,6 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 			}),
 		);
 		assert.match(message, /cleartext/);
-		assert.match(message, /config\.json/);
+		assert.match(message, /config\.sandbox\.json/);
 	});
 });
