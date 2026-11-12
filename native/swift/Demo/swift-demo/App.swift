@@ -58,16 +58,17 @@ final class AppState: ObservableObject {
     /// `redirects.allowedRelayOrigins`.
     static let relayTo = "blocksdemo://auth"
 
-    /// The `Auth` block's OIDC client, for the providers the current state offers.
-    private func oidc() -> OIDCClient<String> {
-        let providers = authState?.actions.compactMap { OIDCClient.providerIdOf($0.name) } ?? []
-        return OIDCClient.forAuth(client: blocks.client, providers: providers, relayTo: Self.relayTo)
-    }
+    /// The `Auth` block's provider ids, as the backend configures them. The demo backend has none,
+    /// so no `signIn:<id>` action appears; list yours here.
+    static let providers: [String] = []
+
+    /// One OIDC client for the app's lifetime, on the app's own client.
+    private lazy var oidc = OIDCClient.forAuth(client: blocks.client, providers: Self.providers, relayTo: Self.relayTo)
 
     /// A `signIn:<id>` action: sign in through the backend's relay, then read the new state.
     func federatedSignIn(provider: String) async {
         do {
-            _ = try await oidc().signIn(provider: provider, launcher: WebAuthenticationLauncher())
+            _ = try await oidc.signIn(provider: provider, launcher: WebAuthenticationLauncher())
             await refreshAuth()
         } catch {
             self.error = error.localizedDescription
@@ -77,7 +78,7 @@ final class AppState: ObservableObject {
     /// A federated user's `signOut` action: sign out, open the provider's logout page, then read the new state.
     func federatedSignOut() async {
         do {
-            if let logoutURL = try await oidc().signOut() {
+            if let logoutURL = try await oidc.signOut() {
                 await UIApplication.shared.open(logoutURL)
             }
             await refreshAuth()
@@ -125,8 +126,11 @@ final class WebAuthenticationLauncher: NSObject, BrowserLauncher, ASWebAuthentic
         }
     }
 
+    @MainActor
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        ASPresentationAnchor()
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first ?? ASPresentationAnchor()
     }
 }
 
