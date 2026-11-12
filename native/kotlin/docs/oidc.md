@@ -142,8 +142,18 @@ an `AnyProvider` was expected rather than a missing import.
 When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
 prints a `kotlin:` warning that names it.
 
+## Restoring a session
+
+`authState` starts out `Loading`. `client.restore()` asks the backend for the session its cookie
+holds, returns the user (and sets `authState` to signed in) or `null` (signed out), and throws
+`OidcSessionException` if the backend could not answer, leaving `authState` as it was.
+
 ## Signing out
 
 `client.signOut()` revokes the session server-side and expires the session cookie as part of its
-response, which is what clears it locally. See
-[runtime configuration](runtime-configuration.md#signing-out).
+response, which is what clears it locally. Only that cookie goes: another `Auth` block sharing the
+jar stays signed in. It returns the identity provider's logout URL, or `null`; open it to end the
+provider's own session too. `authState` is set to signed out even when the request fails, and the
+failure is thrown afterwards. A 503 `SignOutIncompleteException` (`OidcSignOutException.errorName`)
+means the cookie was cleared but the backend kept its session.
+See [runtime configuration](runtime-configuration.md#signing-out).
