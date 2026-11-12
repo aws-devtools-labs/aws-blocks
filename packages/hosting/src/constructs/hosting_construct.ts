@@ -114,6 +114,8 @@ export type { SkewProtectionConfig } from './skew_protection.js';
 // well before it so the operator can split the stack before a deploy fails.
 const CFN_MAX_RESOURCES_PER_STACK = 500;
 const CFN_RESOURCE_WARNING_THRESHOLD = 450;
+/** Stable id of the plain-HTTP front-door warning; also the `acknowledgeWarning` id. */
+const PLAIN_HTTP_FRONT_DOOR_WARNING_ID = '@aws-blocks/hosting:PlainHttpFrontDoor';
 
 // ---- Public types ----
 
@@ -2113,18 +2115,20 @@ export class HostingConstruct extends Construct {
       // The S3 website's URL is a token at synth, so its handle's protocol says it.
       const plainHttp = built.url.startsWith('http://') || built.originHandle.protocol === 'http';
       if (plainHttp && (props.backendApi || isNone) && !stackedRouter) {
+        // `'none'` may be chosen on purpose (testing, public non-interactive
+        // content), so its message names how to acknowledge it.
         Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:PlainHttpFrontDoor',
-          `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
-            (isNone
-              ? "so the pages travel unencrypted. 'none' serves the public S3 website endpoint with no front door " +
-                'in front of it: it takes no certificate, so the HTML and scripts can be read or altered in transit — ' +
-                'even when the app calls an HTTPS API cross-origin, a tampered script sees everything the user enters. '
-              : 'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
-                '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ') +
-            (isNone
-              ? 'Use the CloudFront door for HTTPS.'
-              : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),
+          PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+          isNone
+            ? "The 'none' front door serves the app from the public S3 website endpoint over plain HTTP " +
+                '(an S3 website has no TLS), so the HTML and scripts can be read or altered in transit — ' +
+                'even when the app calls an HTTPS API cross-origin, a tampered script sees everything the user enters. ' +
+                'Use the CloudFront door for HTTPS. If serving over plain HTTP is intended, acknowledge it with ' +
+                `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_FRONT_DOOR_WARNING_ID}')\`.`
+            : `The '${resolved.kind}' front door serves the app over plain HTTP (no certificate), ` +
+                'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
+                '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ' +
+                "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door.",
         );
       }
       this.distributionUrl = built.url;

@@ -843,7 +843,14 @@ The website endpoint takes no certificate, so `'none'` always warns at synth
 HTML and scripts travel unencrypted and can be altered in transit, and a
 tampered script sees everything the user enters, even when the API it calls is
 HTTPS. Use `'none'` for testing or public, non-interactive content; use the
-CloudFront door for HTTPS.
+CloudFront door for HTTPS. If you chose `'none'` deliberately, acknowledge the
+warning on the stack:
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+```
 
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
 payload format 2.0 event and can't stream, so the server is built for it: the

@@ -448,6 +448,8 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    *
    * Because the site is served without TLS, `'none'` always warns at synth
    * (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
+   * If that is intended, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`.
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>
