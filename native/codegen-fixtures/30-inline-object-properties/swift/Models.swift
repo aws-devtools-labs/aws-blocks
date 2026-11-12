@@ -125,9 +125,27 @@ public nonisolated struct Shipment: Codable {
                     self.source = source
                 }
 
-                public enum Source: String, Codable {
+                public enum Source: RawRepresentable, Codable, Hashable {
                     case gps
                     case cell
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "gps": self = .gps
+                        case "cell": self = .cell
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .gps: return "gps"
+                        case .cell: return "cell"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
         }

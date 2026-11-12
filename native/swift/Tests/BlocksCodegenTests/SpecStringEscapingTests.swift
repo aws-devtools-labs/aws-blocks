@@ -145,7 +145,8 @@ final class SpecStringEscapingTests: XCTestCase {
             print("\(roundTrip(text, as: Mood.self)) \(roundTrip(text, as: Api.Pick.Result.self))")
         }
         // What a live `\(1+1)` would have made of the literal.
-        print("\(roundTrip(#""x2""#, as: Mood.self)) \(roundTrip(#""x2""#, as: Api.Pick.Result.self))")
+        // `Mood` is a result, so it is open: `"x2"` is a value it doesn't know.
+        print("\(Mood(rawValue: "x2") == .unknown("x2")) \(roundTrip(#""x2""#, as: Api.Pick.Result.self))")
         print(json(Defaults()))
         print(json(try Code(code: "a\nb")))
         do {
@@ -163,7 +164,7 @@ final class SpecStringEscapingTests: XCTestCase {
             #""x\\(1+1)" "x\\(1+1)""#,
             #""new\nline" "new\nline""#,
             #""back\\slash" "back\\slash""#,
-            "error error",
+            "true error",
             #"{"note":"a/b \\(1+1)\n\u0001","plain":"plain"}"#,
             #"{"code":"a\nb"}"#,
             #""code must match pattern ^a\nb$""#

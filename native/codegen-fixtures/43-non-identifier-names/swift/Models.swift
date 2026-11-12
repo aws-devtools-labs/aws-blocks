@@ -2,16 +2,48 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Kind: String, Codable {
-    case a_b = "a\"b"
-    case c_d = "c;d"
-    case x_y = "x`y"
-    case new_line = "new\nline"
-    case __x_ = "${x}"
-    case __z_ = "\\(z)"
-    case __unnamed = "*/"
-    case _1st = "1st"
-    case _sp_ace = " sp ace"
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
+    case a_b
+    case c_d
+    case x_y
+    case new_line
+    case __x_
+    case __z_
+    case __unnamed
+    case _1st
+    case _sp_ace
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "a\"b": self = .a_b
+        case "c;d": self = .c_d
+        case "x`y": self = .x_y
+        case "new\nline": self = .new_line
+        case "${x}": self = .__x_
+        case "\\(z)": self = .__z_
+        case "*/": self = .__unnamed
+        case "1st": self = ._1st
+        case " sp ace": self = ._sp_ace
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .a_b: return "a\"b"
+        case .c_d: return "c;d"
+        case .x_y: return "x`y"
+        case .new_line: return "new\nline"
+        case .__x_: return "${x}"
+        case .__z_: return "\\(z)"
+        case .__unnamed: return "*/"
+        case ._1st: return "1st"
+        case ._sp_ace: return " sp ace"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Sample_Type__X___: Codable {

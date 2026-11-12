@@ -260,7 +260,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         }, "required": ["status", "geo"] } }
         """)
 
-        assertContains(output, "\npublic nonisolated enum Status: String, Codable {\n    case open\n    case closed\n}\n")
+        assertContains(output, "\npublic nonisolated enum Status: RawRepresentable, Codable, Hashable {\n    case open\n    case closed\n")
         assertContains(output, """
             public nonisolated struct Geo: Codable {
                 public let source: Source
@@ -269,11 +269,9 @@ final class InlineObjectPropertyTests: XCTestCase {
                     self.source = source
                 }
 
-                public enum Source: String, Codable {
+                public enum Source: RawRepresentable, Codable, Hashable {
                     case gps
                     case cell
-                }
-            }
         """)
         assertNoTopLevel(output, "Source")
     }
@@ -292,7 +290,8 @@ final class InlineObjectPropertyTests: XCTestCase {
         }
         """)
 
-        assertContains(output, "public enum Kind: String, Codable {\n            case a\n            case b\n")
+        assertContains(output, "public enum Kind: RawRepresentable, Codable, Hashable {\n            case a\n            case b\n")
+        // Only `Holder` is a result, so only its enum is open.
         assertContains(output, "public enum Kind: String, Codable {\n            case x\n            case y\n")
         assertNoTopLevel(output, "Kind")
     }

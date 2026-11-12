@@ -1,25 +1,99 @@
 import Foundation
 
 
-public nonisolated enum Status: String, Codable {
+public nonisolated enum Status: RawRepresentable, Codable, Hashable {
     case todo
-    case inProgress = "in-progress"
+    case inProgress
     case done
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "todo": self = .todo
+        case "in-progress": self = .inProgress
+        case "done": self = .done
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .todo: return "todo"
+        case .inProgress: return "in-progress"
+        case .done: return "done"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum LabelsValue: String, Codable {
+public nonisolated enum LabelsValue: RawRepresentable, Codable, Hashable {
     case red
     case green
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "red": self = .red
+        case "green": self = .green
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .red: return "red"
+        case .green: return "green"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Priority: String, Codable {
+public nonisolated enum Priority: RawRepresentable, Codable, Hashable {
     case low
     case high
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "low": self = .low
+        case "high": self = .high
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .low: return "low"
+        case .high: return "high"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Source: String, Codable {
+public nonisolated enum Source: RawRepresentable, Codable, Hashable {
     case web
     case unknown
+    /// A value this client was generated without, as the server sent it.
+    case unknownValue(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "web": self = .web
+        case "unknown": self = .unknown
+        default: self = .unknownValue(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .web: return "web"
+        case .unknown: return "unknown"
+        case .unknownValue(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Task: Codable {

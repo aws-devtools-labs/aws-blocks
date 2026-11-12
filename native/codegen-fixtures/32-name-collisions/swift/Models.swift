@@ -51,14 +51,50 @@ public nonisolated struct Cart: Codable {
     }
 }
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
     case x
     case y
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "x": self = .x
+        case "y": self = .y
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .x: return "x"
+        case .y: return "y"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Status: String, Codable {
+public nonisolated enum Status: RawRepresentable, Codable, Hashable {
     case pending
     case shipped
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "pending": self = .pending
+        case "shipped": self = .shipped
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .shipped: return "shipped"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Order: Codable {
@@ -69,14 +105,50 @@ public nonisolated struct Order: Codable {
     }
 }
 
-public nonisolated enum TicketKind: String, Codable {
+public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable {
     case bug
     case task
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "bug": self = .bug
+        case "task": self = .task
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .bug: return "bug"
+        case .task: return "task"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Kinds: String, Codable {
+public nonisolated enum Kinds: RawRepresentable, Codable, Hashable {
     case urgent
     case later
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "urgent": self = .urgent
+        case "later": self = .later
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .urgent: return "urgent"
+        case .later: return "later"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Text: Codable {
@@ -175,9 +247,27 @@ public nonisolated enum Payloads: Codable {
     }
 }
 
-public nonisolated enum TicketStatus: String, Codable {
+public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable {
     case open
     case closed
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "open": self = .open
+        case "closed": self = .closed
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .open: return "open"
+        case .closed: return "closed"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Ticket: Codable {

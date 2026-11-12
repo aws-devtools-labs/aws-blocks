@@ -80,9 +80,27 @@ public final nonisolated class Api: Sendable {
                 self.severity = severity
             }
 
-            public enum Severity: String, Codable {
+            public enum Severity: RawRepresentable, Codable, Hashable {
                 case low
                 case high
+                /// A value this client was generated without, as the server sent it.
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "low": self = .low
+                    case "high": self = .high
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .low: return "low"
+                    case .high: return "high"
+                    case .unknown(let value): return value
+                    }
+                }
             }
         }
 
@@ -130,9 +148,27 @@ public final nonisolated class Api: Sendable {
                 self.taskId = taskId
             }
 
-            public enum Change: String, Codable {
+            public enum Change: RawRepresentable, Codable, Hashable {
                 case created
                 case deleted
+                /// A value this client was generated without, as the server sent it.
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "created": self = .created
+                    case "deleted": self = .deleted
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .created: return "created"
+                    case .deleted: return "deleted"
+                    case .unknown(let value): return value
+                    }
+                }
             }
         }
     }

@@ -189,6 +189,8 @@ final class OpenRecordFlatteningTests: XCTestCase {
                 // The namespace classes' and `Blocks`' inits.
                 - occurrences(of: "public init(client: BlocksClient)", in: source)
                 - occurrences(of: "public init(\n        server: BlocksRuntime.BlocksServer", in: source)
+                // An open enum's.
+                - occurrences(of: "public init(rawValue: String)", in: source)
             XCTAssertEqual(inits, structs, source)
         }
     }

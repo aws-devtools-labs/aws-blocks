@@ -121,7 +121,8 @@ final class NonIdentifierNamesTests: XCTestCase {
         let output = try generate(Data(contentsOf: fixtureSpecURL))
 
         XCTAssertTrue(output.models.contains("case _9lives = \"9lives\""), "got:\n\(output.models)")
-        XCTAssertTrue(output.models.contains("case _1st = \"1st\""), "got:\n\(output.models)")
+        // The fixture's enum is a result, so it is open: its raw value is a case of `init(rawValue:)`.
+        XCTAssertTrue(output.models.contains("case \"1st\": self = ._1st"), "got:\n\(output.models)")
     }
 
     func testSchemaTypeIsDeclaredAndReferencedUnderOneName() throws {

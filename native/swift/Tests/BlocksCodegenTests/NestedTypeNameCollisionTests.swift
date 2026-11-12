@@ -90,8 +90,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.models, "public let kind: Kind\n")
         assertContains(output.models, "public let kinds: [Kinds]\n")
-        assertContains(output.models, "public enum Kind: String, Codable {\n            case a\n            case b")
-        assertContains(output.models, "public enum Kinds: String, Codable {\n            case c\n            case d")
+        assertContains(output.models, "public enum Kind: RawRepresentable, Codable, Hashable {\n            case a\n            case b")
+        assertContains(output.models, "public enum Kinds: RawRepresentable, Codable, Hashable {\n            case c\n            case d")
     }
 
     func testDirectPropertyKeepsItsNameOverAMapsValueType() throws {
@@ -120,8 +120,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let ticket = object(["kind": strings("bug", "task"), "kinds": array(strings("urgent", "later"))])
         let output = try generate(schemas: #"{ "Ticket": \#(ticket) }"#, methods: [returning("Ticket")])
 
-        assertContains(output.models, "public nonisolated enum Kind: String, Codable {\n    case bug\n    case task\n}")
-        assertContains(output.models, "public nonisolated enum Kinds: String, Codable {\n    case urgent\n    case later\n}")
+        assertContains(output.models, "public nonisolated enum Kind: RawRepresentable, Codable, Hashable {\n    case bug\n    case task\n")
+        assertContains(output.models, "public nonisolated enum Kinds: RawRepresentable, Codable, Hashable {\n    case urgent\n    case later\n")
         assertContains(output.models, "public let kinds: [Kinds]\n")
     }
 
@@ -151,8 +151,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let output = try generate(schemas: schemas, methods: [returning("Order"), returning("Ticket")])
 
         // Before, `Ticket.status` was typed as `Order`'s enum, so `"open"` didn't decode.
-        assertContains(output.models, "public nonisolated enum Status: String, Codable {\n    case pending\n    case shipped\n}")
-        assertContains(output.models, "public nonisolated enum TicketStatus: String, Codable {\n    case open\n    case closed\n}")
+        assertContains(output.models, "public nonisolated enum Status: RawRepresentable, Codable, Hashable {\n    case pending\n    case shipped\n")
+        assertContains(output.models, "public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable {\n    case open\n    case closed\n")
         assertContains(output.models, "public nonisolated struct Ticket: Codable {\n    public let status: TicketStatus\n")
     }
 
@@ -163,7 +163,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         """
         let output = try generate(schemas: schemas, methods: [returning("Order"), returning("Ticket")])
 
-        XCTAssertEqual(count("public nonisolated enum Status: String, Codable {", in: output.models), 1)
+        XCTAssertEqual(count("public nonisolated enum Status: RawRepresentable, Codable, Hashable {", in: output.models), 1)
         assertNotContains(output.models, "TicketStatus")
         assertContains(output.models, "public nonisolated struct Ticket: Codable {\n    public let status: Status\n")
     }
@@ -179,9 +179,9 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         // Before, `Alpha`'s inline enums took the names and the component schemas were lost: `Status` (a struct)
         // wasn't generated at all, and `Kind` had `Alpha.kind`'s cases.
-        assertContains(output.models, "public nonisolated enum AlphaKind: String, Codable {\n    case a\n    case b\n}")
-        assertContains(output.models, "public nonisolated enum AlphaStatus: String, Codable {\n    case on\n    case off\n}")
-        assertContains(output.models, "public nonisolated enum Kind: String, Codable {\n    case x\n    case y\n}")
+        assertContains(output.models, "public nonisolated enum AlphaKind: RawRepresentable, Codable, Hashable {\n    case a\n    case b\n")
+        assertContains(output.models, "public nonisolated enum AlphaStatus: RawRepresentable, Codable, Hashable {\n    case on\n    case off\n")
+        assertContains(output.models, "public nonisolated enum Kind: RawRepresentable, Codable, Hashable {\n    case x\n    case y\n")
         assertContains(output.models, "public nonisolated struct Status: Codable {\n    public let code: String")
         assertContains(output.models, "public nonisolated struct Zed: Codable {\n    public let kind: Kind\n")
     }
@@ -192,7 +192,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         """
         let output = try generate(schemas: schemas, methods: [returning("Alpha"), returning("Kind")])
 
-        XCTAssertEqual(count("public nonisolated enum Kind: String, Codable {", in: output.models), 1)
+        XCTAssertEqual(count("public nonisolated enum Kind: RawRepresentable, Codable, Hashable {", in: output.models), 1)
         assertNotContains(output.models, "AlphaKind")
     }
 

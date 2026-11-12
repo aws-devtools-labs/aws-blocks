@@ -94,10 +94,34 @@ public nonisolated struct Extras: Codable {
     }
 }
 
-public nonisolated enum Level: String, Codable {
+public nonisolated enum Level: RawRepresentable, Codable, Hashable {
     case values
     case index
     case name
-    case _Hidden = "_hidden"
+    case _Hidden
     case ok
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "values": self = .values
+        case "index": self = .index
+        case "name": self = .name
+        case "_hidden": self = ._Hidden
+        case "ok": self = .ok
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .values: return "values"
+        case .index: return "index"
+        case .name: return "name"
+        case ._Hidden: return "_hidden"
+        case .ok: return "ok"
+        case .unknown(let value): return value
+        }
+    }
 }

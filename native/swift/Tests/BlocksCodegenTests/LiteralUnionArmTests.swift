@@ -225,7 +225,8 @@ final class LiteralUnionArmTests: XCTestCase {
         assertContains(operation.api, "case level_Variant0(Level_Variant0)")
         assertContains(operation.api, "public enum Level_Variant0: String, Codable {\n            case low\n            case high")
         assertContains(schema.models, "case level_Variant0(Level_Variant0)")
-        assertContains(schema.models, "public nonisolated enum Level_Variant0: String, Codable {\n    case low\n    case high")
+        // A result reaches the schema, so its enum is open.
+        assertContains(schema.models, "public nonisolated enum Level_Variant0: RawRepresentable, Codable, Hashable {\n    case low\n    case high")
     }
 
     func testDiscriminatedUnionWithALiteralArm() throws {

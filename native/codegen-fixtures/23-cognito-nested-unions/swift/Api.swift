@@ -75,10 +75,30 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
-                    case sms = "SMS"
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable {
+                    case sms
+                    case totp
+                    case email
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "SMS": self = .sms
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .sms: return "SMS"
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 
@@ -91,9 +111,27 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable {
+                    case totp
+                    case email
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 
@@ -145,11 +183,33 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable {
-                    case password = "PASSWORD"
-                    case emailOtp = "EMAIL_OTP"
-                    case smsOtp = "SMS_OTP"
-                    case webAuthn = "WEB_AUTHN"
+                public enum AvailableChallenge: RawRepresentable, Codable, Hashable {
+                    case password
+                    case emailOtp
+                    case smsOtp
+                    case webAuthn
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "PASSWORD": self = .password
+                        case "EMAIL_OTP": self = .emailOtp
+                        case "SMS_OTP": self = .smsOtp
+                        case "WEB_AUTHN": self = .webAuthn
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .password: return "PASSWORD"
+                        case .emailOtp: return "EMAIL_OTP"
+                        case .smsOtp: return "SMS_OTP"
+                        case .webAuthn: return "WEB_AUTHN"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 
@@ -392,10 +452,30 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
-                    case sms = "SMS"
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable {
+                    case sms
+                    case totp
+                    case email
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "SMS": self = .sms
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .sms: return "SMS"
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 
@@ -408,9 +488,27 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable {
+                    case totp
+                    case email
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 
@@ -462,11 +560,33 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable {
-                    case password = "PASSWORD"
-                    case emailOtp = "EMAIL_OTP"
-                    case smsOtp = "SMS_OTP"
-                    case webAuthn = "WEB_AUTHN"
+                public enum AvailableChallenge: RawRepresentable, Codable, Hashable {
+                    case password
+                    case emailOtp
+                    case smsOtp
+                    case webAuthn
+                    /// A value this client was generated without, as the server sent it.
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "PASSWORD": self = .password
+                        case "EMAIL_OTP": self = .emailOtp
+                        case "SMS_OTP": self = .smsOtp
+                        case "WEB_AUTHN": self = .webAuthn
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .password: return "PASSWORD"
+                        case .emailOtp: return "EMAIL_OTP"
+                        case .smsOtp: return "SMS_OTP"
+                        case .webAuthn: return "WEB_AUTHN"
+                        case .unknown(let value): return value
+                        }
+                    }
                 }
             }
 

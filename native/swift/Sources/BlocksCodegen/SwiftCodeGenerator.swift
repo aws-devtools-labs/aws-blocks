@@ -36,6 +36,8 @@ public struct SwiftCodeGenerator {
     /// customer package's export list.
     let runtimePrefix: String
     let declaredNames = DeclaredNames()
+    /// Whether the enums emitted now are open (see `SwiftCodeGenerator+OpenEnums.swift`).
+    let openEnums = OpenEnumScope()
 
     public init() {
         self.init(declaredBindings: [:], runtimePrefix: "")
@@ -71,6 +73,7 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
+        generator.openEnums.openTypeNames = generator.openTypeNames(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -232,8 +235,11 @@ public struct SwiftCodeGenerator {
         operation: Operation, name opName: String, namespace: String, indent: String, lines: inout [String]
     ) {
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
+        let resultRoots = resultRootTypeNames(operation)
         for node in operation.nestedTypes {
-            emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
+            openEnums.with(open: resultRoots.contains(node.name)) {
+                emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
+            }
         }
         emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
         lines.append("\(indent)}")
@@ -250,9 +256,9 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
-            lines.append(contentsOf: enumCaseLines(values, indent: indent + "    "))
-            lines.append("\(indent)}")
+            let enumLines = enumDeclarationLines(name: node.name, values: values, declaration: "public enum", indent: indent)
+            emitDeclaration(node.name, line: enumLines[0], lines: &lines)
+            lines.append(contentsOf: enumLines.dropFirst())
         case .union(_, let variants, let discriminator):
             emitNestedUnion(name: node.name, variants: variants, discriminator: discriminator, children: node.children, indent: indent, lines: &lines)
         default:
@@ -422,7 +428,7 @@ public struct SwiftCodeGenerator {
         // variant structs.
         for variant in variants where variant.valueType != nil {
             for node in valueArmTypes(variant) {
-                emitNestedTypeNode(node, indent: indent, lines: &lines)
+                emitValueArmType(node) { emitNestedTypeNode(node, indent: indent, lines: &lines) }
             }
         }
 
@@ -683,6 +689,14 @@ public struct SwiftCodeGenerator {
 
     func emitType(_ type: ResolvedType, name: String, lines: inout [String], emitted: inout Set<String>) {
         guard !emitted.contains(name) else { return }
+        // A component schema is open when a result reaches it; a type emitted on another's behalf (a union's
+        // variant struct, a dependent type) is open when that one is.
+        if typesByName[name] != nil, openEnums.openTypeNames.contains(name) != openEnums.isOpen {
+            openEnums.with(open: openEnums.openTypeNames.contains(name)) {
+                emitType(type, name: name, lines: &lines, emitted: &emitted)
+            }
+            return
+        }
 
         switch type {
         case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
@@ -708,9 +722,11 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
-            lines.append(contentsOf: enumCaseLines(values, indent: "    "))
-            lines.append("}")
+            let enumLines = enumDeclarationLines(
+                name: name, values: values, declaration: "public nonisolated enum", indent: ""
+            )
+            emitDeclaration(name, line: enumLines[0], lines: &lines)
+            lines.append(contentsOf: enumLines.dropFirst())
 
         case .union(_, let variants, let discriminator):
             emitted.insert(name)
@@ -1572,7 +1588,7 @@ private extension SwiftCodeGenerator {
             // like the variant structs.
             for variant in variants where variant.valueType != nil {
                 for node in valueArmTypes(variant) {
-                    emitSchemaNestedType(node, indent: indent, lines: &lines)
+                    emitValueArmType(node) { emitSchemaNestedType(node, indent: indent, lines: &lines) }
                 }
             }
             lines.append("")
