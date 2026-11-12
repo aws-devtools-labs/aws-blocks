@@ -149,10 +149,13 @@ class OidcClient<P : OidcProvider> internal constructor(
             // a callback carrying a `code` still fails if the state or CSRF value does not
             // match, or if the exchange is rejected. They report separately, so the browser
             // is told which of the two it was.
-            val callback = reportingFailure(session, resultUri, INVALID_CALLBACK) {
+            // The state whose callback may repeat the provider's error: the issued one, once its
+            // CSRF value is ours.
+            val trustedState = params.state.takeIf { runCatching { verifyCsrf(it, csrf) }.isSuccess }
+            val callback = reportingFailure(session, resultUri, trustedState, INVALID_CALLBACK) {
                 validateCallback(resultUri, params, csrf)
             }
-            val user = reportingFailure(session, resultUri, EXCHANGE_FAILED) {
+            val user = reportingFailure(session, resultUri, trustedState, EXCHANGE_FAILED) {
                 // Step 6: Exchange the code for tokens.
                 exchange(
                     code = callback.code,
@@ -179,8 +182,20 @@ class OidcClient<P : OidcProvider> internal constructor(
         params: AuthorizeParamsResponse,
         csrf: String,
     ): ValidatedCallback {
-        // Step 4: Validate the callback.
+        // Step 4: Validate the callback. The state and its CSRF value are checked before
+        // anything else the callback says, an error included: any page can reach the relay
+        // target, and only a callback carrying the state this attempt was issued came from the
+        // backend.
         val resultParams = Url(resultUri).parameters
+
+        val returnedState = resultParams["state"]
+            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
+        if (returnedState != params.state) {
+            throw OidcCallbackException("State mismatch in callback")
+        }
+
+        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
+        verifyCsrf(returnedState, csrf)
 
         val error = resultParams["error"]
         if (error != null) {
@@ -190,15 +205,6 @@ class OidcClient<P : OidcProvider> internal constructor(
 
         val code = resultParams["code"]
             ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
-        val returnedState = resultParams["state"]
-            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
-
-        if (returnedState != params.state) {
-            throw OidcCallbackException("State mismatch in callback")
-        }
-
-        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
-        verifyCsrf(returnedState, csrf)
 
         return ValidatedCallback(code, resultParams["iss"])
     }
@@ -215,6 +221,7 @@ class OidcClient<P : OidcProvider> internal constructor(
     private suspend fun <T> reportingFailure(
         session: OidcRedirectSession,
         resultUri: String,
+        issuedState: String?,
         code: String,
         block: suspend () -> T,
     ): T = try {
@@ -225,7 +232,7 @@ class OidcClient<P : OidcProvider> internal constructor(
         }
         throw cancellation
     } catch (failure: Throwable) {
-        session.reportOutcome(failureOutcome(failure, resultUri, code))
+        session.reportOutcome(failureOutcome(failure, resultUri, issuedState, code))
         throw failure
     }
 
@@ -241,10 +248,14 @@ class OidcClient<P : OidcProvider> internal constructor(
     private fun failureOutcome(
         failure: Throwable,
         resultUri: String,
+        issuedState: String?,
         code: String,
     ): OidcSignInOutcome.Failed {
         val resultParams = runCatching { Url(resultUri).parameters }.getOrNull()
-        val idpError = resultParams?.get("error")
+        // A callback without the issued state, or one whose state carries another CSRF value,
+        // did not come from this attempt, so what it says the provider reported is not repeated
+        // to the user.
+        val idpError = resultParams?.takeIf { issuedState != null && it["state"] == issuedState }?.get("error")
         return if (idpError != null) {
             OidcSignInOutcome.Failed(idpError, resultParams["error_description"])
         } else {
@@ -337,8 +348,13 @@ class OidcClient<P : OidcProvider> internal constructor(
     private fun verifyCsrf(state: String, expectedCsrf: String) {
         // State is "state.signature" - get the state part
         val encodedPayloadJson = state.substringBefore('.')
-        val json = base64.decode(encodedPayloadJson).decodeToString()
-        val payload = BlocksJson.decodeFromString<StatePayload>(json)
+        // A state the client cannot read fails closed, as the mismatch it may well be.
+        val payload = try {
+            BlocksJson.decodeFromString<StatePayload>(base64.decode(encodedPayloadJson).decodeToString())
+        } catch (e: IllegalArgumentException) {
+            // Both a bad base64url payload and a SerializationException land here.
+            throw OidcCallbackException("Undecodable state envelope")
+        }
         if (payload.csrf != expectedCsrf) {
             throw OidcCallbackException("CSRF mismatch in state envelope")
         }

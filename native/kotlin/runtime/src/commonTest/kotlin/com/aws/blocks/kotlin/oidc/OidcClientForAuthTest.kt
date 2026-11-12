@@ -70,8 +70,11 @@ class OidcClientForAuthTest {
     }
 
     /** Relays the issued state straight back, as the backend's callback would. */
-    private class RelayingLauncher : OidcPlatformLauncher {
+    private class RelayingLauncher(private val query: String = "code=the-code") : OidcPlatformLauncher {
         var authorizeUrl: String? = null
+            private set
+
+        var reportedOutcome: OidcSignInOutcome? = null
             private set
 
         override suspend fun openSession(
@@ -84,10 +87,12 @@ class OidcClientForAuthTest {
                 override suspend fun awaitRedirect(authorizeUrl: String): String {
                     this@RelayingLauncher.authorizeUrl = authorizeUrl
                     val state = Url(authorizeUrl).parameters["state"]
-                    return "$configuredRelayTo?code=the-code&state=$state"
+                    return "$configuredRelayTo?$query&state=$state"
                 }
 
-                override suspend fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+                override suspend fun reportOutcome(outcome: OidcSignInOutcome) {
+                    reportedOutcome = outcome
+                }
 
                 override fun close() = Unit
             }
@@ -274,4 +279,61 @@ class OidcClientForAuthTest {
         shouldThrow<IllegalStateException> { client.signIn("google") }.message shouldContain "relayTo"
         requests shouldBe emptyList()
     }
+
+    @Test
+    fun `signIn checks the envelope's CSRF value before an error the callback carries`() = runTest {
+        // The relayed state is the issued one, but its envelope carries another attempt's CSRF.
+        val foreign = Base64.UrlSafe.encode("""{"v":1,"csrf":"another-attempt"}""".encodeToByteArray()).trimEnd('=')
+        val backend = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    respond(
+                        ByteReadChannel(
+                            """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                                """"scopes":["openid"],"kind":"oidc","state":"$foreign.sig"}""",
+                        ),
+                        HttpStatusCode.OK,
+                        headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+        }
+        val launcher = RelayingLauncher(query = "error=access_denied&error_description=Call+this+number")
+        val client = OidcClient.forAuth(backend, server, listOf("google"), "myapp://auth")
+            .also { it.platformLauncher = launcher }
+
+        shouldThrow<OidcCallbackException> { client.signIn("google") }.message shouldBe
+            "CSRF mismatch in state envelope"
+        launcher.reportedOutcome shouldBe
+            OidcSignInOutcome.Failed("invalid_callback", "CSRF mismatch in state envelope")
+    }
+
+    @Test
+    fun `signIn fails closed on a state envelope it cannot read`() = runTest {
+        // None of these payloads decodes to a state: the first is not base64url, the second is
+        // base64url of "not-json", and the third is base64url of {"v":1}, which has no csrf.
+        for (unreadable in listOf("!!!.sig", "bm90LWpzb24.sig", "eyJ2IjoxfQ.sig")) {
+            val launcher = RelayingLauncher()
+            val backend = HttpClient(MockEngine) {
+                engine {
+                    addHandler { request ->
+                        val body = if (request.url.encodedPath.contains("/authorize-params/")) {
+                            """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                                """"scopes":["openid"],"kind":"oidc","state":"$unreadable"}"""
+                        } else {
+                            """{"user":{"userId":"u","username":"alice"}}"""
+                        }
+                        respond(ByteReadChannel(body), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                }
+            }
+            val client = OidcClient.forAuth(backend, server, listOf("google"), "myapp://auth")
+                .also { it.platformLauncher = launcher }
+
+            shouldThrow<OidcCallbackException> { client.signIn("google") }.message shouldBe
+                "Undecodable state envelope"
+            client.authState.value shouldBe OidcAuthState.Loading
+        }
+    }
+
 }
