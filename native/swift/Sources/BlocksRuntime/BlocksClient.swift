@@ -225,16 +225,15 @@ public final class BlocksClient: Sendable {
     /// The cut is at the first `aws-blocks` segment, so a doubled `/aws-blocks/api/aws-blocks/api`
     /// gives the origin. A URL with no such segment is used as it is, without a trailing `/`.
     var rawRouteBase: String {
-        guard let parsed = URL(string: url) else { return url }
-        let pathComponents = parsed.pathComponents.filter { $0 != "/" }
-        // Find where "aws-blocks" starts in the path and drop from there
-        if let idx = pathComponents.firstIndex(of: "aws-blocks") {
-            let keepComponents = pathComponents[..<idx]
-            let scheme = parsed.scheme ?? "https"
-            let host = parsed.host ?? "localhost"
-            let port = parsed.port.map { ":\($0)" } ?? ""
-            let basePath = keepComponents.isEmpty ? "" : "/" + keepComponents.joined(separator: "/")
-            return "\(scheme)://\(host)\(port)\(basePath)"
+        // `URLComponents` keeps an IPv6 host's brackets and the path's percent-encoding as they were.
+        guard var components = URLComponents(string: url), components.host != nil else { return url }
+        let segments = components.percentEncodedPath.split(separator: "/")
+        if let idx = segments.firstIndex(of: "aws-blocks") {
+            let kept = segments[..<idx]
+            components.percentEncodedPath = kept.isEmpty ? "" : "/" + kept.joined(separator: "/")
+            components.query = nil
+            components.fragment = nil
+            return components.string ?? url
         }
         var trimmed = Substring(url)
         while trimmed.hasSuffix("/") {

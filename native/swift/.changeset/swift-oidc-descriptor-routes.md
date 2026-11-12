@@ -15,4 +15,6 @@ authorize-params path is now percent-encoded the way the server encodes it.
 
 `exchange` now refuses a provider the client wasn't built with, throwing `OIDCError.unknownProvider`
 before any request, as `signIn` already did. Raw routes are requested at the client URL cut before
-its first `aws-blocks` path segment; a URL with no such segment now drops its trailing `/`.
+its first `aws-blocks` path segment, which keeps an API Gateway stage prefix as it was written,
+percent-encoding included, and an IPv6 host's brackets. A URL with no such segment now drops its
+trailing `/`.
