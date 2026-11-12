@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { escapeRegExp, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
@@ -70,7 +70,7 @@ const PG_NAME_MAX = 63;
 const hashSuffixed = (name: string, id: string, separator: string, max = PG_NAME_MAX): string => {
 	if (name.length <= max) return name;
 	const hash = createHash('sha256').update(id).digest('hex').slice(0, 8);
-	return `${name.slice(0, max - hash.length - 1).replace(new RegExp(`${separator}$`), '')}${separator}${hash}`;
+	return `${name.slice(0, max - hash.length - 1).replace(new RegExp(`${escapeRegExp(separator)}$`), '')}${separator}${hash}`;
 };
 
 // The express configuration names the writer instance `<cluster>-instance-1`, and an instance identifier is

@@ -1,0 +1,154 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "api.getShipment",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "GetShipmentResult",
+        "schema": { "$ref": "#/components/schemas/Shipment" }
+      }
+    },
+    {
+      "name": "api.saveShipment",
+      "params": [
+        {
+          "name": "shipment",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Shipment" }
+        }
+      ],
+      "result": {
+        "name": "SaveShipmentResult",
+        "schema": { "$ref": "#/components/schemas/Shipment" }
+      }
+    },
+    {
+      "name": "api.getInvoice",
+      "params": [],
+      "result": {
+        "name": "GetInvoiceResult",
+        "schema": { "$ref": "#/components/schemas/Invoice" }
+      }
+    },
+    {
+      "name": "api.getReceipt",
+      "params": [],
+      "result": {
+        "name": "GetReceiptResult",
+        "schema": { "$ref": "#/components/schemas/Receipt" }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Shipment": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "city": { "type": "string" },
+              "geo": {
+                "type": "object",
+                "properties": {
+                  "lat": { "type": "number" },
+                  "lng": { "type": "number" },
+                  "accuracy": {
+                    "type": "object",
+                    "properties": {
+                      "meters": { "type": "number" },
+                      "source": { "type": "string", "enum": ["gps", "cell"] }
+                    },
+                    "required": ["meters", "source"]
+                  }
+                },
+                "required": ["lat", "lng"]
+              }
+            },
+            "required": ["city", "geo"]
+          },
+          "insurance": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string" },
+              "amount": { "type": "number" }
+            },
+            "required": ["provider"]
+          },
+          "signature": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "signedBy": { "type": "string" },
+                  "signedAt": { "type": "string" }
+                },
+                "required": ["signedBy", "signedAt"]
+              },
+              { "type": "null" }
+            ]
+          },
+          "parcels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sku": { "type": "string" },
+                "weightKg": { "type": "number" }
+              },
+              "required": ["sku", "weightKg"]
+            }
+          },
+          "customs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "code": { "type": "string" },
+                "value": { "type": "number" }
+              },
+              "required": ["code", "value"]
+            }
+          }
+        },
+        "required": ["id", "destination", "signature", "parcels"]
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "meta": {
+            "type": "object",
+            "properties": { "value": { "type": "integer" } },
+            "required": ["value"]
+          }
+        },
+        "required": ["id", "meta"]
+      },
+      "Receipt": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "meta": {
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"]
+          }
+        },
+        "required": ["id", "meta"]
+      }
+    }
+  }
+}

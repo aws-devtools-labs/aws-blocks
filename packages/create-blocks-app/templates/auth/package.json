@@ -1,0 +1,56 @@
+{
+  "name": "blocks-auth-app",
+  "version": "0.1.0",
+  "type": "module",
+  "blocksTemplate": "auth",
+  "blocksTemplateDescription": "Vite + vanilla-DOM tour of the Auth block: email sign-up with code, groups, profile (was auth-cognito)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "aws-blocks"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "spec": "cdk-blocks generate spec",
+    "dev:server": "cdk-blocks dev",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:preview": "cdk-blocks sandbox preview",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "prebuild": "cdk-blocks generate client",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy": "cdk-blocks deploy",
+    "secret": "cdk-blocks secret",
+    "config": "cdk-blocks config",
+    "typegen": "cdk-blocks generate types",
+    "destroy": "cdk-blocks destroy",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "vendorize": "cdk-blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "frontendPort": 3100
+    }
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.5",
+    "tsx": "^4.23.15",
+    "esbuild": "^0.28.2",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "^2.275.0",
+    "constructs": "^10.8.1"
+  }
+}

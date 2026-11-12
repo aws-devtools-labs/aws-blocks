@@ -93,23 +93,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getChannel(channelId: string) {
     const user = await auth.requireAuth(context);
     // Scoped to the caller: another user who passes the same channelId gets a different channel.
-    return assistant.getChannel(channelId, { userId: user.userId });
+    return assistant.getChannel(channelId, { userId: user.userSub });
   },
   async ask(message: string, conversationId: string) {
     const user = await auth.requireAuth(context);
-    const result = await assistant.stream(message, { conversationId, userId: user.userId });
+    const result = await assistant.stream(message, { conversationId, userId: user.userSub });
     return { channelId: result.channelId };
   },
 }));
 ```
 
-These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session user's `userSub` and don't spread a caller-supplied object into it (`{ userId: user.userSub, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userSub }` or pick only `limit`). Pass `user.userSub` rather than `user.userId`: `AuthenticatedUser` (from `@aws-blocks/bb-auth`) documents `userSub` as the id to key your data on, stable for the user's lifetime, while `userId` is the username for a user-pool user. `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getMessages(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getConversation(conversationId, { userId: user.userId });
+    return agent.getConversation(conversationId, { userId: user.userSub });
   },
 }));
 ```
@@ -589,7 +589,7 @@ const agent = new Agent(scope, 'support', {
 });
 
 const user = await auth.requireAuth(requestContext);
-await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
+await agent.stream(message, { conversationId, userId: user.userSub, context: { userId: user.userSub } });
 ```
 
 To make context required and type-safe, declare a `toolContextSchema`:
@@ -638,7 +638,7 @@ const agent = new Agent(scope, 'assistant', {
 
 // In a request handler, fill the context from the authenticated session, for example a tenant id
 // your app looks up for the signed-in user:
-// await agent.stream(message, { userId: user.userId, context: { tenantId } });
+// await agent.stream(message, { userId: user.userSub, context: { tenantId } });
 ```
 
 Or write the tool yourself:
@@ -1131,7 +1131,7 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 import type { InterruptResponse } from '@aws-blocks/bb-agent';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 
@@ -1140,35 +1140,36 @@ const agent = new Agent(scope, 'chat', {
   systemPrompt: 'You are a helpful assistant.',
 });
 
-// Any auth block works (AuthBasic, AuthCognito, AuthOIDC); the userId comes from
-// the session, never from a request parameter. See "Authorization" above.
-const auth = new AuthBasic(scope, 'auth');
+// Any Auth sign-in method works (email + password, OIDC, social); the owner id
+// (user.userSub) comes from the session, never from a request parameter. See
+// "Authorization" above.
+const auth = new Auth(scope, 'auth');
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async createConversation() {
     const user = await auth.requireAuth(context);
-    return { conversationId: await agent.createConversationId(user.userId) };
+    return { conversationId: await agent.createConversationId(user.userSub) };
   },
   async sendMessage(conversationId: string, message: string, channelId: string) {
     const user = await auth.requireAuth(context);
-    const result = await agent.stream(message, { conversationId, channelId, userId: user.userId });
+    const result = await agent.stream(message, { conversationId, channelId, userId: user.userSub });
     return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { messages: await agent.getConversation(conversationId, { userId: user.userId }) };
+    return { messages: await agent.getConversation(conversationId, { userId: user.userSub }) };
   },
   async getPendingInterrupts(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userId }) };
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userSub }) };
   },
   async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
     const user = await auth.requireAuth(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user.userId });
+    await agent.resume(channelId, responses, { conversationId, userId: user.userSub });
   },
   async getChannel(channelId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getChannel(channelId, { userId: user.userId });
+    return agent.getChannel(channelId, { userId: user.userSub });
   },
 }));
 ```
@@ -1327,8 +1328,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     return await agent.stream(message, {
       conversationId,
-      userId: user.userId,
-      context: { userId: user.userId },
+      userId: user.userSub,
+      context: { userId: user.userSub },
     });
   },
 }));

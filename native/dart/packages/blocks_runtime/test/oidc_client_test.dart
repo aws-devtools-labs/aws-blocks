@@ -317,5 +317,50 @@ void main() {
       expect(client.providerConfigs['google']!.clientId, 'client-123');
       expect(client.exchangePath, '/auth/exchange');
     });
+
+    test('defaults the relay routes to the auth block\'s /aws-blocks/auth/* '
+        'routes when the descriptor omits them', () {
+      final client = OidcClient.fromJson(
+        {
+          'exchangePath': '/aws-blocks/auth/exchange',
+          'signOutPath': '/aws-blocks/auth/signout',
+          'providers': ['google'],
+          'providerConfigs': <String, dynamic>{},
+        },
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: InMemoryTokenStore(),
+      );
+
+      // The routes `Auth` serves (packages/bb-auth DESIGN.md → Routes).
+      expect(
+        client.authorizeParamsBasePath,
+        '/aws-blocks/auth/authorize-params',
+      );
+      expect(client.callbackPath, '/aws-blocks/auth/callback');
+      expect(client.refreshPath, '/aws-blocks/auth/exchange/refresh');
+      expect(
+        OidcClient.defaultAuthorizeParamsBasePath,
+        '/aws-blocks/auth/authorize-params',
+      );
+      expect(OidcClient.defaultCallbackPath, '/aws-blocks/auth/callback');
+    });
+
+    test('constructor defaults match the descriptor defaults', () {
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: InMemoryTokenStore(),
+      );
+
+      expect(
+        client.authorizeParamsBasePath,
+        OidcClient.defaultAuthorizeParamsBasePath,
+      );
+      expect(client.callbackPath, OidcClient.defaultCallbackPath);
+    });
   });
 }

@@ -35,7 +35,9 @@ health check plus an auth-gated CRUD resource with per-user isolation.
   so an overwritten file can be restored. A presigned PUT carries no size limit;
   if you need one, upload through the API with `files.put()` and check the size
   first.
-- **Auth** — `AuthBasic`: callers sign up, then their items are scoped to them.
+- **Auth** — `Auth` (email + password; Amazon Cognito on AWS): callers sign up,
+  confirm their email with a 6-digit code (printed in the `npm run dev` terminal
+  locally), and are signed in; their items are scoped to them.
 
 There is no `src/`, `index.html`, or web bundle — nothing is served to a browser.
 Point any HTTP/JSON-RPC client at the RPC endpoint.
