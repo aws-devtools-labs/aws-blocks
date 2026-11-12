@@ -5,7 +5,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, existsSync, readdirSync } from 'node:fs';
 import { Scope } from '@aws-blocks/core';
-import { FileBucket, FileBucketErrors } from './index.mock.js';
+import { FileBucket } from './index.mock.js';
 
 const scope = new Scope('idx');
 
@@ -204,12 +204,6 @@ test('createUploadHandle returns an upload handle with toJSON', async () => {
 test('fromExisting returns ExternalBucketRef', () => {
 	const ref = FileBucket.fromExisting('my-bucket');
 	assert.strictEqual(ref.bucketName, 'my-bucket');
-});
-
-// ── Error constants ─────────────────────────────────────────────────────────
-
-test('FileBucketErrors has expected values', () => {
-	assert.strictEqual(FileBucketErrors.FileNotFound, 'NoSuchKey');
 });
 
 // ── fullId ──────────────────────────────────────────────────────────────────

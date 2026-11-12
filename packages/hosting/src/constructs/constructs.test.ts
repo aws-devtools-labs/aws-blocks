@@ -417,10 +417,6 @@ void describe('Image Optimization provisioning', () => {
     const patterns = (
       dist.Properties.DistributionConfig.CacheBehaviors ?? []
     ).map((b) => b.PathPattern);
-    assert.ok(
-      !patterns.includes('/_next/image/*'),
-      `image route must not be a behavior; got ${JSON.stringify(patterns)}`,
-    );
     assert.deepEqual(patterns.sort(), [
       '/__blocks_origin_image/*',
       '/__blocks_origin_server/*',

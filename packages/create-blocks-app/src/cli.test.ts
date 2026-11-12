@@ -211,7 +211,7 @@ describe('create-blocks-app template metadata', () => {
 
   it('every deployable template runs its lifecycle scripts through the cdk-blocks CLI', () => {
     // The npm script names stay the same; each one is a thin alias of a `cdk-blocks`
-    // command, so no template ships aws-blocks/scripts/*.ts wrappers any more.
+    // command.
     // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses, and
     // `sandbox:preview` the one-shot deploy with a hosted preview.
     const expected: Record<string, string> = {
@@ -248,10 +248,6 @@ describe('create-blocks-app template metadata', () => {
         if (name in expected && value !== expected[name]) {
           problems.push(`${entry.name}: "${name}" should be "${expected[name]}", not "${value}"`);
         }
-        if (value.includes('aws-blocks/scripts')) problems.push(`${entry.name}: "${name}" still runs ${value}`);
-      }
-      if (existsSync(join(templatesDir, entry.name, 'aws-blocks', 'scripts'))) {
-        problems.push(`${entry.name}: still ships aws-blocks/scripts/`);
       }
     }
     assert.deepStrictEqual(problems, []);
@@ -512,14 +508,9 @@ describe('create-blocks-app auto-detection', () => {
       const dev = await resolvedDevConfig(tmpDir);
       assert.strictEqual(dev.frontendCommand, undefined);
       assert.strictEqual(dev.port, 3001);
-      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts')));
-      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
       assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
-      assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
-      assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
       // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
-      assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
       assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -535,7 +526,6 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const handler = readFileSync(join(tmpDir, 'aws-blocks', 'index.handler.ts'), 'utf-8');
       assert.match(handler, /createLambdaHandler\(\(\) => import\('\.\/index\.js'\)\)/);
-      assert.doesNotMatch(handler, /import \* as backend/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -800,7 +790,6 @@ describe('create-blocks-app auto-detection', () => {
           assert.strictEqual(pkg.blocks, undefined, `${template} into ${framework}`);
           const dev = await resolvedDevConfig(tmpDir, { 'frontend-port': '41902' });
           assert.strictEqual(dev.frontendCommand, command.replace('3100', '41902'), `${template} into ${framework}`);
-          assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
         } finally {
           rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
         }

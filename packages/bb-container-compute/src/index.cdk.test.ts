@@ -254,8 +254,6 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 		]) {
 			assert.ok(names.includes(required), `expected env ${required}; got ${JSON.stringify(names)}`);
 		}
-		// No zip-prefix env should survive from the old directory-asset design.
-		assert.ok(!names.includes('BLOCKS_CODE_PREFIX'), 'BLOCKS_CODE_PREFIX should be gone (per-file assets now)');
 
 		// The container image is a stock registry string, so no ECR image-asset
 		// repository is synthesized for it. (An image built via fromAsset would

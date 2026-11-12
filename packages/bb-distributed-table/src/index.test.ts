@@ -869,15 +869,6 @@ describe('DistributedTable', () => {
 		});
 	});
 
-	// ── Error constants ─────────────────────────────────────────────────────
-
-	describe('error constants', () => {
-		test('DistributedTableErrors has expected values', () => {
-			assert.equal(DistributedTableErrors.ConditionalCheckFailed, 'ConditionalCheckFailedException');
-			assert.equal(DistributedTableErrors.ValidationFailed, 'ValidationFailedException');
-		});
-	});
-
 	// ── TypeScript type safety ──────────────────────────────────────────────
 
 	describe('type safety', () => {

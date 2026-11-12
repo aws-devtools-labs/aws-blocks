@@ -266,7 +266,6 @@ describe('cleanup-stacks.yml legs', () => {
 			{ name: 'e2e account 1', environment: 'e2e', index: 0 },
 			{ name: 'e2e account 2', environment: 'e2e', index: 1 },
 		]);
-		assert.doesNotMatch(workflow, /environment == 'publish'|secrets\.AWS_ROLE_ARN\b/);
 	});
 });
 

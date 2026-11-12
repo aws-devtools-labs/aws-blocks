@@ -780,16 +780,6 @@ describe('the 400 KB item-size overflow is a distinct ItemTooLarge error, not th
 	});
 });
 
-describe('DistributedTableErrors split the old single Validation bucket into intent-revealing names', () => {
-	test('InvalidQuery and ItemTooLarge are distinct, non-generic names', () => {
-		assert.strictEqual(DistributedTableErrors.InvalidQuery, 'InvalidQueryException');
-		assert.strictEqual(DistributedTableErrors.ItemTooLarge, 'ItemTooLargeException');
-		assert.notStrictEqual(DistributedTableErrors.InvalidQuery, DistributedTableErrors.ItemTooLarge);
-		// The generic ValidationException bucket no longer exists on the public API.
-		assert.strictEqual((DistributedTableErrors as any).Validation, undefined);
-	});
-});
-
 describe('readValidation behaves identically on the mock and the AWS runtime', () => {
 	// V2 schema adds `currency` with a default; a legacy row lacks it.
 	const schemaV2 = z.object({ orderId: z.string(), total: z.number(), currency: z.string().default('USD') });

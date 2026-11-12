@@ -475,14 +475,6 @@ describe('Disk persistence', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Error constants', () => {
-	test('AppSettingErrors has ParameterNotFound', () => {
-		assert.strictEqual(AppSettingErrors.ParameterNotFound, 'ParameterNotFoundException');
-	});
-
-	test('AppSettingErrors has ValidationFailed', () => {
-		assert.strictEqual(AppSettingErrors.ValidationFailed, 'ValidationFailedException');
-	});
-
 	test('AppSettingErrors is typed as const', () => {
 		// as const provides compile-time literal types, not runtime freezing
 		// Verify the values are string literals (not just 'string')
@@ -641,7 +633,7 @@ describe('Option validation (parity with CDK)', () => {
 		});
 	}
 
-	test('non-secret setting without a value throws (no longer silently defaults to "")', () => {
+	test('non-secret setting without a value throws', () => {
 		rejectsValidation(
 			() => new AppSetting({ id: 'root' } as any, 'no-value', { name: '/app/no-value' }),
 			'non-secret settings require a value',

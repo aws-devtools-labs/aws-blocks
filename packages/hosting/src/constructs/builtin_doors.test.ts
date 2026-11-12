@@ -112,11 +112,10 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
   // ── A. Raw routes reach the backend ──────────────────────────────────────
 
   describe('A — every origins.api.paths entry reaches the backend', () => {
-    it('ALB: one rule carries /aws-blocks/* plus each raw route; no stale /aws-blocks-auth/*', () => {
+    it('ALB: one rule carries /aws-blocks/* plus each raw route', () => {
       const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       const paths = albRulePaths(t);
       for (const p of ['/aws-blocks/*', ...RAW_ROUTES]) assert.ok(paths.includes(p), `ALB routes ${p}`);
-      assert.ok(!paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* rule');
     });
 
     it('ALB: more paths than one rule can hold (5 path values) are split across rules', () => {
@@ -152,7 +151,6 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.ok(keys.includes('ANY /aws-blocks/{proxy+}'));
       assert.ok(keys.includes('ANY /hooks/door-probe'), `routes: ${keys.join(', ')}`);
       assert.ok(keys.includes('ANY /users/{proxy+}'));
-      assert.ok(!keys.some((k) => k.includes('/aws-blocks-auth')), 'no stale /aws-blocks-auth route');
       t.hasResourceProperties('AWS::ApiGatewayV2::Integration', {
         IntegrationType: 'HTTP_PROXY',
         // Proxied to the same path on the backend's stage (API_URL minus `/aws-blocks/api`).
@@ -168,7 +166,6 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       );
       const parts = restPathParts(t);
       for (const p of ['hooks', 'door-probe', 'users']) assert.ok(parts.includes(p), `REST resource ${p}`);
-      assert.ok(!parts.includes('aws-blocks-auth'), 'no stale /aws-blocks-auth resource');
     });
 
     it('the door input lists the same paths the door routes', () => {

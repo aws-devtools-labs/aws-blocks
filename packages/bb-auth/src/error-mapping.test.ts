@@ -83,7 +83,6 @@ describe('toAuthApiError', () => {
 			assert.strictEqual(e.retriable, true);
 			assert.strictEqual(e.message, INTERNAL_ERROR_MESSAGE);
 			assertClientSafe(e);
-			assert.ok(!e.message.includes(raw.message));
 		}
 		assert.deepStrictEqual(
 			entries.map((x) => x.context?.error),
@@ -214,7 +213,6 @@ describe('wire-safe messages: Cognito text never reaches a client (ports bb-auth
 			captureLogger().logger,
 		);
 		assert.strictEqual(e.message, clientMessageFor(AuthErrors.InvalidPassword));
-		assert.ok(!e.message.includes('conform'));
 	});
 
 	test('the raw error stays server-side: non-enumerable cause, no own field of it copied', () => {

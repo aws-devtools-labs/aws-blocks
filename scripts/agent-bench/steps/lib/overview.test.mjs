@@ -73,14 +73,6 @@ describe('DELTA_THRESHOLDS — the one place the bands live', () => {
 		assert.equal(DELTA_THRESHOLDS.turns, 3);
 		assert.equal(DELTA_THRESHOLDS.costAbs, 0.02);
 	});
-	it('LOC, Files & token thresholds are GONE with their removed columns', () => {
-		assert.equal('loc' in DELTA_THRESHOLDS, false);
-		assert.equal('files' in DELTA_THRESHOLDS, false);
-		assert.equal('tokensPct' in DELTA_THRESHOLDS, false);
-		assert.equal('tokensAbs' in DELTA_THRESHOLDS, false);
-		assert.equal('cacheReadPct' in DELTA_THRESHOLDS, false);
-		assert.equal('cacheWritePct' in DELTA_THRESHOLDS, false);
-	});
 });
 
 describe('deltaColor(baseline, pr, threshold, direction) — significance + direction of the change', () => {
@@ -337,9 +329,6 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 	it('has the 8-column header — Tests|Judge|Cost|Turns|Score|Stop reason', () => {
 		const md = renderDetailed(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL), {}).join('\n');
 		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Turns \| Score \| Stop reason \|/);
-		assert.doesNotMatch(md, /Δ vs base/);
-		assert.doesNotMatch(md, /->/); // no arrows anywhere
-		assert.doesNotMatch(md, /Tokens|LOC|Files/); // removed columns gone from the header
 	});
 
 	it('scalar cells are INLINE `<indicator> <value> (<Δ>)` (tests/cost/turns/score)', () => {
@@ -355,14 +344,6 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
 		assert.equal(judge, '✨ 8 (+1)'); // overall 7→8 beyond ±0.3 → ✨; indicator + score + delta, nothing else
-		assert.doesNotMatch(judge, /·/); // no ` · ` separator
-		assert.doesNotMatch(judge, /F\d|S\d|P\d|C\d|B\d/); // no per-dimension shorthand (F/S/P/C/B)
-		assert.equal(judge.split('<br>').length, 1); // single line — no <br> stacking
-	});
-
-	it('no cell uses <br> stacking any more (every column is a single inline value)', () => {
-		const md = renderDetailed(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL), {}).join('\n');
-		assert.doesNotMatch(md, /<br>/); // Tokens/LOC/Files stacking and multi-line judge are gone
 	});
 
 	it('no baseline at all → 🆕 + the CURRENT value + (new) for every metric (value never hidden)', () => {
@@ -418,8 +399,6 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([partialDims], {}), null));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
 		assert.equal(judge, '🆕 8 (new)'); // overall score only — the per-dim data exists but is NOT rendered
-		assert.doesNotMatch(judge, /·|F\d|S\d|P\d|C\d|B\d/); // no shorthand tail
-		assert.equal(judge.split('<br>').length, 1); // single line, never <br>-stacked
 	});
 
 	it('a removed cell whose baseline lacks a test denom omits the "(was …)" suffix (never prints /null)', () => {

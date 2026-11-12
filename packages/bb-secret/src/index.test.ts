@@ -58,7 +58,6 @@ describe('Secret (mock)', () => {
 			void (writableSecret.put as (v: string) => Promise<void>);
 			// @ts-expect-error — a writable string secret rejects a non-string value
 			void writableSecret.put(123);
-			assert.ok(true);
 		});
 
 		test('put is absent from the instance by default (read-only)', () => {

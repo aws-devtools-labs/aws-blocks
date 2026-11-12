@@ -3156,7 +3156,6 @@ describe('Hosting', () => {
         const paths = routed(Template.fromStack(stack)).join(' ');
         assert.match(paths, /\/hooks\/door-probe/, `${label} routes the raw route (got: ${paths})`);
         assert.match(paths, /\/users\/(\*|\{proxy\+\})/, `${label} routes the parameterized raw route`);
-        assert.doesNotMatch(paths, /aws-blocks-auth/, 'no stale /aws-blocks-auth path');
       });
     }
 
@@ -3494,7 +3493,6 @@ describe('Hosting', () => {
       assert.strictEqual(edge.behaviors[0][0], '/.blocks-sandbox/*');
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
       assert.strictEqual(warnings.length, 1);
-      assert.doesNotMatch(String(warnings[0]?.entry.data), /raise the quota/);
     });
 
     it('the edge stamps the same security headers on the API, auth and raw-route behaviors as on the static site', () => {

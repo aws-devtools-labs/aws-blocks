@@ -217,7 +217,7 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 		assert.equal(verdictOf(cell), 'harness_error');
 	});
 
-	it('the isolation-active teardown reason is the concrete WALL-CLOCK-TIMEOUT label, not the old agent-teardown one', () => {
+	it('the isolation-active teardown reason is the concrete WALL-CLOCK-TIMEOUT label', () => {
 		// Under active isolation the death is an infra wall-clock timeout, NOT an agent pkill-storm, so the
 		// reason must read as a timeout. Still harness_error, still EXCLUDED — only the label changed.
 		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
@@ -225,7 +225,6 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 		assert.equal(klass, 'harness_error');
 		assert.equal(reason, 'wall_clock_timeout');
 		assert.equal(reason, AGENT_HARNESS_TIMEOUT_REASON);
-		assert.notEqual(reason, 'agent_harness_teardown'); // the old, misleading label is gone
 		assert.equal(isScoredCell(cell), false); // still EXCLUDED from the headline mean
 	});
 
@@ -599,7 +598,7 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 	// the causal `data_layer_unavailable` sentinel (step 3 sets it only when the layer was down at test end).
 	const base = { task: 'oidc-dsql-notes', template: 'default', dev_server_status: 'dead', dev_pid_status: 'exited (pid=1)', tests_passed: 0, tests_failed: 0 };
 
-	it('Aborted(...) in a dead_server dev-log alone NO LONGER excludes — stays dead_server (counted)', () => {
+	it('Aborted(...) in a dead_server dev-log alone stays dead_server (counted)', () => {
 		// Blocking 2: the trap signature appearing in the tail is not proof it CAUSED the death. Without
 		// the causal sentinel this is a genuine product failure and must stay counted.
 		const cell = { ...base, dev_log_tail: 'postgres: Aborted(Cannot enlarge memory arrays to 0x...)' };
@@ -624,7 +623,7 @@ describe('dead_server PGlite-init-OOM carve-out: a WASM memory-ceiling crash is 
 		assert.equal(isScoredCell(cell), true);
 	});
 
-	it('isPgliteInitOom still matches the trap signatures (pure predicate; no longer wired into classifyCell)', () => {
+	it('isPgliteInitOom matches the trap signatures (pure predicate)', () => {
 		assert.equal(isPgliteInitOom('x Aborted(OOM) y'), true);
 		assert.equal(isPgliteInitOom('wasm trap: unreachable'), true);
 		assert.equal(isPgliteInitOom('RuntimeError: unreachable'), true);

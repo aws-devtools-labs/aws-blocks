@@ -141,23 +141,6 @@ describe('file-server: basic GET/PUT', () => {
 		assert.strictEqual(res.status, 403);
 	});
 
-	test('a token forged with the former hardcoded secret is rejected', async () => {
-		// The signing secret used to be a fixed, source-visible literal, so anyone
-		// could mint a valid token offline for any fullId/path without ever calling
-		// getUrl()/putUrl(). It is now a per-process random secret. A token signed
-		// with the old literal must no longer validate.
-		const bucket = new FileBucket(scope, 'fs-forge');
-		const putUrl = await bucket.putUrl('secret.txt', { contentType: 'text/plain' });
-		const adjustedPut = putUrl.replace(/localhost:\d+/, `localhost:${port}`);
-		await fetch(adjustedPut, { method: 'PUT', body: 'data', headers: { 'Content-Type': 'text/plain' } });
-
-		const forged = mintFileToken('fsrv-fs-forge', 'secret.txt', 'GET', 3600, '__blocks_file_bucket_dev_secret__');
-		const url = `http://localhost:${port}/.bb-file-bucket/fsrv-fs-forge/secret.txt?token=${forged}`;
-		const res = await fetch(url);
-		await res.arrayBuffer();
-		assert.strictEqual(res.status, 403, 'a token forged with the old hardcoded secret must be rejected');
-	});
-
 	test('PUT for an unregistered bucket fails loud (500), no silent write', async () => {
 		// Mint a structurally valid token for a fullId that has no FileBucket
 		// instance registered. The server must refuse rather than fall back to

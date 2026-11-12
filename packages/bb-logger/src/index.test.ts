@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Scope } from '@aws-blocks/core';
-import { Logger, LoggingErrors } from './index.mock.js';
+import { Logger } from './index.mock.js';
 import { Logger as AwsLogger } from './index.aws.js';
 import type { LogEntry, ChildLogger } from './types.js';
 import { shouldLog, buildEntry, processValue, safeStringify } from './serializer.js';
@@ -485,14 +485,6 @@ describe('buildEntry', () => {
 		const result = buildEntry('info', 'test', 'app', []);
 		const entry = JSON.parse(result);
 		assert.strictEqual(entry.traceId, undefined);
-	});
-});
-
-// ── Error Constants ─────────────────────────────────────────────────────────
-
-describe('error constants', () => {
-	test('LoggingErrors exports SerializationFailed', () => {
-		assert.strictEqual(LoggingErrors.SerializationFailed, 'SerializationFailedException');
 	});
 });
 

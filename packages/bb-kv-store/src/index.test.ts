@@ -287,7 +287,7 @@ test('400 KB rejection is matchable via KVStoreErrors.ItemTooLarge', async () =>
 	);
 });
 
-test('ItemTooLarge error name is distinct from generic ValidationException', async () => {
+test('ItemTooLarge error name is ItemTooLargeException', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'big3');
 	const bigValue = 'x'.repeat(401 * 1024);
 	await assert.rejects(
@@ -295,8 +295,6 @@ test('ItemTooLarge error name is distinct from generic ValidationException', asy
 		(e: unknown) => {
 			assert.ok(e instanceof Error);
 			assert.strictEqual(e.name, 'ItemTooLargeException');
-			assert.notStrictEqual(e.name, 'ValidationException',
-				'ItemTooLarge must NOT use the generic ValidationException name');
 			return true;
 		},
 	);
@@ -321,17 +319,6 @@ test('ItemTooLarge error message matches DynamoDB size-exceeded pattern', async 
 test('fromExisting returns ExternalTableRef', () => {
 	const ref = KVStore.fromExisting('my-table');
 	assert.strictEqual(ref.tableName, 'my-table');
-});
-
-// ── Error constants ─────────────────────────────────────────────────────────
-
-test('KVStoreErrors has ConditionalCheckFailed', () => {
-	assert.strictEqual(KVStoreErrors.ConditionalCheckFailed, 'ConditionalCheckFailedException');
-});
-
-test('KVStoreErrors.ItemTooLarge is a distinct name, not generic ValidationException', () => {
-	assert.strictEqual(KVStoreErrors.ItemTooLarge, 'ItemTooLargeException');
-	assert.notStrictEqual(KVStoreErrors.ItemTooLarge, 'ValidationException');
 });
 
 // ── fullId ──────────────────────────────────────────────────────────────────

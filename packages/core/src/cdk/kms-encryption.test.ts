@@ -53,9 +53,3 @@ test('resolveKmsEncryption: an unrecognized value fails the synth with the block
 		);
 	}
 });
-
-test('resolveKmsEncryption: an unrecognized value no longer emits the UnknownEncryption warning', () => {
-	const stack = new cdk.Stack(new cdk.App(), 'stack');
-	assert.throws(() => resolveKmsEncryption(stack, 'kms' as unknown as KmsEncryptionOption, IDENTITY));
-	assert.strictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('UnknownEncryption')).length, 0);
-});

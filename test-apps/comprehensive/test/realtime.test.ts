@@ -573,7 +573,6 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const _good1: import('aws-blocks').DisconnectReason = 'timeout';
 				const _good2: import('aws-blocks').DisconnectReason = 'error';
 				const _good3: import('aws-blocks').DisconnectReason = 'unknown';
-				assert.ok(true);
 			});
 		});
 	});

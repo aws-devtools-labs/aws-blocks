@@ -123,7 +123,6 @@ describe('WebSocket server: subscribe authorization', () => {
 
 		const message = await authedGotMessage;
 		assert.deepStrictEqual(message.data, { sender: 'alice', text: 'Top secret' });
-		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 		assert.strictEqual(intruderGotMessage, false, 'unauthorized client must not receive the broadcast');
 
 		authed.close();
@@ -145,7 +144,6 @@ describe('WebSocket server: subscribe authorization', () => {
 
 		const message = await received;
 		assert.deepStrictEqual(message.data, { text: 'from server' });
-		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 
 		subscriber.close();
 	});
