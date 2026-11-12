@@ -7,10 +7,12 @@ import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.exceptions.BlocksException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.contentType
@@ -35,9 +37,11 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.plus
@@ -58,6 +62,12 @@ class OidcClient<P : OidcProvider> internal constructor(
     private val wireDescriptor: JsonObject? = null,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
+
+    /**
+     * Whether this client has a signed-in user. It is [OidcAuthState.Loading] until [restore],
+     * [signIn] or [signOut] first settles it, so call [restore] on launch to pick up a session
+     * from an earlier one.
+     */
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
 
     val providers: List<String> = config.providers
@@ -333,6 +343,61 @@ class OidcClient<P : OidcProvider> internal constructor(
         }
     }
 
+    /**
+     * Reads the session the backend holds for this client's cookie, so an app that launches
+     * signed in reports it before any sign-in of its own. Call it once on launch:
+     *
+     * ```kotlin
+     * val user = oidc.restore() // null when there is no session
+     * ```
+     *
+     * The user is the one the backend reports, including its `userId`.
+     *
+     * @return the signed-in user, which also becomes the value of [authState], or `null` when the
+     *   backend has no session for this client, which sets [authState] to signed out.
+     * @throws OidcSessionException if the backend answers with a failure status other than 401.
+     *   A 404 means it serves no session route, which an `Auth` block with no federated providers
+     *   does not. [authState] is left as it was, as it is for a request that fails to reach the
+     *   backend.
+     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     */
+    suspend fun restore(): OidcUser? {
+        ensureOpen()
+        val response = httpClient.get(server.rawRoute(sessionPath))
+        if (response.status == HttpStatusCode.Unauthorized) {
+            _authState.value = OidcAuthState.SignedOut
+            return null
+        }
+        if (!response.status.isSuccess()) {
+            val status = response.status.value
+            if (response.status == HttpStatusCode.NotFound) {
+                throw OidcSessionException(
+                    "The backend serves no session route at $sessionPath. An Auth block serves one only " +
+                        "when it has federated providers; check the block's providers and callbackPath.",
+                    status,
+                    null,
+                )
+            }
+            val name = runCatching {
+                Json.parseToJsonElement(response.bodyAsText()).jsonObject["name"]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+            throw OidcSessionException(
+                "Session read failed: HTTP $status" + (name?.let { " ($it)" } ?: ""),
+                status,
+                name,
+            )
+        }
+        val userElement = Json.parseToJsonElement(response.bodyAsText()).jsonObject["user"]
+            ?: throw SerializationException("Session response missing 'user' field")
+        return BlocksJson.decodeFromJsonElement<OidcUser>(userElement).also {
+            _authState.value = OidcAuthState.SignedIn(it)
+        }
+    }
+
+    /** The backend serves its session read in the directory of the callback, beside `exchange`. */
+    private val sessionPath: String
+        get() = config.callbackPath.substringBeforeLast('/') + "/session"
+
     suspend fun signOut() {
         ensureOpen()
         val signOutUrl = server.rawRoute(config.signOutPath)
@@ -378,7 +443,7 @@ class OidcClient<P : OidcProvider> internal constructor(
          * Creates a client for the federation routes of an AWS Blocks `Auth` block.
          *
          * `Auth` serves the relay sign-in routes at fixed paths in the directory of [callbackPath]
-         * (`authorize-params/<provider>`, `exchange`), plus [callbackPath] itself and
+         * (`authorize-params/<provider>`, `exchange`, `session`), plus [callbackPath] itself and
          * [signOutPath], so the client needs no server-supplied descriptor:
          *
          * ```kotlin
