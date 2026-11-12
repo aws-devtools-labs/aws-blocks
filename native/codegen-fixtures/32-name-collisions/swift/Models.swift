@@ -1,4 +1,5 @@
 import Foundation
+import BlocksRuntime
 
 
 public nonisolated struct Cart: Codable, Sendable {
@@ -170,20 +171,25 @@ public nonisolated struct Count: Codable, Sendable {
 public nonisolated enum TicketPayload: Codable, Sendable {
     case text(Text)
     case count(Count)
+    /// An arm this client was generated without: the object as the server sent it.
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case `type`
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("text", forKey: .`type`)
             try params.encode(to: encoder)
         case .count(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("count", forKey: .`type`)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
     }
 
@@ -194,7 +200,7 @@ public nonisolated enum TicketPayload: Codable, Sendable {
         case "text": self = .text(try Text(from: decoder))
         case "count": self = .count(try Count(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .`type`, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
@@ -218,20 +224,25 @@ public nonisolated struct Rich: Codable, Sendable {
 public nonisolated enum TicketPayloads: Codable, Sendable {
     case plain(Plain)
     case rich(Rich)
+    /// An arm this client was generated without: the object as the server sent it.
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case format
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .plain(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("plain", forKey: .format)
             try params.encode(to: encoder)
         case .rich(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("rich", forKey: .format)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
     }
 
@@ -242,7 +253,7 @@ public nonisolated enum TicketPayloads: Codable, Sendable {
         case "plain": self = .plain(try Plain(from: decoder))
         case "rich": self = .rich(try Rich(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .format, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
