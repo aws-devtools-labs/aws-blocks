@@ -1328,17 +1328,20 @@ final class OIDCClientTests: XCTestCase {
             "userSub": "https://idp.example.com:sub-1",
             "signInProvider": "google",
             "groups": ["admins"],
-            "attributes": ["email": "alice@example.com", "custom:team": "platform"]
+            "attributes": ["email": "alice@example.com", "custom:team": "platform"],
+            "displayName": "alice@example.com"
         ])
         XCTAssertEqual(user.userSub, "https://idp.example.com:sub-1")
         XCTAssertEqual(user.signInProvider, "google")
         XCTAssertEqual(user.groups, ["admins"])
         XCTAssertEqual(user.attributes, ["email": "alice@example.com", "custom:team": "platform"])
+        XCTAssertEqual(user.displayName, "alice@example.com")
 
         let minimal = try OIDCUser.fromJSON(["userId": "u1", "username": "bob"])
         XCTAssertNil(minimal.userSub)
         XCTAssertNil(minimal.signInProvider)
         XCTAssertNil(minimal.attributes)
+        XCTAssertNil(minimal.displayName)
         XCTAssertEqual(minimal.groups, [])
     }
 
