@@ -142,7 +142,7 @@ All condition failures throw with `error.name === DistributedTableErrors.Conditi
 
 ### Reads and schema evolution
 
-Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T` — a newly added field is **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a **required, no-default** field makes the read-modify-write cycle above **fail on the write** as `put()` rejects the legacy shape.
+Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T`. Under the default `'coerce'` (and under `'strict'`), a newly added field with a `.default()` is **filled in on the returned value**, but the stored row is **not rewritten** — the default reaches storage only when you `put()` the returned item back. Under `'off'` the field stays **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back). A **required, no-default** field can't be filled in any mode: the read-modify-write cycle above **fails on the write** as `put()` rejects the legacy shape (under `'strict'`, the read itself throws first).
 
 `readValidation` has three modes:
 

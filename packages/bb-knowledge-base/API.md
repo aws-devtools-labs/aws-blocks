@@ -7,6 +7,7 @@
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { z } from 'zod';
 
 // @public
 export interface ChunkingConfig {
@@ -27,6 +28,7 @@ export type IngestionFailureCause = Error & {
 // @public
 export class KnowledgeBase extends Scope {
     constructor(scope: ScopeParent, id: string, _options: KnowledgeBaseOptions);
+    asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext>;
     // (undocumented)
     readonly bbName = "KnowledgeBase";
     isSynced(): Promise<boolean>;
@@ -35,6 +37,38 @@ export class KnowledgeBase extends Scope {
     retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]>;
     waitUntilSynced(options?: WaitUntilSyncedOptions): Promise<void>;
 }
+
+// @public
+export type KnowledgeBaseAgentTool<TContext> = {
+    description: string;
+    parameters: z.ZodObject<{
+        query: z.ZodString;
+    }>;
+    untrustedOutput: true;
+    handler: (args: {
+        input: {
+            query: string;
+        };
+        context: TContext;
+    }) => Promise<KnowledgeBaseAgentToolResult[]>;
+};
+
+// @public
+export interface KnowledgeBaseAgentToolOptions<TContext> {
+    description?: string;
+    filter: (context: TContext) => MetadataFilter | undefined | Promise<MetadataFilter | undefined>;
+    maxResults?: number;
+}
+
+// @public
+export type KnowledgeBaseAgentToolResult = {
+    text: string;
+    score: number;
+    source: string;
+    metadata: {
+        [key: string]: string;
+    };
+};
 
 // @public
 export const KnowledgeBaseErrors: {

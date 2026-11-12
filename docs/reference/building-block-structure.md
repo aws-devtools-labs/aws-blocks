@@ -440,6 +440,23 @@ export class MyBlock {
 }
 ```
 
+## Mock and AWS validation parity
+
+A Building Block that ships both a local mock (`src/index.mock.ts`) and an AWS runtime entry (`src/index.aws.ts`) must validate caller input the same way in both. A check that exists only in the mock lets local tests pass while the deployed path accepts the same input, or fails with a raw SDK error instead of the named one.
+
+- **Put caller-input checks in `src/validation.ts`**, and call them from both `index.mock.ts` and `index.aws.ts` at the same point in each method (the same order relative to schema checks and other preconditions), before the AWS entry calls the SDK.
+- **Throw the same branded, named error on both paths**: `blocksError()` or `brandBlocksError()` from `@aws-blocks/core`, so callers can match it with `isBlocksError(e, XxxErrors.Foo)`.
+- **Leave service-only semantics to the service.** Don't simulate in the AWS entry what only the service can decide (IAM, eventual consistency, account quotas); the mock may simulate them, and the BB's `DESIGN.md` should note the difference.
+- **Add `src/parity.test.ts`.** Run one table of cases against the mock and against the AWS entry with its SDK client stubbed, and assert the same outcome: the same named error, or success. For success cases, assert the captured SDK input, so a stub that rejects every command can't make a case pass; for rejected cases, assert that nothing reached the SDK. `packages/bb-file-bucket/src/parity.test.ts` and `packages/bb-app-setting/src/parity.test.ts` follow this model.
+
+`packages/blocks/src/mock-aws-parity.test.ts` enforces the structure: it fails when a BB with both entries has no `src/parity.test.ts`, or when its `src/validation.ts` is imported by only one of the two entries. A BB that doesn't meet a rule yet must have an entry with a reason (or the owning pull request) in that file's `PARITY_ALLOWLIST`, and an entry that is no longer needed fails the test. Run it with:
+
+```bash
+cd packages/blocks && npm run build && node --test dist/mock-aws-parity.test.js
+```
+
+A stubbed-SDK parity suite checks the BB's own validation and error mapping, not service behavior. Changes that depend on how S3, DynamoDB, SES or another service behaves still need a sandbox run (`npm run test:e2e:sandbox`).
+
 ## Best Practices
 
 1. **Keep interfaces consistent** - Runtime and mock should export the same interface

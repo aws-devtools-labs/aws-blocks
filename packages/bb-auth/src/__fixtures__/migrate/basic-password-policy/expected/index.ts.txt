@@ -1,0 +1,49 @@
+import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+const base = { minLength: 12 };
+
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod
+//   wrote `false` for each one the old policy left unset, so passwords that worked before still do).
+export const multiline = new Auth(scope, 'multiline', {
+	session: {
+		ttlSeconds: 3600,
+	},
+	emailPassword: {
+		passwordPolicy: {
+			minLength: 12,
+			requireUppercase: true,
+			requireLowercase: false,
+			requireDigits: false,
+			requireSymbols: false,
+		},
+	},
+});
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod
+//   wrote `false` for each one the old policy left unset, so passwords that worked before still do).
+export const empty = new Auth(scope, 'empty', { session: { ttlSeconds: 3600 }, emailPassword: { passwordPolicy: { requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false } } });
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod
+//   wrote `false` for each one the old policy left unset, so passwords that worked before still do).
+// TODO(aws-blocks-auth-migrate): add requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false (in passwordPolicy) to these options to keep AuthBasic's password policy (it required no character classes) (MIGRATION.md, "Option mapping").
+export const spread = new Auth(scope, 'spread', { session: { ttlSeconds: 3600 }, emailPassword: { passwordPolicy: { ...base } } });
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod
+//   wrote `false` for each one the old policy left unset, so passwords that worked before still do).
+// TODO(aws-blocks-auth-migrate): AuthBasic passwordPolicy.requireSpecialChars is now requireSymbols; rename it in this object, and set requireUppercase, requireLowercase, requireDigits and requireSymbols to false where it leaves them unset, to keep AuthBasic's password policy (it required no character classes).
+export const byRef = new Auth(scope, 'by-ref', { session: { ttlSeconds: 3600 }, emailPassword: { passwordPolicy: base } });

@@ -8,9 +8,7 @@
   "references": [
     { "path": "../core" },
     { "path": "../auth-common" },
-    { "path": "../bb-auth-basic" },
-    { "path": "../bb-auth-cognito" },
-    { "path": "../bb-auth-oidc" },
+    { "path": "../bb-auth" },
     { "path": "../bb-kv-store" },
     { "path": "../bb-distributed-table" },
     { "path": "../bb-realtime" },

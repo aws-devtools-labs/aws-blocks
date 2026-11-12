@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -96,22 +97,22 @@ class UsersApi {
   UsersApi(this._client);
 
   Future<User> get$({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('users.get', params);
     return User.fromJson(result as Map<String, dynamic>);
   }
 
   Future<List<User>> list() async {
-    final result = await _client.call('users.list', <String, dynamic>{});
+    final result = await _client.call('users.list', const <dynamic>[]);
     return (result as List<dynamic>).map((e) => User.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<User> create({required UsersCreateInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('users.create', params);
     return User.fromJson(result as Map<String, dynamic>);
   }
@@ -242,25 +243,25 @@ class PostsApi {
   PostsApi(this._client);
 
   Future<List<PostsListResult>> list({required String authorId}) async {
-    final params = <String, dynamic>{
-      'authorId': authorId,
-    };
+    final params = <dynamic>[
+      authorId,
+    ];
     final result = await _client.call('posts.list', params);
     return (result as List<dynamic>).map((e) => PostsListResult.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<PostsListResult> create({required PostsCreateInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('posts.create', params);
     return PostsListResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<PostsDeleteResult> delete({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('posts.delete', params);
     return PostsDeleteResult.fromJson(result as Map<String, dynamic>);
   }

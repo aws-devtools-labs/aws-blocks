@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -277,23 +278,23 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetClassResult> getClass({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.getClass', params);
     return GetClassResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<ImportResult> import$({required ApiImportInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.import', params);
     return ImportResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<ExportResult> export$() async {
-    final result = await _client.call('api.export', <String, dynamic>{});
+    final result = await _client.call('api.export', const <dynamic>[]);
     return ExportResult.fromJson(result as Map<String, dynamic>);
   }
 }

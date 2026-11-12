@@ -6,7 +6,7 @@ import { HostingError } from '../hosting_error.js';
 // ---- Constants ----
 
 /** Default rate limit: requests per 5-minute window per IP. */
-const DEFAULT_RATE_LIMIT = 1000;
+export const DEFAULT_WAF_RATE_LIMIT = 1000;
 
 // ---- Public types ----
 
@@ -26,6 +26,28 @@ export type WafConstructProps = {
    * via a cross-region mechanism.
    */
   skipRegionValidation?: boolean;
+  /**
+   * Web ACL scope. `'REGIONAL'` builds the same rules for an API Gateway
+   * stage (no us-east-1 requirement).
+   * @default 'CLOUDFRONT'
+   */
+  scope?: 'CLOUDFRONT' | 'REGIONAL';
+  /**
+   * A header (name and exact value) that exempts a request from the rate rule
+   * (the managed rule groups still inspect it). Used on a REGIONAL web ACL
+   * behind CloudFront: requests CloudFront forwards arrive from its edge IPs,
+   * so a per-IP limit would throttle every viewer behind one edge together.
+   * CloudFront marks them with an origin custom header, which replaces any
+   * viewer header of the same name.
+   */
+  rateLimitExemptHeader?: { name: string; value: string };
+  /**
+   * Keep sampled requests for the web ACL and every rule. Sampled requests
+   * carry the full request headers, and the logging `RedactedFields` don't
+   * apply to them, so turn this off on a web ACL that sees a secret header.
+   * @default true
+   */
+  sampledRequests?: boolean;
 };
 
 // ---- Construct ----
@@ -39,6 +61,8 @@ export type WafConstructProps = {
  * - IP-based rate limiting
  *
  * NOTE: WAFv2 WebACLs with scope CLOUDFRONT must be created in us-east-1.
+ * With `scope: 'REGIONAL'` the same rules are built for an API Gateway stage
+ * in the stack's region.
  */
 export class WafConstruct extends Construct {
   readonly webAcl?: CfnWebACL;
@@ -54,9 +78,11 @@ export class WafConstruct extends Construct {
     }
 
     const region = Stack.of(this).region;
+    const scopeName = props.scope ?? 'CLOUDFRONT';
 
     // Validate us-east-1 (required for CloudFront WAF)
     if (
+      scopeName === 'CLOUDFRONT' &&
       !props.skipRegionValidation &&
       !Token.isUnresolved(region) &&
       region !== 'us-east-1'
@@ -77,16 +103,17 @@ export class WafConstruct extends Construct {
       });
     }
 
-    const rateLimit = props.rateLimit ?? DEFAULT_RATE_LIMIT;
+    const rateLimit = props.rateLimit ?? DEFAULT_WAF_RATE_LIMIT;
     const metricPrefix = props.metricName ?? 'hosting';
+    const sampled = props.sampledRequests ?? true;
 
     this.webAcl = new CfnWebACL(this, 'WebAcl', {
       defaultAction: { allow: {} },
-      scope: 'CLOUDFRONT',
+      scope: scopeName,
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
         metricName: `${metricPrefix}WebAcl`,
-        sampledRequestsEnabled: true,
+        sampledRequestsEnabled: sampled,
       },
       rules: [
         {
@@ -102,7 +129,7 @@ export class WafConstruct extends Construct {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'AWSManagedRulesCommonRuleSet',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
         {
@@ -118,7 +145,7 @@ export class WafConstruct extends Construct {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'AWSManagedRulesKnownBadInputsRuleSet',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
         {
@@ -129,12 +156,28 @@ export class WafConstruct extends Construct {
             rateBasedStatement: {
               limit: rateLimit,
               aggregateKeyType: 'IP',
+              ...(props.rateLimitExemptHeader
+                ? {
+                    scopeDownStatement: {
+                      notStatement: {
+                        statement: {
+                          byteMatchStatement: {
+                            fieldToMatch: { singleHeader: { Name: props.rateLimitExemptHeader.name } },
+                            positionalConstraint: 'EXACTLY',
+                            searchString: props.rateLimitExemptHeader.value,
+                            textTransformations: [{ priority: 0, type: 'NONE' }],
+                          },
+                        },
+                      },
+                    },
+                  }
+                : {}),
             },
           },
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'RateLimitRule',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
       ],

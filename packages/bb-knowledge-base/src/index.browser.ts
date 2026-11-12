@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSyncedOptions } from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSyncedOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
 import { KnowledgeBaseErrors, blocksError } from './errors.js';
 
 export type {
@@ -11,6 +11,7 @@ export type {
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
 	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolResult,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -37,6 +38,10 @@ export class KnowledgeBase {
 	}
 
 	async retrieve(_query: string, _options?: RetrieveOptions): Promise<RetrieveResult[]> {
+		throw browserError();
+	}
+
+	asAgentTool<TContext = Record<string, any>>(_options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
 		throw browserError();
 	}
 

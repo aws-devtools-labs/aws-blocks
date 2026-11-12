@@ -22,8 +22,12 @@ import type {
 	MetadataFilter,
 	WaitUntilSyncedOptions,
 	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolResult,
 } from './types.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
+import { createAgentTool } from './agent-tool.js';
 import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -39,6 +43,9 @@ export type {
 	MetadataFilter,
 	WaitUntilSyncedOptions,
 	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolResult,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -267,6 +274,7 @@ export class KnowledgeBase extends Scope {
 	// lazily on first sync call via getAgentClient() so instances that only
 	// ever retrieve() (or never check sync state) don't allocate it.
 	private agentClient?: BedrockAgentClient;
+	private readonly kbDescription?: string;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -275,6 +283,7 @@ export class KnowledgeBase extends Scope {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = _options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fullIdCached = this.fullId;
+		this.kbDescription = _options?.description;
 		this.runtimeClient = new BedrockAgentRuntimeClient({
 			maxAttempts: 3,
 			retryMode: 'adaptive',
@@ -368,6 +377,54 @@ export class KnowledgeBase extends Scope {
 			this.log.error(mapped.message);
 			throw mapped;
 		}
+	}
+
+	/**
+	 * Expose this knowledge base as an Agent tool whose search scope comes from your server code,
+	 * not from the model.
+	 *
+	 * Pass the result to the `tool()` factory in an Agent's `tools` callback. The tool takes one
+	 * input, `query`; the metadata filter is derived on every call by `options.filter` from the
+	 * per-call tool context, which you fill from the authenticated session in `agent.stream()`.
+	 * The tool is marked `untrustedOutput: true`, so the agent wraps retrieved text in an
+	 * untrusted-data block and tells the model to treat it as data, never instructions.
+	 *
+	 * Retrieval is read-only, so the tool doesn't set `needsApproval`. Set `needsApproval` on the
+	 * agent's tools that have side effects.
+	 *
+	 * Synth-safe: you can declare the tool at module top level. The search itself runs only at
+	 * runtime.
+	 *
+	 * @param options - `filter` (required) derives the metadata filter from the tool context;
+	 *   optional `description` and `maxResults` (default 5).
+	 * @returns A plain tool definition (`description`, `parameters`, `untrustedOutput: true`,
+	 *   `handler`) for the Agent's `tool()` factory. The handler returns plain JSON search hits.
+	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function, or
+	 *   `options.maxResults` is not an integer. When the tool runs, an error thrown by `filter`
+	 *   fails the call (no unscoped search), and so does a `filter` result other than `undefined`
+	 *   that isn't a non-empty filter with a non-empty string `equals` per key (`null`, `{}`,
+	 *   `{ tenant: { equals: undefined } }`); `retrieve()` errors propagate.
+	 *
+	 * @example
+	 * ```typescript
+	 * const agent = new Agent(scope, 'assistant', {
+	 *   systemPrompt: 'Answer questions from the tenant documents.',
+	 *   toolContextSchema: z.object({ tenantId: z.string() }),
+	 *   tools: (tool) => ({
+	 *     searchDocs: tool(kb.asAgentTool({
+	 *       filter: (context) => ({ tenant: { equals: context.tenantId } }),
+	 *     })),
+	 *   }),
+	 * });
+	 *
+	 * // In an API method: the scope comes from the authenticated session. The built-in auth
+	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
+	 * const user = await auth.requireAuth(context);
+	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
+	 * ```
+	 */
+	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
+		return createAgentTool(this.retrieve.bind(this), options, this.kbDescription);
 	}
 
 	/**

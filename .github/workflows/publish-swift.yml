@@ -25,7 +25,7 @@ jobs:
         run: swift build
 
       - name: Run unit tests
-        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests"
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests|BlocksGeneratedNonIdentifierNamesTests"
 
       - name: Build for iOS
         run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
@@ -95,8 +95,8 @@ jobs:
       - name: Guard against existing release branch
         env:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           if git ls-remote --heads origin "release/swift-${VERSION}" | grep -q .; then
             echo "::error::Release branch release/swift-${VERSION} already exists."
             exit 1
@@ -104,8 +104,9 @@ jobs:
 
       - name: Read CHANGELOG entry
         id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           ENTRY=$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")
           # Use a randomised heredoc delimiter so a changelog line that happens
           # to equal a fixed "EOF" can't terminate this $GITHUB_OUTPUT block
@@ -124,9 +125,9 @@ jobs:
           # the workflow expression expand into the script text, so the shell
           # treats the value as data and does not evaluate it.
           CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
+          VERSION: ${{ steps.version.outputs.version }}
         working-directory: .
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/swift-${VERSION}"
 
           git config user.name "github-actions[bot]"
@@ -200,8 +201,8 @@ jobs:
           # the workflow expression expand into the script text (see the
           # monorepo step), so the shell treats the value as data.
           CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/swift-${VERSION}"
 
           git config user.name "github-actions[bot]"

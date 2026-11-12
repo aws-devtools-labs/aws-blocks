@@ -3,11 +3,17 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import { ClusterInfra } from './deploy/cluster-infra.js';
 import { configError } from './errors.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
-import { registerDatabase, registerUniqueId } from './runtime/construction.js';
+import {
+	type ResolvedClusterOptions,
+	registerDatabase,
+	registerUniqueId,
+	resolveClusterOptions,
+} from './runtime/construction.js';
 import type { ClusterRef, ClusterType, DatabaseClusterOptions, DatabaseOptions } from './types.js';
 
 // DSQL is reached over its public endpoint, so an app in a VPC needs egress.
@@ -18,7 +24,7 @@ function projectRootOf(scope: BuildingBlockScope): string {
 	return typeof ctx === 'string' && ctx ? ctx : process.cwd();
 }
 
-function clusterInfra(owner: BuildingBlockScope, options: DatabaseClusterOptions): ClusterInfra {
+function clusterInfra(owner: BuildingBlockScope, options: ResolvedClusterOptions): ClusterInfra {
 	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options });
 	for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(owner, key, value);
 	return infra;
@@ -26,7 +32,9 @@ function clusterInfra(owner: BuildingBlockScope, options: DatabaseClusterOptions
 
 /**
  * The cluster a `Database` runs on, when several blocks share one. Provisions
- * Aurora DSQL (`type: 'dsql'`) plus the migration Lambdas its blocks use.
+ * Aurora DSQL (`type: 'dsql'`) or Aurora PostgreSQL Serverless v2 with the
+ * express configuration (`type: 'aurora'`), plus the migration Lambdas its
+ * blocks use. Both kinds are reached over a public endpoint, so neither needs a VPC.
  *
  * Part of the `Database` block, not a block itself. It extends
  * `BuildingBlockScope` only because that is how a construct declares its VPC
@@ -40,9 +48,13 @@ export class DatabaseCluster extends BuildingBlockScope {
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
-		this.type = options.type;
+		// First-party, but passes no official `bbName`: mark it so the
+		// service-principal trust check treats its roles as AWS Blocks roles.
+		markBlocksOwned(this);
+		const resolved = resolveClusterOptions(options, this.fullId);
+		this.type = resolved.type;
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
-		this.infra = clusterInfra(this, options);
+		this.infra = clusterInfra(this, resolved);
 	}
 }
 
@@ -62,18 +74,24 @@ export class Database extends BuildingBlockScope {
 	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
+		// First-party, but passes no official `bbName`: mark it so the
+		// service-principal trust check treats its roles as AWS Blocks roles.
+		markBlocksOwned(this);
 		const resolved = registerDatabase(this, id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId, projectRootOf(this));
-		// Checked with dsql-lint here, before any deploy: the migration Lambda runs the files without the
-		// linter, which is not deployed with it.
+		// Checked here, before any deploy: the migration Lambda runs the files without the linter, which is not
+		// deployed with it.
 		const migrations = this.migrationsPath ? loadMigrationFiles(this.migrationsPath) : undefined;
-		if (migrations) lintMigrationFiles(migrations);
+		if (migrations) lintMigrationFiles(migrations, resolved.ref.kind);
 
 		let infra: ClusterInfra;
 		if (!options.cluster) {
-			infra = clusterInfra(this, { type: 'dsql', removalPolicy: options.removalPolicy });
+			infra = clusterInfra(
+				this,
+				resolveClusterOptions({ type: 'dsql', removalPolicy: options.removalPolicy }, this.fullId),
+			);
 		} else if (resolved.shared instanceof DatabaseCluster) {
 			infra = resolved.shared.infra;
 		} else {

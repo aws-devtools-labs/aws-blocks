@@ -271,4 +271,167 @@ void main() {
       expect(model.types.containsKey('PostsListResult'), isTrue);
     });
   });
+
+  group('structural dedup keys', () {
+    List<ResolvedType> results(List<TypeRef> refs) {
+      final model = CodegenModelBuilder().build(
+        RpcModel(
+          title: 't',
+          version: '1',
+          schemas: {},
+          methods: [
+            for (final (i, r) in refs.indexed)
+              RpcMethod(name: 'api.m$i', params: [], result: r),
+          ],
+        ),
+      );
+      return model.namespaces[0].operations.map((o) => o.result).toList();
+    }
+
+    InlineObjectRef channelResult(InlineObjectRef message) => InlineObjectRef(
+      properties: {
+        'channel': TransferableRef(
+          blocksType: 'realtime/channel',
+          typeArgs: [message],
+        ),
+      },
+      required: {'channel'},
+    );
+
+    test('channels with different payloads keep distinct result types', () {
+      final r = results([
+        channelResult(
+          const InlineObjectRef(
+            properties: {'text': PrimitiveRef('String')},
+            required: {'text'},
+          ),
+        ),
+        channelResult(
+          const InlineObjectRef(
+            properties: {'count': PrimitiveRef('int')},
+            required: {'count'},
+          ),
+        ),
+      ]);
+      expect(r[0], isA<RecordType>());
+      expect(r[1], isA<RecordType>());
+      expect((r[1] as RecordType).name, isNot((r[0] as RecordType).name));
+    });
+
+    test('an open payload does not merge into a closed one', () {
+      final r = results([
+        channelResult(
+          const InlineObjectRef(
+            properties: {'text': PrimitiveRef('String')},
+            required: {'text'},
+          ),
+        ),
+        channelResult(
+          const InlineObjectRef(
+            properties: {'text': PrimitiveRef('String')},
+            required: {'text'},
+            additionalProperties: PrimitiveRef('int'),
+          ),
+        ),
+      ]);
+      final first = (r[0] as RecordType).fields.single.type as TransferableType;
+      final second =
+          (r[1] as RecordType).fields.single.type as TransferableType;
+      expect(first.typeArgs.single, isA<RecordType>());
+      expect(second.typeArgs.single, isA<RecordType>());
+      expect(
+        (second.typeArgs.single as RecordType).additionalProperties,
+        isNotNull,
+      );
+    });
+
+    test('unions with different embedded unions stay distinct', () {
+      DiscriminatedUnionRef hybrid(String innerArm) => DiscriminatedUnionRef(
+        discriminant: 'type',
+        variants: [
+          UnionVariant(
+            discriminantValue: 'a',
+            properties: const {'x': PrimitiveRef('String')},
+            required: const {'x'},
+            embeddedUnion: DiscriminatedUnionRef(
+              discriminant: 'kind',
+              variants: [
+                UnionVariant(
+                  discriminantValue: innerArm,
+                  properties: const {},
+                  required: const {},
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+      final r = results([hybrid('one'), hybrid('two')]);
+      expect(r[0], isA<SealedClassType>());
+      expect(r[1], isA<SealedClassType>());
+      expect(
+        (r[1] as SealedClassType).name,
+        isNot((r[0] as SealedClassType).name),
+      );
+    });
+  });
+
+  group('identifier collision warnings', () {
+    CodegenModel build(List<RpcMethod> methods) => CodegenModelBuilder().build(
+      RpcModel(title: 't', version: '1', schemas: {}, methods: methods),
+    );
+
+    test('two namespaces that generate one class are a warning', () {
+      final model = build([
+        RpcMethod(name: 'a.b.x', params: [], result: const PrimitiveRef('int')),
+        RpcMethod(name: 'aB.y', params: [], result: const PrimitiveRef('int')),
+      ]);
+      expect(model.warnings, hasLength(1));
+      expect(
+        model.warnings.single,
+        allOf(contains("'a.b'"), contains("'aB'"), contains(r'ABApi$')),
+      );
+    });
+
+    test('two fields that generate one identifier are a warning', () {
+      final model = build([
+        RpcMethod(
+          name: 'api.get',
+          params: [],
+          result: const InlineObjectRef(
+            properties: {'d-e': PrimitiveRef('int'), 'dE': PrimitiveRef('int')},
+            required: {},
+          ),
+        ),
+      ]);
+      expect(model.warnings, hasLength(1));
+      expect(
+        model.warnings.single,
+        allOf(contains("'d-e'"), contains("'dE'"), contains(r'dE$')),
+      );
+    });
+
+    test('names that stay distinct are not a warning', () {
+      final model = build([
+        RpcMethod(
+          name: 'api.get',
+          params: [
+            RpcParam(
+              name: 'class',
+              isRequired: true,
+              schema: const PrimitiveRef('int'),
+            ),
+          ],
+          result: const InlineObjectRef(
+            properties: {
+              '_id': PrimitiveRef('int'),
+              'd-e': PrimitiveRef('int'),
+            },
+            required: {},
+          ),
+        ),
+      ]);
+      expect(model.warnings, isEmpty);
+    });
+  });
 }

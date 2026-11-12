@@ -283,6 +283,139 @@ describe('createLambdaHandler — RPC body handling', () => {
   });
 });
 
+describe('createLambdaHandler — strict API namespace placement (defaults.strictNamespacePlacement)', () => {
+  // What the CDK layer sets when `reports` is placed on compute `app-reports`:
+  // the placement map in the environment of every API compute, and the
+  // compute's own id only on that compute. The handler reads both from
+  // process.env, as a deployed function does.
+  const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
+
+  function withEnv(vars: Record<string, string>, fn: () => Promise<void>): () => Promise<void> {
+    return async () => {
+      const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, vars);
+      try {
+        await fn();
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    };
+  }
+
+  function placedBackend(calls: string[]) {
+    return {
+      api: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('api'); return 'api'; } }),
+      reports: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('reports'); return 'reports'; } }),
+    };
+  }
+
+  function rpc(namespace: string, path = '/aws-blocks/api') {
+    return makeEvent({ path, body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 }) });
+  }
+
+  it('the default compute refuses a namespace placed on another compute, on the bare endpoint', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      const result = await invoke(placedBackend(calls), rpc('reports'));
+      const body = JSON.parse(result.body);
+      assert.strictEqual(body.error?.code, -32601, 'refused like an unknown namespace');
+      assert.match(body.error?.message, /API 'reports' not found/);
+      assert.deepStrictEqual(calls, [], "the placed namespace's code never ran on the default compute");
+    },
+  ));
+
+  it('the default compute still serves its own namespaces on the bare endpoint and their own path', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+        const body = JSON.parse((await invoke(placedBackend(calls), rpc('api', path))).body);
+        assert.strictEqual(body.result, 'api', path);
+      }
+      assert.deepStrictEqual(calls, ['api', 'api']);
+    },
+  ));
+
+  it('the placed compute serves its namespace and refuses every other one', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, BLOCKS_API_COMPUTE_ID: 'app-reports' },
+    async () => {
+      const calls: string[] = [];
+      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/aws-blocks/api/reports'))).body);
+      assert.strictEqual(served.result, 'reports');
+      const refused = JSON.parse((await invoke(placedBackend(calls), rpc('api'))).body);
+      assert.strictEqual(refused.error?.code, -32601);
+      assert.deepStrictEqual(calls, ['reports']);
+    },
+  ));
+
+  it('serves every namespace on the bare endpoint when no placement is configured', async () => {
+    const calls: string[] = [];
+    const body = JSON.parse((await invoke(placedBackend(calls), rpc('reports'))).body);
+    assert.strictEqual(body.result, 'reports');
+  });
+
+  it('a refused namespace writes a 404 RpcErrors metric through onRpcError', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, AWS_LAMBDA_FUNCTION_NAME: 'app-default-fn' },
+    async () => {
+      const lines: string[] = [];
+      const savedWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+        if (text.includes('"_aws"')) {
+          lines.push(...text.split('\n').filter(Boolean));
+          return true;
+        }
+        return (savedWrite as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+      }) as typeof process.stdout.write;
+      try {
+        const body = JSON.parse((await invoke(placedBackend([]), rpc('reports'))).body);
+        assert.strictEqual(body.error?.code, -32601);
+      } finally {
+        process.stdout.write = savedWrite;
+      }
+      const metrics = lines.map((l) => JSON.parse(l));
+      assert.strictEqual(metrics.length, 1);
+      assert.strictEqual(metrics[0].Status, 404);
+      assert.strictEqual(metrics[0].StatusClass, '4xx');
+      assert.strictEqual(metrics[0].ApiNamespace, 'reports');
+      assert.strictEqual(metrics[0].FunctionName, 'app-default-fn');
+    },
+  ));
+
+  for (const [name, env, message] of [
+    ['a malformed placement map', { BLOCKS_API_NAMESPACE_COMPUTES: '{not json' }, /must be a JSON object/],
+    ['a compute id without a placement map', { BLOCKS_API_COMPUTE_ID: 'app-reports' }, /BLOCKS_API_COMPUTE_ID is set but/],
+  ] as const) {
+    it(`${name} fails initialization, and the next request retries it`, async () => {
+      const keys = ['BLOCKS_API_NAMESPACE_COMPUTES', 'BLOCKS_API_COMPUTE_ID'];
+      const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, env);
+      try {
+        const calls: string[] = [];
+        const handler = createLambdaHandler(async () => placedBackend(calls));
+        await assert.rejects(async () => handler(rpc('reports', '/aws-blocks/api/reports')), message);
+        assert.deepStrictEqual(calls, [], 'nothing was served');
+        // The same environment, once it carries a readable map, initializes.
+        for (const k of keys) delete process.env[k];
+        process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+        process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+        const res = (await handler(rpc('reports', '/aws-blocks/api/reports'))) as { body: string };
+        assert.strictEqual(JSON.parse(res.body).result, 'reports');
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+  }
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
@@ -2545,6 +2678,85 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
     const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── ApiNamespace `httpErrorStatus` ──────────────────────────────────────────
+//
+// Opt-in: a 4xx `ApiError` is answered with its HTTP status; the JSON-RPC body
+// is the same either way. Off (the default), every RPC response stays a 200.
+
+function statusBackend(options?: { httpErrorStatus?: boolean }) {
+  const thrown: { current: unknown } = { current: undefined };
+  const api = new ApiNamespace(
+    { id: 'app' },
+    'api',
+    () => ({
+      async echo() {
+        throw thrown.current;
+      },
+    }),
+    options,
+  );
+  return { backend: { api }, thrown };
+}
+
+describe('createLambdaHandler — ApiNamespace httpErrorStatus', () => {
+  it('default: a 401 ApiError is an HTTP 200 carrying the error in the body', async () => {
+    const { backend, thrown } = statusBackend();
+    thrown.current = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+    const result = await invoke(backend, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcError(result).status, 401);
+  });
+
+  for (const status of [400, 401, 403, 404, 409, 429]) {
+    it(`on: a ${status} ApiError is answered with HTTP ${status}, same body`, async () => {
+      const on = statusBackend({ httpErrorStatus: true });
+      const off = statusBackend();
+      on.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      off.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      const result = await invoke(on.backend, makeEvent());
+      const baseline = await invoke(off.backend, makeEvent());
+      assert.strictEqual(result.statusCode, status);
+      assert.strictEqual(result.body, baseline.body, 'the JSON-RPC body is unchanged');
+      const err = decodeRpcError(result);
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.name, 'SomeError');
+    });
+  }
+
+  it('on: a 5xx ApiError, an unbranded throw and a branded BB error stay HTTP 200', async () => {
+    for (const error of [new ApiError('boom', 503), new Error('raw driver text'), blocksError('KVStore.Conflict', 'x')]) {
+      const { backend, thrown } = statusBackend({ httpErrorStatus: true });
+      thrown.current = error;
+      const result = await invoke(backend, makeEvent());
+      assert.strictEqual(result.statusCode, 200, String(error));
+    }
+  });
+
+  it('on: the clearing Set-Cookie still travels with a 401', async () => {
+    const api = new ApiNamespace(
+      { id: 'app' },
+      'api',
+      (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+        },
+      }),
+      { httpErrorStatus: true },
+    );
+    const result = await invoke({ api }, makeV2Event());
+    assert.strictEqual(result.statusCode, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+  });
+
+  it('on: a successful call is unaffected', async () => {
+    const api = new ApiNamespace({ id: 'app' }, 'api', () => ({ async echo(v: string) { return v; } }), { httpErrorStatus: true });
+    const result = await invoke({ api }, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcResponse(JSON.parse(result.body)), 'hello');
   });
 });
 

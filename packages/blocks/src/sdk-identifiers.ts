@@ -12,19 +12,18 @@
  * @module
  */
 
-import type { KVStore } from '@aws-blocks/bb-kv-store';
-import type { FileBucket } from '@aws-blocks/bb-file-bucket';
-import type { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import type { AsyncJob } from '@aws-blocks/bb-async-job';
+import type { Agent } from '@aws-blocks/bb-agent';
 import type { AppSetting } from '@aws-blocks/bb-app-setting';
+import type { AsyncJob } from '@aws-blocks/bb-async-job';
+import type { Auth } from '@aws-blocks/bb-auth';
 import type { CronJob } from '@aws-blocks/bb-cron-job';
-import type { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import type { AuthOIDC } from '@aws-blocks/bb-auth-oidc';
+import type { Dashboard } from '@aws-blocks/bb-dashboard';
 import type { Database } from '@aws-blocks/bb-data';
 import type { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
+import type { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
-import type { Agent } from '@aws-blocks/bb-agent';
-import type { Dashboard } from '@aws-blocks/bb-dashboard';
+import type { KVStore } from '@aws-blocks/bb-kv-store';
 import type { Logger } from '@aws-blocks/bb-logger';
 import type { Realtime } from '@aws-blocks/bb-realtime';
 import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
@@ -54,13 +53,28 @@ export function getSdkIdentifiers(bb: FileBucket<any>): { bucketName: string };
 export function getSdkIdentifiers(bb: AsyncJob<any>): { queueUrl: string };
 export function getSdkIdentifiers(bb: AppSetting<any>): { parameterName: string };
 export function getSdkIdentifiers(bb: CronJob<any>): { scheduleName: string };
-export function getSdkIdentifiers(bb: AuthCognito<any>): { userPoolId: string; clientId: string };
-export function getSdkIdentifiers(bb: AuthOIDC<any>): { sessionTableName: string };
+// `Auth` registers its user pool's ids (and, in Lambda, the pool's region) whenever it has a user pool,
+// and its managed-login domain and app client when a provider federates through Cognito. A configuration
+// without a pool (directly federated OIDC / OAuth 2.0 providers only) creates no AWS resource and
+// registers nothing, so every field is optional. Its sessions table is a separate KVStore, not listed here.
+export function getSdkIdentifiers(bb: Auth<any>): {
+	userPoolId?: string;
+	clientId?: string;
+	region?: string;
+	hostedUiDomain?: string;
+	hostedUiClientId?: string;
+};
 export function getSdkIdentifiers(bb: Database): { clusterArn: string; secretArn: string; databaseName: string };
 export function getSdkIdentifiers(bb: DistributedDatabase): { clusterEndpoint: string };
 export function getSdkIdentifiers(bb: KnowledgeBase): { kbId: string };
 export function getSdkIdentifiers(bb: InstanceType<typeof Realtime>): { wsUrl: string; callbackUrl: string };
-export function getSdkIdentifiers(bb: Agent): { conversationsTableName: string; messagesTableName: string; sessionBucketName: string; realtimeWsUrl: string; realtimeCallbackUrl: string };
+export function getSdkIdentifiers(bb: Agent): {
+	conversationsTableName: string;
+	messagesTableName: string;
+	sessionBucketName: string;
+	realtimeWsUrl: string;
+	realtimeCallbackUrl: string;
+};
 export function getSdkIdentifiers(bb: Dashboard): { dashboardName: string };
 export function getSdkIdentifiers(bb: Logger): { logGroupName: string };
 export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string>;

@@ -20,6 +20,18 @@ export interface BlocksThrottling {
 }
 
 /**
+ * Where AWS Blocks stores the secrets it generates for its own Building Blocks.
+ *
+ * - `'ssm'`: an SSM Parameter Store SecureString (standard tier, encrypted
+ *   with the `aws/ssm` key).
+ * - `'secrets-manager'`: an AWS Secrets Manager secret (encrypted with the
+ *   `aws/secretsmanager` key).
+ *
+ * See {@link BlocksDefaults.secretsStore}.
+ */
+export type BlocksSecretsStore = 'ssm' | 'secrets-manager';
+
+/**
  * Default values for every Amazon-authored Building Block created within a
  * `BlocksStack` or `BlocksBackend`. A per-block option always overrides the
  * corresponding default (`option ?? scope.defaults.field`).
@@ -43,10 +55,32 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
-	 * CORS origins the compute's API accepts, as regular-expression patterns
-	 * matched against the request `Origin` header. Empty means no cross-origin
-	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
-	 * frontend can reach a deployed API; `production` allows none by default.
+	 * CORS origins the compute's API accepts, matched against the request
+	 * `Origin` header. Empty means no cross-origin requests are allowed. The
+	 * `sandbox` preset allows localhost so a local dev frontend can reach a
+	 * deployed API; `production` allows none by default.
+	 *
+	 * Each entry is either:
+	 * - a **plain origin** (`scheme://host[:port]`, e.g. `'https://app.example.com'`),
+	 *   matched exactly and case-insensitively — its dots are literal. An
+	 *   `http`/`https` origin is compared as the browser sends it (default port
+	 *   dropped, internationalized host in punycode); user info, a path, a query
+	 *   or a fragment is rejected; or
+	 * - a **regex pattern** (any entry with regex syntax such as `^`, `$`, `\`,
+	 *   `(`, `|` or `*`), anchored as `^(?:<entry>)$` and matched case-sensitively.
+	 *   Dots must be escaped (`'https://app\\.example\\.com'`) unless followed
+	 *   by a quantifier (`.*`, `.+`), and the entry must compile on its own. For
+	 *   any subdomain use e.g. `'https://[a-z0-9-]+\\.example\\.com'` (glob
+	 *   wildcards such as `'https://*.example.com'` are not supported). Brace
+	 *   quantifiers are limited to `{n}` (`{n,m}` contains a comma, and entries
+	 *   are comma-joined), and a group repeated with `*`, `+` or `{n}` that
+	 *   itself contains `*`, `+`, `{n}` or an alternation (e.g. `(a+)+`,
+	 *   `(a|b)+`) is not supported (this does not rule out every slow pattern);
+	 *   for subdomains at any depth use e.g.
+	 *   `'https://[a-z0-9.-]+\\.example\\.com'`.
+	 *
+	 * Invalid entries fail `cdk synth` (`BlocksStack.create()` /
+	 * `BlocksBackend.create()`), and are ignored at runtime.
 	 */
 	allowedOrigins: string[];
 
@@ -148,6 +182,40 @@ export interface BlocksDefaults {
 	storageAccessLogging?: boolean;
 
 	/**
+	 * Where AWS Blocks stores the secrets it generates for its own Building
+	 * Blocks. It currently applies to the `Realtime` connection token key; other
+	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
+	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
+	 * are not affected.
+	 *
+	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
+	 *   per key, with a CloudFormation-generated name and value. The app's
+	 *   execution role can only read it. It is deleted with the stack.
+	 * - `'ssm'` (the `sandbox` preset): one SSM SecureString per key, written at
+	 *   deploy time. This has no per-secret charge, which suits short-lived
+	 *   stacks.
+	 *
+	 * Changing this value on a deployed stack creates new keys in the new store.
+	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
+	 * clients without it receive `onDisconnect('error')` and must call
+	 * `getChannel()` again. To keep an existing stack's keys where they are, set
+	 * this before you deploy a version that reads it.
+	 *
+	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
+	 * when this is `'ssm'` and the stack looks like production: the
+	 * `sandboxMode` context is not `'true'`, {@link removalPolicy} is `RETAIN`,
+	 * or {@link deletionProtection} is on. Acknowledge it with
+	 * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
+	 * if SSM is a deliberate choice.
+	 *
+	 * The local mock ignores this field; local development behaves the same in
+	 * both modes. If the field is missing at synth (plain JavaScript, or a cast),
+	 * it is treated as `'secrets-manager'`, the production preset's value.
+	 */
+	secretsStore: BlocksSecretsStore;
+
+	/**
 	 * Place the app's compute and VPC-resident resources in a VPC. Pass a
 	 * standard CDK VPC — Blocks handles Lambda placement, endpoint provisioning
 	 * (based on which Building Blocks are in scope), and security-group wiring.
@@ -222,6 +290,58 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	permissionsBoundary?: string | IManagedPolicy;
+
+	/**
+	 * Serve each API namespace only on the compute it is placed on.
+	 *
+	 * An `ApiNamespace` given its own `compute` (directly or through its scope) is
+	 * routed to that compute at `/aws-blocks/api/{namespace}`. The bare
+	 * `/aws-blocks/api` endpoint is served by the default compute and dispatches on
+	 * the JSON-RPC body, so without this option a raw `POST /aws-blocks/api` with
+	 * `{ "method": "reports.build" }` runs `reports` on the **default** compute —
+	 * outside the VPC, container or sizing its placement was meant to give it.
+	 *
+	 * With `strictNamespacePlacement: true`, every compute's dispatcher serves only
+	 * the namespaces placed on it, on any RPC path. A call to a namespace placed
+	 * elsewhere gets the same "method not found" error as an unknown namespace.
+	 * Namespaces without a placement keep running on the default compute, on the
+	 * bare endpoint and on their own path.
+	 *
+	 * It applies only to deployed computes: the local dev server (`npm run dev`)
+	 * serves every namespace on every RPC path, so a raw bare-endpoint call that
+	 * works there returns "method not found" once deployed.
+	 *
+	 * This keeps a namespace's code on the compute (and network) it was placed on.
+	 * It doesn't split IAM: every compute still runs under the app's one execution
+	 * role.
+	 *
+	 * The typed TypeScript client and the Kotlin, Swift and Dart clients always
+	 * call `/aws-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
+	 * or a native client generated before clients called per-namespace paths, that
+	 * posts a placed namespace to the bare endpoint is refused: point it at the
+	 * namespace's own path before enabling this.
+	 *
+	 * `false` in both {@link BlocksPresets}. While it is off and some
+	 * namespace runs on its own compute, synth emits the warning
+	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. If raw callers
+	 * still need the bare endpoint, acknowledge it by calling
+	 * `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+	 * on the stack or backend returned by `create()`.
+	 *
+	 * @example Serve `reports` only on its own compute, keeping the preset the stack already picks
+	 * ```ts
+	 * const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: {
+	 *     ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
+	 *     strictNamespacePlacement: true,
+	 *   },
+	 * });
+	 * ```
+	 */
+	strictNamespacePlacement?: boolean;
 }
 
 /**
@@ -242,6 +362,8 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
+		secretsStore: 'ssm',
+		strictNamespacePlacement: false,
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -261,5 +383,9 @@ export const BlocksPresets = {
 		// per stack once you've confirmed a single Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
+		secretsStore: 'secrets-manager',
+		// Off so existing raw callers of the bare endpoint keep working — see the
+		// `strictNamespacePlacement` field doc.
+		strictNamespacePlacement: false,
 	},
 } satisfies Record<string, BlocksDefaults>;

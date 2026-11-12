@@ -222,7 +222,7 @@ test('sendBatch returns all failures without throwing when ALL messages fail', a
 
 // ── Batch: many messages succeeds ───────────────────────────────────────────
 
-test('sendBatch sends many messages (no batch size limit)', async () => {
+test('sendBatch sends a batch of 100 messages (the default maxBatchSize)', async () => {
 	const emailClient = new EmailClient({ id: 'root' } as any, 'bigbatch', {
 		fromAddress: 'noreply@example.com',
 	});

@@ -9,8 +9,10 @@ import type { Handle } from '@sveltejs/kit';
  * server-set cookie the /cookies page reads back.
  */
 export const handle: Handle = async ({ event, resolve }) => {
-  // Seed a visit cookie if the client doesn't already have one.
-  if (!event.cookies.get('sk_visit')) {
+  // Seed a visit cookie if the client doesn't already have one. Skipped on
+  // the edge-cacheable /headers route: a response that sets a cookie is never
+  // stored at the edge, so seeding there would turn its `s-maxage` off.
+  if (event.url.pathname !== '/headers' && !event.cookies.get('sk_visit')) {
     event.cookies.set('sk_visit', `v-${Date.now()}`, {
       path: '/',
       httpOnly: false,
