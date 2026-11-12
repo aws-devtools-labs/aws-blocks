@@ -56,6 +56,8 @@ IAM Statement Changes
 (NOTE: There may be security-related changes not in this list. See https://github.com/aws/aws-cdk/issues/1299)
 
 Resources
+[-] AWS::DynamoDB::Table upgrade/auth/sessions/table upgradeauthsessionstable29328177 destroy
+[+] AWS::DynamoDB::Table upgrade/auth/session-store/table upgradeauthsessionstoretableC85094EE
 [~] AWS::IAM::Policy BlocksRole/DefaultPolicy BlocksRoleDefaultPolicyF2F3EE2E
  └─ [~] PolicyDocument
      └─ [~] .Statement:
