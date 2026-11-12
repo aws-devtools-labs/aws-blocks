@@ -10,7 +10,9 @@ import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.oidc.signIn
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldEndWith
 import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 
@@ -55,7 +57,8 @@ class OidcMultiBlockE2ETest {
         val me = api.oidcRequireAuth()
         me.userId shouldBe user.userId
         me.provider shouldBe "github2"
-        client.signOut()
+
+        assertRestoreThenSignOut(user.userId, "github2", ::oidcClient)
     }
 
     @Test
@@ -72,21 +75,46 @@ class OidcMultiBlockE2ETest {
         val me = api.ssoRequireAuth()
         me.userId shouldBe user.userId
         me.provider shouldBe "corp"
+
+        assertRestoreThenSignOut(user.userId, "corp", ::ssoClient)
+        api.ssoGetCurrentUser().shouldBeNull()
     }
 
     @Test
-    fun signOutOfABlockOnItsOwnRoutes() = runTest {
+    fun signingOutOfOneBlockLeavesTheOtherSignedIn() = runTest {
         if (!hasHeadlessIdp()) {
             markSkipped(NEEDS_HEADLESS_IDP)
             return@runTest
         }
-        val client = ssoClient()
-        client.signIn("corp")
+        val oidc = oidcClient()
+        val sso = ssoClient()
+        oidc.signIn("github2")
+        sso.signIn("corp")
 
-        client.signOut()
+        sso.signOut()
 
-        client.authState.value shouldBe OidcAuthState.SignedOut
-        api.ssoGetCurrentUser().shouldBeNull()
+        sso.restore().shouldBeNull()
+        api.oidcRequireAuth().provider shouldBe "github2"
+        oidc.signOut()
+    }
+
+    /**
+     * A fresh client on the same [com.aws.blocks.kotlin.e2e.e2eBlocks] shares the cookie jar, so
+     * restore() finds the session; signOut() returns the stub IdP's logout URL and ends it.
+     */
+    private suspend fun assertRestoreThenSignOut(
+        userId: String,
+        provider: String,
+        client: () -> OidcClient<AnyProvider>,
+    ) {
+        val fresh = client()
+        fresh.restore()?.userId shouldBe userId
+
+        val logoutUrl = fresh.signOut()
+        logoutUrl.shouldNotBeNull().substringBefore('?') shouldEndWith "/aws-blocks/auth/idp/$provider/logout"
+        fresh.authState.value shouldBe OidcAuthState.SignedOut
+
+        fresh.restore().shouldBeNull()
     }
 
     @Test
