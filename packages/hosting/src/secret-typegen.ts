@@ -34,6 +34,7 @@ import { existsSync, watch as fsWatch } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import fg from 'fast-glob';
+import semver from 'semver';
 import type * as TS from 'typescript';
 import type { ValueKind } from './secret.js';
 
@@ -167,16 +168,88 @@ function buildMarkerBindings(
 	return { named, namespaces };
 }
 
-/** Dynamically import the app's TypeScript compiler (present in every TS app). */
-async function loadTypeScript(): Promise<typeof import('typescript')> {
+/**
+ * TypeScript versions typegen supports — must match the optional `typescript` peer
+ * range in this package's `package.json` (a test asserts they agree). The range
+ * has no upper bound, so an app on TypeScript 7 installs cleanly; whether the
+ * loaded module actually has the compiler API typegen calls is checked at run
+ * time by {@link checkTypeScriptCompat}.
+ */
+export const SUPPORTED_TYPESCRIPT_RANGE = '>=5.3.0';
+
+/** Compiler API members typegen calls directly; checked before use. */
+const REQUIRED_TYPESCRIPT_APIS = ['createSourceFile', 'createProgram', 'forEachChild', 'findConfigFile'] as const;
+
+/**
+ * The install command that keeps TypeScript 7's `tsc` and gives tools that import
+ * `typescript` the TypeScript 6 compiler API instead (the side-by-side setup the
+ * TypeScript team recommends for 7.0, which ships without a JS API).
+ */
+export const TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL =
+	'npm i -D @typescript/native@npm:typescript@^7 typescript@npm:@typescript/typescript6@^6';
+
+/** Appended to every "typegen can't run" message. */
+const TYPEGEN_OPTIONAL_NOTE =
+	'Typegen is optional: without it `getSecret`/`getConfig` accept any string key, and ' +
+	'`startDevServer({ typegen: false })` turns it off in the dev server.';
+
+/**
+ * Return why `ts` can't be used for typegen, or `undefined` when it is compatible.
+ * Prerelease tags are ignored for the range check (`5.9.0-dev` counts as 5.9.0),
+ * and the compiler APIs typegen calls must exist. TypeScript 7.0 ships no
+ * compiler API, so it is rejected with the side-by-side install that fixes it.
+ */
+export function checkTypeScriptCompat(ts: Record<string, unknown>): string | undefined {
+	const version = typeof ts.version === 'string' ? ts.version : 'unknown';
+	const coerced = semver.coerce(version);
+	const inRange = coerced !== null && semver.satisfies(coerced, SUPPORTED_TYPESCRIPT_RANGE);
+	const target = ts.ScriptTarget as { Latest?: unknown } | undefined;
+	const hasApis =
+		target?.Latest !== undefined && REQUIRED_TYPESCRIPT_APIS.every((name) => typeof ts[name] === 'function');
+	if (inRange && hasApis) return undefined;
+	if (inRange && coerced.major >= 7) {
+		return (
+			`[hosting] typegen can't use typescript ${version}: TypeScript 7 doesn't include the compiler API ` +
+			'typegen reads your source with. To keep TypeScript 7 for `tsc` and give typegen the TypeScript 6 API, ' +
+			`run \`${TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL}\` and re-run. ${TYPEGEN_OPTIONAL_NOTE}`
+		);
+	}
+	return (
+		`[hosting] typegen can't use typescript ${version}: @aws-blocks/hosting supports typescript ` +
+		`${SUPPORTED_TYPESCRIPT_RANGE} with its compiler API. Install a supported version ` +
+		`(\`npm i -D typescript@6\`) and re-run. ${TYPEGEN_OPTIONAL_NOTE}`
+	);
+}
+
+/**
+ * Dynamically import the app's TypeScript compiler (present in every TS app) and
+ * verify it is a supported version. `importTs` is injectable for tests.
+ */
+export async function loadTypeScript(importTs: () => Promise<unknown> = () => import('typescript')): Promise<typeof TS> {
+	let mod: Record<string, unknown>;
 	try {
-		return await import('typescript');
+		mod = (await importTs()) as Record<string, unknown>;
 	} catch {
 		throw new Error(
 			'[hosting] typegen requires the "typescript" package to parse your source. ' +
-				'Install it as a dev dependency (`npm i -D typescript`) and re-run.',
+				'Install it as a dev dependency (`npm i -D typescript@6`) and re-run. ' +
+				TYPEGEN_OPTIONAL_NOTE,
 		);
 	}
+	// ESM interop: a CJS `typescript` may expose its API only on `default`.
+	const ts = (typeof mod.createSourceFile === 'function' || !mod.default ? mod : mod.default) as Record<string, unknown>;
+	const problem = checkTypeScriptCompat(ts);
+	if (problem) throw new Error(problem);
+	return ts as unknown as typeof TS;
+}
+
+/**
+ * Whether `text` could hold a marker call: detection needs an import from one of
+ * the `allowed` modules, so a file that never mentions one can't contribute keys.
+ */
+function mentionsMarkerModule(text: string, allowed: Set<string>): boolean {
+	for (const specifier of allowed) if (text.includes(specifier)) return true;
+	return false;
 }
 
 /** Resolve a call's callee to a marker kind via its import binding (not its text). */
@@ -323,11 +396,19 @@ function resolveSchemaTypes(
 /**
  * Statically scan the app for `secret()` / `config()` string-literal keys.
  *
+ * TypeScript is loaded only when some file mentions a marker module, so an app
+ * that declares no secrets scans without it (no warning on TypeScript 7 or
+ * without `typescript` installed).
+ *
  * @param options - See {@link TypegenOptions}.
+ * @param loadTs - Loads the compiler; injectable for tests.
  * @returns The de-duplicated, sorted keys per kind, plus any non-literal call sites.
  * @internal
  */
-export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanResult> {
+export async function scanValueKeys(
+	options: TypegenOptions = {},
+	loadTs: () => Promise<typeof TS> = loadTypeScript,
+): Promise<ScanResult> {
 	const cwd = options.cwd ?? process.cwd();
 	const include = options.include ?? DEFAULT_TYPEGEN_INCLUDE;
 	const allowed = new Set(options.markerModules ?? DEFAULT_MARKER_MODULES);
@@ -338,14 +419,28 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 		ignore: ['**/node_modules/**', '**/dist/**', '**/.blocks/**', '**/*.d.ts'],
 	});
 
-	const ts = await loadTypeScript();
+	const candidates: { file: string; text: string }[] = [];
+	for (const file of files) {
+		const text = await readFile(file, 'utf-8');
+		if (mentionsMarkerModule(text, allowed)) candidates.push({ file, text });
+	}
+
 	const secretKeys = new Set<string>();
 	const configKeys = new Set<string>();
 	const schemaKeys = { secret: new Set<string>(), config: new Set<string>() };
 	const dynamicCallSites: DynamicCallSite[] = [];
+	if (candidates.length === 0) {
+		return {
+			secretKeys: [],
+			configKeys: [],
+			valueTypes: { secret: {}, config: {} },
+			dynamicCallSites,
+			scannedFiles: files.sort(),
+		};
+	}
 
-	for (const file of files) {
-		const text = await readFile(file, 'utf-8');
+	const ts = await loadTs();
+	for (const { file, text } of candidates) {
 		const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /* setParentNodes */ true);
 		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites);
 	}

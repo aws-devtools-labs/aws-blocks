@@ -174,6 +174,20 @@ Because it is derived only from string-literal keys, a `secret(myVar)` with a
 non-literal key is reported and skipped; and a synth-only `domain` / `connectionArn`
 key may appear in autocomplete even though it is not readable at runtime.
 
+Typegen parses your source with the TypeScript compiler API, so it needs
+`typescript` 5.3 or later with that API: TypeScript 5.x and 6.x work as installed.
+TypeScript 7.0 ships no compiler API, so on 7 typegen skips with a warning and the
+getters accept any `string`. To keep TypeScript 7 for `tsc` and give typegen the
+TypeScript 6 API under the `typescript` name (the side-by-side setup the TypeScript
+team recommends for tools that still need the API), install both under aliases:
+
+```bash
+npm i -D @typescript/native@npm:typescript@^7 typescript@npm:@typescript/typescript6@^6
+```
+
+`npx tsc` then runs TypeScript 7, and typegen uses the 6.0 API. To turn typegen
+off in the dev server instead, pass `typegen: false` to `startDevServer()`.
+
 ### Typed, parsed values with a schema
 
 Pass a schema (Zod, Valibot, ArkType — any Standard Schema) to get a **typed,

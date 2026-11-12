@@ -7,7 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
+	checkTypeScriptCompat,
 	DEFAULT_TYPEGEN_MODULES,
+	loadTypeScript,
+	SUPPORTED_TYPESCRIPT_RANGE,
+	TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL,
 	generateHostingValuesDts,
 	renderHostingValuesDts,
 	runTypegenCli,
@@ -247,5 +251,117 @@ void describe('watchHostingValues()', () => {
 		} finally {
 			stop();
 		}
+	});
+});
+
+/** A module shaped like TypeScript 5/6 (the APIs typegen calls), at `version`. */
+function fakeTs(version: string): Record<string, unknown> {
+	const fn = () => undefined;
+	return {
+		version,
+		ScriptTarget: { Latest: 99 },
+		createSourceFile: fn,
+		createProgram: fn,
+		forEachChild: fn,
+		findConfigFile: fn,
+	};
+}
+
+void describe('TypeScript compatibility check', () => {
+	void it('SUPPORTED_TYPESCRIPT_RANGE matches the typescript peer range in package.json', async () => {
+		// Compiled tests run from dist/, so package.json is one level up.
+		const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf-8')) as {
+			peerDependencies: Record<string, string>;
+		};
+		assert.strictEqual(pkg.peerDependencies.typescript, SUPPORTED_TYPESCRIPT_RANGE);
+	});
+
+	for (const version of ['5.3.0', '5.9.3', '6.0.0', '6.1.2', '5.9.0-dev.20250101']) {
+		void it(`accepts typescript ${version}`, () => {
+			assert.strictEqual(checkTypeScriptCompat(fakeTs(version)), undefined);
+		});
+	}
+
+	void it('accepts any version at or above the minimum that has the compiler API (no upper bound)', () => {
+		assert.strictEqual(checkTypeScriptCompat(fakeTs('8.0.0')), undefined);
+	});
+
+	for (const version of ['5.2.2', '4.9.5']) {
+		void it(`rejects typescript ${version} naming the version and supported range`, () => {
+			const msg = checkTypeScriptCompat(fakeTs(version));
+			assert.ok(msg?.includes(`typescript ${version}`), msg);
+			assert.ok(msg?.includes(`supports typescript ${SUPPORTED_TYPESCRIPT_RANGE}`), msg);
+			assert.ok(msg?.includes('typescript@6'), msg);
+		});
+	}
+
+	void it('rejects an in-range version that lacks the compiler APIs typegen calls', () => {
+		const { ScriptTarget: _omit, ...noTarget } = fakeTs('6.0.0');
+		assert.ok(checkTypeScriptCompat(noTarget));
+		const { createSourceFile: _omit2, ...noCreate } = fakeTs('6.0.0');
+		assert.ok(checkTypeScriptCompat(noCreate));
+	});
+
+	// What `import('typescript')` returns for typescript 7.x: only the version.
+	for (const version of ['7.0.2', '7.1.0-dev.20261108.1']) {
+		void it(`rejects TypeScript ${version} (no compiler API) with the side-by-side install and the opt-out`, () => {
+			const msg = checkTypeScriptCompat({ version, versionMajorMinor: version.slice(0, 3) });
+			assert.ok(msg?.includes(`typescript ${version}`), msg);
+			assert.ok(msg?.includes(TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL), msg);
+			assert.ok(msg?.includes('typegen: false'), msg);
+		});
+	}
+
+	void it('loadTypeScript() rejects a TypeScript 7-shaped module with a clear error instead of crashing on ScriptTarget', async () => {
+		await assert.rejects(
+			loadTypeScript(async () => ({ version: '7.0.2', versionMajorMinor: '7.0' })),
+			(e: Error) =>
+				e.message.includes('typescript 7.0.2') &&
+				e.message.includes(TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL) &&
+				!e.message.includes('Latest'),
+		);
+	});
+
+	void it('loadTypeScript() keeps the missing-typescript error, suggesting a version that has the compiler API', async () => {
+		await assert.rejects(
+			loadTypeScript(async () => {
+				throw new Error('Cannot find package typescript');
+			}),
+			(e: Error) => /requires the "typescript" package/.test(e.message) && e.message.includes('typescript@6'),
+		);
+	});
+
+	void it('scanValueKeys() does not load TypeScript when no file imports a marker module', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.ts': "import { config } from 'dotenv';\nconfig();\nexport const port = 3000;\n",
+			'src/app.ts': "export const config = (k: string) => k;\nconfig('NOT_A_MARKER');\n",
+		});
+		const result = await scanValueKeys({ cwd }, async () => {
+			throw new Error('TypeScript must not be loaded');
+		});
+		assert.deepStrictEqual(result.secretKeys, []);
+		assert.deepStrictEqual(result.configKeys, []);
+		assert.strictEqual(result.scannedFiles.length, 2);
+	});
+
+	void it('scanValueKeys() still surfaces the TypeScript error when a file declares a marker', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.ts': "import { secret } from '@aws-blocks/hosting';\nsecret('API_KEY');\n",
+		});
+		await assert.rejects(
+			scanValueKeys({ cwd }, () => loadTypeScript(async () => ({ version: '7.0.2' }))),
+			(e: Error) => e.message.includes(TYPESCRIPT_7_SIDE_BY_SIDE_INSTALL),
+		);
+	});
+
+	void it('loadTypeScript() returns a supported module, including via a CJS `default` export', async () => {
+		const ts = fakeTs('5.9.3');
+		assert.strictEqual(await loadTypeScript(async () => ts), ts);
+		assert.strictEqual(await loadTypeScript(async () => ({ default: ts })), ts);
+	});
+
+	void it('loadTypeScript() accepts the real installed typescript', async () => {
+		const ts = await loadTypeScript();
+		assert.strictEqual(typeof ts.createSourceFile, 'function');
 	});
 });
