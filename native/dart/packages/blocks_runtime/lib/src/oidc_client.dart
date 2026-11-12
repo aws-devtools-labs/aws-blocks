@@ -614,7 +614,7 @@ class OidcClient implements AuthProvider {
   /// - 503 with `SignOutIncompleteException`: the server cleared the cookie
   ///   but couldn't remove its session. Clears the stored tokens, emits
   ///   [OidcSignedOut], then throws an [OidcRequestException] with that
-  ///   [OidcRequestException.name].
+  ///   [OidcRequestException.errorName].
   ///
   /// The session store is never cleared, because it may hold the cookies of
   /// other `Auth` blocks on the same app. This block's cookie is removed by
@@ -655,13 +655,13 @@ class OidcClient implements AuthProvider {
       throw OidcRequestException(
         'Signed out locally, but the backend could not remove its session',
         statusCode: status,
-        name: name,
+        errorName: name,
       );
     }
     throw OidcRequestException(
       'Sign-out failed: HTTP $status',
       statusCode: status,
-      name: name,
+      errorName: name,
     );
   }
 
@@ -734,13 +734,13 @@ class OidcClient implements AuthProvider {
           'GET $url returned 404: the auth block serves no session route, '
           'which means it has no sign-in providers',
           statusCode: 404,
-          name: _errorName(response),
+          errorName: _errorName(response),
         );
       default:
         throw OidcRequestException(
           'Session request failed: HTTP ${response.statusCode}',
           statusCode: response.statusCode,
-          name: _errorName(response),
+          errorName: _errorName(response),
         );
     }
   }

@@ -19,7 +19,7 @@
   block's cookie. On a 503
   `SignOutIncompleteException` (the cookie was cleared but the server-side
   session was not removed) it does the same, then throws an
-  `OidcRequestException` with that `name`. Any other status, or a transport
+  `OidcRequestException` with that `errorName`. Any other status, or a transport
   error, now throws: the stored tokens are cleared, but the session cookie
   and the state are kept. It used to ignore the response and drop the
   logout URL.
@@ -36,8 +36,8 @@
   session, because a cookie session stores no tokens.
 - **Breaking for exhaustive `switch` statements over `OidcException`:** add
   `OidcRequestException`, thrown when an auth route answers with a status
-  the client doesn't accept. It carries the `statusCode` and the error
-  `name` the server sent.
+  the client doesn't accept. It carries the `statusCode` and, as
+  `errorName`, the error name the server sent.
 - Add `OidcClient.forAuth(client, providers: …, relayTo: …)`, a client for an
   `Auth` block's federated sign-in. It shares the app's `BlocksClient`: its
   base URL, HTTP client, session store and, unless one is passed, token

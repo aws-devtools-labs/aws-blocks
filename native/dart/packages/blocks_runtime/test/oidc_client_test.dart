@@ -454,7 +454,7 @@ void main() {
         throwsA(
           isA<OidcRequestException>()
               .having((e) => e.statusCode, 'statusCode', 500)
-              .having((e) => e.name, 'name', 'InternalError'),
+              .having((e) => e.errorName, 'errorName', 'InternalError'),
         ),
       );
       await Future<void>.delayed(Duration.zero);
@@ -601,7 +601,11 @@ void main() {
           throwsA(
             isA<OidcRequestException>()
                 .having((e) => e.statusCode, 'statusCode', 503)
-                .having((e) => e.name, 'name', 'SignOutIncompleteException'),
+                .having(
+                  (e) => e.errorName,
+                  'errorName',
+                  'SignOutIncompleteException',
+                ),
           ),
         );
         await Future<void>.delayed(Duration.zero);
