@@ -259,6 +259,8 @@ class OidcClient implements AuthProvider {
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], or [providerConfigs] has no entry for it.
+  ///
+  /// Signing in with an `Auth` block uses [signIn].
   Future<OidcUser> signInDirect(
     String provider, {
     required BrowserLauncher launcher,

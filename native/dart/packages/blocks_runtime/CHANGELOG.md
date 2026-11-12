@@ -102,6 +102,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   no `kind`, now hydrates instead of throwing a `TypeError`. One without
   `exchangePath`, which every route is found from, throws a `FormatException`
   naming the field.
+- The README gains a "Using Auth" section: the state machine through
+  `getAuthState()` and `setAuthState` for everything but federated sign-in,
+  one sign-in button per provider in the `providers` of the client
+  `getClient()` returns, calling `signIn`, `signOut()` for a federated
+  sign-out, and `getAuthState()` on launch.
 - Add `OidcClient.authState`, the current sign-in state: the state most recently
   added to `authStateChanges`, or `OidcLoading` before the first one. An app can
   read it once, such as on launch after `restore()`, without subscribing to the
