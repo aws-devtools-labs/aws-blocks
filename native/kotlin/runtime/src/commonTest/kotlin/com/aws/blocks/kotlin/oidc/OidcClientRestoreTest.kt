@@ -11,6 +11,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlin.test.Test
+import kotlinx.io.IOException
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -208,5 +210,27 @@ class OidcClientRestoreTest {
         client.restore()?.username shouldBe "alice"
         client.authState.value shouldBe OidcAuthState.SignedIn(OidcUser("google:1", "alice"))
         requests shouldBe listOf("GET /aws-blocks/auth/session")
+    }
+
+    @Test
+    fun `restore throws on a session body it cannot read and leaves the state alone`() = runTest {
+        // A body with no user is an OidcSessionException; one that is not JSON at all is this.
+        for (body in listOf("not json", "{")) {
+            val client = client(HttpStatusCode.OK, body)
+
+            shouldThrow<SerializationException> { client.restore() }
+            client.authState.value shouldBe OidcAuthState.Loading
+        }
+    }
+
+    @Test
+    fun `restore throws when the backend cannot be reached and leaves the state alone`() = runTest {
+        val unreachable = HttpClient(MockEngine) {
+            engine { addHandler { throw IOException("connection refused") } }
+        }
+        val client = authBlockClient(unreachable, listOf("google"))
+
+        shouldThrow<IOException> { client.restore() }
+        client.authState.value shouldBe OidcAuthState.Loading
     }
 }
