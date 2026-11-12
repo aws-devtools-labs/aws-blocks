@@ -643,7 +643,8 @@ public extension OIDCClient where Provider == String {
     ///   - callbackPath: The backend's `redirects.callbackPath`.
     ///   - signOutPath: The backend's `redirects.signOutPath`.
     /// - Precondition: Both paths start with `/aws-blocks/auth/`, and `callbackPath` has a segment
-    ///   after that and no trailing `/`.
+    ///   after that and no trailing `/`. The paths are constants of the app's backend, so a path that
+    ///   breaks this stops the app with `preconditionFailure`, naming the path, instead of throwing.
     static func forAuth(
         client: BlocksClient,
         providers: [String],

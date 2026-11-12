@@ -9,7 +9,8 @@ returns a client for the `Auth` block on the app's own `BlocksClient`, so it sha
 `URLSession`, cookies and token store. Its routes are derived as the server derives them: the base
 is `callbackPath` up to its last `/`, and authorize-params, exchange and refresh sit under it. Pass
 `callbackPath:` and `signOutPath:` when the backend sets `redirects.callbackPath` or
-`redirects.signOutPath`. Both must start with `/aws-blocks/auth/`. A client built this way signs in
+`redirects.signOutPath`. Both must start with `/aws-blocks/auth/`, and an invalid path stops the
+app with `preconditionFailure` when the client is built. A client built this way signs in
 with `signIn(provider:launcher:)`, which uses the `relayTo` it was built with and throws
 `OIDCConfigurationError` when there is none.
 
