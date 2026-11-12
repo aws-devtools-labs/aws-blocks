@@ -16,6 +16,8 @@
     }
   },
   "dependencies": {
-    "astro": "^7.4.4"
+    "@playwright/test": "^1.65.0",
+    "astro": "^7.4.4",
+    "cookie": "^2.0.2"
   }
 }

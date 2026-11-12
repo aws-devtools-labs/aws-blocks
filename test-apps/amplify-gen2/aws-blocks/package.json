@@ -17,10 +17,11 @@
   },
   "dependencies": {
     "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-data": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/blocks": "*",
     "@aws-blocks/data-common": "*",
+    "@playwright/test": "^1.65.0",
     "vite": "^6.4.5"
   }
 }

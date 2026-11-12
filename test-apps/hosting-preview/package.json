@@ -33,6 +33,6 @@
     "concurrently": "^8.2.0",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "^1.65.0"
   }
 }

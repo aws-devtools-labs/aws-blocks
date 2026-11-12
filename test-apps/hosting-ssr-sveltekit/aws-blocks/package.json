@@ -16,6 +16,8 @@
     }
   },
   "dependencies": {
+    "@playwright/test": "^1.65.0",
+    "@sveltejs/adapter-node": "^5.5.8",
     "vite": "^6.4.5"
   }
 }

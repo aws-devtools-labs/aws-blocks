@@ -14,5 +14,9 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@opennextjs/aws": "^4.1.15",
+    "@playwright/test": "^1.65.0"
   }
 }

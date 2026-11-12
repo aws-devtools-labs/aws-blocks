@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "@playwright/test": "^1.65.0",
     "nuxt": "^4.6.3"
   }
 }
