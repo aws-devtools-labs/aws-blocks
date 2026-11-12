@@ -286,7 +286,7 @@ void main() {
     );
 
     test('maps each identifier to its escaped wire value', () {
-      final mark = _decl(output, 'Mark');
+      final mark = _decl(output, 'MarkKnown');
       expect(mark, contains('  itS,\n  backSlash,\n  a\$b,\n  newLine\n;'));
       expect(mark, contains(r"    'it\'s': itS,"));
       expect(mark, contains(r"    'back\\slash': backSlash,"));

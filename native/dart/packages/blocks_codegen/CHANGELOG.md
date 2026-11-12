@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **Breaking:** a string enum that a response can carry is now open, so a
+  value a newer backend adds no longer makes decoding throw. Such an enum
+  `X` (reachable from a method result, at any depth) is a sealed class:
+  its known values are the constants of the enum `XKnown`, which `X.a` and
+  `X.values` still name, and any other value decodes to `XUnknown`, whose
+  `value` is the string as sent. `toJson()` writes that string back, so an
+  unknown value round-trips. An exhaustive `switch` over `X` needs an
+  `XUnknown()` case, and `name`, `index` and `values.byName` are on `XKnown`
+  only. An enum that only parameters use stays a closed Dart enum.
+
 - Fix two arms of one union whose discriminator values generate the same
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as

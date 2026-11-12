@@ -132,7 +132,19 @@ class Extras {
 }
 
 
-enum Level {
+sealed class Level {
+  static const values$ = LevelKnown.values$;
+  static const index$ = LevelKnown.index$;
+  static const name$ = LevelKnown.name$;
+  static const $hidden = LevelKnown.$hidden;
+  static const ok = LevelKnown.ok;
+  static const values = LevelKnown.values;
+
+  String toJson();
+  static Level fromJson(String json) => LevelKnown._jsonMap[json] ?? LevelUnknown(json);
+}
+
+enum LevelKnown implements Level {
   values$,
   index$,
   name$,
@@ -140,22 +152,43 @@ enum Level {
   ok
 ;
 
-  static const _jsonMap = <String, Level>{
+  static const _jsonMap = <String, LevelKnown>{
     'values': values$,
     'index': index$,
     'name': name$,
     '_hidden': $hidden,
     'ok': ok,
   };
-  static const _toJsonMap = <Level, String>{
+  static const _toJsonMap = <LevelKnown, String>{
     values$: 'values',
     index$: 'index',
     name$: 'name',
     $hidden: '_hidden',
     ok: 'ok',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static Level fromJson(String json) => _jsonMap[json]!;
+}
+
+/// A `Level` value this client was generated without.
+final class LevelUnknown implements Level {
+  /// The value as the server sent it.
+  final String value;
+
+  const LevelUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LevelUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LevelUnknown' '($value)';
 }
 
 
