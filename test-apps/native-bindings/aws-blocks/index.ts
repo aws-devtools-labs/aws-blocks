@@ -116,7 +116,8 @@ const oidcAuth = new Auth(scope, 'auth-oidc', {
         : stubIdp({ onAuthorize: (req) => req.users[0] }),
     // A second provider, so the suites cover a block with more than one:
     // `getAuthState()` lists one `signIn:<id>` action per provider. Always the
-    // stub, also when `google` federates a real IdP.
+    // stub, also when `google` federates a real IdP. It is an OIDC stub (ID
+    // token, logout URL), not the bare OAuth 2.0 `github()` provider.
     github2: stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
