@@ -567,7 +567,7 @@ class OidcClientTest {
     }
 
     @Test
-    fun `signOut transitions to signed out even on server error`() = runTest {
+    fun `signOut throws on a server error after signing out locally`() = runTest {
         val httpClient = createMockClient(signOutStatus = HttpStatusCode.InternalServerError)
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson<AnyProvider>(element, httpClient, localServer, "myapp://auth/callback")
@@ -581,7 +581,7 @@ class OidcClientTest {
             callbackUrl = "http://localhost:3001/auth/callback",
         )
 
-        client.signOut()
+        shouldThrow<OidcSignOutException> { client.signOut() }.statusCode shouldBe 500
         client.authState.value shouldBe OidcAuthState.SignedOut
     }
 
