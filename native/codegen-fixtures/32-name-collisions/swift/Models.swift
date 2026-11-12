@@ -193,6 +193,13 @@ public nonisolated enum Payload: Codable {
         }
     }
 
+    /// The discriminator of an arm this client was generated without; nil for a known arm.
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["type"] else { return nil }
+        return tag
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let disc = try container.decode(String.self, forKey: .`type`)
@@ -244,6 +251,13 @@ public nonisolated enum Payloads: Codable {
         case .unknown(let value):
             try value.encode(to: encoder)
         }
+    }
+
+    /// The discriminator of an arm this client was generated without; nil for a known arm.
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["format"] else { return nil }
+        return tag
     }
 
     public init(from decoder: Decoder) throws {

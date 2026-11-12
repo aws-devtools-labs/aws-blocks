@@ -507,6 +507,17 @@ public struct SwiftCodeGenerator {
         }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
+        if let unknownCase {
+            // The tag of an arm the client doesn't know, as Dart's `XUnknown.discriminator` and Kotlin's
+            // `X.Unknown.discriminator` give it.
+            lines.append("")
+            lines.append("\(indent)    /// The discriminator of an arm this client was generated without; nil for a known arm.")
+            lines.append("\(indent)    public var unknownDiscriminator: String? {")
+            lines.append("\(indent)        guard case .\(unknownCase)(.dictionary(let object)) = self,")
+            lines.append("\(indent)              case .string(let tag)? = object[\"\(swiftStringContent(discriminator.fieldName))\"] else { return nil }")
+            lines.append("\(indent)        return tag")
+            lines.append("\(indent)    }")
+        }
         lines.append("")
         lines.append("\(indent)    public init(from decoder: Decoder) throws {")
         // A map or a transferable arm decodes from an object too, so it's tried only when the discriminator is

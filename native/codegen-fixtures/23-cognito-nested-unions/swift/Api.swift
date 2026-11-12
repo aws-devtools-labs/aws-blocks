@@ -357,6 +357,13 @@ public final nonisolated class Api: Sendable {
                     }
                 }
 
+                /// The discriminator of an arm this client was generated without; nil for a known arm.
+                public var unknownDiscriminator: String? {
+                    guard case .unknown(.dictionary(let object)) = self,
+                          case .string(let tag)? = object["name"] else { return nil }
+                    return tag
+                }
+
                 public init(from decoder: Decoder) throws {
                     let container = try decoder.container(keyedBy: CodingKeys.self)
                     let disc = try container.decode(String.self, forKey: .name)
@@ -414,6 +421,13 @@ public final nonisolated class Api: Sendable {
                 case .unknown(let value):
                     try value.encode(to: encoder)
                 }
+            }
+
+            /// The discriminator of an arm this client was generated without; nil for a known arm.
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["status"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
@@ -757,6 +771,13 @@ public final nonisolated class Api: Sendable {
                     }
                 }
 
+                /// The discriminator of an arm this client was generated without; nil for a known arm.
+                public var unknownDiscriminator: String? {
+                    guard case .unknown(.dictionary(let object)) = self,
+                          case .string(let tag)? = object["name"] else { return nil }
+                    return tag
+                }
+
                 public init(from decoder: Decoder) throws {
                     let container = try decoder.container(keyedBy: CodingKeys.self)
                     let disc = try container.decode(String.self, forKey: .name)
@@ -814,6 +835,13 @@ public final nonisolated class Api: Sendable {
                 case .unknown(let value):
                     try value.encode(to: encoder)
                 }
+            }
+
+            /// The discriminator of an arm this client was generated without; nil for a known arm.
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["status"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
