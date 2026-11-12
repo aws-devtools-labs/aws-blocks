@@ -14,7 +14,7 @@
 /// out (which returns the stub IdP's logout URL), and checks that `restore()`
 /// is null afterwards. Then, on one cookie store shared by both blocks, it
 /// checks that they stay separate: `auth-sso` refuses an `auth-oidc` session,
-/// and signing out of `auth-sso` leaves `auth-oidc` signed in.
+/// and signing out of either block leaves the other signed in.
 ///
 /// Like oidc_test.dart, it needs a headless IdP: it runs against the local dev
 /// server, and against a deployed backend only with `RUN_OIDC=1`.
@@ -58,8 +58,10 @@ void main() async {
     launcher: launcher,
     provider: 'github2',
     providers: const ['google', 'github2'],
-    requireAuth: (blocks) async =>
-        (await blocks.api.oidcRequireAuth()).provider,
+    requireAuth: (blocks) async {
+      final me = await blocks.api.oidcRequireAuth();
+      return (userId: me.userId, provider: me.provider);
+    },
   );
 
   // --- auth-sso, routes under /aws-blocks/auth/sso/ -------------------------
@@ -72,7 +74,10 @@ void main() async {
     providers: const ['corp'],
     callbackPath: '/aws-blocks/auth/sso/callback',
     signOutPath: '/aws-blocks/auth/sso/signout',
-    requireAuth: (blocks) async => (await blocks.api.ssoRequireAuth()).provider,
+    requireAuth: (blocks) async {
+      final me = await blocks.api.ssoRequireAuth();
+      return (userId: me.userId, provider: me.provider);
+    },
   );
 
   await _blocksStaySeparate(
@@ -113,6 +118,11 @@ Future<void> _blocksStaySeparate({
   group('OIDC forAuth: auth-sso refuses an auth-oidc session');
   try {
     await oidc.signInRelay('github2', launcher: launcher);
+    final oidcSignedIn = await blocks.api.oidcRequireAuth();
+    check(
+      oidcSignedIn.provider == 'github2',
+      'auth-oidc is signed in (provider=${oidcSignedIn.provider})',
+    );
     await expectErrorNamed(
       () => blocks.api.ssoRequireAuth(),
       AuthErrorNames.notAuthenticated,
@@ -127,7 +137,7 @@ Future<void> _blocksStaySeparate({
     check(false, 'auth-sso refuses an auth-oidc session threw: $e');
   }
 
-  group('OIDC forAuth: signing out of auth-sso leaves auth-oidc signed in');
+  group('OIDC forAuth: signing out of either block leaves the other signed in');
   try {
     await sso.signInRelay('corp', launcher: launcher);
     await sso.signOut();
@@ -138,9 +148,22 @@ Future<void> _blocksStaySeparate({
       oidcAfter.provider == 'github2',
       'auth-oidc is still signed in (provider=${oidcAfter.provider})',
     );
+
+    await sso.signInRelay('corp', launcher: launcher);
     await oidc.signOut();
+    final oidcRestored = await oidc.restore();
+    check(
+      oidcRestored == null,
+      'auth-oidc restore() is null after its sign-out',
+    );
+    final ssoStill = await blocks.api.ssoRequireAuth();
+    check(
+      ssoStill.provider == 'corp',
+      'auth-sso is still signed in (provider=${ssoStill.provider})',
+    );
+    await sso.signOut();
   } catch (e) {
-    check(false, 'signing out of auth-sso only threw: $e');
+    check(false, 'signing out of one block only threw: $e');
   }
 }
 
@@ -151,7 +174,8 @@ Future<void> _signInRestoreSignOut({
   required HttpRelayLauncher launcher,
   required String provider,
   required List<String> providers,
-  required Future<String> Function(Blocks blocks) requireAuth,
+  required Future<({String userId, String provider})> Function(Blocks blocks)
+  requireAuth,
   String? callbackPath,
   String? signOutPath,
 }) async {
@@ -176,17 +200,20 @@ Future<void> _signInRestoreSignOut({
   final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
 
   group('OIDC forAuth ($label): sign in');
+  String? userId;
   try {
     final user = await forAuth().signInRelay(provider, launcher: launcher);
+    userId = user.userId;
     check(
       user.userId.isNotEmpty && user.signInProvider == provider,
       'signInRelay returns the user (userId=${user.userId}, '
       'signInProvider=${user.signInProvider})',
     );
-    final signedInWith = await requireAuth(blocks);
+    final me = await requireAuth(blocks);
     check(
-      signedInWith == provider,
-      'an authenticated RPC sees provider $provider (got: $signedInWith)',
+      me.userId == user.userId && me.provider == provider,
+      'an authenticated RPC sees the same user through $provider '
+      '(got: ${me.userId}, ${me.provider})',
     );
   } catch (e) {
     check(false, 'sign in through $provider threw: $e');
@@ -197,7 +224,7 @@ Future<void> _signInRestoreSignOut({
   try {
     final restored = await forAuth().restore();
     check(
-      restored != null && restored.signInProvider == provider,
+      restored != null && restored.userId == userId,
       'restore() returns the signed-in user (got: ${restored?.userId})',
     );
   } catch (e) {
@@ -208,7 +235,7 @@ Future<void> _signInRestoreSignOut({
   try {
     final logoutUrl = await forAuth().signOut();
     check(
-      logoutUrl != null && logoutUrl.path.endsWith('/idp/$provider/logout'),
+      logoutUrl?.path == '/aws-blocks/auth/idp/$provider/logout',
       "signOut() returns the stub IdP's logout URL (got: ${logoutUrl?.path})",
     );
     final afterSignOut = await forAuth().restore();
