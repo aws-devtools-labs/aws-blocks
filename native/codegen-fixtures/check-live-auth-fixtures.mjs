@@ -42,14 +42,20 @@ const DEFAULT_SPEC = join(BACKEND_DIR, 'aws-blocks', 'blocks.spec.json');
 /**
  * Each fixture: the method names it carries → the live method it must equal.
  * Fixture 18 *is* the `Auth` sign-in state machine (`createApi()`'s
- * `setAuthState`, which is identical for every `Auth` configuration: the TS
- * client narrows it per block, but the spec describes the wide union —
- * `@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
+ * `getAuthState` and `setAuthState`, which are identical for every `Auth`
+ * configuration: the TS client narrows them per block, but the spec describes
+ * the wide union — `@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
  * fixture 23 is `Auth.signIn` / `confirmSignIn`'s nested result unions, as
  * native-bindings' `api.cognitoSignIn` / `api.cognitoConfirmSignIn` return them.
  */
 const FIXTURES = [
-	{ dir: '18-hybrid-arm', methods: { 'authApi.setAuthState': 'authBasicApi.setAuthState' } },
+	{
+		dir: '18-hybrid-arm',
+		methods: {
+			'authApi.getAuthState': 'authBasicApi.getAuthState',
+			'authApi.setAuthState': 'authBasicApi.setAuthState',
+		},
+	},
 	{
 		dir: '23-cognito-nested-unions',
 		methods: {
@@ -174,11 +180,14 @@ for (const fixture of FIXTURES) {
 
 	// Rewrite: replace the fixture's methods with the live ones, drop schemas only
 	// the old methods reached, and set every live-reachable schema (existing keys
-	// keep their position). Components outside both closures are kept.
+	// keep their position; one that differs only in order is left as it is).
+	// Components outside both closures are kept.
 	spec.methods = spec.methods.map((m) => expectedMethods.find((e) => e.name === m.name) ?? m);
+	// A method the fixture doesn't carry yet is added, after the ones it does.
+	for (const e of expectedMethods) if (!spec.methods.some((m) => m.name === e.name)) spec.methods.push(e);
 	const schemas = { ...fixtureSchemas };
 	for (const name of actualClosure) if (!expectedClosure.has(name)) delete schemas[name];
-	for (const name of expectedClosure) schemas[name] = liveSchemas[name];
+	for (const name of expectedClosure) if (!same(schemas[name], liveSchemas[name])) schemas[name] = liveSchemas[name];
 	spec.components = { ...spec.components, schemas };
 	writeFileSync(fixturePath, json(spec) + (raw.endsWith('\n') ? '\n' : ''));
 	console.log(`✎ ${fixture.dir}: rewrote spec.json (${problems.length} change(s))`);

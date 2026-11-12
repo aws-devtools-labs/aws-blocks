@@ -34,8 +34,7 @@ final class HybridArmTests: XCTestCase {
         let data = try loadSpec()
         let parser = OpenRPCParser()
         let model = try parser.parse(data: data)
-        XCTAssertEqual(model.methods.count, 1)
-        XCTAssertEqual(model.methods[0].name, "authApi.setAuthState")
+        XCTAssertEqual(model.methods.map(\.name), ["authApi.setAuthState", "authApi.getAuthState"])
     }
 
     func testRealSetAuthStateBuildsCodegenModelWithoutError() throws {

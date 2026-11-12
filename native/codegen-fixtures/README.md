@@ -87,7 +87,7 @@ To add round trips for a fixture, create `native/kotlin/fixture-goldens/round-tr
 
 ## Auth Fixtures Must Match the Live Block
 
-`18-hybrid-arm` is the `Auth` block's sign-in state machine (`createApi()`'s `setAuthState`) and `23-cognito-nested-unions` is `Auth.signIn` / `confirmSignIn`'s result unions. Regenerating golden files only proves the generators are stable against the committed `spec.json`, so a separate check compares those two specs with the spec `test-apps/native-bindings` emits from the live block (CI: the `setup` job of `.github/workflows/native-sdk-e2e.yml`):
+`18-hybrid-arm` is the `Auth` block's sign-in state machine (`createApi()`'s `getAuthState` and `setAuthState`) and `23-cognito-nested-unions` is `Auth.signIn` / `confirmSignIn`'s result unions. Regenerating golden files only proves the generators are stable against the committed `spec.json`, so a separate check compares those two specs with the spec `test-apps/native-bindings` emits from the live block (CI: the `setup` job of `.github/workflows/native-sdk-e2e.yml`):
 
 ```bash
 npm run build   # from the repo root
