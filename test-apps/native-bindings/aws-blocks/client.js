@@ -13,10 +13,12 @@ export const api = __BLOCKS_ApiNamespaceClient__('api');
 export const authBasicApi = __BLOCKS_ApiNamespaceClient__('authBasicApi');
 export const authCognitoApi = __BLOCKS_ApiNamespaceClient__('authCognitoApi');
 export const oidcAuthApi = __BLOCKS_ApiNamespaceClient__('oidcAuthApi');
+export const ssoAuthApi = __BLOCKS_ApiNamespaceClient__('ssoAuthApi');
 
 export const generateClient = (config) => ({
     api: __BLOCKS_ApiNamespaceClient__('api', config),
     authBasicApi: __BLOCKS_ApiNamespaceClient__('authBasicApi', config),
     authCognitoApi: __BLOCKS_ApiNamespaceClient__('authCognitoApi', config),
     oidcAuthApi: __BLOCKS_ApiNamespaceClient__('oidcAuthApi', config),
+    ssoAuthApi: __BLOCKS_ApiNamespaceClient__('ssoAuthApi', config),
 });
