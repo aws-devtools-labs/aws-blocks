@@ -45,12 +45,14 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 - **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
   provider's logout URL, or null when it has none. Open it with the app's
   launcher to end the provider's own session; the client doesn't open it. It
-  POSTs `{signOutPath}?format=json`. On a 2xx it clears the stored tokens and
-  emits `OidcSignedOut`. It doesn't clear the session store, which may hold
-  other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
-  block's cookie. On a 503 `SignOutIncompleteException` (the cookie was
-  cleared but the server-side session was not removed) it does the same,
-  then throws an `OidcRequestException` with that `errorName`. Any other
+  POSTs `{signOutPath}?format=json` with an empty JSON body; it no longer
+  sends the stored refresh token, which the server ignores. On a 2xx it
+  clears the stored tokens and emits `OidcSignedOut`. It doesn't clear the
+  session store, which may hold other `Auth` blocks' cookies; the server's
+  `Set-Cookie` removes this block's cookie. On a 503
+  `SignOutIncompleteException` (the cookie was cleared but the server-side
+  session was not removed) it does the same, then throws an
+  `OidcRequestException` with that `errorName`. Any other
   status, or a transport error, now throws: the stored tokens are cleared,
   but the session cookie and the state are kept. It used to ignore the
   response and drop the logout URL.

@@ -652,7 +652,7 @@ void main() {
       );
       expect(req.headers['content-type'], startsWith('application/json'));
       expect(req.headers['cookie'], 'blocks_session=live');
-      expect(jsonDecode(req.body), {'refreshToken': 'rt'});
+      expect(jsonDecode(req.body), <String, dynamic>{});
       expect(logoutUrl, Uri.parse('https://idp.example.com/logout?x=1'));
       expect(t.states, [isA<OidcSignedOut>()]);
       expect(await t.store.get('access_token'), isNull);
@@ -660,11 +660,11 @@ void main() {
       expect(t.session.cookies, isEmpty);
     });
 
-    test('sends {} when no refresh token is stored', () async {
+    test('sends {} even when a refresh token is stored', () async {
       final t = await signOutClient((_) async => http.Response('{}', 200));
-      await t.store.delete('refresh_token');
+      expect(await t.store.get('refresh_token'), 'rt');
       expect(await t.client.signOut(), isNull);
-      expect(jsonDecode(t.sent.single.body), <String, dynamic>{});
+      expect(t.sent.single.body, '{}');
     });
 
     test('returns null for a 204 with no body', () async {
