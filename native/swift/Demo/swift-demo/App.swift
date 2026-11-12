@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import AuthenticationServices
+import BlocksRuntime
 import SwiftUI
 
 // MARK: - Configuration
@@ -52,6 +54,38 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Where the backend relays a federated sign-in back to. The backend lists it in
+    /// `redirects.allowedRelayOrigins`.
+    static let relayTo = "blocksdemo://auth"
+
+    /// The `Auth` block's OIDC client, for the providers the current state offers.
+    private func oidc() -> OIDCClient<String> {
+        let providers = authState?.actions.compactMap { OIDCClient.providerIdOf($0.name) } ?? []
+        return OIDCClient.forAuth(client: blocks.client, providers: providers, relayTo: Self.relayTo)
+    }
+
+    /// A `signIn:<id>` action: sign in through the backend's relay, then read the new state.
+    func federatedSignIn(provider: String) async {
+        do {
+            _ = try await oidc().signIn(provider: provider, launcher: WebAuthenticationLauncher())
+            await refreshAuth()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// A federated user's `signOut` action: sign out, open the provider's logout page, then read the new state.
+    func federatedSignOut() async {
+        do {
+            if let logoutURL = try await oidc().signOut() {
+                await UIApplication.shared.open(logoutURL)
+            }
+            await refreshAuth()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func performAuthAction(_ input: AuthApi.SetAuthState.Input) async {
         do {
             authState = try await authApi.setAuthState(input: input)
@@ -59,6 +93,40 @@ final class AppState: ObservableObject {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Browser launcher
+
+/// Opens the identity provider in `ASWebAuthenticationSession` and returns the relayed callback URL.
+final class WebAuthenticationLauncher: NSObject, BrowserLauncher, ASWebAuthenticationPresentationContextProviding,
+    @unchecked Sendable {
+    /// Held while the sheet is open.
+    private var session: ASWebAuthenticationSession?
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        try await present(authorizeURL, callbackScheme: callbackScheme)
+    }
+
+    @MainActor
+    private func present(_ authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        defer { session = nil }
+        return try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: callbackScheme) { url, error in
+                if let url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cancelled))
+                }
+            }
+            session.presentationContextProvider = self
+            self.session = session
+            session.start()
+        }
+    }
+
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        ASPresentationAnchor()
     }
 }
 

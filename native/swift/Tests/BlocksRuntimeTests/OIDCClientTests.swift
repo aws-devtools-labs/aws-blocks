@@ -1321,6 +1321,15 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange")
     }
 
+    func testProviderIdOfReadsTheSignInActionName() {
+        XCTAssertEqual(OIDCClient.providerIdOf("signIn:google"), "google")
+        XCTAssertEqual(OIDCClient.providerIdOf("signIn:corp:sso"), "corp:sso")
+        XCTAssertNil(OIDCClient.providerIdOf("signIn"))
+        XCTAssertNil(OIDCClient.providerIdOf("signIn:"))
+        XCTAssertNil(OIDCClient.providerIdOf("signOut"))
+        XCTAssertNil(OIDCClient.providerIdOf("signUp"))
+    }
+
     func testForAuthPathValidation() {
         let problem = OIDCClient<String>.authPathsProblem
         XCTAssertNil(problem("/aws-blocks/auth/callback", "/aws-blocks/auth/signout"))

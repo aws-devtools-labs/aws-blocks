@@ -638,6 +638,23 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 // MARK: - Auth block
 
 public extension OIDCClient where Provider == String {
+    /// The provider id of an `Auth` sign-in state action named `signIn:<id>`, or `nil` for any other action.
+    ///
+    /// A native app signs in with such an action through ``signIn(provider:launcher:)`` instead of
+    /// opening its `url`, which starts a browser-cookie sign-in the app never sees:
+    ///
+    /// ```swift
+    /// if let provider = OIDCClient.providerIdOf(action.name) {
+    ///     _ = try await oidc.signIn(provider: provider, launcher: launcher)
+    ///     state = try await blocks.authApi.getAuthState()
+    /// }
+    /// ```
+    static func providerIdOf(_ actionName: String) -> String? {
+        let prefix = "signIn:"
+        guard actionName.hasPrefix(prefix), actionName.count > prefix.count else { return nil }
+        return String(actionName.dropFirst(prefix.count))
+    }
+
     /// A client for the `Auth` block's federated sign-in, on the app's own `BlocksClient`, so it shares
     /// the app's `URLSession`, cookies and token store. It makes no request until you call it.
     ///
