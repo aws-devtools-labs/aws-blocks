@@ -14,7 +14,8 @@ with `signIn(provider:launcher:)`, which uses the `relayTo` it was built with an
 `OIDCConfigurationError` when there is none.
 
 Raw routes are requested at the client URL cut before its first `aws-blocks` path segment, which
-keeps an API Gateway stage prefix. A URL with no such segment now drops its trailing `/`.
+keeps an API Gateway stage prefix as it was written, percent-encoding included, and an IPv6 host's
+brackets. A URL with no such segment now drops its trailing `/`.
 
 `OIDCClient.exchange` now refuses a provider the client wasn't built with, throwing
 `OIDCError.unknownProvider` before any request, as `signIn` already did.

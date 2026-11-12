@@ -1256,6 +1256,8 @@ final class OIDCClientTests: XCTestCase {
             ("https://d1.cloudfront.net/aws-blocks/api", "https://d1.cloudfront.net"),
             ("https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api", "https://d1.cloudfront.net"),
             ("http://localhost:3001", "http://localhost:3001"),
+            ("http://[::1]:3001/aws-blocks/api", "http://[::1]:3001"),
+            ("https://x.example.com/pr%20od/aws-blocks/api", "https://x.example.com/pr%20od"),
             ("http://localhost:3001/", "http://localhost:3001")
         ]
         for (url, origin) in cases {
