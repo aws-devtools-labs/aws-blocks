@@ -254,6 +254,19 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
     }
 
+    func testExchangeAsksForNoBearerTokens() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(requestJSON(request)["tokens"] as? Bool, false)
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+
+        _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
+
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1)
+    }
+
     func testExchangeThrowsOnMalformedResponse() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["nope": "missing tokens"]

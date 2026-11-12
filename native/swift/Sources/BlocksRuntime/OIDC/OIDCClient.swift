@@ -332,7 +332,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             "callbackUrl": callbackURL,
             "provider": provider,
             "state": state,
-            "nonce": nonce
+            "nonce": nonce,
+            // Cookie session only: the server mints no bearer tokens for this client.
+            "tokens": false
         ]
         if let iss { body["iss"] = iss }
 
