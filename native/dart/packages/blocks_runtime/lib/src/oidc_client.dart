@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'auth_provider.dart';
 import 'blocks_client.dart';
 import 'browser_launcher.dart';
+import 'loopback_session.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
 import 'oidc_types.dart';
@@ -89,6 +90,29 @@ class OidcClient implements AuthProvider {
 
   /// The [tokenStore] key for [name].
   String _key(String name) => '$_keyPrefix$name';
+
+  /// Opens the browser for a desktop sign-in, which [signInRelay] runs when it
+  /// gets no launcher; it isn't used when a launcher is passed. Null opens it
+  /// with the platform's URL handler (`open`, `xdg-open` or `rundll32`), and
+  /// when that fails, prints a one-time local URL to stderr that leads to the
+  /// sign-in page. A Flutter desktop app can pass `url_launcher`'s `launchUrl`
+  /// instead. When this function throws, the sign-in fails with that error,
+  /// so throw when no browser opened:
+  ///
+  /// ```dart
+  /// oidc.openBrowser = (url) async {
+  ///   if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+  ///     throw StateError('No browser to sign in with');
+  ///   }
+  /// };
+  /// ```
+  Future<void> Function(Uri url)? openBrowser;
+
+  /// How long a desktop sign-in waits for the browser to come back, from the
+  /// moment the browser is opened. When it passes, [signInRelay] throws
+  /// [OidcCancelledException]. Like [openBrowser], it applies only to a
+  /// [signInRelay] call without a launcher.
+  Duration signInTimeout = const Duration(minutes: 5);
 
   final _controller = StreamController<OidcAuthState>.broadcast();
   OidcAuthState _authState = OidcLoading();
@@ -386,20 +410,56 @@ class OidcClient implements AuthProvider {
   /// 4. Verifies the returned state matches and the CSRF inside the envelope.
   /// 5. Exchanges the code (forwarding `iss` per RFC 9207).
   ///
-  /// [relayTo] must be the custom-scheme URI registered in the backend's
-  /// `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`). When it is
-  /// omitted, the client's own [OidcClient.relayTo] is used.
+  /// With a [launcher], [relayTo] must be the custom-scheme URI registered in
+  /// the backend's `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`).
+  /// When it is omitted, the client's own [OidcClient.relayTo] is used.
+  ///
+  /// Without a [launcher], on macOS, Linux and Windows, the client signs in
+  /// through a loopback listener (RFC 8252): it binds `127.0.0.1` on a port
+  /// the operating system picks, relays to
+  /// `http://127.0.0.1:<port>/oidc/callback`, which the backend always
+  /// allows, opens the browser with [openBrowser] and waits up to
+  /// [signInTimeout]. [relayTo] is not used then. A launcher, when passed,
+  /// always wins. When [cancel] completes first, for example because the user
+  /// closed the sign-in dialog, the listener closes and this throws
+  /// [OidcCancelledException]. [cancel] is not used with a launcher.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
-  /// [provider]. Throws a [StateError] when neither [relayTo] nor the
-  /// client's [OidcClient.relayTo] is set.
+  /// [provider]. With a [launcher], throws a [StateError] when neither
+  /// [relayTo] nor the client's [OidcClient.relayTo] is set; without one,
+  /// throws a [StateError] on a platform with no loopback sign-in (mobile or
+  /// the web). Both are thrown before any request is sent.
   Future<OidcUser> signInRelay(
     String provider, {
-    required BrowserLauncher launcher,
+    BrowserLauncher? launcher,
     String? relayTo,
+    Future<void>? cancel,
   }) async {
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
+    }
+    if (launcher == null) {
+      if (!loopbackSupported) {
+        throw StateError(
+          'signInRelay needs a launcher on this platform, such as '
+          'FlutterBrowserLauncher from blocks_runtime_flutter. Only macOS, '
+          'Linux and Windows sign in without one.',
+        );
+      }
+      final session = await LoopbackSession.open(
+        openUrl: openBrowser,
+        timeout: signInTimeout,
+      );
+      try {
+        return await _signInRelay(
+          provider,
+          session.relayTo,
+          (url, state) =>
+              session.awaitRedirect(url, expectedState: state, cancel: cancel),
+        );
+      } finally {
+        await session.close();
+      }
     }
     final relay = (relayTo == null || relayTo.isEmpty) ? this.relayTo : relayTo;
     if (relay == null) {
@@ -409,7 +469,21 @@ class OidcClient implements AuthProvider {
         'redirects.allowedRelayOrigins.',
       );
     }
+    return _signInRelay(
+      provider,
+      relay,
+      (url, _) => launcher.launch(url, callbackScheme: Uri.parse(relay).scheme),
+    );
+  }
 
+  /// The relay sign-in after the relay target is known. [launch] opens
+  /// the authorize URL and returns the redirect whose `state` is the one
+  /// passed to it.
+  Future<OidcUser> _signInRelay(
+    String provider,
+    String relay,
+    Future<Uri> Function(Uri authorizeUrl, String state) launch,
+  ) async {
     final csrf = generateRandom();
     final verifier = generateVerifier();
     final challenge = generateChallenge(verifier);
@@ -425,11 +499,8 @@ class OidcClient implements AuthProvider {
       challenge,
     );
 
-    // Step 3: open the browser and wait for the relay custom-scheme redirect.
-    final resultUri = await launcher.launch(
-      authorizeUri,
-      callbackScheme: Uri.parse(relay).scheme,
-    );
+    // Step 3: open the browser and wait for the relay redirect.
+    final resultUri = await launch(authorizeUri, params.state);
 
     // Step 4: validate the callback. The state and the CSRF value inside its
     // envelope are checked first, so a redirect that didn't come from this

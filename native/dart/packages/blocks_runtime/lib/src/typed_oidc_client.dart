@@ -67,12 +67,14 @@ extension type TypedOidcClient<P extends OidcProvider>(OidcClient untyped)
   /// [OidcClient.signInRelay] with [provider]'s name.
   Future<OidcUser> signInRelay(
     P provider, {
-    required BrowserLauncher launcher,
+    BrowserLauncher? launcher,
     String? relayTo,
+    Future<void>? cancel,
   }) => untyped.signInRelay(
     provider.providerName,
     launcher: launcher,
     relayTo: relayTo,
+    cancel: cancel,
   );
 
   /// [OidcClient.exchange] with [provider]'s name.
