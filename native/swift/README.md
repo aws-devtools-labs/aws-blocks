@@ -68,7 +68,7 @@ The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state m
 Two kinds of action carry a `url`, which a native app doesn't open (it would sign in the system browser, not the app). Run them through an `OIDCClient` for the block instead:
 
 - `signIn:<id>`, a federated provider: `OIDCClient.providerIdOf(action.name)` gives the id. Call `oidc.signIn(provider:launcher:)`, then `getAuthState()`.
-- `signOut` with a `url`, a federated user's sign-out: call `oidc.signOut()`, then `getAuthState()`. A `signOut` without a `url` goes through `setAuthState` like any other action.
+- `signOut` with a `url`, a federated user's sign-out: call `oidc.signOut()`, then `getAuthState()`. Never submit this one through `setAuthState`: that ends the session but drops the provider's logout URL. A `signOut` without a `url` goes through `setAuthState` like any other action.
 
 ```swift
 let blocks = Blocks()
@@ -76,8 +76,7 @@ let blocks = Blocks()
 // backend's `redirects.allowedRelayOrigins`.
 let oidc = OIDCClient.forAuth(client: blocks.client, providers: ["google"], relayTo: "myapp://auth")
 
-// On launch: reads the session the Keychain cookie still holds (nil when signed out).
-_ = try await oidc.restore()
+// On launch: the state reflects the session the Keychain cookie still holds.
 var state = try await blocks.authApi.getAuthState()
 
 /// Runs `action`; `input` is what the form collected for a plain (non-federated) action.
@@ -99,7 +98,8 @@ func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throw
 
 Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
 
-- **Restore on launch.** `restore()` reads the server's session and emits `.signedIn` or `.signedOut` on `authStateChanges()`. It returns `nil` when there is no session, and throws when the backend serves no session route (a block without federated providers) or the request fails.
+- **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws (HTTP 404).
+- **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
 - **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it to end the provider's own session; otherwise the next sign-in can pick the same account without asking.
 - **Passkeys.** Hide actions whose `capability` is set (`webauthn-get`, `webauthn-create`): they need platform WebAuthn APIs the runtime doesn't call yet.
 - **New actions.** The block can add actions in a later release, so keep a `default` branch when you switch over action names.
