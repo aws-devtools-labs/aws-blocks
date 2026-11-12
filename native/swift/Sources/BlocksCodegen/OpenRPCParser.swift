@@ -9,13 +9,15 @@ import Foundation
 
 // MARK: - Stage 1: OpenRPC Parser
 //
-// Stateless parser that deserializes JSON into an RPCModel.
+// Parser that deserializes JSON into an RPCModel.
 // Handles: method extraction, $ref resolution, type mapping, constraint
 // extraction, transferable detection, nullability, enum / const detection,
 // and tuple-form arrays.
 
 public struct OpenRPCParser {
     private let optOutNativePackages: Set<String>
+    /// Component schema name -> the Swift type name it's declared and referenced under.
+    private var componentTypeNames: [String: String] = [:]
 
     public init(optOutNativePackages: Set<String> = []) {
         self.optOutNativePackages = optOutNativePackages
@@ -23,6 +25,37 @@ public struct OpenRPCParser {
 
     public func parse(data: Data) throws -> RPCModel {
         let spec = try JSONDecoder().decode(OpenRPCSpec.self, from: data)
+        var parser = self
+        parser.componentTypeNames = Self.componentTypeNames(Array((spec.components?.schemas ?? [:]).keys))
+        return try parser.parse(spec: spec)
+    }
+
+    /// A component schema keeps its name when it's an identifier; otherwise it takes `specTypeName`'s, numbered
+    /// (`_2`, `_3`, …) when another schema already has it. Names are assigned in sorted order, so the result
+    /// doesn't depend on the order of the spec's keys.
+    static func componentTypeNames(_ names: [String]) -> [String: String] {
+        let sorted = names.sorted()
+        var taken = Set(sorted.filter(isValidSwiftIdentifier))
+        var result: [String: String] = [:]
+        for name in sorted {
+            if isValidSwiftIdentifier(name) {
+                result[name] = name
+                continue
+            }
+            let candidate = specTypeName(name)
+            var allocated = candidate
+            var suffix = 2
+            while taken.contains(allocated) {
+                allocated = "\(candidate)_\(suffix)"
+                suffix += 1
+            }
+            taken.insert(allocated)
+            result[name] = allocated
+        }
+        return result
+    }
+
+    private func parse(spec: OpenRPCSpec) throws -> RPCModel {
 
         let declared = try resolveDeclaredTransferableBindings(
             packages: spec.nativePackages,
@@ -32,20 +65,9 @@ public struct OpenRPCParser {
 
         // Resolve component schemas
         var componentSchemas: [String: TypeRef] = [:]
-        // A schema name becomes a type name, so two that reduce to one identifier would declare
-        // one type in place of two.
-        var schemaIdentifiers: [String: String] = [:]
         if let schemas = spec.components?.schemas {
-            for (name, jsonSchema) in schemas.sorted(by: { $0.key < $1.key }) {
-                let identifier = swiftIdentifier(name)
-                if let prior = schemaIdentifiers[identifier], prior != name {
-                    throw CodegenError.unsupportedSchema(
-                        "The schemas '\(escapedForDiagnostic(prior))' and '\(escapedForDiagnostic(name))'"
-                            + " both generate the identifier '\(identifier)'. Rename one in the spec."
-                    )
-                }
-                schemaIdentifiers[identifier] = name
-                componentSchemas[name] = mapTypeRef(jsonSchema)
+            for (name, jsonSchema) in schemas {
+                componentSchemas[componentTypeNames[name] ?? name] = mapTypeRef(jsonSchema)
             }
         }
 
@@ -124,10 +146,15 @@ public struct OpenRPCParser {
         case .null:
             return .primitive(kind: .void)
 
+        case .unknown:
+            return .primitive(kind: .unknown)
+
         case .constLiteral(let value):
             // `z.literal("foo")` collapses to a single-value enum so it can
-            // participate in discriminator detection downstream.
-            return .unionLiteral(values: [value])
+            // participate in discriminator detection downstream. A boolean or
+            // numeric literal keeps its JSON type.
+            if case .string(let text) = value { return .unionLiteral(values: [text]) }
+            return .literal(value)
 
         case .array(let items, let minItems, let maxItems):
             let elementType = items.map { mapTypeRef($0) } ?? .primitive(kind: .unknown)
@@ -136,9 +163,10 @@ public struct OpenRPCParser {
 
         case .tuple(let elements):
             // Multi-element tuples render as a positional inline-object with
-            // synthesized fields `item0`, `item1`, … .
+            // synthesized fields `item0`, `item1`, … . On the wire it is a JSON
+            // array of their values (`positional`), not an object.
             let fields = elements.enumerated().map { idx, element -> Field in
-                Field(name: "item\(idx)", type: mapTypeRef(element), required: true)
+                Field(name: "item\(idx)", type: mapTypeRef(element), required: true, positional: true)
             }
             return .inlineObject(fields: fields, additionalProperties: nil, embeddedUnion: nil)
 
@@ -203,7 +231,7 @@ public struct OpenRPCParser {
 
         case .ref(let refStr):
             let name = refStr.components(separatedBy: "/").last ?? "Unknown"
-            return .schemaRef(name: name, resolved: nil)
+            return .schemaRef(name: componentTypeNames[name] ?? name, resolved: nil)
 
         case .transferable(let kind, let typeArgs):
             return .transferable(blocksType: kind, typeArgs: typeArgs.map { mapTypeRef($0) })

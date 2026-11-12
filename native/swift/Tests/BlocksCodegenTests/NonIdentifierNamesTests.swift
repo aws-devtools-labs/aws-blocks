@@ -8,7 +8,7 @@
 import XCTest
 @testable import BlocksCodegen
 
-/// Names the spec supplies reach generated code only as sanitized identifiers or escaped literals.
+/// Names the spec supplies reach generated code only as identifiers or escaped literals.
 final class NonIdentifierNamesTests: XCTestCase {
 
     private var fixtureSpecURL: URL {
@@ -17,7 +17,7 @@ final class NonIdentifierNamesTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("codegen-fixtures/29-non-identifier-names/spec.json")
+            .appendingPathComponent("codegen-fixtures/43-non-identifier-names/spec.json")
     }
 
     private func generate(_ data: Data) throws -> GeneratedSources {
@@ -75,22 +75,36 @@ final class NonIdentifierNamesTests: XCTestCase {
         """
     }
 
-    func testSanitizerKeepsOnlyIdentifierCharacters() {
-        XCTAssertEqual(swiftIdentifier("camelCase"), "camelCase")
-        XCTAssertEqual(swiftIdentifier("run { error(\"x\") } || id"), "run___error__x________id")
-        XCTAssertEqual(swiftIdentifier("9lives"), "_9lives")
-        XCTAssertEqual(swiftIdentifier("é"), "_unnamed")
-        XCTAssertEqual(swiftIdentifier("*/"), "__unnamed")
-        XCTAssertEqual(escapedSwiftName("a`b\nc"), "a_b_c")
-        XCTAssertEqual(pascalCase("Sample\"Type${x}`;"), "Sample_Type__x___")
+    private func schemasSpec(_ names: [String]) -> String {
+        let schemas = names.map {
+            "\"\($0)\": { \"type\": \"object\", \"properties\": { \"a\": { \"type\": \"string\" } } }"
+        }.joined(separator: ", ")
+        let methods = names.enumerated().map { idx, name in
+            """
+            { "name": "api.get\(idx)", "params": [],
+              "result": { "name": "Get\(idx)Result", "schema": { "$ref": "#/components/schemas/\(name)" } } }
+            """
+        }.joined(separator: ", ")
+        return """
+        {
+          "openrpc": "1.3.2",
+          "info": { "title": "test", "version": "1.0.0" },
+          "components": { "schemas": { \(schemas) } },
+          "methods": [\(methods)]
+        }
+        """
     }
 
-    func testFixtureGenerates() throws {
-        let output = try generate(Data(contentsOf: fixtureSpecURL))
-
-        XCTAssertTrue(output.models.contains("struct Sample_Type__x___: Codable {"), "got:\n\(output.models)")
-        XCTAssertTrue(output.models.contains("case run___error__x________id = \"run { error(\\\"x\\\") } || id\""), "got:\n\(output.models)")
-        XCTAssertTrue(output.api.contains("run___error__xParam________p: String"), "got:\n\(output.api)")
+    func testSanitizerKeepsOnlyIdentifierCharacters() {
+        XCTAssertEqual(sanitizedSwiftName("run { error(\"x\") } || id"), "run___error__x________id")
+        XCTAssertEqual(sanitizedSwiftName("9lives"), "_9lives")
+        XCTAssertEqual(sanitizedSwiftName("1st"), "_1st")
+        XCTAssertEqual(sanitizedSwiftName("$"), "_unnamed")
+        XCTAssertEqual(sanitizedSwiftName("*/"), "__unnamed")
+        XCTAssertEqual(sanitizedSwiftName(""), "_unnamed")
+        XCTAssertFalse(isValidSwiftIdentifier("_"))
+        XCTAssertEqual(escapedSwiftName("_"), "_unnamed")
+        XCTAssertEqual(escapedSwiftName("a`b\nc"), "a_b_c")
     }
 
     func testNoSpecTextSurvivesOutsideALiteralOrComment() throws {
@@ -100,199 +114,38 @@ final class NonIdentifierNamesTests: XCTestCase {
         for fragment in ["error(", "{ error", "`", "${", "\\(", "*/", "'", ";", "||", " sp ace", "with space"] {
             XCTAssertFalse(code.contains(fragment), "'\(fragment)' reached code:\n\(code)")
         }
+        XCTAssertFalse(code.contains("let _:"), "a lone `_` can't be declared:\n\(code)")
     }
 
-    func testTwoFieldsThatReduceToOneIdentifierFail() {
-        XCTAssertThrowsError(try generate(recordSpec(["a-b", "a_b"]))) { error in
-            let message = String(describing: error)
-            XCTAssertTrue(message.contains("'a-b'") && message.contains("'a_b'"), message)
-        }
-    }
+    func testFixtureKeepsLeadingDigits() throws {
+        let output = try generate(Data(contentsOf: fixtureSpecURL))
 
-    func testTwoParametersThatReduceToOneIdentifierFail() {
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "methods": [{
-            "name": "api.put",
-            "params": [
-              { "name": "a b", "required": true, "schema": { "type": "string" } },
-              { "name": "a;b", "required": true, "schema": { "type": "string" } }
-            ],
-            "result": { "name": "PutResult", "schema": { "type": "boolean" } }
-          }]
-        }
-        """
-        XCTAssertThrowsError(try generate(spec)) { error in
-            XCTAssertTrue(String(describing: error).contains("parameters"), String(describing: error))
-        }
-    }
-
-    func testTwoSchemasThatReduceToOneIdentifierFail() {
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "components": { "schemas": {
-            "A;b": { "type": "object", "properties": { "x": { "type": "string" } } },
-            "A b": { "type": "object", "properties": { "y": { "type": "string" } } }
-          }},
-          "methods": []
-        }
-        """
-        XCTAssertThrowsError(try generate(spec)) { error in
-            XCTAssertTrue(String(describing: error).contains("schemas"), String(describing: error))
-        }
-    }
-
-    func testKeywordEnumValuesAreBackticked() throws {
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "methods": [{
-            "name": "api.pick",
-            "params": [
-              { "name": "choice", "required": true, "schema": { "type": "string", "enum": ["default", "in", "plain"] } }
-            ],
-            "result": { "name": "PickResult", "schema": { "type": "boolean" } }
-          }]
-        }
-        """
-        let output = try generate(spec)
-
-        XCTAssertTrue(output.api.contains("case `default`\n"), "got:\n\(output.api)")
-        XCTAssertTrue(output.api.contains("case `in`\n"), "got:\n\(output.api)")
-        XCTAssertTrue(output.api.contains("case plain\n"), "got:\n\(output.api)")
-    }
-
-    /// A discriminated union whose tags are `default`, `self`, `class` and `type`, as a component
-    /// schema (`Shape`) and as an inline parameter. `Shape` also has a `text` tag, which names a
-    /// reserved type that a nested type may shadow.
-    private let keywordUnionSpec = """
-    {
-      "openrpc": "1.3.2",
-      "info": { "title": "test", "version": "1.0.0" },
-      "components": { "schemas": {
-        "Shape": { "oneOf": [
-          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["default"] } }, "required": ["kind"] },
-          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["self"] }, "a": { "type": "string" } }, "required": ["kind", "a"] },
-          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["class"] }, "b": { "type": "string" } }, "required": ["kind", "b"] },
-          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["type"] }, "c": { "type": "string" } }, "required": ["kind", "c"] },
-          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["text"] }, "d": { "type": "string" } }, "required": ["kind", "d"] }
-        ]}
-      }},
-      "methods": [{
-        "name": "api.draw",
-        "params": [{ "name": "input", "required": true, "schema": { "oneOf": [
-          { "type": "object", "properties": { "op": { "type": "string", "enum": ["default"] } }, "required": ["op"] },
-          { "type": "object", "properties": { "op": { "type": "string", "enum": ["self"] }, "x": { "type": "string" } }, "required": ["op", "x"] },
-          { "type": "object", "properties": { "op": { "type": "string", "enum": ["class"] }, "y": { "type": "string" } }, "required": ["op", "y"] }
-        ]}}],
-        "result": { "name": "DrawResult", "schema": { "$ref": "#/components/schemas/Shape" } }
-      }]
-    }
-    """
-
-    func testKeywordDiscriminatorValuesGenerateBacktickedUnionCases() throws {
-        let output = try generate(keywordUnionSpec)
-
-        for expected in [
-            "case `default`\n",
-            "case selfValue(SelfValue)\n",
-            "case `class`(Class)\n",
-            "case typeValue(TypeValue)\n",
-            "case text(Text)\n",
-            "case .`default`:",
-            "case .`class`(let params):",
-            "case \"default\": self = .`default`\n",
-            "case \"self\": self = .selfValue(try SelfValue(from: decoder))",
-            "case \"class\": self = .`class`(try Class(from: decoder))",
-        ] {
-            XCTAssertTrue(output.models.contains(expected), "missing '\(expected)' in:\n\(output.models)")
-        }
-        for expected in [
-            "case `default`\n",
-            "case selfValue(SelfValue)\n",
-            "case `class`(Class)\n",
-            "case \"default\": self = .`default`\n",
-        ] {
-            XCTAssertTrue(output.api.contains(expected), "missing '\(expected)' in:\n\(output.api)")
-        }
-    }
-
-    /// Only `self` and `type` tags gain a `Value` suffix; a `text` tag keeps `Text`.
-    func testReservedDiscriminatorValuesGenerateSuffixedVariantStructs() throws {
-        let output = try generate(keywordUnionSpec)
-
-        XCTAssertTrue(output.models.contains("struct SelfValue: Codable {"), "got:\n\(output.models)")
-        XCTAssertTrue(output.models.contains("struct TypeValue: Codable {"), "got:\n\(output.models)")
-        XCTAssertTrue(output.models.contains("struct Class: Codable {"), "got:\n\(output.models)")
-        XCTAssertTrue(output.models.contains("struct Text: Codable {"), "got:\n\(output.models)")
-        XCTAssertFalse(output.models.contains("TextValue"), "got:\n\(output.models)")
-        XCTAssertTrue(output.api.contains("struct SelfValue: Codable {"), "got:\n\(output.api)")
-        for source in [output.models, output.api] {
-            for fragment in ["struct Self:", "struct Type:", "case self(", "case default", "case class(", "case type("] {
-                XCTAssertFalse(source.contains(fragment), "'\(fragment)' in:\n\(source)")
-            }
-        }
-    }
-
-    func testTwoOperationsWhoseTypesNestInOneEnumFail() {
-        let inlineResult = #"{ "type": "object", "properties": { "a": { "type": "string" } } }"#
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "methods": [
-            { "name": "api.get-x", "params": [], "result": { "name": "R1", "schema": \(inlineResult) } },
-            { "name": "api.getX", "params": [], "result": { "name": "R2", "schema": \(inlineResult) } }
-          ]
-        }
-        """
-        XCTAssertThrowsError(try generate(spec)) { error in
-            let message = String(describing: error)
-            XCTAssertTrue(message.contains("'get-x'") && message.contains("'getX'") && message.contains("'GetX'"), message)
-        }
-    }
-
-    func testTwoServersThatReduceToOneIdentifierFail() {
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "servers": [
-            { "name": "my-server", "url": "https://a.example.com" },
-            { "name": "my.server", "url": "https://b.example.com" }
-          ],
-          "methods": [{ "name": "api.run", "params": [], "result": { "name": "RunResult", "schema": { "type": "boolean" } } }]
-        }
-        """
-        XCTAssertThrowsError(try generate(spec)) { error in
-            let message = String(describing: error)
-            XCTAssertTrue(message.contains("servers") && message.contains("'my-server'"), message)
-        }
+        XCTAssertTrue(output.models.contains("case _9lives = \"9lives\""), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("case _1st = \"1st\""), "got:\n\(output.models)")
     }
 
     func testSchemaTypeIsDeclaredAndReferencedUnderOneName() throws {
-        let spec = """
-        {
-          "openrpc": "1.3.2",
-          "info": { "title": "test", "version": "1.0.0" },
-          "components": { "schemas": {
-            "my-type": { "type": "object", "properties": { "a": { "type": "string" } } }
-          }},
-          "methods": [{
-            "name": "api.get", "params": [],
-            "result": { "name": "GetResult", "schema": { "$ref": "#/components/schemas/my-type" } }
-          }]
-        }
-        """
-        let output = try generate(spec)
+        let output = try generate(schemasSpec(["Sample-Type${x}`;"]))
+        let name = specTypeName("Sample-Type${x}`;")
 
-        XCTAssertEqual(output.models.components(separatedBy: "struct my_type: Codable").count, 2, "got:\n\(output.models)")
-        XCTAssertFalse(output.models.contains("MyType"), "got:\n\(output.models)")
-        XCTAssertTrue(output.api.contains("decode(my_type.self"), "got:\n\(output.api)")
+        XCTAssertEqual(output.models.components(separatedBy: "struct \(name): Codable").count, 2, "got:\n\(output.models)")
+        XCTAssertTrue(output.api.contains("decode(\(name).self"), "got:\n\(output.api)")
+    }
+
+    func testSchemasThatReduceToOneIdentifierGetDistinctTypes() throws {
+        let output = try generate(schemasSpec(["my-type!", "my-type?"]))
+        let name = specTypeName("my-type!")
+
+        XCTAssertTrue(output.models.contains("struct \(name): Codable"), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("struct \(name)_2: Codable"), "got:\n\(output.models)")
+        XCTAssertTrue(output.api.contains("decode(\(name).self"), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("decode(\(name)_2.self"), "got:\n\(output.api)")
+    }
+
+    func testFieldsThatReduceToOneIdentifierKeepTheirKeys() throws {
+        let output = try generate(recordSpec(["a-b", "a_b"]))
+
+        XCTAssertTrue(output.api.contains("= \"a-b\""), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("a_b_2"), "got:\n\(output.api)")
     }
 }

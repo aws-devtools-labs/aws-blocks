@@ -251,23 +251,125 @@ describe('file-server: Content-Type signing parity', () => {
 		assert.strictEqual(file.contentType, 'image/jpeg');
 	});
 
-	test('PUT without a signed Content-Type accepts any request header', async () => {
-		// putUrl without contentType signs no content-type, mirroring an S3
-		// presigned URL that did not include it — any upload header is allowed.
+	test('a parameterized Content-Type is signed in canonical form, which a client re-rendering it sends unchanged', async () => {
+		// HTTP clients such as Ktor parse a Content-Type and re-render it as
+		// `type/subtype; name=value`. The signed value is already in that form,
+		// so the header such a client sends matches it byte-for-byte.
+		const bucket = new FileBucket(scope, 'fs-ct-canonical');
+		const handle = await bucket.createUploadHandle('notes.txt', { contentType: 'text/plain;charset=utf-8' });
+		assert.strictEqual(handle.toJSON().contentType, 'text/plain; charset=utf-8');
+		const adjusted = handle.getUrl().replace(/localhost:\d+/, `localhost:${port}`);
+
+		const res = await fetch(adjusted, {
+			method: 'PUT',
+			body: 'hello',
+			headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+		});
+		assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
+
+		const file = await bucket.get('notes.txt');
+		assert.ok(file);
+		assert.strictEqual(file.contentType, 'text/plain; charset=utf-8');
+	});
+
+	test('putUrl without contentType signs application/octet-stream, so another Content-Type returns 403', async () => {
+		// putUrl always signs a Content-Type (application/octet-stream when the
+		// caller names none), as the AWS runtime does, so the uploader can't
+		// choose a different one.
 		const bucket = new FileBucket(scope, 'fs-ct5');
 		const putUrl = await bucket.putUrl('blob.bin');
 		const adjusted = putUrl.replace(/localhost:\d+/, `localhost:${port}`);
 
+		const rejected = await fetch(adjusted, {
+			method: 'PUT',
+			body: 'anything',
+			headers: { 'Content-Type': 'text/html' },
+		});
+		assert.strictEqual(rejected.status, 403, `Expected 403 for an unsigned Content-Type, got ${rejected.status}`);
+		assert.match(await rejected.text(), /SignatureDoesNotMatch/);
+		assert.strictEqual(await bucket.get('blob.bin'), null, 'a rejected upload must not be stored');
+
+		const accepted = await fetch(adjusted, {
+			method: 'PUT',
+			body: 'anything',
+			headers: { 'Content-Type': 'application/octet-stream' },
+		});
+		assert.strictEqual(accepted.status, 200, `Expected 200 for the signed default, got ${accepted.status}`);
+		const file = await bucket.get('blob.bin');
+		assert.ok(file);
+		assert.strictEqual(file.contentType, 'application/octet-stream');
+	});
+
+	test('createUploadHandle without contentType sends the signed default and round-trips', async () => {
+		const bucket = new FileBucket(scope, 'fs-ct6');
+		const handle = await bucket.createUploadHandle('blob.bin');
+		assert.strictEqual(handle.toJSON().contentType, 'application/octet-stream');
+		const adjusted = handle.getUrl().replace(/localhost:\d+/, `localhost:${port}`);
 		const res = await fetch(adjusted, {
+			method: 'PUT',
+			body: 'bytes',
+			headers: { 'Content-Type': handle.toJSON().contentType ?? '' },
+		});
+		assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
+		assert.strictEqual((await bucket.get('blob.bin'))?.contentType, 'application/octet-stream');
+	});
+
+	test('a token minted without a Content-Type accepts any request header', async () => {
+		// The dev server only enforces what a token signs. FileBucket always signs
+		// a Content-Type now; a token without one keeps the request's header.
+		new FileBucket(scope, 'fs-ct7');
+		const token = mintFileToken('fsrv-fs-ct7', 'blob.bin', 'PUT', 3600, LOCAL_FILE_SECRET);
+		const res = await fetch(`http://localhost:${port}/.bb-file-bucket/fsrv-fs-ct7/blob.bin?token=${token}`, {
 			method: 'PUT',
 			body: 'anything',
 			headers: { 'Content-Type': 'application/x-custom' },
 		});
-		assert.strictEqual(res.status, 200, `Expected 200 when no Content-Type was signed, got ${res.status}`);
+		assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
+	});
+});
 
-		const file = await bucket.get('blob.bin');
-		assert.ok(file);
-		assert.strictEqual(file.contentType, 'application/x-custom');
+describe('file-server: Content-Length signing parity', () => {
+	test('PUT whose body size differs from the signed contentLength returns 403', async () => {
+		const bucket = new FileBucket(scope, 'fs-len1');
+		const putUrl = await bucket.putUrl('a.txt', { contentType: 'text/plain', contentLength: 5 });
+		const adjusted = putUrl.replace(/localhost:\d+/, `localhost:${port}`);
+		const res = await fetch(adjusted, { method: 'PUT', body: 'too long body', headers: { 'Content-Type': 'text/plain' } });
+		assert.strictEqual(res.status, 403, `Expected 403, got ${res.status}`);
+		assert.match(await res.text(), /SignatureDoesNotMatch/);
+		assert.strictEqual(await bucket.get('a.txt'), null, 'a rejected upload must not be stored');
+	});
+
+	test('PUT with exactly the signed contentLength succeeds', async () => {
+		const bucket = new FileBucket(scope, 'fs-len2', { maxUploadBytes: 10 });
+		const handle = await bucket.createUploadHandle('a.txt', { contentType: 'text/plain', contentLength: 5 });
+		const adjusted = handle.getUrl().replace(/localhost:\d+/, `localhost:${port}`);
+		const res = await fetch(adjusted, { method: 'PUT', body: 'hello', headers: { 'Content-Type': 'text/plain' } });
+		assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
+		assert.strictEqual((await bucket.get('a.txt'))?.body.toString(), 'hello');
+	});
+});
+
+describe('file-server: Content-Disposition', () => {
+	test('a download URL created with attachment serves the signed disposition', async () => {
+		const bucket = new FileBucket(scope, 'fs-cd1');
+		await bucket.put('r.pdf', 'pdf', { contentType: 'application/pdf' });
+		const url = (await bucket.getUrl('r.pdf', { attachment: 'Q1 report.pdf' })).replace(/localhost:\d+/, `localhost:${port}`);
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 200);
+		assert.strictEqual(
+			res.headers.get('content-disposition'),
+			`attachment; filename="Q1 report.pdf"; filename*=UTF-8''Q1%20report.pdf`,
+		);
+		await res.arrayBuffer();
+	});
+
+	test('a download URL created without attachment keeps the dev-server default (attachment)', async () => {
+		const bucket = new FileBucket(scope, 'fs-cd2');
+		await bucket.put('r.pdf', 'pdf', { contentType: 'application/pdf' });
+		const url = (await bucket.getUrl('r.pdf')).replace(/localhost:\d+/, `localhost:${port}`);
+		const res = await fetch(url);
+		assert.strictEqual(res.headers.get('content-disposition'), 'attachment');
+		await res.arrayBuffer();
 	});
 });
 

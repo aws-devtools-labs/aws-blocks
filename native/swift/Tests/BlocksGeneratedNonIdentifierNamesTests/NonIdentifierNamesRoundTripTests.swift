@@ -30,7 +30,7 @@ final class NonIdentifierNamesRoundTripTests: XCTestCase {
           "kind": "x`y"
         }
         """#
-        let decoded = try JSONDecoder().decode(Sample_Type__x___.self, from: Data(json.utf8))
+        let decoded = try JSONDecoder().decode(Sample_Type__X___.self, from: Data(json.utf8))
 
         XCTAssertEqual(decoded.run___error__x________id, "id")
         XCTAssertEqual(decoded._unnamed, "dollar")
@@ -65,7 +65,7 @@ final class NonIdentifierNamesRoundTripTests: XCTestCase {
     func testDiscriminatedUnionKeepsTagAndKeys() throws {
         let json = #"{"ty pe": "re`move", "${id}": "abc"}"#
         let decoded = try JSONDecoder().decode(Ns.Do_Action.Input.self, from: Data(json.utf8))
-        guard case .re_Move(let payload) = decoded else {
+        guard case .ty_PeRe_Move(let payload) = decoded else {
             return XCTFail("decoded \(decoded)")
         }
         XCTAssertEqual(payload.__id_, "abc")

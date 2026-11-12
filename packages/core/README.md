@@ -89,7 +89,23 @@ The body is JSON-RPC 2.0:
 
 - `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
-- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
+- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status — unless the namespace opts in to `httpErrorStatus` (below).
+
+To let status-code-only tooling (API Gateway and CloudFront metrics, access logs, WAF rate rules, a 4xx alarm) see rejected calls, create the namespace with `httpErrorStatus: true`. A call that throws an `ApiError` with a `4xx` status is then answered with that HTTP status; the body is the same JSON-RPC error, and the typed client decodes it the same way, so `isBlocksError()` is unaffected. `5xx` and other failures stay HTTP `200`. It applies locally and on AWS:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getNote() {
+    const user = await auth.requireAuth(context); // signed out → HTTP 401
+    return notes.get(user.userId);
+  },
+}), { httpErrorStatus: true });
+```
+
+Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
+
+- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
+- **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
 Error responses use these JSON-RPC codes:
 
@@ -560,10 +576,13 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
+The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+
 You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the `cdk-blocks` CLI then also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
-- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
+- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Requests and same-origin pages reached by IP are accepted; DNS names are not (the dev server answers them `403`), because a same-origin check against a name can be defeated by DNS rebinding.
 - To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+- Behind a **reverse proxy or a port-forwarding tunnel** that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
 

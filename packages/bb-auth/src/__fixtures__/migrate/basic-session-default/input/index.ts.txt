@@ -1,0 +1,9 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+
+// AuthBasic sessions lasted 24 hours unless sessionDuration was set; Auth's
+// default is 400 days. The codemod writes the old default out.
+const scope = new Scope('app');
+export const bare = new AuthBasic(scope, 'bare');
+export const shared = new AuthBasic(scope, 'shared', { crossDomain: true });
+export const custom = new AuthBasic(scope, 'custom', { sessionDuration: 3600 });

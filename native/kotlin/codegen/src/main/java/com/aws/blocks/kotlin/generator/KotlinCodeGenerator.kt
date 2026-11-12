@@ -1,14 +1,12 @@
 package com.aws.blocks.kotlin.generator
 
 import com.aws.blocks.kotlin.NamingUtils
-import com.aws.blocks.kotlin.builder.IdentifierSanitizer
 import com.aws.blocks.kotlin.model.ApiNamespace
 import com.aws.blocks.kotlin.model.CodegenModel
 import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.forDiagnostic
 import com.aws.blocks.kotlin.model.Constraints
 import com.aws.blocks.kotlin.model.DiscriminatorInfo
-import com.aws.blocks.kotlin.model.DiscriminatorType
 import com.aws.blocks.kotlin.model.FormatKind
 import com.aws.blocks.kotlin.model.NativeCatalogs
 import com.aws.blocks.kotlin.model.NestedTypeNode
@@ -119,14 +117,6 @@ private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
  */
 private val RESERVED_FILE_NAMES = setOf("Types", "Serializers", "Servers")
 
-/**
- * Whether a class name would share its file with one in [RESERVED_FILE_NAMES]. The class name is
- * also the file name, and on a case-insensitive file system `SeRvers.kt` and `Servers.kt` are one
- * file, so the comparison ignores case.
- */
-private fun isReservedFileName(name: String): Boolean =
-    RESERVED_FILE_NAMES.any { it.equals(name, ignoreCase = true) }
-
 private const val API_SUFFIX = "Api"
 
 private const val SCHEMA_VERSION = 1
@@ -215,44 +205,29 @@ class KotlinCodeGenerator(
             )
         }
 
-        for (namespace in model.apiNamespaces) {
+        // A namespace named like a file this generator emits itself (`Types`, `Serializers`,
+        // `Servers`) takes an `Api` suffix; say so, since its accessor changes too.
+        val apiClassNames = apiClassNames(model)
+        for ((i, namespace) in model.apiNamespaces.withIndex()) {
             val original = toPascalCase(namespace.name)
-            if (isReservedFileName(original)) {
+            val wanted = if (original in RESERVED_FILE_NAMES) original + API_SUFFIX else original
+            if (original in RESERVED_FILE_NAMES) {
                 warnings.add(
-                    "The \"${namespace.wireName.forDiagnostic()}\" namespace would be generated as $original.kt, which " +
+                    "The \"${namespace.name}\" namespace would be generated as $original.kt, which " +
                         "this generator emits itself. Its API is generated as " +
-                        "${apiClassName(namespace)} instead, reached through " +
-                        "blocks.${apiPropertyName(namespace)}."
+                        "${apiClassNames[i]} instead, reached through " +
+                        "blocks.${apiPropertyName(apiClassNames[i])}."
+                )
+            } else if (apiClassNames[i] != wanted) {
+                // The suffix goes to whichever name comes later in the spec, so adding one can rename another.
+                warnings.add(
+                    "The \"${namespace.name}\" namespace's API class would be $wanted, which another " +
+                        "namespace, a schema type or a generated name already has. It is generated as " +
+                        "${apiClassNames[i]} instead, reached through " +
+                        "blocks.${apiPropertyName(apiClassNames[i])}. Rename the namespace to keep the " +
+                        "name stable."
                 )
             }
-        }
-
-        // Suffixing can itself collide, e.g. namespaces "types" and "typesApi". One file would
-        // silently replace the other, so refuse instead. The class name is also the file name, and
-        // `Foo.kt` and `FOO.kt` are one file on a case-insensitive file system, so group ignoring case.
-        model.apiNamespaces
-            .groupBy { apiClassName(it).lowercase() }
-            .filterValues { it.size > 1 }
-            .forEach { (_, namespaces) ->
-                error(
-                    "Namespaces ${namespaces.joinToString { "\"${it.wireName.forDiagnostic()}\"" }} would all be " +
-                        "generated as ${namespaces.map { apiClassName(it) }.distinct().joinToString(" / ")}. " +
-                        "Rename one in the spec."
-                )
-            }
-
-        // Names the generator derives after sanitizing (server properties, the objects operations'
-        // own types nest in) can still meet, e.g. `get-x` and `getX` both nest in `GetX`.
-        IdentifierSanitizer.requireDistinct("server", "the spec", model.servers.map { it.name }, ::serverPropertyName)
-        for (namespace in model.apiNamespaces) {
-            val withObject = namespace.operations
-                .filter { it.nestedTypes.isNotEmpty() || narrowedTypeArgs(it).isNotEmpty() }
-                .associateBy { it.wireName }
-            IdentifierSanitizer.requireDistinct(
-                "operation",
-                "namespace '${namespace.wireName.forDiagnostic()}'",
-                withObject.keys.toList(),
-            ) { operationObjectName(withObject.getValue(it)) }
         }
 
         if (relayTo == null &&
@@ -275,8 +250,9 @@ class KotlinCodeGenerator(
         if (typesFile != null) files.add(typesFile)
 
         // Generate API files before serializers so annotations register every serializer they use.
-        val apiFiles = model.apiNamespaces.map { group ->
-            generateApiGroupFile(group, index, serializerRegistry, bound)
+        val serverProperties = serverPropertyNames(model.servers)
+        val apiFiles = model.apiNamespaces.mapIndexed { i, group ->
+            generateApiGroupFile(group, apiClassNames[i], index, serializerRegistry, bound)
         }
 
         // Emit Serializers.kt for the transferables referenced by generated annotations.
@@ -291,24 +267,26 @@ class KotlinCodeGenerator(
 
         // Emit Servers.kt
         if (model.servers.isNotEmpty()) {
-            files.add(generateServersFile(model.servers, model.endpoint))
+            files.add(generateServersFile(model.servers, serverProperties, model.endpoint))
         }
 
         // Emit per-API-group files (interface + impl)
         files.addAll(apiFiles)
 
-        for (namespace in model.apiNamespaces) {
-            for (operation in namespace.operations) {
+        for ((i, namespace) in model.apiNamespaces.withIndex()) {
+            // Named as generateApiClass names the operation objects, where the enum is emitted.
+            val objectNames = NamingUtils.allocate(namespace.operations.map { it.name }, candidate = ::toPascalCase)
+            for ((j, operation) in namespace.operations.withIndex()) {
                 val result = operation.result.type
                 if (isUnboundDirectResult(result, bound)) {
                     warnings.add(
                         formatUnboundTransferable(
-                            "${namespace.wireName}.${operation.wireName}",
+                            operation.rpcMethod,
                             result as ResolvedType.Transferable,
                         )
                     )
                 }
-                warnings.addAll(narrowedTypeArgWarnings(operation, namespace.name, apiClassName(namespace)))
+                warnings.addAll(narrowedTypeArgWarnings(operation, namespace.name, "${apiClassNames[i]}.${objectNames[j]}"))
             }
         }
 
@@ -328,15 +306,78 @@ class KotlinCodeGenerator(
             )
         }
 
-        return GeneratorResult(files, warnings)
+        return GeneratorResult(files.map { it.withUuidOptIn() }, warnings)
     }
+
+    /**
+     * `format: uuid` maps to `kotlin.uuid.Uuid`, which is `@ExperimentalUuidApi`: an opt-in marker at
+     * level ERROR, so a file that uses `Uuid` without opting in doesn't compile. Adds the marker to the
+     * file's `@file:OptIn`, only in files that use `Uuid`. `OptIn` isn't repeatable, so a file that
+     * already opts in (to `ExperimentalSerializationApi`) gets one annotation naming both markers.
+     *
+     * Opting in here doesn't propagate: customer code that calls a generated method, or reads a
+     * generated property, whose signature has a `Uuid` still opts in itself, as it would for any
+     * `kotlin.uuid` API.
+     */
+    private fun FileSpec.withUuidOptIn(): FileSpec {
+        if (!usesUuid.containsMatchIn(toString())) return this
+        val builder = toBuilder()
+        val existing = builder.annotations.indexOfFirst { it.typeName == ClassNames.optIn }
+        val markers = if (existing >= 0) builder.annotations.removeAt(existing).members else emptyList()
+        val optIn = AnnotationSpec.builder(ClassNames.optIn).useSiteTarget(AnnotationSpec.UseSiteTarget.FILE)
+        markers.forEach { optIn.addMember(it) }
+        optIn.addMember("%T::class", ClassNames.experimentalUuidApi)
+        builder.annotations.add(0, optIn.build())
+        return builder.build()
+    }
+
+    /**
+     * The class (and file) name of each namespace's API class, in [CodegenModel.apiNamespaces]
+     * order: the namespace in PascalCase (`_default` -> `Default`). One that a type already has,
+     * that names a generated top-level declaration or file ([GENERATED_TOP_LEVEL_NAMES]), or that
+     * an earlier namespace took (`a-b` and `a_b` are both `AB`) gets `_2`, `_3`, …, as in Dart,
+     * where namespaces yield to types.
+     */
+    private fun apiClassNames(model: CodegenModel): List<String> {
+        val reserved = GENERATED_TOP_LEVEL_NAMES + model.typeDefinitions.filter { it.parentSchema == null }.map { it.name }
+        return NamingUtils.allocate(model.apiNamespaces.map { it.name }, reserved) { name ->
+            val pascal = toPascalCase(name)
+            if (pascal in RESERVED_FILE_NAMES) pascal + API_SUFFIX else pascal
+        }
+    }
+
+    /** The `Servers` property of each server: its name in camelCase, distinct (`us-east` and `us_east` are both `usEast`). */
+    private fun serverPropertyNames(servers: List<ServerDefinition>): List<String> =
+        NamingUtils.allocate(servers.map { it.name }, candidate = ::toCamelCase)
+
+    /** `kotlin.uuid.Uuid` as an import or a qualified reference, but not `kotlin.uuid.ExperimentalUuidApi`. */
+    private val usesUuid = Regex("""\b${Regex.escape(uuidClass.canonicalName)}\b""")
 
     private fun CodegenModel.hasOidcTransferable(): Boolean =
         apiNamespaces.any { ns -> ns.operations.any { containsOidcTransferable(it.result.type) } }
 
+    /**
+     * Whether [type] holds an `oidc/client` anywhere: itself, inside a list, map or nullable, in
+     * a field or the additional properties of a model or union variant, or in the payload of a
+     * realtime channel. Such an operation decodes with `OidcClient.json` (or is stubbed when no
+     * relay target is configured), and such a channel decodes its messages with that Json too.
+     * Resolved types are trees, so this ends.
+     */
     private fun containsOidcTransferable(type: ResolvedType): Boolean = when (type) {
-        is ResolvedType.Transferable -> type.transferableName == OIDC_CLIENT_TAG
+        is ResolvedType.Transferable ->
+            type.transferableName == OIDC_CLIENT_TAG || type.typeArgs.any { containsOidcTransferable(it) }
         is ResolvedType.Nullable -> containsOidcTransferable(type.inner)
+        is ResolvedType.ListType -> containsOidcTransferable(type.elementType)
+        is ResolvedType.MapType -> containsOidcTransferable(type.valueType)
+        is ResolvedType.TupleType -> type.elements.any { containsOidcTransferable(it) }
+        is ResolvedType.Record -> type.fields.any { containsOidcTransferable(it.type) } ||
+            type.additionalPropertiesType?.let { containsOidcTransferable(it) } == true
+        is ResolvedType.Union -> type.variants.any { variant ->
+            variant.fields.any { containsOidcTransferable(it.type) } ||
+                variant.additionalPropertiesType?.let { containsOidcTransferable(it) } == true ||
+                variant.embeddedUnion?.let { containsOidcTransferable(it) } == true ||
+                variant.valueType?.let { containsOidcTransferable(it) } == true
+        }
         else -> false
     }
 
@@ -379,22 +420,19 @@ class KotlinCodeGenerator(
     private fun narrowedTypeArgWarnings(
         operation: Operation,
         namespace: String,
-        className: String,
+        /** The operation's object, qualified by its API class (`AuthApi.GetClient`). */
+        objectPath: String,
     ): List<String> = narrowedTypeArgs(operation)
         .filter { it.values.name != it.preferredName }
         .map {
             "kotlin: ${fullMethodName(operation, namespace)} generates " +
-                "$className.${operationObjectName(operation)}.${it.values.name} rather than " +
+                "$objectPath.${it.values.name} rather than " +
                 "${it.preferredName}, since the operation already names a " +
                 "${it.preferredName} of its own."
         }
 
     private fun fullMethodName(operation: Operation, namespace: String): String =
         if (namespace == "_default") operation.name else "$namespace.${operation.name}"
-
-    /** The object an operation's own types nest in. */
-    private fun operationObjectName(operation: Operation): String =
-        NamingUtils.safeIdentifier(toPascalCase(operation.name))
 
     /**
      * The enum of values an operation's client accepts for its parameter. Each constant carries
@@ -466,9 +504,10 @@ class KotlinCodeGenerator(
             val shortName: String
 
             if (typeDef.parentSchema != null) {
-                // Schema child: nest under parent schema class
-                className = ClassName(packageName, typeDef.parentSchema, typeDef.name)
-                shortName = typeDef.name
+                // Schema child: nest under its enclosing type. parentSchema is a dotted path
+                // (`Holder`, or `Holder.Payload` for a type inside an inline-object property).
+                className = ClassName(packageName, typeDef.parentSchema.split('.') + typeDef.shortName)
+                shortName = typeDef.shortName
             } else {
                 // Top-level
                 className = ClassName(packageName, typeDef.name)
@@ -547,8 +586,12 @@ class KotlinCodeGenerator(
             routeType(entry.typeDef, spec)
         }
 
-        // Emit data classes, injecting schema-child types as nested types
-        for ((_, entry) in index.dataClasses) {
+        // Emit data classes, injecting schema-child types as nested types. Innermost first, so each
+        // nested data class (`Holder.Payload.Meta`, then `Holder.Payload`) is attached to its
+        // enclosing type before that type is built; top-level order is unchanged.
+        val dataClassesInnermostFirst = index.dataClasses.values
+            .sortedByDescending { entry -> entry.typeDef.parentSchema?.let { it.count { c -> c == '.' } + 1 } ?: 0 }
+        for (entry in dataClassesInnermostFirst) {
             val recordType = entry.typeDef.type as ResolvedType.Record
             var spec = generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
 
@@ -582,22 +625,39 @@ class KotlinCodeGenerator(
         serializerContext: OperationTypeContext? = opContext,
     ): TypeSpec {
         val constructor = FunSpec.constructorBuilder()
+        val isOpenRecord = record.additionalPropertiesType != null
+        val names = propertyNames(record.fields)
+        val extrasProperty = NamingUtils.claim(OpenRecordSerializerGenerator.EXTRAS_PROPERTY, names.toMutableSet())
+        val (openRecordSerializer, openRecordFields) = OpenRecordSerializerGenerator.nestedTypeNames(names)
+        val tupleSerializer = TupleSerializerGenerator.serializerName(names)
         val classBuilder = TypeSpec
             .classBuilder(name)
             .addModifiers(KModifier.DATA)
-            .addAnnotation(ClassNames.serializable)
+            .addAnnotation(
+                when {
+                    isOpenRecord -> OpenRecordSerializerGenerator.serializableAnnotation(name, openRecordSerializer)
+                    // A tuple is a JSON array on the wire (TupleSerializerGenerator).
+                    record.positional -> TupleSerializerGenerator.serializableAnnotation(name, tupleSerializer)
+                    else -> AnnotationSpec.builder(ClassNames.serializable).build()
+                },
+            )
 
-        val kdoc = buildDataClassKdoc(record.description, record.fields)
+        val kdoc = buildDataClassKdoc(record.description, record.fields, names)
         if (kdoc.isNotEmpty()) {
             classBuilder.addKdoc("%L", neutraliseKdoc(kdoc))
         }
 
-        for (field in record.fields) {
+        for ((i, field) in record.fields.withIndex()) {
+            val name = names[i]
             val kotlinType = resolveResolvedType(field.type, index, opContext)
             val isOptional = !field.required
-            val finalType = if (isOptional) kotlinType.copy(nullable = true) else kotlinType
+            val directTransferable = unwrapNullableTransferable(field.type)
+            val finalType = (if (isOptional) kotlinType.copy(nullable = true) else kotlinType).let {
+                if (directTransferable != null) it
+                else annotateNestedTransferables(field.type, it, index, serializerRegistry, serializerContext)
+            }
 
-            val paramBuilder = ParameterSpec.builder(field.name, finalType)
+            val paramBuilder = ParameterSpec.builder(name, finalType)
             if (field.defaultValue != null) {
                 val defaultExpr = jsonElementToKotlinDefault(field.defaultValue, field.type)
                 if (defaultExpr != null) {
@@ -611,41 +671,76 @@ class KotlinCodeGenerator(
             constructor.addParameter(paramBuilder.build())
 
             val propBuilder = PropertySpec
-                .builder(field.name, finalType)
-                .initializer(field.name)
-            addFieldSerialName(propBuilder, field)
-            if (isTransferableType(field.type)) {
-                val transferableType = unwrapNullableTransferable(field.type)
-                if (transferableType != null) {
-                    addTransferableSerializerAnnotation(
-                        propBuilder,
-                        transferableType,
-                        index,
-                        serializerRegistry,
-                        serializerContext,
-                    )
-                }
+                .builder(name, finalType)
+                .initializer("%N", name)
+            if (name != field.name || isKotlinKeyword(field.name)) {
+                propBuilder.addAnnotation(
+                    AnnotationSpec.builder(ClassNames.serialName)
+                        .addMember("%S", field.name)
+                        .build()
+                )
+            }
+            if (directTransferable != null) {
+                addTransferableSerializerAnnotation(
+                    propBuilder,
+                    directTransferable,
+                    index,
+                    serializerRegistry,
+                    serializerContext,
+                )
             }
             classBuilder.addProperty(propBuilder.build())
         }
 
-        // Add attributes field for open-shape records (T & Record<string, V>)
+        // Add attributes field for open-shape records (T & Record<string, V>), flat on the wire
         if (record.additionalPropertiesType != null) {
-            val valueType = resolveResolvedType(record.additionalPropertiesType, index, opContext)
+            val valueType = annotateNestedTransferables(
+                record.additionalPropertiesType,
+                resolveResolvedType(record.additionalPropertiesType, index, opContext),
+                index,
+                serializerRegistry,
+                serializerContext,
+            )
             val mapType = Map::class.asTypeName().parameterizedBy(String::class.asTypeName(), valueType)
-            val paramBuilder = ParameterSpec.builder("attributes", mapType)
+            val paramBuilder = ParameterSpec.builder(extrasProperty, mapType)
                 .defaultValue("emptyMap()")
             constructor.addParameter(paramBuilder.build())
             classBuilder.addProperty(
-                PropertySpec.builder("attributes", mapType)
-                    .initializer("attributes")
+                PropertySpec.builder(extrasProperty, mapType)
+                    .initializer("%N", extrasProperty)
                     .build(),
             )
         }
 
-        classBuilder.primaryConstructor(constructor.build())
+        val primaryConstructor = constructor.build()
+        classBuilder.primaryConstructor(primaryConstructor)
+        if (isOpenRecord) {
+            classBuilder.addTypes(
+                OpenRecordSerializerGenerator.nestedTypes(
+                    ownerName = name,
+                    serialName = name,
+                    parameters = primaryConstructor.parameters,
+                    properties = classBuilder.propertySpecs.toList(),
+                    discriminator = null,
+                    extrasProperty = extrasProperty,
+                    wireNames = names.zip(record.fields.map { it.name }).toMap(),
+                    serializerObject = openRecordSerializer,
+                    fieldsClassName = openRecordFields,
+                ),
+            )
+        }
 
-        val initBlock = generateInitValidation(record.fields)
+        if (record.positional && !isOpenRecord) {
+            val elements = record.fields.mapIndexed { i, field ->
+                names[i] to UnionSerializerGenerator.ValueCoding(
+                    primaryConstructor.parameters[i].type,
+                    containerTransferableSerializer(field.type, index, serializerRegistry, serializerContext),
+                )
+            }
+            classBuilder.addType(TupleSerializerGenerator.generate(name, tupleSerializer, elements))
+        }
+
+        val initBlock = generateInitValidation(record.fields, names)
         if (initBlock != null) {
             classBuilder.addInitializerBlock(initBlock)
         }
@@ -654,23 +749,18 @@ class KotlinCodeGenerator(
     }
 
     /**
-     * Names the field's wire key when its identifier differs from it, or is a keyword. The key is
-     * the spec's own text, so it is emitted as an escaped literal: %S would turn a key with a line
-     * break into a trimMargin raw string, which is no constant an annotation can take.
+     * The Kotlin names of a model's or union variant's [fields], in order: each field's spec name,
+     * unless Kotlin can't declare it ([NamingUtils.memberName]: `back\slash` -> `backSlash`, written
+     * with `@SerialName("back\\slash")`), and never one another field has (`_2`, …). The names are
+     * the class's public properties; the generated members of the class step aside for them.
      */
-    private fun addFieldSerialName(propBuilder: PropertySpec.Builder, field: ResolvedField) {
-        if (field.serialName != field.name || isKotlinKeyword(field.name)) {
-            propBuilder.addAnnotation(
-                AnnotationSpec.builder(ClassNames.serialName)
-                    .addMember("%L", kotlinStringLiteral(field.serialName))
-                    .build()
-            )
-        }
-    }
+    private fun propertyNames(fields: List<ResolvedField>): List<String> =
+        NamingUtils.allocate(fields.map { it.name }, candidate = NamingUtils::memberName)
 
     private fun buildDataClassKdoc(
         description: String?,
         fields: List<ResolvedField>,
+        names: List<String>,
     ): String {
         val parts = mutableListOf<String>()
 
@@ -679,8 +769,9 @@ class KotlinCodeGenerator(
         }
 
         val propertyTags = fields
-            .filter { it.description != null }
-            .map { "@property ${it.name} ${it.description}" }
+            .mapIndexed { i, field -> names[i] to field }
+            .filter { (_, field) -> field.description != null }
+            .map { (name, field) -> "@property $name ${field.description}" }
 
         if (propertyTags.isNotEmpty()) {
             if (parts.isNotEmpty()) {
@@ -694,10 +785,10 @@ class KotlinCodeGenerator(
 
     // ── Init block validation generation ─────────────────────────────────
 
-    private fun generateInitValidation(fields: List<ResolvedField>): CodeBlock? {
+    private fun generateInitValidation(fields: List<ResolvedField>, names: List<String>): CodeBlock? {
         val statements = mutableListOf<CodeBlock>()
-        for (field in fields) {
-            val fieldStatements = generateFieldValidation(field.name, field.serialName, field.type, field.constraints, !field.required)
+        for ((i, field) in fields.withIndex()) {
+            val fieldStatements = generateFieldValidation(names[i], field.name, field.type, field.constraints, !field.required)
             statements.addAll(fieldStatements)
         }
         if (statements.isEmpty()) return null
@@ -709,41 +800,39 @@ class KotlinCodeGenerator(
     }
 
     /**
-     * [fieldName] is the property the checks read; [label] is the field's key as the spec spells
-     * it, which the messages name.
+     * The `require` checks of the property [propertyName] (spec name [fieldName], which the
+     * messages name) for its [constraints].
      */
     private fun generateFieldValidation(
+        propertyName: String,
         fieldName: String,
-        label: String,
         type: ResolvedType,
         constraints: Constraints,
         isOptional: Boolean,
     ): List<CodeBlock> {
         val stmts = mutableListOf<CodeBlock>()
+        // The value checked: the property, escaped where Kotlin needs it, or `it` inside `?.let`.
+        val ref = if (isOptional) "it" else expressionReference(propertyName)
+        fun message(text: String) = messageLiteral("$fieldName $text")
 
         // String constraints (including format-based validation for non-type-mapped formats)
         if (type is ResolvedType.Primitive && type.kind == PrimitiveKind.STRING) {
             constraints.minLength?.let { min ->
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N.length >= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, min, message("$label must be at least $min characters"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L.length >= %L) { %L }\n", ref, min, message("must be at least $min characters"))))
             }
             constraints.maxLength?.let { max ->
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N.length <= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, max, message("$label must be at most $max characters"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L.length <= %L) { %L }\n", ref, max, message("must be at most $max characters"))))
             }
             constraints.pattern?.let { pattern ->
-                stmts.add(wrapOptional(fieldName, isOptional,
+                stmts.add(wrapOptional(propertyName, isOptional,
                     // Pattern via kotlinStringLiteral, not %S: %S turns a value with a newline into a
                     // trimMargin raw string, which drops a CR.
-                    CodeBlock.of("require(%N.matches(Regex(%L))) { %L }\n",
-                        if (isOptional) "it" else fieldName, kotlinStringLiteral(pattern),
-                        // Not %S: it would rewrite every `$` as `${'$'}`, changing benign output such as `^[A-Z]{3}$`.
-                        kotlinMessageLiteral("$label must match pattern $pattern"))))
+                    CodeBlock.of("require(%L.matches(Regex(%L))) { %L }\n", ref, kotlinStringLiteral(pattern), message("must match pattern $pattern"))))
             }
             constraints.format?.let { format ->
-                val validationBlock = generateFormatValidation(fieldName, label, format, isOptional)
+                val validationBlock = generateFormatValidation(propertyName, fieldName, format, isOptional)
                 if (validationBlock != null) stmts.add(validationBlock)
             }
         }
@@ -752,48 +841,41 @@ class KotlinCodeGenerator(
         if (type is ResolvedType.Primitive && (type.kind == PrimitiveKind.NUMBER || type.kind == PrimitiveKind.INTEGER)) {
             constraints.minimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N >= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, minVal, message("$label must be >= $minVal"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L >= %L) { %L }\n", ref, minVal, message("must be >= $minVal"))))
             }
             constraints.maximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N <= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, maxVal, message("$label must be <= $maxVal"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L <= %L) { %L }\n", ref, maxVal, message("must be <= $maxVal"))))
             }
             constraints.exclusiveMinimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N > %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, minVal, message("$label must be > $minVal"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L > %L) { %L }\n", ref, minVal, message("must be > $minVal"))))
             }
             constraints.exclusiveMaximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N < %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, maxVal, message("$label must be < $maxVal"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L < %L) { %L }\n", ref, maxVal, message("must be < $maxVal"))))
             }
             constraints.multipleOf?.let { mult ->
                 val multVal = if (type.kind == PrimitiveKind.INTEGER) mult.toInt().toString() else mult.toString()
                 val zeroVal = if (type.kind == PrimitiveKind.INTEGER) "0" else "0.0"
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N %% %L == %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, multVal, zeroVal, message("$label must be a multiple of $multVal"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L %% %L == %L) { %L }\n", ref, multVal, zeroVal, message("must be a multiple of $multVal"))))
             }
         }
 
         // List/array constraints
         if (type is ResolvedType.ListType) {
             type.constraints.minItems?.let { min ->
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N.size >= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, min, message("$label must have at least $min items"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L.size >= %L) { %L }\n", ref, min, message("must have at least $min items"))))
             }
             type.constraints.maxItems?.let { max ->
-                stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%N.size <= %L) { %L }\n",
-                        if (isOptional) "it" else fieldName, max, message("$label must have at most $max items"))))
+                stmts.add(wrapOptional(propertyName, isOptional,
+                    CodeBlock.of("require(%L.size <= %L) { %L }\n", ref, max, message("must have at most $max items"))))
             }
         }
 
@@ -812,24 +894,33 @@ class KotlinCodeGenerator(
         }
     }
 
-    private fun generateFormatValidation(fieldName: String, label: String, format: String, isOptional: Boolean): CodeBlock? {
-        val ref = if (isOptional) "it" else fieldName
+    private fun generateFormatValidation(propertyName: String, fieldName: String, format: String, isOptional: Boolean): CodeBlock? {
+        val ref = if (isOptional) "it" else expressionReference(propertyName)
+        fun message(text: String) = messageLiteral("$fieldName $text")
         return when (format) {
-            "email" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%N.contains(%S) && %N.contains(%S)) { %L }\n",
-                    ref, "@", ref, ".", message("$label must be a valid email address")))
-            "uri" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%N.startsWith(%S) || %N.startsWith(%S)) { %L }\n",
-                    ref, "http://", ref, "https://", message("$label must be a valid URI")))
-            "ipv4" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%N.matches(Regex(%S))) { %L }\n",
-                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", message("$label must be a valid IPv4 address")))
-            "ipv6" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%N.contains(%S)) { %L }\n",
-                    ref, ":", message("$label must be a valid IPv6 address")))
+            "email" -> wrapOptional(propertyName, isOptional,
+                CodeBlock.of("require(%L.contains(%S) && %L.contains(%S)) { %L }\n",
+                    ref, "@", ref, ".", message("must be a valid email address")))
+            "uri" -> wrapOptional(propertyName, isOptional,
+                CodeBlock.of("require(%L.startsWith(%S) || %L.startsWith(%S)) { %L }\n",
+                    ref, "http://", ref, "https://", message("must be a valid URI")))
+            "ipv4" -> wrapOptional(propertyName, isOptional,
+                CodeBlock.of("require(%L.matches(Regex(%S))) { %L }\n",
+                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", message("must be a valid IPv4 address")))
+            "ipv6" -> wrapOptional(propertyName, isOptional,
+                CodeBlock.of("require(%L.contains(%S)) { %L }\n",
+                    ref, ":", message("must be a valid IPv6 address")))
             else -> null
         }
     }
+
+    /**
+     * A one-line Kotlin string literal of [text], a validation message that quotes spec text (a
+     * field name, a pattern). `\`, `"` and line breaks are escaped, and so is a `$` that would
+     * start a template (`$name`, `${`); any other `$` stays as written, so `^[A-Z]{3}$` reads the
+     * same as before.
+     */
+    private fun messageLiteral(text: String): String = kotlinMessageLiteral(text)
 
     // ── Default value conversion ─────────────────────────────────────────
 
@@ -873,7 +964,7 @@ class KotlinCodeGenerator(
             if (entryName != literal) {
                 entryBuilder.addAnnotation(
                     AnnotationSpec.builder(ClassNames.serialName)
-                        .addMember("%L", kotlinStringLiteral(literal))
+                        .addMember("%S", literal)
                         .build()
                 )
             }
@@ -886,10 +977,12 @@ class KotlinCodeGenerator(
     /**
      * Constant names for a string enum's values, each paired with the literal it serializes as.
      *
-     * A value whose PascalCase form is already an identifier keeps it. For the rest, every
-     * character outside `[A-Za-z0-9]` separates segments, so `v1.0` is `V10`, `okta:corp` is
-     * `OktaCorp` and `cost$` is `Cost`, and a value that leaves no segments at all is `Unnamed`.
-     * The serial name carries the literal either way, as an escaped string.
+     * A value whose PascalCase form can name a constant keeps it, backticked by KotlinPoet where
+     * it has to be, so a value like `cost$` still reads as the spec wrote it. The rest are values
+     * no identifier can hold even in backticks, which the generator would otherwise fail on: every
+     * character an identifier can't hold separates segments, so `v1.0` is `V10` and `okta:corp` is
+     * `OktaCorp`, and a value that leaves no segments at all is `Unnamed`. The serial name carries
+     * the literal either way.
      *
      * A repeated value is emitted once, and a name another value already took is numbered, since
      * two constants of one name don't compile.
@@ -911,9 +1004,9 @@ class KotlinCodeGenerator(
         return constants
     }
 
-    /** Whether [name] can name a constant as it is, which [NamingUtils.safeIdentifier] leaves alone. */
+    /** Whether [name] can name a constant, as itself or backticked. */
     private fun canNameConstant(name: String): Boolean =
-        name.isNotEmpty() && name.all { isConstantNameChar(it) } && NamingUtils.safeIdentifier(name) == name
+        name.isNotEmpty() && name.all { isConstantNameChar(it) }
 
     private fun synthesizeConstantName(literal: String): String {
         val segments = literal.split(NON_IDENTIFIER_RUN)
@@ -922,7 +1015,8 @@ class KotlinCodeGenerator(
         return when {
             segments.isEmpty() -> "Unnamed"
             // A synthesized name is never backticked, so it can't open with a digit.
-            else -> NamingUtils.safeIdentifier(segments)
+            segments.first().isDigit() -> "_$segments"
+            else -> segments
         }
     }
 
@@ -940,20 +1034,22 @@ class KotlinCodeGenerator(
             .addModifiers(KModifier.SEALED)
 
         val discriminator = union.discriminator
-        if (discriminator != null && discriminator.type == DiscriminatorType.BOOLEAN) {
-            val serializerName = "${name}Serializer"
-            sealedBuilder.addAnnotation(
-                AnnotationSpec.builder(ClassNames.serializable)
-                    .addMember("with = %T::class", ClassName("", name, serializerName))
-                    .build()
+        // kotlinx's sealed serializer writes the spec's wire format only for a string discriminator
+        // over object arms; every other union reads and writes its own (UnionSerializerGenerator).
+        val customSerializer = UnionSerializerGenerator.needsCustomSerializer(union)
+        if (customSerializer) {
+            sealedBuilder.addAnnotation(UnionSerializerGenerator.serializableAnnotation(name))
+            sealedBuilder.addType(
+                UnionSerializerGenerator.generate(name, union) { variant ->
+                    unionValueCoding(variant, index, opContext, serializerRegistry, serializerContext)
+                },
             )
-            sealedBuilder.addType(generateBooleanDiscriminatorSerializer(name, serializerName, discriminator, union.variants))
         } else {
             sealedBuilder.addAnnotation(ClassNames.serializable)
             if (discriminator != null) {
                 sealedBuilder.addAnnotation(
                     AnnotationSpec.builder(ClassNames.discriminator)
-                        .addMember("%L", kotlinStringLiteral(discriminator.fieldName))
+                        .addMember("%S", discriminator.fieldName)
                         .build()
                 )
             }
@@ -987,43 +1083,21 @@ class KotlinCodeGenerator(
         return sealedBuilder.build()
     }
 
-    private fun generateBooleanDiscriminatorSerializer(
-        sealedClassName: String,
-        serializerName: String,
-        discriminator: DiscriminatorInfo,
-        variants: List<UnionVariant>,
-    ): TypeSpec {
-        val sealedClass = ClassName("", sealedClassName)
-        val jsonElementClass = ClassName("kotlinx.serialization.json", "JsonElement")
-        val jsonObjectMember = MemberName("kotlinx.serialization.json", "jsonObject")
-        val jsonPrimitiveMember = MemberName("kotlinx.serialization.json", "jsonPrimitive")
-        val booleanMember = MemberName("kotlinx.serialization.json", "boolean")
-
-        val selectFun = FunSpec.builder("selectDeserializer")
-            .addModifiers(KModifier.OVERRIDE)
-            .addParameter("element", jsonElementClass)
-            .returns(ClassNames.deserializationStrategy.parameterizedBy(sealedClass))
-
-        val fieldName = discriminator.fieldName
-        selectFun.addStatement(
-            "val disc = element.%M[%S]?.%M?.%M",
-            jsonObjectMember, fieldName, jsonPrimitiveMember, booleanMember
+    /** How a union's serializer reads and writes a value arm (or a literal arm with several literals). */
+    private fun unionValueCoding(
+        variant: UnionVariant,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ): UnionSerializerGenerator.ValueCoding {
+        val literal = variant.literal
+        if (literal != null) return UnionSerializerGenerator.ValueCoding(UnionSerializerGenerator.literalValueType(literal), null)
+        val valueType = variant.valueType ?: error("${variant.name} is not a value arm")
+        return UnionSerializerGenerator.ValueCoding(
+            resolveResolvedType(valueType, index, opContext),
+            containerTransferableSerializer(valueType, index, serializerRegistry, serializerContext),
         )
-
-        selectFun.beginControlFlow("return when (disc)")
-        for (variant in variants) {
-            val discValue = variant.discriminatorValue ?: continue
-            val boolLiteral = if (discValue == "true") "true" else "false"
-            selectFun.addStatement("$boolLiteral -> %T.serializer()", ClassName("", sealedClassName, variant.name))
-        }
-        selectFun.addStatement("else -> error(%S)", "Unknown $fieldName value: \$disc")
-        selectFun.endControlFlow()
-
-        return TypeSpec.objectBuilder(serializerName)
-            .superclass(ClassNames.jsonContentPolymorphicSerializer.parameterizedBy(sealedClass))
-            .addSuperclassConstructorParameter("%T::class", sealedClass)
-            .addFunction(selectFun.build())
-            .build()
     }
 
     private fun generateSealedVariant(
@@ -1041,44 +1115,90 @@ class KotlinCodeGenerator(
         val discValue = variant.discriminatorValue
             ?: discriminator?.variants?.entries?.find { it.value == variant.name }?.key
             ?: variant.name.lowercase()
+        // A `@SerialName` is the discriminator value; a union without one has none to give.
+        val serialName = AnnotationSpec.builder(ClassNames.serialName).addMember("%S", discValue).build()
+        val annotateSerialName: TypeSpec.Builder.() -> TypeSpec.Builder =
+            { if (discriminator != null) addAnnotation(serialName) else this }
+
+        // A literal arm with one literal: the union's serializer reads and writes the literal itself.
+        if (variant.literal?.size == 1) {
+            return TypeSpec.objectBuilder(variant.name)
+                .addModifiers(KModifier.DATA)
+                .superclass(sealedClassName)
+                .addKdoc("The literal `%L`.\n", variant.literal.single())
+                .build()
+        }
+
+        // A value arm holds the arm's bare JSON value, which the union's serializer reads and writes.
+        if (variant.valueType != null || variant.literal != null) {
+            val valueType = unionValueCoding(variant, index, opContext, serializerRegistry, serializerContext).type
+            val property = UnionSerializerGenerator.VALUE_PROPERTY
+            return TypeSpec.classBuilder(variant.name)
+                .addModifiers(KModifier.DATA)
+                .superclass(sealedClassName)
+                .primaryConstructor(FunSpec.constructorBuilder().addParameter(property, valueType).build())
+                .addProperty(PropertySpec.builder(property, valueType).initializer(property).build())
+                .build()
+        }
 
         if (variant.fields.isEmpty() && variant.embeddedUnion == null && variant.additionalPropertiesType == null) {
             val objectBuilder = TypeSpec.objectBuilder(variant.name)
                 .addModifiers(KModifier.DATA)
                 .superclass(sealedClassName)
                 .addAnnotation(ClassNames.serializable)
-                .addAnnotation(
-                    AnnotationSpec.builder(ClassNames.serialName)
-                        .addMember("%S", discValue)
-                        .build()
-                )
+                .annotateSerialName()
             return objectBuilder.build()
         }
 
         val constructor = FunSpec.constructorBuilder()
+        val isOpenRecord = variant.additionalPropertiesType != null
+        // A hybrid arm (own properties plus a nested union) is one flat object on the wire.
+        val isHybrid = variant.embeddedUnion != null && !isOpenRecord
+        // Generated members step aside for the variant's properties: `attributes_2`, `OpenRecordSerializer_2`.
+        val names = propertyNames(variant.fields)
+        val taken = names.toMutableSet()
+        val extrasProperty = NamingUtils.claim(OpenRecordSerializerGenerator.EXTRAS_PROPERTY, taken)
+        val embeddedProperty = variant.embeddedUnion?.let {
+            NamingUtils.claim(NamingUtils.memberName(it.discriminator?.fieldName ?: "variant"), taken)
+        }
+        val (openRecordSerializer, openRecordFields) = OpenRecordSerializerGenerator.nestedTypeNames(names)
+        val (hybridSerializer, hybridFields) = HybridArmSerializerGenerator.nestedTypeNames(names + listOfNotNull(embeddedProperty))
         val variantBuilder = TypeSpec.classBuilder(variant.name)
             .addModifiers(KModifier.DATA)
             .superclass(sealedClassName)
-            .addAnnotation(ClassNames.serializable)
             .addAnnotation(
-                AnnotationSpec.builder(ClassNames.serialName)
-                    .addMember("%L", kotlinStringLiteral(discValue))
-                    .build()
+                when {
+                    isOpenRecord -> OpenRecordSerializerGenerator.serializableAnnotation(variant.name, openRecordSerializer)
+                    isHybrid -> HybridArmSerializerGenerator.serializableAnnotation(variant.name, hybridSerializer)
+                    else -> AnnotationSpec.builder(ClassNames.serializable).build()
+                },
             )
+            .annotateSerialName()
 
-        for (field in variant.fields) {
+        for ((i, field) in variant.fields.withIndex()) {
+            val name = names[i]
             val kotlinType = resolveResolvedType(field.type, index, opContext)
             val isOptional = !field.required
-            val finalType = if (isOptional) kotlinType.copy(nullable = true) else kotlinType
+            val directTransferable = unwrapNullableTransferable(field.type)
+            val finalType = (if (isOptional) kotlinType.copy(nullable = true) else kotlinType).let {
+                if (directTransferable != null) it
+                else annotateNestedTransferables(field.type, it, index, serializerRegistry, serializerContext)
+            }
 
-            val paramBuilder = ParameterSpec.builder(field.name, finalType)
+            val paramBuilder = ParameterSpec.builder(name, finalType)
             if (isOptional) paramBuilder.defaultValue("null")
             constructor.addParameter(paramBuilder.build())
 
-            val propBuilder = PropertySpec.builder(field.name, finalType)
-                .initializer(field.name)
-            addFieldSerialName(propBuilder, field)
-            unwrapNullableTransferable(field.type)?.let { transferableType ->
+            val propBuilder = PropertySpec.builder(name, finalType)
+                .initializer("%N", name)
+            if (name != field.name || isKotlinKeyword(field.name)) {
+                propBuilder.addAnnotation(
+                    AnnotationSpec.builder(ClassNames.serialName)
+                        .addMember("%S", field.name)
+                        .build()
+                )
+            }
+            directTransferable?.let { transferableType ->
                 addTransferableSerializerAnnotation(
                     propBuilder,
                     transferableType,
@@ -1090,41 +1210,38 @@ class KotlinCodeGenerator(
             variantBuilder.addProperty(propBuilder.build())
         }
 
-        // Add attributes field for open-shape variants
+        // Add attributes field for open-shape variants, flat on the wire beside the discriminator
         if (variant.additionalPropertiesType != null) {
-            val valueType = resolveResolvedType(variant.additionalPropertiesType, index, opContext)
+            val valueType = annotateNestedTransferables(
+                variant.additionalPropertiesType,
+                resolveResolvedType(variant.additionalPropertiesType, index, opContext),
+                index,
+                serializerRegistry,
+                serializerContext,
+            )
             val mapType = Map::class.asTypeName().parameterizedBy(String::class.asTypeName(), valueType)
-            val paramBuilder = ParameterSpec.builder("attributes", mapType)
+            val paramBuilder = ParameterSpec.builder(extrasProperty, mapType)
                 .defaultValue("emptyMap()")
             constructor.addParameter(paramBuilder.build())
             variantBuilder.addProperty(
-                PropertySpec.builder("attributes", mapType)
-                    .initializer("attributes")
+                PropertySpec.builder(extrasProperty, mapType)
+                    .initializer("%N", extrasProperty)
                     .build(),
             )
         }
 
         // Add embedded union field if present
-        if (variant.embeddedUnion != null) {
+        if (variant.embeddedUnion != null && embeddedProperty != null) {
             val embeddedName = variant.embeddedUnion.name
             val embeddedClassName = ClassName("", embeddedName)
-            val discFieldName = variant.embeddedUnion.discriminator?.fieldName ?: "variant"
-            // The discriminator key is the spec's own text: the property takes its identifier,
-            // and the key stays on the wire as an escaped serial name.
-            val discField = ResolvedField(
-                name = NamingUtils.safeIdentifier(discFieldName),
-                type = variant.embeddedUnion,
-                required = true,
-                serialName = discFieldName,
-            )
+            val discFieldName = embeddedProperty
 
             constructor.addParameter(
-                ParameterSpec.builder(discField.name, embeddedClassName).build()
+                ParameterSpec.builder(discFieldName, embeddedClassName).build()
             )
             variantBuilder.addProperty(
-                PropertySpec.builder(discField.name, embeddedClassName)
-                    .initializer(discField.name)
-                    .also { addFieldSerialName(it, discField) }
+                PropertySpec.builder(discFieldName, embeddedClassName)
+                    .initializer("%N", discFieldName)
                     .build(),
             )
 
@@ -1140,9 +1257,42 @@ class KotlinCodeGenerator(
             variantBuilder.addType(embeddedSpec)
         }
 
-        variantBuilder.primaryConstructor(constructor.build())
+        val primaryConstructor = constructor.build()
+        variantBuilder.primaryConstructor(primaryConstructor)
+        if (isOpenRecord) {
+            variantBuilder.addTypes(
+                OpenRecordSerializerGenerator.nestedTypes(
+                    ownerName = variant.name,
+                    serialName = discValue,
+                    parameters = primaryConstructor.parameters,
+                    properties = variantBuilder.propertySpecs.toList(),
+                    discriminator = discriminator?.fieldName,
+                    extrasProperty = extrasProperty,
+                    wireNames = names.zip(variant.fields.map { it.name }).toMap(),
+                    serializerObject = openRecordSerializer,
+                    fieldsClassName = openRecordFields,
+                ),
+            )
+        }
+        val embeddedUnion = variant.embeddedUnion
+        if (isHybrid && embeddedUnion != null && embeddedProperty != null) {
+            variantBuilder.addTypes(
+                HybridArmSerializerGenerator.nestedTypes(
+                    ownerName = variant.name,
+                    serialName = discValue,
+                    parameters = primaryConstructor.parameters,
+                    properties = variantBuilder.propertySpecs.toList(),
+                    unionProperty = embeddedProperty,
+                    unionName = embeddedUnion.name,
+                    discriminator = discriminator?.fieldName,
+                    wireNames = names.zip(variant.fields.map { it.name }).toMap(),
+                    serializerObject = hybridSerializer,
+                    fieldsClassName = hybridFields,
+                ),
+            )
+        }
 
-        val initBlock = generateInitValidation(variant.fields)
+        val initBlock = generateInitValidation(variant.fields, names)
         if (initBlock != null) {
             variantBuilder.addInitializerBlock(initBlock)
         }
@@ -1170,15 +1320,15 @@ class KotlinCodeGenerator(
      * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
      * right URL from the constant alone.
      */
-    private fun generateServersFile(servers: List<ServerDefinition>, endpoint: String?): FileSpec {
+    private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>, endpoint: String?): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
 
         // Servers object using BlocksServer from the runtime
         val serversObjectBuilder = TypeSpec.objectBuilder("Servers")
-        for (entry in servers) {
+        for ((i, entry) in servers.withIndex()) {
             serversObjectBuilder.addProperty(
                 PropertySpec
-                    .builder(serverPropertyName(entry.name), blocksServerClass)
+                    .builder(propertyNames[i], blocksServerClass)
                     .initializer(
                         // url via kotlinStringLiteral, not %S, so a newline/CR in it is preserved exactly.
                         "%T(name = %S, url = %L)",
@@ -1190,8 +1340,8 @@ class KotlinCodeGenerator(
             )
         }
         serverFileBuilder.addType(serversObjectBuilder.build().withApiVisibility())
-        serverFileBuilder.addFunction(generateDefaultEntryPoint(servers.first().name))
-        serverFileBuilder.addProperty(generateDefaultServerValue(servers.first().name))
+        serverFileBuilder.addFunction(generateDefaultEntryPoint(propertyNames.first()))
+        serverFileBuilder.addProperty(generateDefaultServerValue(propertyNames.first()))
 
         return serverFileBuilder.build()
     }
@@ -1204,7 +1354,7 @@ class KotlinCodeGenerator(
      * change. Being a value rather than another accessor overload also means it keeps working
      * whatever `BlocksConfig` gains later.
      */
-    private fun generateDefaultServerValue(defaultServerName: String): PropertySpec =
+    private fun generateDefaultServerValue(defaultServerProperty: String): PropertySpec =
         PropertySpec
             .builder("defaultServer", blocksServerClass)
             .addModifiers(apiModifiers)
@@ -1214,7 +1364,7 @@ class KotlinCodeGenerator(
                     .addStatement(
                         "return %T.%N",
                         ClassName(packageName, "Servers"),
-                        serverPropertyName(defaultServerName),
+                        defaultServerProperty,
                     )
                     .build(),
             )
@@ -1225,7 +1375,7 @@ class KotlinCodeGenerator(
      * runtime cannot default the server itself, because it never sees the spec; an `invoke` on the
      * companion puts the default where regenerating the spec keeps it current.
      */
-    private fun generateDefaultEntryPoint(defaultServerName: String): FunSpec =
+    private fun generateDefaultEntryPoint(defaultServerProperty: String): FunSpec =
         FunSpec
             .builder("invoke")
             .addModifiers(apiModifiers)
@@ -1236,41 +1386,37 @@ class KotlinCodeGenerator(
                 "return %T(%T.%N)",
                 ClassNames.blocks,
                 ClassName(packageName, "Servers"),
-                serverPropertyName(defaultServerName),
+                defaultServerProperty,
             )
             .build()
-
-    /** The `Servers` property for a server, whose name is the spec's own text. */
-    private fun serverPropertyName(server: String): String = NamingUtils.safeIdentifier(toCamelCase(server))
 
     // ── API naming ────────────────────────────────────────────────────
 
     /**
-     * The class and file name for a namespace. A namespace whose name matches one of the files
-     * this generator emits itself takes an `Api` suffix, because two files of the same name in one
-     * package overwrite each other and the loser disappears without an error.
+     * The `Blocks` accessor for an API class: the class name in lowerCamelCase (`AuthApi` ->
+     * `authApi`, `TypesApi` -> `typesApi`). Class names are unique, so accessors are too.
      */
-    private fun apiClassName(namespace: ApiNamespace): String {
-        val name = NamingUtils.safeIdentifier(toPascalCase(namespace.name))
-        return if (isReservedFileName(name)) name + API_SUFFIX else name
-    }
-
-    /** The accessor name for a namespace, suffixed alongside [apiClassName] so the two match. */
-    private fun apiPropertyName(namespace: ApiNamespace): String {
-        val name = NamingUtils.safeIdentifier(toCamelCase(namespace.name))
-        return if (isReservedFileName(toPascalCase(namespace.name))) name + API_SUFFIX else name
-    }
+    private fun apiPropertyName(className: String): String = className.replaceFirstChar { it.lowercaseChar() }
 
     // ── Per-API-group file generation ─────────────────────────────────
 
     private fun generateApiGroupFile(
         group: ApiNamespace,
+        className: String,
         index: TypeIndex,
         serializerRegistry: TransferableSerializerRegistry,
         bound: Map<String, BoundTransferable>,
     ): FileSpec {
-        val className = apiClassName(group)
         val builder = FileSpec.builder(packageName, className)
+
+        // A parameter named after an object a method body reads (`BlocksJson.encodeToJsonElement`)
+        // would shadow it there, so that object is imported under an alias in this file.
+        val parameterNames = group.operations.flatMap { methodNames(it).parameters }.toMutableSet()
+        for (receiver in EXPRESSION_RECEIVERS) {
+            if (receiver.simpleName in parameterNames) {
+                builder.addAliasedImport(receiver, NamingUtils.claim(receiver.simpleName, parameterNames))
+            }
+        }
 
         // Add @OptIn(ExperimentalSerializationApi::class) if any operation has discriminated unions
         val hasDiscriminator = group.operations.any { op ->
@@ -1301,7 +1447,7 @@ class KotlinCodeGenerator(
     private fun generateApiAccessor(group: ApiNamespace, className: String): PropertySpec {
         val apiClass = ClassName(packageName, className)
         return PropertySpec
-            .builder(apiPropertyName(group), apiClass)
+            .builder(apiPropertyName(className), apiClass)
             .addModifiers(apiModifiers)
             .receiver(ClassNames.blocks)
             .getter(
@@ -1379,28 +1525,34 @@ class KotlinCodeGenerator(
                     .build(),
             )
 
+        // An operation's function and its nested-types object are named after it, distinct in this class.
+        val operations = namespace.operations
+        val functionNames = NamingUtils.allocate(operations.map { it.name }, candidate = NamingUtils::memberName)
+        val objectNames = NamingUtils.allocate(operations.map { it.name }, candidate = ::toPascalCase)
+
         val operationContexts = java.util.IdentityHashMap<Operation, OperationTypeContext?>()
-        for (operation in namespace.operations) {
-            operationContexts[operation] = buildOperationTypeContext(operation, className)
+        for ((i, operation) in operations.withIndex()) {
+            operationContexts[operation] = buildOperationTypeContext(operation, objectNames[i], className)
         }
 
-        for (operation in namespace.operations) {
+        for ((i, operation) in operations.withIndex()) {
             if (isStubbed(operation)) {
-                classBuilder.addFunction(generateOidcStubMethod(operation))
+                classBuilder.addFunction(generateOidcStubMethod(functionNames[i]))
             } else {
                 val opContext = operationContexts[operation]
                 classBuilder.addFunction(
-                    generateImplMethod(operation, namespace.wireName, index, opContext, bound),
+                    generateImplMethod(operation, functionNames[i], index, opContext, serializerRegistry, bound),
                 )
             }
         }
 
         // Add nested operation objects for operations that have nested types
-        for (operation in namespace.operations) {
+        for ((i, operation) in operations.withIndex()) {
             if (operation.nestedTypes.isNotEmpty() || narrowedTypeArgs(operation).isNotEmpty()) {
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
+                        objectNames[i],
                         index,
                         serializerRegistry,
                         operationContexts[operation],
@@ -1417,10 +1569,9 @@ class KotlinCodeGenerator(
      * nested types. Relative paths are used in API source; qualified paths are used by
      * serializers emitted in a separate top-level file.
      */
-    private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
+    private fun buildOperationTypeContext(operation: Operation, opObjectName: String, apiClassName: String): OperationTypeContext? {
         val narrowed = narrowedTypeArgs(operation).map { it.values }
         if (operation.nestedTypes.isEmpty() && narrowed.isEmpty()) return null
-        val opObjectName = operationObjectName(operation)
         val context = OperationTypeContext(opObjectName)
 
         // A narrowed enum isn't a nested type of the result, so register it directly; the result's
@@ -1471,11 +1622,11 @@ class KotlinCodeGenerator(
      */
     private fun generateOperationObject(
         operation: Operation,
+        objectName: String,
         index: TypeIndex,
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ): TypeSpec {
-        val objectName = operationObjectName(operation)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
         for (narrowed in narrowedTypeArgs(operation)) {
@@ -1592,7 +1743,40 @@ class KotlinCodeGenerator(
         return spec
     }
 
-    private fun buildMethodKdoc(operation: Operation): String {
+    /**
+     * The names an operation's method declares and reads. [parameters] are the Kotlin names of its
+     * parameters, in order: the spec's, unless Kotlin can't declare one ([NamingUtils.memberName]).
+     * They are public (named arguments), so the generated names step aside for them: the locals
+     * [request], [args], [result] and [json] keep their names unless a parameter has one (then
+     * `result_2`, …), and [client], the API class's property, is read as `this.client` when a
+     * parameter is named `client`.
+     */
+    private inner class MethodNames(
+        val parameters: List<String>,
+        val request: String,
+        val args: String,
+        val result: String,
+        val json: String,
+        val client: String,
+    ) {
+        /** How the body reads the parameter at [index] (see [expressionReference]). */
+        fun reference(index: Int): String = expressionReference(parameters[index])
+    }
+
+    private fun methodNames(operation: Operation): MethodNames {
+        val parameters = NamingUtils.allocate(operation.parameters.map { it.name }, candidate = NamingUtils::memberName)
+        val taken = parameters.toMutableSet()
+        return MethodNames(
+            parameters = parameters,
+            request = NamingUtils.claim("request", taken),
+            args = NamingUtils.claim("args", taken),
+            result = NamingUtils.claim("result", taken),
+            json = NamingUtils.claim("json", taken),
+            client = if ("client" in parameters) "this.client" else "client",
+        )
+    }
+
+    private fun buildMethodKdoc(operation: Operation, names: MethodNames): String {
         val parts = mutableListOf<String>()
 
         if (operation.description != null) {
@@ -1600,8 +1784,9 @@ class KotlinCodeGenerator(
         }
 
         val paramTags = operation.parameters
-            .filter { !it.description.isNullOrEmpty() }
-            .map { "@param ${it.name} ${it.description}" }
+            .mapIndexed { i, param -> names.parameters[i] to param }
+            .filter { (_, param) -> !param.description.isNullOrEmpty() }
+            .map { (name, param) -> "@param $name ${param.description}" }
 
         val returnTag = operation.result.description
 
@@ -1619,30 +1804,32 @@ class KotlinCodeGenerator(
 
     private fun generateImplMethod(
         operation: Operation,
-        namespace: String,
+        functionName: String,
         index: TypeIndex,
         opContext: OperationTypeContext?,
+        serializerRegistry: TransferableSerializerRegistry,
         bound: Map<String, BoundTransferable>,
     ): FunSpec {
         val funBuilder = FunSpec
-            .builder(operation.name)
+            .builder(functionName)
             .addModifiers(KModifier.SUSPEND)
 
-        val kdoc = buildMethodKdoc(operation)
+        val names = methodNames(operation)
+        val kdoc = buildMethodKdoc(operation, names)
         if (kdoc.isNotEmpty()) {
             funBuilder.addKdoc("%L", neutraliseKdoc(kdoc))
         }
 
-        for (param in operation.parameters) {
+        for ((i, param) in operation.parameters.withIndex()) {
             val paramType = resolveResolvedType(param.type, index, opContext)
             val isOptional = !param.required
             val finalType = if (isOptional) paramType.copy(nullable = true) else paramType
-            val paramBuilder = ParameterSpec.builder(param.name, finalType)
+            val paramBuilder = ParameterSpec.builder(names.parameters[i], finalType)
             if (isOptional) paramBuilder.defaultValue("null")
             funBuilder.addParameter(paramBuilder.build())
         }
 
-        val boundResult = boundDirectResult(operation, namespace, bound, index, opContext)
+        val boundResult = boundDirectResult(operation, bound, index, opContext)
         val returnType = when {
             boundResult != null -> boundResult.declaredType()
             isUnboundDirectResult(operation.result.type, bound) -> ClassNames.unknownTransferable
@@ -1652,17 +1839,15 @@ class KotlinCodeGenerator(
             funBuilder.returns(returnType)
         }
 
-        generateImplMethodBody(
-            funBuilder, operation, namespace, index, opContext, returnType, boundResult,
-        )
+        generateImplMethodBody(funBuilder, operation, names, index, opContext, returnType, serializerRegistry, boundResult)
 
         return funBuilder.build()
     }
 
-    private fun generateOidcStubMethod(operation: Operation): FunSpec {
+    private fun generateOidcStubMethod(functionName: String): FunSpec {
         val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
             "to enable this method."
-        return FunSpec.builder(operation.name)
+        return FunSpec.builder(functionName)
             .addModifiers(KModifier.SUSPEND)
             .addAnnotation(
                 AnnotationSpec.builder(ClassName("kotlin", "Deprecated"))
@@ -1678,36 +1863,44 @@ class KotlinCodeGenerator(
     private fun generateImplMethodBody(
         funBuilder: FunSpec.Builder,
         operation: Operation,
-        namespace: String,
+        names: MethodNames,
         index: TypeIndex,
         opContext: OperationTypeContext?,
         returnType: TypeName,
+        serializerRegistry: TransferableSerializerRegistry,
         boundResult: BoundResult?,
     ) {
-        val hasOptionalParams = operation.parameters.any { !it.required }
-        val dottedMethod = "${namespace}.${operation.wireName}"
+        // Optional parameters after the last required one. Every other parameter always has its slot.
+        val trailingOptionals = operation.parameters.size - 1 - operation.parameters.indexOfLast { it.required }
+        // The spec's method name, exactly: a dotless `ping` is grouped under `_default` but sent as `ping`.
+        val dottedMethod = operation.rpcMethod
 
         if (operation.parameters.isEmpty()) {
             funBuilder.addStatement(
-                "val request = %T(method = %S, params = emptyList(), id = %T.nextId())",
+                "val %N = %T(method = %S, params = emptyList(), id = %T.nextId())",
+                names.request,
                 ClassNames.blocksRequest,
                 dottedMethod,
                 ClassNames.blocksRequest,
             )
-        } else if (hasOptionalParams) {
-            generateConditionalArgs(funBuilder, operation, index, opContext)
+        } else if (trailingOptionals > 0) {
+            generateConditionalArgs(funBuilder, operation, names, index, opContext)
             funBuilder.addStatement(
-                "val request = %T(method = %S, params = args, id = %T.nextId())",
+                "val %N = %T(method = %S, params = %N, id = %T.nextId())",
+                names.request,
                 ClassNames.blocksRequest,
                 dottedMethod,
+                names.args,
                 ClassNames.blocksRequest,
             )
         } else {
-            // All params are required — build a listOf(...) inline
-            val paramBlocks = operation.parameters.map { paramToJsonExpression(it, index, opContext) }
+            // Every parameter has a slot (an optional one before a required one is sent as null when
+            // it is null) — build a listOf(...) inline
+            val paramBlocks = operation.parameters.indices.map { i -> slotExpression(operation, names, i, index, opContext) }
             val paramsCode = paramBlocks.joinToCode(", ")
             funBuilder.addStatement(
-                "val request = %T(method = %S, params = listOf(%L), id = %T.nextId())",
+                "val %N = %T(method = %S, params = listOf(%L), id = %T.nextId())",
+                names.request,
                 ClassNames.blocksRequest,
                 dottedMethod,
                 paramsCode,
@@ -1716,91 +1909,183 @@ class KotlinCodeGenerator(
         }
 
         if (boundResult != null) {
-            funBuilder.addStatement("val result = client.execute(request)")
-            funBuilder.addCode("return %L\n", boundResult.fromDescriptor())
+            funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            funBuilder.addCode("return %L\n", boundResult.fromDescriptor(names.result))
         } else if (returnType == Unit::class.asTypeName()) {
-            funBuilder.addStatement("client.execute(request)")
+            funBuilder.addStatement("%L.execute(%N)", names.client, names.request)
         } else if (returnType == ClassNames.unknownTransferable) {
             // An unbound tag here would otherwise fail generation; degrade to a checked carrier.
-            // A nullable unbound result fails generation, so this arm is always non-nullable.
-            // See docs/native-clients/codegen-design.md § Unbound transferables.
-            val tag = unwrapNullableTransferable(operation.result.type)!!.transferableName
-            funBuilder.addStatement("val result = client.execute(request)")
-            funBuilder.addCode(
-                "return %T.fromJson(result, expectedTag = %L)\n",
+            val tag = (operation.result.type as ResolvedType.Transferable).transferableName
+            funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            funBuilder.addStatement(
+                "return %T.fromJson(%N, expectedTag = %L)",
                 ClassNames.unknownTransferable,
+                names.result,
                 kotlinStringLiteral(tag),
             )
         } else if (isTransferableType(operation.result.type)) {
             val transferableType = unwrapNullableTransferable(operation.result.type)!!
-            funBuilder.addStatement("val result = client.execute(request)")
-            val fromJsonExpr = generateTransferableFromJson(transferableType, "result", index, opContext)
+            funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            // A channel whose payload holds an OIDC client decodes each message with a Json bound to this client.
+            val payloadJson = if (transferableType.transferableName == "realtime/channel" &&
+                transferableType.typeArgs.any { containsOidcTransferable(it) }
+            ) {
+                funBuilder.addStatement("val %N = %T.json(%L, %S)", names.json, ClassNames.oidcClient, names.client, relayTo ?: "")
+                CodeBlock.of("%N", names.json)
+            } else {
+                CodeBlock.of("%T", ClassNames.blocksJson)
+            }
+            val fromJsonExpr = generateTransferableFromJson(
+                transferableType,
+                names.result,
+                index,
+                opContext,
+                serializerRegistry,
+                payloadJson,
+                names.client,
+            )
             funBuilder.addCode(
                 "return %L\n",
-                nullGuarded(operation.result.type is ResolvedType.Nullable, fromJsonExpr),
+                nullGuarded(operation.result.type is ResolvedType.Nullable, names.result, fromJsonExpr),
             )
         } else {
-            val blocksJson = ClassNames.blocksJson
-            val decodeFromJsonElement = MemberNames.decode
-            funBuilder.addStatement("val result = client.execute(request)")
-            funBuilder.addStatement("return %T.%M(result)", blocksJson, decodeFromJsonElement)
+            // A result holding an OIDC client anywhere decodes with a Json that binds it to this client.
+            val json = if (containsOidcTransferable(operation.result.type)) {
+                CodeBlock.of("%T.json(%L, %S)", ClassNames.oidcClient, names.client, relayTo ?: "")
+            } else {
+                CodeBlock.of("%T", ClassNames.blocksJson)
+            }
+            val serializer = containerTransferableSerializer(operation.result.type, index, serializerRegistry, opContext)
+            funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            if (serializer != null) {
+                funBuilder.addStatement("return %L.%M(%L, %N)", json, MemberNames.decode, serializer, names.result)
+            } else {
+                funBuilder.addStatement("return %L.%M(%N)", json, MemberNames.decode, names.result)
+            }
         }
     }
 
     private fun unwrapNullable(type: ResolvedType): ResolvedType =
         if (type is ResolvedType.Nullable) type.inner else type
 
+    /**
+     * The parameters of a method with optional ones after its last required one, as `args`.
+     *
+     * JSON-RPC params are positional on the server (`parseRpcRequest` passes `params` as the
+     * method's argument list), so every argument keeps its slot, as the TypeScript client's
+     * arguments array does: an optional parameter before a required one is sent as JSON `null`
+     * when it is null ([slotExpression]); a trailing one is sent when it or a later one is set,
+     * as `null` if it isn't, and trailing ones that are all null are left off.
+     */
     private fun generateConditionalArgs(
         funBuilder: FunSpec.Builder,
         operation: Operation,
+        names: MethodNames,
         index: TypeIndex,
         opContext: OperationTypeContext?,
     ) {
         val params = operation.parameters
-        val requiredParams = params.filter { it.required }
-        val optionalParams = params.filter { !it.required }
+        val firstTrailing = params.indexOfLast { it.required } + 1
+        val leading = (0 until firstTrailing).map { slotExpression(operation, names, it, index, opContext) }
+        fun toJson(position: Int) = paramToJsonExpression(params[position], names, position, index, opContext)
 
-        if (optionalParams.size == 1 && requiredParams.size == params.size - 1) {
-            val optParam = optionalParams[0]
-            val reqBlocks = requiredParams.map { paramToJsonExpression(it, index, opContext) }
-            val allBlocks = params.map { paramToJsonExpression(it, index, opContext) }
-            val reqCode = reqBlocks.joinToCode(", ")
-            val allCode = allBlocks.joinToCode(", ")
+        if (firstTrailing == params.size - 1) {
+            val optParam = params.lastIndex
+            val reqCode = leading.joinToCode(", ")
+            val allCode = (leading + toJson(optParam)).joinToCode(", ")
 
             funBuilder.addCode(
-                "val args: %T = if (%N != null) listOf(%L) else listOf(%L)\n",
+                "val %N: %T = if (%N != null) listOf(%L) else listOf(%L)\n",
+                names.args,
                 List::class.asTypeName().parameterizedBy(ClassNames.jsonElement),
-                optParam.name,
+                names.parameters[optParam],
                 allCode,
                 reqCode,
             )
         } else {
-            val reqBlocks = requiredParams.map { paramToJsonExpression(it, index, opContext) }
-            val reqCode = reqBlocks.joinToCode(", ")
-            funBuilder.addCode("val args = mutableListOf<%T>(%L)\n", ClassNames.jsonElement, reqCode)
-            for (param in optionalParams) {
-                val expr = paramToJsonExpression(param, index, opContext)
-                funBuilder.beginControlFlow("if (%N != null)", param.name)
-                funBuilder.addCode("args.add(%L)\n", expr)
+            funBuilder.addCode("val %N = mutableListOf<%T>(%L)\n", names.args, ClassNames.jsonElement, leading.joinToCode(", "))
+            for (position in firstTrailing until params.size) {
+                if (position == params.lastIndex) {
+                    funBuilder.beginControlFlow("if (%N != null)", names.parameters[position])
+                    funBuilder.addCode("%N.add(%L)\n", names.args, toJson(position))
+                } else {
+                    // Sent when this or a later argument is set, so the later one keeps its slot.
+                    val anySet = (position until params.size)
+                        .map { CodeBlock.of("%N != null", names.parameters[it]) }
+                        .joinToCode(" || ")
+                    funBuilder.beginControlFlow("if (%L)", anySet)
+                    funBuilder.addCode(
+                        "%N.add(if (%N != null) %L else %T)\n",
+                        names.args,
+                        names.parameters[position],
+                        toJson(position),
+                        ClassNames.jsonNull,
+                    )
+                }
                 funBuilder.endControlFlow()
             }
         }
     }
 
     /**
+     * The JSON a parameter that always has a slot sends: a required one as is, an optional one
+     * (before a required one) as JSON `null` when it is null, so later arguments keep their place.
+     */
+    private fun slotExpression(
+        operation: Operation,
+        names: MethodNames,
+        position: Int,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+    ): CodeBlock {
+        val param = operation.parameters[position]
+        val json = paramToJsonExpression(param, names, position, index, opContext)
+        return if (param.required) json
+        else CodeBlock.of("if (%N != null) %L else %T", names.parameters[position], json, ClassNames.jsonNull)
+    }
+
+    /**
      * Generates a [CodeBlock] that converts an operation parameter to a JsonElement.
      * Wraps primitives in JsonPrimitive; delegates to generateToJsonExpression for complex types.
+     * A transferable is sent as its descriptor (`toJson()`), as Swift does. A parameter holding
+     * an OIDC client inside a model encodes with `OidcClient.json`, whose contextual serializer
+     * writes it (plain [ClassNames.blocksJson] has none).
      */
-    private fun paramToJsonExpression(param: OperationParameter, index: TypeIndex, opContext: OperationTypeContext?): CodeBlock {
+    private fun paramToJsonExpression(
+        param: OperationParameter,
+        names: MethodNames,
+        position: Int,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+    ): CodeBlock {
         val jsonPrimitiveClass = ClassNames.jsonPrimitive
         val inner = unwrapNullable(param.type)
+        val reference = names.reference(position)
+        val json = if (containsOidcTransferable(inner)) {
+            CodeBlock.of("%T.json(%L, %S)", ClassNames.oidcClient, names.client, relayTo ?: "")
+        } else {
+            CodeBlock.of("%T", ClassNames.blocksJson)
+        }
         return when (inner) {
             is ResolvedType.Primitive -> when (inner.kind) {
-                PrimitiveKind.VOID, PrimitiveKind.UNKNOWN -> CodeBlock.of("%N", param.name)
-                else -> CodeBlock.of("%T(%N)", jsonPrimitiveClass, param.name)
+                PrimitiveKind.VOID -> CodeBlock.of("%L", reference)
+                // Already a JsonElement. A required-but-nullable one is `JsonElement?` here (optional
+                // ones are smart-cast inside their `!= null` guard), so send a JSON null for null.
+                PrimitiveKind.UNKNOWN -> if (param.required && param.type is ResolvedType.Nullable) {
+                    CodeBlock.of("%L ?: %T", reference, ClassNames.jsonNull)
+                } else {
+                    CodeBlock.of("%L", reference)
+                }
+                else -> CodeBlock.of("%T(%L)", jsonPrimitiveClass, reference)
             }
-            // The expression builders splice their receiver in with %L, so it goes in as %N's output.
-            else -> generateToJsonExpression(inner, CodeBlock.of("%N", param.name).toString(), index)
+            // A required-but-nullable transferable is `T?` here (optional ones are smart-cast inside
+            // their `!= null` guard), so send a JSON null for null.
+            is ResolvedType.Transferable -> if (param.required && param.type is ResolvedType.Nullable) {
+                generateToJsonExpression(param.type, reference, index, json)
+            } else {
+                generateToJsonExpression(inner, reference, index, json)
+            }
+            else -> generateToJsonExpression(inner, reference, index, json)
         }
     }
 
@@ -1942,7 +2227,6 @@ class KotlinCodeGenerator(
      */
     private fun boundDirectResult(
         operation: Operation,
-        namespace: String,
         bound: Map<String, BoundTransferable>,
         index: TypeIndex,
         opContext: OperationTypeContext?,
@@ -1951,7 +2235,7 @@ class KotlinCodeGenerator(
         val binding = bound[transferable.transferableName] ?: return null
         if (transferable.typeArgs.size != binding.genericArity) {
             throw CodegenException(
-                "$namespace.${operation.name.forDiagnostic()} returns \"${transferable.transferableName.forDiagnostic()}\", bound at " +
+                "${operation.rpcMethod.forDiagnostic()} returns \"${transferable.transferableName.forDiagnostic()}\", bound at " +
                     "genericArity ${binding.genericArity}, but its result carries " +
                     "${transferable.typeArgs.size} x-blocks-type-args entries",
             )
@@ -1965,9 +2249,10 @@ class KotlinCodeGenerator(
         )
     }
 
-    private fun nullGuarded(optional: Boolean, hydrate: CodeBlock): CodeBlock =
+    /** [hydrate], or `null` when an optional result arrived as JSON `null`. */
+    private fun nullGuarded(optional: Boolean, result: String, hydrate: CodeBlock): CodeBlock =
         if (!optional) hydrate
-        else CodeBlock.of("if (result is %T) null else %L", ClassNames.jsonNull, hydrate)
+        else CodeBlock.of("if (%N is %T) null else %L", result, ClassNames.jsonNull, hydrate)
 
     /** A direct result's declared type and factory call, both derived from one resolution. */
     private inner class BoundResult(
@@ -1979,10 +2264,11 @@ class KotlinCodeGenerator(
         fun declaredType(): TypeName =
             (if (typeArg == null) type else type.parameterizedBy(typeArg)).copy(nullable = optional)
 
-        fun fromDescriptor(): CodeBlock {
+        fun fromDescriptor(result: String): CodeBlock {
             val descriptor = CodeBlock.of(
-                "%M(result, expectedTag = %L)",
+                "%M(%N, expectedTag = %L)",
                 MemberNames.validateTransferableDescriptor,
+                result,
                 kotlinStringLiteral(tag),
             )
             val hydrate = if (typeArg == null) {
@@ -1993,7 +2279,7 @@ class KotlinCodeGenerator(
                     type, typeArg, descriptor, ClassNames.blocksJson, MemberNames.decode, typeArg,
                 )
             }
-            return nullGuarded(optional, hydrate)
+            return nullGuarded(optional, result, hydrate)
         }
     }
 
@@ -2021,12 +2307,6 @@ class KotlinCodeGenerator(
         return "AWSBLOCKS-NATIVE-001: ${operation.forDiagnostic()} returns unbound transferable " +
             "'$safeTag' on kotlin; generated UnknownTransferable with $typeArgClause."
     }
-
-    /**
-     * Kotlin literal for a validation message that names a field's key. The key is spec text, so
-     * it goes through [kotlinStringLiteral] (byte-identical to %S for text without a newline).
-     */
-    private fun message(text: String): String = kotlinStringLiteral(text)
 
     /**
      * Quoted Kotlin literal for a validation message. Escapes `\\`, `"` and control characters, and escapes
@@ -2089,6 +2369,7 @@ class KotlinCodeGenerator(
         return sb.append('"').toString()
     }
 
+    /** Annotates a property that is itself a (nullable) transferable with its serializer. */
     private fun addTransferableSerializerAnnotation(
         property: PropertySpec.Builder,
         transferable: ResolvedType.Transferable,
@@ -2096,21 +2377,144 @@ class KotlinCodeGenerator(
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ) {
-        if (stubOidc && transferable.transferableName == OIDC_CLIENT_TAG) return
+        transferableSerializerAnnotation(transferable, index, serializerRegistry, serializerContext)
+            ?.let { property.addAnnotation(it) }
+    }
 
+    /**
+     * The annotation that gives a transferable its serializer, on a property or a type usage.
+     *
+     * An `oidc/client` is `@Contextual`: hydrating it needs the calling `BlocksClient` and relay
+     * target, so the operation decodes with `OidcClient.json`, which binds it. Without that it
+     * still compiles, and decoding throws. Every other known tag gets a generated serializer
+     * object; an unknown tag is a `JsonElement` and needs none.
+     */
+    private fun transferableSerializerAnnotation(
+        transferable: ResolvedType.Transferable,
+        index: TypeIndex,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ): AnnotationSpec? {
+        if (transferable.transferableName == "oidc/client") return AnnotationSpec.builder(ClassNames.contextual).build()
+        val serializer = registerTransferableSerializer(transferable, index, serializerRegistry, serializerContext)
+            ?: return null
+        return AnnotationSpec.builder(ClassNames.serializable)
+            .addMember("with = %T::class", serializer)
+            .build()
+    }
+
+    /** Registers the generated serializer object for [transferable]; null for `oidc/client` and unknown tags. */
+    private fun registerTransferableSerializer(
+        transferable: ResolvedType.Transferable,
+        index: TypeIndex,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ): ClassName? {
+        if (transferable.transferableName == "oidc/client") return null
+        // A direct property of an unknown tag keeps its (throwing) serializer, as before; one
+        // nested in a container resolves to `JsonElement`, which needs no serializer.
         val returnType = resolveTransferable(transferable, index, serializerContext, qualified = true)
+        val payload = transferable.typeArgs.firstOrNull()
         // The serializer is keyed by the one type argument it decodes through, so it reads the
         // first position by the same rule the return type does.
         val typeArgument = knownTransferableBindings[transferable.transferableName]
             ?.typeArgs
             ?.firstOrNull()
             ?.let { resolveTypeArg(transferable, 0, it, index, serializerContext, qualified = true) }
-        val serializerName = serializerRegistry.register(transferable.transferableName, returnType, typeArgument)
-        property.addAnnotation(
-            AnnotationSpec.builder(ClassNames.serializable)
-                .addMember("with = %T::class", ClassName(packageName, serializerName))
-                .build(),
+        // A channel's messages decode through the payload's own serializers (registered first),
+        // and with the channel's Json when the payload holds an OIDC client.
+        val isChannel = transferable.transferableName == "realtime/channel"
+        val payloadSerializer = payload?.takeIf { isChannel }
+            ?.let { containerTransferableSerializer(it, index, serializerRegistry, serializerContext) }
+        val serializerName = serializerRegistry.register(
+            transferable.transferableName,
+            returnType,
+            typeArgument,
+            payloadSerializer = payloadSerializer,
+            payloadNeedsDecoderJson = isChannel && payload != null && containsOidcTransferable(payload),
         )
+        return ClassName(packageName, serializerName)
+    }
+
+    /**
+     * Gives every transferable inside a list, map or nullable of [type] its serializer, as an
+     * annotation on that type usage (`List<@Serializable(with = …) RealtimeChannel<Note>>`).
+     * [typeName] is [type] resolved to Kotlin; a model or union is left alone, since its own
+     * serializer handles its fields. So is a channel's payload, recursively, when the channel is
+     * annotated on a type usage (`RealtimeChannel<@Serializable(with = …) FileUploadHandle>`).
+     */
+    private fun annotateNestedTransferables(
+        type: ResolvedType,
+        typeName: TypeName,
+        index: TypeIndex,
+        serializerRegistry: TransferableSerializerRegistry,
+        serializerContext: OperationTypeContext?,
+    ): TypeName {
+        fun annotateArgument(element: ResolvedType, position: Int): TypeName {
+            val parameterized = typeName as? ParameterizedTypeName ?: return typeName
+            val arguments = parameterized.typeArguments.toMutableList()
+            arguments[position] = annotateNestedTransferables(
+                element,
+                arguments[position],
+                index,
+                serializerRegistry,
+                serializerContext,
+            )
+            return parameterized.rawType.parameterizedBy(arguments)
+                .copy(nullable = parameterized.isNullable, annotations = parameterized.annotations)
+        }
+        return when (type) {
+            is ResolvedType.Transferable -> {
+                if (type.transferableName !in knownTransferableTags) return typeName
+                val annotation = transferableSerializerAnnotation(type, index, serializerRegistry, serializerContext)
+                    ?: return typeName
+                // The serialization plugin checks a type usage's type arguments even when it names a
+                // serializer, so a channel payload holding transferables (`RealtimeChannel<FileUploadHandle>`)
+                // is annotated too. Only the check reads these; the channel's serializer decodes the payload.
+                val payload = type.typeArgs.firstOrNull()
+                val withPayload = if (payload != null) annotateArgument(payload, 0) else typeName
+                withPayload.copy(annotations = withPayload.annotations + annotation)
+            }
+            is ResolvedType.Nullable ->
+                annotateNestedTransferables(type.inner, typeName, index, serializerRegistry, serializerContext)
+            is ResolvedType.ListType -> annotateArgument(type.elementType, 0)
+            is ResolvedType.MapType -> annotateArgument(type.valueType, 1)
+            else -> typeName
+        }
+    }
+
+    /**
+     * The serializer for an operation result that holds a transferable inside lists, maps and
+     * nullables only (`List<RealtimeChannel<Note>>`): `ListSerializer(RealtimeChannelNoteSerializer)`.
+     * A reified decode can't find a serializer for the transferable there. Null for any other
+     * result, which decodes as before: a model's own serializer handles its fields, and an
+     * `oidc/client` resolves through `OidcClient.json`.
+     */
+    private fun containerTransferableSerializer(
+        type: ResolvedType,
+        index: TypeIndex,
+        serializerRegistry: TransferableSerializerRegistry,
+        opContext: OperationTypeContext?,
+    ): CodeBlock? = when (type) {
+        is ResolvedType.Transferable ->
+            if (type.transferableName in knownTransferableTags) {
+                registerTransferableSerializer(type, index, serializerRegistry, opContext)?.let { CodeBlock.of("%T", it) }
+            } else null
+        is ResolvedType.Nullable -> containerTransferableSerializer(type.inner, index, serializerRegistry, opContext)
+            ?.let { CodeBlock.of("%L.%M", it, MemberNames.nullable) }
+        is ResolvedType.ListType -> containerTransferableSerializer(type.elementType, index, serializerRegistry, opContext)
+            ?.let { CodeBlock.of("%M(%L)", MemberNames.listSerializer, it) }
+        is ResolvedType.MapType -> containerTransferableSerializer(type.valueType, index, serializerRegistry, opContext)
+            ?.let {
+                CodeBlock.of(
+                    "%M(%T.%M(), %L)",
+                    MemberNames.mapSerializer,
+                    String::class.asTypeName(),
+                    MemberNames.builtinSerializer,
+                    it,
+                )
+            }
+        else -> null
     }
 
     private fun namedType(type: ResolvedType): String? = when (type) {
@@ -2135,7 +2539,17 @@ class KotlinCodeGenerator(
         val entries: Collection<TransferableSerializerGenerator.TransferableEntry>
             get() = entriesByKey.values
 
-        fun register(transferableName: String, returnType: TypeName, typeArgument: TypeName?): String {
+        /**
+         * The serializer object for a transferable of [returnType]. The payload settings derive from
+         * the type argument, so one key always carries the same ones.
+         */
+        fun register(
+            transferableName: String,
+            returnType: TypeName,
+            typeArgument: TypeName?,
+            payloadSerializer: CodeBlock? = null,
+            payloadNeedsDecoderJson: Boolean = false,
+        ): String {
             val key = Key(transferableName, returnType, typeArgument)
             return entriesByKey.getOrPut(key) {
                 TransferableSerializerGenerator.TransferableEntry(
@@ -2143,6 +2557,8 @@ class KotlinCodeGenerator(
                     serializerName = allocateName(transferableName, typeArgument),
                     returnType = returnType,
                     typeArgument = typeArgument,
+                    payloadSerializer = payloadSerializer,
+                    payloadNeedsDecoderJson = payloadNeedsDecoderJson,
                 )
             }.serializerName
         }
@@ -2171,7 +2587,10 @@ class KotlinCodeGenerator(
         PrimitiveKind.INTEGER -> Int::class.asTypeName()
         PrimitiveKind.NUMBER -> Double::class.asTypeName()
         PrimitiveKind.VOID -> Unit::class.asTypeName()
-        PrimitiveKind.UNKNOWN -> Any::class.asTypeName()
+        // `unknown` is any JSON value. `JsonElement` has a built-in serializer, so it works as a
+        // property of a `@Serializable` class, a map value, a list element, a parameter and a result
+        // (`Any` has no serializer and fails to compile). Swift uses `JSONValue`, Dart `dynamic`.
+        PrimitiveKind.UNKNOWN -> ClassNames.jsonElement
     }
 
     private fun mapFormattedType(format: FormatKind): TypeName = when (format) {
@@ -2202,8 +2621,14 @@ class KotlinCodeGenerator(
      * @param type The resolved type to serialize from
      * @param expr The expression string holding the value to serialize
      * @param index The type index for resolving type references
+     * @param json The [kotlinx.serialization.json.Json] that encodes models, enums and unions
      */
-    private fun generateToJsonExpression(type: ResolvedType, expr: String, index: TypeIndex): CodeBlock {
+    private fun generateToJsonExpression(
+        type: ResolvedType,
+        expr: String,
+        index: TypeIndex,
+        json: CodeBlock = CodeBlock.of("%T", ClassNames.blocksJson),
+    ): CodeBlock {
         return when (type) {
             is ResolvedType.Primitive -> when (type.kind) {
                 PrimitiveKind.STRING -> CodeBlock.of("%L", expr)
@@ -2215,24 +2640,33 @@ class KotlinCodeGenerator(
             }
 
             is ResolvedType.Record, is ResolvedType.Enum, is ResolvedType.Union -> {
-                CodeBlock.of("%T.%M(%L)", ClassNames.blocksJson, MemberNames.encode, expr)
+                CodeBlock.of("%L.%M(%L)", json, MemberNames.encode, expr)
             }
 
             is ResolvedType.ListType -> {
-                val arrayBody = generateJsonArrayBody(type, expr, index)
+                val arrayBody = generateJsonArrayBody(type, expr, index, json)
                 CodeBlock.of("%M { %L }", MemberNames.buildJsonArray, arrayBody)
             }
 
             is ResolvedType.Nullable -> {
-                generateToJsonExpression(type.inner, expr, index)
+                // A known transferable's `toJson()` needs a non-null receiver; any other value
+                // encodes as before (a model's encode takes a nullable).
+                val transferable = type.inner as? ResolvedType.Transferable
+                if (transferable != null && transferable.transferableName in knownTransferableTags) {
+                    CodeBlock.of("%L?.toJson() ?: %T", expr, ClassNames.jsonNull)
+                } else if (transferable != null) {
+                    CodeBlock.of("%L ?: %T", expr, ClassNames.jsonNull)
+                } else {
+                    generateToJsonExpression(type.inner, expr, index, json)
+                }
             }
 
             is ResolvedType.TypeReference -> {
                 val resolvedType = resolveTypeReference(type.name, index)
                 if (resolvedType != null) {
-                    generateToJsonExpression(resolvedType, expr, index)
+                    generateToJsonExpression(resolvedType, expr, index, json)
                 } else {
-                    CodeBlock.of("%T.%M(%L)", ClassNames.blocksJson, MemberNames.encode, expr)
+                    CodeBlock.of("%L.%M(%L)", json, MemberNames.encode, expr)
                 }
             }
 
@@ -2240,15 +2674,22 @@ class KotlinCodeGenerator(
                 CodeBlock.of("%T(%L.toString())", ClassNames.jsonPrimitive, expr)
             }
             is ResolvedType.MapType -> {
-                val valueToJson = generateToJsonExpression(type.valueType, "it.value", index)
+                // `put(key, JsonElement?)` has no overload, so a nullable `unknown` value becomes JsonNull.
+                val valueToJson = if (type.valueType.isNullableUnknown()) {
+                    CodeBlock.of("it.value ?: %T", ClassNames.jsonNull)
+                } else {
+                    generateToJsonExpression(type.valueType, "it.value", index, json)
+                }
                 CodeBlock.of("%M { %L.forEach { %M(it.key, %L) } }", MemberNames.buildJsonObject, expr, MemberNames.put, valueToJson)
             }
             is ResolvedType.TupleType -> TODO("TupleType toJson not yet implemented")
 
-            is ResolvedType.Transferable -> {
-                throw CodegenException(
-                    "Transferable types (${type.transferableName}) cannot be serialized — they are read-only"
-                )
+            // Sent as its `{ "__blocks": … }` descriptor, the shape the server's `toJSON()` sends. An
+            // unbound tag is a `JsonElement` (the descriptor itself), sent as is.
+            is ResolvedType.Transferable -> if (type.transferableName in knownTransferableTags) {
+                CodeBlock.of("%L.toJson()", expr)
+            } else {
+                CodeBlock.of("%L", expr)
             }
         }
     }
@@ -2257,30 +2698,39 @@ class KotlinCodeGenerator(
      * Generates the body of a `putJsonArray` / `buildJsonArray` lambda for a list type.
      * Uses `addAll(expr)` for simple primitive collections, or `expr.forEach { add(...) }` for complex types.
      */
-    private fun generateJsonArrayBody(listType: ResolvedType.ListType, expr: String, index: TypeIndex): CodeBlock {
+    private fun generateJsonArrayBody(listType: ResolvedType.ListType, expr: String, index: TypeIndex, json: CodeBlock): CodeBlock {
         val elementType = listType.elementType
         return when {
             elementType is ResolvedType.Primitive && elementType.kind in listOf(
                 PrimitiveKind.STRING, PrimitiveKind.BOOLEAN, PrimitiveKind.INTEGER, PrimitiveKind.NUMBER
             ) -> CodeBlock.of("%M(%L)", MemberNames.addAll, expr)
 
+            // `add(JsonElement?)` has no overload, so a null `unknown` element becomes JsonNull.
+            elementType.isNullableUnknown() -> {
+                CodeBlock.of("%L.forEach { %M(it ?: %T) }", expr, MemberNames.add, ClassNames.jsonNull)
+            }
+
             elementType is ResolvedType.Nullable && elementType.inner is ResolvedType.Primitive -> {
                 CodeBlock.of("%L.forEach { %M(it) }", expr, MemberNames.add)
             }
 
             else -> {
-                val elementExpr = generateToJsonElementExpression(elementType, "it", index)
+                val elementExpr = generateToJsonElementExpression(elementType, "it", index, json)
                 CodeBlock.of("%L.forEach { %M(%L) }", expr, MemberNames.add, elementExpr)
             }
         }
     }
+
+    /** True for `unknown | null` — generated as `JsonElement?`. */
+    private fun ResolvedType.isNullableUnknown(): Boolean =
+        this is ResolvedType.Nullable && inner.let { it is ResolvedType.Primitive && it.kind == PrimitiveKind.UNKNOWN }
 
     /**
      * Like [generateToJsonExpression], but guarantees the result is a JsonElement.
      * Primitives are wrapped in JsonPrimitive; complex types already return JsonElement.
      * Use this when the expression must be a JsonElement (e.g. inside JsonArray).
      */
-    private fun generateToJsonElementExpression(type: ResolvedType, expr: String, index: TypeIndex): CodeBlock {
+    private fun generateToJsonElementExpression(type: ResolvedType, expr: String, index: TypeIndex, json: CodeBlock): CodeBlock {
         val jsonPrimitiveClass = ClassNames.jsonPrimitive
         return when (type) {
             is ResolvedType.Primitive -> when (type.kind) {
@@ -2289,11 +2739,11 @@ class KotlinCodeGenerator(
                 else -> CodeBlock.of("%L", expr)
             }
             is ResolvedType.Nullable -> {
-                val innerExpr = generateToJsonElementExpression(type.inner, expr, index)
+                val innerExpr = generateToJsonElementExpression(type.inner, expr, index, json)
                 val jsonNull = ClassNames.jsonNull
                 CodeBlock.of("if (%L != null) %L else %T", expr, innerExpr, jsonNull)
             }
-            else -> generateToJsonExpression(type, expr, index)
+            else -> generateToJsonExpression(type, expr, index, json)
         }
     }
 
@@ -2303,18 +2753,29 @@ class KotlinCodeGenerator(
      * @param type The transferable type to hydrate
      * @param expr The expression string holding the JsonElement descriptor
      * @param index The type index for resolving type arguments
+     * @param serializerRegistry Registers the serializers a channel's payload decodes through
+     * @param payloadJson The [kotlinx.serialization.json.Json] a channel decodes its messages with
+     * @param client How the method reads the API's [ClassNames.blocksClient] (`client`, or `this.client`)
      */
-    private fun generateTransferableFromJson(type: ResolvedType.Transferable, expr: String, index: TypeIndex, opContext: OperationTypeContext? = null): CodeBlock {
+    private fun generateTransferableFromJson(
+        type: ResolvedType.Transferable,
+        expr: String,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+        serializerRegistry: TransferableSerializerRegistry,
+        payloadJson: CodeBlock,
+        client: String = "client",
+    ): CodeBlock {
         return when (type.transferableName) {
             "realtime/channel" -> {
                 if (type.typeArgs.isNotEmpty()) {
-                    val typeArgClassName = resolveResolvedType(type.typeArgs.first(), index, opContext)
-
-                    CodeBlock.of(
-                        "%T.fromJson(%L) { %T.%M<%T>(it) }",
-                        ClassNames.realtimeChannel, expr,
-                        ClassNames.blocksJson, MemberNames.decode, typeArgClassName
+                    val payload = type.typeArgs.first()
+                    val payloadDecode = channelPayloadDecode(
+                        resolveResolvedType(payload, index, opContext),
+                        payloadJson,
+                        containerTransferableSerializer(payload, index, serializerRegistry, opContext),
                     )
+                    CodeBlock.of("%T.fromJson(%L) { %L }", ClassNames.realtimeChannel, expr, payloadDecode)
                 } else {
                     CodeBlock.of(
                         "%T.fromJson(%L) { it }",
@@ -2334,7 +2795,7 @@ class KotlinCodeGenerator(
             // The declared return type carries the provider enum, so the call is the same whether
             // or not the spec named them.
             OIDC_CLIENT_TAG -> {
-                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
+                CodeBlock.of("%T.fromJson(%L, %L, %S)", ClassNames.oidcClient, expr, client, relayTo ?: "")
             }
 
             else -> {
@@ -2362,14 +2823,27 @@ class KotlinCodeGenerator(
 
     // ── Naming utilities ──────────────────────────────────────────────
 
+    /**
+     * How generated code reads the parameter or property [name] in an expression: as written when
+     * it is a plain identifier, a soft or modifier keyword included (`value`, `data`), and escaped
+     * with backticks otherwise (a hard keyword `class`, `content-type`, `a${'$'}b`). Declarations are
+     * escaped by KotlinPoet; a read written with `%L` was not, so a parameter `class` didn't parse.
+     */
+    private fun expressionReference(name: String): String {
+        val plain = (name.first().isLetter() || name.first() == '_') &&
+            name.all { it.isLetterOrDigit() || it == '_' } &&
+            !name.all { it == '_' }
+        return if (plain && !isKotlinKeyword(name)) name else CodeBlock.of("%N", name).toString()
+    }
+
     private fun isKotlinKeyword(name: String): Boolean = NamingUtils.isKotlinKeyword(name)
 
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
         fun toCamelCase(name: String): String = NamingUtils.toCamelCase(name)
 
-        /** A run of characters a generated identifier can't hold, which separates name segments. */
-        private val NON_IDENTIFIER_RUN = Regex("[^A-Za-z0-9]+")
+        /** A run of characters a Kotlin identifier can't hold, which separates name segments. */
+        private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
 
         /**
          * Whether [name] can hold [char] — an allowlist, because each platform the generated code
@@ -2381,12 +2855,46 @@ class KotlinCodeGenerator(
          * outright: a provider named `c#` compiles and then fails the Android build with
          * "Field name 'C#' cannot be represented in dex format".
          *
-         * The allowlist is the one every generated identifier keeps to, `[A-Za-z0-9_]`, so a
-         * constant never needs backticks and no spec text reaches it — see
+         * Non-ASCII is admitted, since the DEX ranges cover letters broadly, except the spaces
+         * DEX names explicitly — see
          * [SimpleName](https://source.android.com/docs/core/runtime/dex-format#simplename).
          */
-        private fun isConstantNameChar(char: Char): Boolean =
-            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' || char == '_'
+        private fun isConstantNameChar(char: Char): Boolean = when {
+            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' -> true
+            char == '$' || char == '_' -> true
+            char.code < 0x80 -> false
+            else -> char !in DEX_REJECTED_SPACES
+        }
+
+        /** The spaces DEX rejects before version 040, which its SimpleName grammar excludes. */
+        private val DEX_REJECTED_SPACES = charArrayOf(
+            '\u00a0', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
+            '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000',
+        )
+
+        /**
+         * The generator's own top-level declarations and file names in the package: the `Servers`
+         * object and the `Types.kt` / `Serializers.kt` / `Servers.kt` files. An API class named
+         * like one would shadow it, or be written over by it.
+         */
+        private val GENERATED_TOP_LEVEL_NAMES = setOf("Servers", "Types", "Serializers")
+
+        /**
+         * The objects a method body reads as a receiver or a value (`BlocksJson.encodeToJsonElement`,
+         * `BlocksRequest.nextId()`, `?: JsonNull`). A parameter of that name would shadow one inside
+         * the method, so a file with such a parameter imports the object under an alias. A class only
+         * called (`JsonPrimitive(…)`) can't be shadowed by a parameter: Kotlin moves on to the class.
+         */
+        private val EXPRESSION_RECEIVERS = listOf(
+            ClassNames.blocksJson,
+            ClassNames.blocksRequest,
+            ClassNames.jsonNull,
+            ClassNames.oidcClient,
+            ClassNames.realtimeChannel,
+            ClassNames.fileDownloadHandle,
+            ClassNames.fileUploadHandle,
+            ClassNames.unknownTransferable,
+        )
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

@@ -99,18 +99,14 @@ class EnumConstantNamingTest : FunSpec({
         source shouldNotContain "`"
     }
 
-    test("a value keeps the name the spec wrote when it is already an identifier") {
+    test("a value keeps the name the spec wrote when an identifier can hold it") {
         val source = generate(enumParamSpec("pending", "cost\$", "my-sso", "2fa", "é"))
 
         source shouldContain "Pending"
+        source shouldContain "`Cost\$`"
         source shouldContain "MySso"
-        // Anything outside [A-Za-z0-9_] separates segments, and a leading digit gains an underscore.
-        source shouldContain "Cost,"
-        source shouldContain "@SerialName(\"cost\${'\$'}\")"
-        source shouldContain "_2fa"
-        source shouldContain "Unnamed"
-        source shouldContain "@SerialName(\"é\")"
-        source shouldNotContain "`"
+        source shouldContain "`2fa`"
+        source shouldContain "é"
     }
 
     test("two values that reduce to one name are numbered apart") {

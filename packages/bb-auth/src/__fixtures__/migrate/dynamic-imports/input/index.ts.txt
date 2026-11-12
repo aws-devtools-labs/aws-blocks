@@ -1,0 +1,7 @@
+export async function loadCognito() {
+	return import('@aws-blocks/bb-auth-cognito');
+}
+
+export function loadBasic() {
+	return require('@aws-blocks/bb-auth-basic');
+}

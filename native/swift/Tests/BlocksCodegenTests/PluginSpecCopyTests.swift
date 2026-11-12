@@ -14,7 +14,7 @@ final class PluginSpecCopyTests: XCTestCase {
 
     /// Test target directory under `Tests/`, paired with the codegen fixture whose spec it copies.
     private let copies: [(target: String, fixture: String)] = [
-        ("BlocksGeneratedNonIdentifierNamesTests", "29-non-identifier-names"),
+        ("BlocksGeneratedNonIdentifierNamesTests", "43-non-identifier-names"),
     ]
 
     private var swiftPackageURL: URL {

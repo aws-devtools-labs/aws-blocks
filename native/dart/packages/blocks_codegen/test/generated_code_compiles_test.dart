@@ -82,12 +82,12 @@ void main() {
     '9lives': true,
     'kind': r'${x}',
   };
-  check('record', Sample_Type__x___.fromJson(record).toJson(), record);
+  check('record', SampleType$X.fromJson(record).toJson(), record);
 
   final create = <String, dynamic>{'ty pe': 'cre"ate', 'ti;tle': 't'};
-  check('create', NsDo_ActionInput.fromJson(create).toJson(), create);
+  check('create', NsDoActionInput.fromJson(create).toJson(), create);
   final remove = <String, dynamic>{'ty pe': 're`move', r'${id}': 'i'};
-  check('remove', NsDo_ActionInput.fromJson(remove).toJson(), remove);
+  check('remove', NsDoActionInput.fromJson(remove).toJson(), remove);
 
   final result = <String, dynamic>{'ok`': true};
   check('result', DoActionResult.fromJson(result).toJson(), result);
@@ -105,7 +105,7 @@ void main() {
   final root = Directory.current.path;
   final runtimeDir = Directory('$root/../blocks_runtime');
   final fixtureGolden = File(
-    '$root/../../../codegen-fixtures/29-non-identifier-names/dart/client.dart',
+    '$root/../../../codegen-fixtures/43-non-identifier-names/dart/client.dart',
   );
 
   late Directory scratch;

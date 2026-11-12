@@ -28,28 +28,23 @@ import { describe, it } from 'node:test';
 import { compareWithAllowlist, findCodegenSinks, listCodegenFiles, report, scan } from './sinks.mjs';
 
 const SWIFT_TYPE_NAME =
-	'Decoding error text built from the generated Swift type name, which swiftIdentifier() has reduced to identifier characters, so it holds no quote, backslash or interpolation.';
-const SWIFT_CONSTANT_TEXT = 'Decoding error text that is a fixed string plus a runtime interpolation of the decoded tag; no spec value reaches it.';
-const EMITTER_BODY = "The literal emitter's own return: the value has just been escaped by the lines above it.";
+	'Decoding error text built from the generated Swift type name, which the same output declares as a type, so it must be an identifier; turning spec names into identifiers is open PR #1417, which owns this file.';
+const SWIFT_CONTENT_LOCAL = (v) =>
+	`${v} is swiftStringContent() of the spec text, assigned a few lines above, inside a literal this line opens and closes.`;
 
 const ALLOWLIST = [
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:580',
-		reason: 'Import URI package:<name>/<library>; the parser accepts only ^[a-z_][a-z0-9_]*$ names and [a-z_]-led path segments.',
+		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1649',
+		reason: "label is the generated class name, a Dart identifier, with its `$` escaped on the line above, so it holds no quote or interpolation.",
 	},
-	{ at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1464', reason: EMITTER_BODY },
+	...[540, 628].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_TYPE_NAME })),
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1551',
-		reason: 'classLabel is _dartStringLiteral(className) with its quotes stripped, so it is already escaped literal text.',
+		at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:552',
+		reason: 'Decoding error text that is a constant apart from the runtime `\\(disc)` interpolation it writes into the generated code.',
 	},
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:481', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:492', reason: SWIFT_CONSTANT_TEXT },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:540', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1165', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1175', reason: SWIFT_CONSTANT_TEXT },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1230', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/TransferableEmission.swift:104', reason: EMITTER_BODY },
-	{ at: 'native/swift/Sources/BlocksCodegen/TransferableEmission.swift:116', reason: EMITTER_BODY },
+	...[1002, 1004, 1023, 1025].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_CONTENT_LOCAL('key') })),
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1088', reason: SWIFT_CONTENT_LOCAL('escaped') },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator+EntryPoint.swift:112', reason: SWIFT_CONTENT_LOCAL('name and url') },
 ];
 
 describe('codegen sink detector', () => {

@@ -63,10 +63,10 @@ interface Exception {
  */
 const EXCEPTIONS: Exception[] = [
 	{
-		file: 'bb-auth-cognito/src/index.ts',
-		call: 'new ApiError(e.message, e.status, { name: e.name, retriable: true, cause: e.cause })',
-		// Re-throws an ApiError it caught with only `retriable` changed; that message was already client-facing.
-		reason: 're-wraps an existing ApiError unchanged',
+		file: 'bb-auth/src/error-mapping.ts',
+		call: 'new ApiError(message, e.status, { name: e.name, cause: e, ...(e.retriable ? { retriable: true } : {}) })',
+		// Re-wraps an ApiError it caught; `message` is that error's own (already client-facing) text, scrubbed of AWS identifiers.
+		reason: 're-wraps an existing ApiError with its message scrubbed',
 	},
 	{
 		file: 'bb-data/src/errors.ts',

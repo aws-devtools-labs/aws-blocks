@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { escapeRegExp, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
@@ -51,6 +51,9 @@ export const DEFAULT_MAX_RETRIES = 3;
 
 export const AUTOCOMMIT_CONFLICT_BACKOFF_MS: readonly number[] = [50, 100, 200];
 
+/** Local mode: how long a statement waits for the one session while a Kysely transaction holds it. */
+export const SESSION_TRANSACTION_WAIT_MS = 5000;
+
 export const TRANSACTION_ROW_LIMIT = 3000;
 
 export const TRANSACTION_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -70,10 +73,7 @@ const PG_NAME_MAX = 63;
 const hashSuffixed = (name: string, id: string, separator: string, max = PG_NAME_MAX): string => {
 	if (name.length <= max) return name;
 	const hash = createHash('sha256').update(id).digest('hex').slice(0, 8);
-	const head = name.slice(0, max - hash.length - 1);
-	// Drop one trailing separator so the result never holds a doubled separator before the hash.
-	const trimmed = separator && head.endsWith(separator) ? head.slice(0, -separator.length) : head;
-	return `${trimmed}${separator}${hash}`;
+	return `${name.slice(0, max - hash.length - 1).replace(new RegExp(`${escapeRegExp(separator)}$`), '')}${separator}${hash}`;
 };
 
 // The express configuration names the writer instance `<cluster>-instance-1`, and an instance identifier is

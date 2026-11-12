@@ -7,7 +7,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlin.test.Test
 
 /**
- * Wire coverage for the golden `native/codegen-fixtures/29-non-identifier-names/kotlin/`, which
+ * Wire coverage for the golden `native/codegen-fixtures/43-non-identifier-names/kotlin/`, which
  * this source set compiles as is. The golden's identifiers differ from the spec's keys, so each
  * key must reach the wire through its `@SerialName`: a payload with every key decodes, and
  * encodes back to the same JSON.
@@ -36,41 +36,41 @@ class NonIdentifierNamesGoldenTest {
             }
         """.trimIndent()
 
-        val decoded = BlocksJson.decodeFromString(Sample_Type__x___.serializer(), payload)
+        val decoded = BlocksJson.decodeFromString(SampleTypeX.serializer(), payload)
 
-        decoded.run___error__x________id shouldBe "ab"
-        decoded.__unnamed shouldBe "dollar"
-        decoded.__x_ shouldBe "template"
-        decoded.__y_ shouldBe "interpolation"
-        decoded.___unnamed shouldBe "comment"
-        decoded.q_uote shouldBe "quote"
-        decoded.s_ingle shouldBe "single"
-        decoded.semi_colon shouldBe "semi"
-        decoded.back_tick shouldBe "tick"
-        decoded.new_line shouldBe "newline"
-        decoded.with_space shouldBe 3
-        decoded._9lives shouldBe true
-        decoded.kind shouldBe Sample_Type__x___.Kind.SpAce
-        json(BlocksJson.encodeToString(Sample_Type__x___.serializer(), decoded)) shouldBe json(payload)
+        decoded.`run { error("x") } || id` shouldBe "ab"
+        decoded.`$` shouldBe "dollar"
+        decoded.`${x}` shouldBe "template"
+        decoded.y shouldBe "interpolation"
+        decoded.unnamed shouldBe "comment"
+        decoded.`q"uote` shouldBe "quote"
+        decoded.`s'ingle` shouldBe "single"
+        decoded.semiColon shouldBe "semi"
+        decoded.backTick shouldBe "tick"
+        decoded.newLine shouldBe "newline"
+        decoded.`with space` shouldBe 3
+        decoded.`9lives` shouldBe true
+        decoded.kind shouldBe SampleTypeX.Kind.SpAce
+        json(BlocksJson.encodeToString(SampleTypeX.serializer(), decoded)) shouldBe json(payload)
     }
 
     @Test
     fun enumValuesRoundTrip() {
         val values = mapOf(
-            "a\"b" to Sample_Type__x___.Kind.AB,
-            "c;d" to Sample_Type__x___.Kind.CD,
-            "x`y" to Sample_Type__x___.Kind.XY,
-            "new\nline" to Sample_Type__x___.Kind.NewLine,
-            "\${x}" to Sample_Type__x___.Kind.X,
-            "\\(z)" to Sample_Type__x___.Kind.Z,
-            "*/" to Sample_Type__x___.Kind.Unnamed,
-            "1st" to Sample_Type__x___.Kind._1st,
-            " sp ace" to Sample_Type__x___.Kind.SpAce,
+            "a\"b" to SampleTypeX.Kind.AB,
+            "c;d" to SampleTypeX.Kind.CD,
+            "x`y" to SampleTypeX.Kind.XY,
+            "new\nline" to SampleTypeX.Kind.NewLine,
+            "\${x}" to SampleTypeX.Kind.X,
+            "\\(z)" to SampleTypeX.Kind.Z,
+            "*/" to SampleTypeX.Kind.Unnamed,
+            "1st" to SampleTypeX.Kind.`1st`,
+            " sp ace" to SampleTypeX.Kind.SpAce,
         )
         for ((wire, constant) in values) {
-            val encoded = BlocksJson.encodeToString(Sample_Type__x___.Kind.serializer(), constant)
+            val encoded = BlocksJson.encodeToString(SampleTypeX.Kind.serializer(), constant)
             json(encoded) shouldBe kotlinx.serialization.json.JsonPrimitive(wire)
-            BlocksJson.decodeFromString(Sample_Type__x___.Kind.serializer(), encoded) shouldBe constant
+            BlocksJson.decodeFromString(SampleTypeX.Kind.serializer(), encoded) shouldBe constant
         }
     }
 
@@ -83,8 +83,8 @@ class NonIdentifierNamesGoldenTest {
         val created = BlocksJson.decodeFromString(serializer, create)
         val removed = BlocksJson.decodeFromString(serializer, remove)
 
-        created shouldBe Ns.DoAction.Input.Cre_ate(ti_tle = "hello")
-        removed shouldBe Ns.DoAction.Input.Re_move(__id_ = "42")
+        created shouldBe Ns.DoAction.Input.`Cre"ate`(tiTle = "hello")
+        removed shouldBe Ns.DoAction.Input.ReMove(`${id}` = "42")
         json(BlocksJson.encodeToString(serializer, created)) shouldBe json(create)
         json(BlocksJson.encodeToString(serializer, removed)) shouldBe json(remove)
     }
@@ -96,7 +96,7 @@ class NonIdentifierNamesGoldenTest {
 
         val decoded = BlocksJson.decodeFromString(serializer, payload)
 
-        decoded.ok_ shouldBe true
+        decoded.ok shouldBe true
         json(BlocksJson.encodeToString(serializer, decoded)) shouldBe json(payload)
     }
 }

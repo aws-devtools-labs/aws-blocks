@@ -104,5 +104,5 @@ kotlin.sourceSets.named("commonMain") {
 // Compiling it here, against this runtime, checks that it is valid Kotlin, which the golden
 // comparison in :codegen:test does not. The golden is read in place so the two cannot drift.
 kotlin.sourceSets.named("jvmTest") {
-    kotlin.srcDir("../../codegen-fixtures/29-non-identifier-names/kotlin")
+    kotlin.srcDir("../../codegen-fixtures/43-non-identifier-names/kotlin")
 }

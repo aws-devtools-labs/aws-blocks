@@ -1,14 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import type { TransactionHandle } from '@aws-blocks/data-common/core';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { Signer as RdsSigner } from '@aws-sdk/rds-signer';
 import pg from 'pg';
 import { DEFAULT_POOL_SIZE, PG_DEFAULT_DATABASE, PG_PORT, quoteIdent } from '../constants.js';
 import { asError, isConnectionLost, isStaleSchemaCache, pgErrorCode, translated, translatePgError } from '../errors.js';
 import type { ClusterType } from '../types.js';
-import { EngineTransaction, isSettled, openTransaction } from './handle.js';
+import { type CountedRows, EngineTransaction, isSettled, openTransaction, type RowCountingEngine } from './handle.js';
 
 /** How a connection identifies itself: the cluster, the database role, and whether it is the cluster admin. */
 export interface IamAuthOptions {
@@ -150,7 +150,15 @@ const pooledStatement = (pool: Queryable, sql: string, params?: unknown[]): Prom
 		pool.query(sql, params).catch((e) => (retriedOnce(e) ? pool.query(sql, params) : Promise.reject(e))),
 	);
 
-export class PgEngine implements DatabaseEngine {
+// pg's `rowCount` is the rows changed for these commands and the rows returned for a query.
+const CHANGES_ROWS = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE']);
+
+const counted = <T>(result: pg.QueryResult): CountedRows<T> => ({
+	rows: result.rows,
+	rowCount: CHANGES_ROWS.has(result.command) ? (result.rowCount ?? 0) : 0,
+});
+
+export class PgEngine implements RowCountingEngine {
 	private readonly pool: PgPool;
 
 	constructor(config: PgEngineConfig) {
@@ -163,6 +171,10 @@ export class PgEngine implements DatabaseEngine {
 
 	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
 		return { rowCount: (await pooledStatement(this.pool, sql, params)).rowCount ?? 0 };
+	}
+
+	async queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
+		return counted(await pooledStatement(this.pool, sql, params));
 	}
 
 	beginTransaction(): Promise<TransactionHandle> {
@@ -216,6 +228,14 @@ export class PgEngine implements DatabaseEngine {
 		params?: unknown[],
 	): Promise<{ rowCount: number }> {
 		return { rowCount: (await statement(open(handle).client, sql, params)).rowCount ?? 0 };
+	}
+
+	async queryCountedInTransaction<T>(
+		handle: TransactionHandle,
+		sql: string,
+		params?: unknown[],
+	): Promise<CountedRows<T>> {
+		return counted(await statement(open(handle).client, sql, params));
 	}
 
 	async destroy(): Promise<void> {

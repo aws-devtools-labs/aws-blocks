@@ -20,12 +20,12 @@ Define the blocks in `aws-blocks/index.ts`:
 
 ```ts
 import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Database, DatabaseCluster, sql } from '@aws-blocks/bb-database';
 
 const scope = new Scope('app');
-const auth = new AuthBasic(scope, 'auth');
-export const authApi = auth.createApi(); // clients sign in with authApi.setAuthState({ action: 'signUp', username, password })
+const auth = new Auth(scope, 'auth');
+export const authApi = auth.createApi(); // clients sign up with authApi.setAuthState({ action: 'signUp', username, password }), then confirm the emailed code
 
 // 1. Default. The block owns an Aurora DSQL cluster.
 const shop = new Database(scope, 'shop');
@@ -240,6 +240,31 @@ await shop.transaction(async (tx) => {
 ```
 
 For tests, `simulateConflict(shop)` from `@aws-blocks/bb-database/testing` makes the next commit fail with `SerializationFailure` in local mode. It throws in the Lambda runtime.
+
+## Kysely
+
+`DatabaseDialect` is a [Kysely](https://kysely.dev) dialect for a `Database`. Kysely is the supported query builder. It is an optional peer dependency of the block: install it in your application (`npm install kysely`) and import the dialect from `@aws-blocks/bb-database/kysely`. An application that does not use Kysely does not load it.
+
+```ts
+import { type Generated, Kysely } from 'kysely';
+import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+
+interface Tables {
+  orders: { id: Generated<number>; customer_id: string; total: number; created_at: Generated<Date> };
+}
+
+const kysely = new Kysely<Tables>({ dialect: new DatabaseDialect(shop) });
+
+const recent = await kysely.selectFrom('orders').select(['id', 'total']).where('customer_id', '=', customerId).execute();
+```
+
+Statements run through the same engine as `query()`: they use the block's schema, the same DML-only access and the errors under [Errors](#errors). Create the Kysely instance at module scope; it is safe during CDK synth. Plugins and logging are options of Kysely.
+
+- **Types.** Declare the tables yourself. A `bigint` column is a `number`, a `numeric` column is a `string` and a `timestamp` column is a `Date`, locally and on AWS.
+- **Transactions.** Inside a Kysely transaction, run every statement on `trx`. A statement on the block or on the root Kysely instance is not part of that transaction: on AWS it runs on another connection, and in local mode it fails after five seconds. A Kysely statement inside the block's `transaction()` callback runs in that transaction.
+- **Errors.** An error that the callback of a Kysely transaction throws reaches the caller as thrown; the block does not change it to `TransactionFailed`. A Kysely transaction is not re-run on a conflict, so on a `dsql` cluster use `transaction(fn, { retryOnConflict: true })` for work that can conflict.
+- **`dsql` clusters.** Isolation levels and savepoints are not available.
+- **Not supported.** Streaming (`.stream()`). `destroy()` on the Kysely instance does not close the block's connections.
 
 ## Errors
 

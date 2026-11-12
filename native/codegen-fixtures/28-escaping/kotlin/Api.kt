@@ -29,7 +29,7 @@ public class Api(
    * Result *&#47; widget &#47;* "q" 'q' $x ${y} \(z)
    * next
    */
-  public suspend fun get_x(id: String): Widget {
+  public suspend fun `get$x`(id: String): Widget {
     val request = BlocksRequest(method = "api.get${'$'}x", params = listOf(JsonPrimitive(id)), id = BlocksRequest.nextId())
     val result = client.execute(request)
     return BlocksJson.decodeFromJsonElement(result)
@@ -55,13 +55,13 @@ public class Api(
     public sealed class Input {
       @Serializable
       @SerialName("create${'$'}")
-      public data class Create_(
+      public data class `Create$`(
         public val title: String,
       ) : Input()
 
       @Serializable
       @SerialName("re${'$'}move")
-      public data class Re_move(
+      public data class `Re$move`(
         public val id: String,
       ) : Input()
     }

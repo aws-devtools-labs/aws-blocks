@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin.model
 
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 // ── Primitive Kind ────────────────────────────────────────────────
 
@@ -28,12 +29,16 @@ sealed interface ResolvedType {
     /** A type whose Kotlin representation is determined by its JSON Schema `format` keyword. */
     data class FormattedType(val format: FormatKind, val constraints: Constraints = Constraints.EMPTY) : ResolvedType
 
-    /** Named record type with resolved fields. */
+    /**
+     * Named record type with resolved fields. A [positional] record is a tuple: a JSON array of its
+     * fields' values, in order (see [com.aws.blocks.kotlin.model.TypeRef.InlineObject.positional]).
+     */
     data class Record(
         val name: String,
         val fields: List<ResolvedField>,
         val description: String? = null,
         val additionalPropertiesType: ResolvedType? = null,
+        val positional: Boolean = false,
     ) : ResolvedType
 
     /** Enum type with string literal values. */
@@ -77,10 +82,21 @@ data class ResolvedField(
     val description: String? = null,
     val constraints: Constraints = Constraints.EMPTY,
     val defaultValue: JsonElement? = null,
-    /** The key the field has on the wire, which [name] may differ from once it is an identifier. */
-    val serialName: String = name,
 )
 
+/**
+ * One arm of a union. An object arm has [fields] (and maybe [additionalPropertiesType] or an
+ * [embeddedUnion]); on the wire it is that JSON object. Two other kinds carry no fields:
+ *
+ * - a **value arm** ([valueType] set): a string, number, boolean, `unknown`, formatted string,
+ *   array, map or transferable, or a nullable of one. On the wire it is that bare JSON value
+ *   (`"abc"`, `[1, 2]`), so its Kotlin class holds it as `value`.
+ * - a **literal arm** ([literal] set): a `const` or an `enum` arm, matched by its exact JSON
+ *   literals (`true`, `5`, `"auto"`).
+ *
+ * [discriminatorLiteral] is [discriminatorValue] with the JSON type the spec gives it (`false`,
+ * not `"false"`).
+ */
 data class UnionVariant(
     val name: String,
     val fields: List<ResolvedField>,
@@ -89,6 +105,9 @@ data class UnionVariant(
     val payloadTypeName: String? = null,
     val additionalPropertiesType: ResolvedType? = null,
     val nestedTypes: List<NestedTypeNode> = emptyList(),
+    val valueType: ResolvedType? = null,
+    val literal: List<JsonPrimitive>? = null,
+    val discriminatorLiteral: JsonPrimitive? = null,
 )
 
 data class DiscriminatorInfo(
@@ -98,9 +117,14 @@ data class DiscriminatorInfo(
     val type: DiscriminatorType = DiscriminatorType.STRING,
 )
 
+/** The JSON type of a union's discriminator values. */
 enum class DiscriminatorType {
+    /** Every value is a JSON string: kotlinx's `@JsonClassDiscriminator` reads and writes it. */
     STRING,
+    /** Every value is a JSON boolean. */
     BOOLEAN,
+    /** Numbers, or a mix of JSON types. */
+    OTHER,
 }
 
 data class ServerDefinition(
@@ -121,18 +145,20 @@ data class CodegenModel(
 data class ApiNamespace(
     val name: String,
     val operations: List<Operation>,
-    /** The namespace as the spec's method names spell it, which [name] may differ from once it is an identifier. */
-    val wireName: String = name,
 )
 
+/**
+ * One method of an [ApiNamespace]. [name] is its local name (after the namespace), and
+ * [rpcMethod] the spec's method name, which a call sends as the JSON-RPC `method` exactly: a
+ * method with no dot is grouped under `_default`, but its wire name is still `ping`.
+ */
 data class Operation(
     val name: String,
     val parameters: List<OperationParameter>,
     val result: OperationResult,
     val description: String?,
     val nestedTypes: List<NestedTypeNode> = emptyList(),
-    /** The operation as the spec's method name spells it, which [name] may differ from once it is an identifier. */
-    val wireName: String = name,
+    val rpcMethod: String = name,
 )
 
 data class NestedTypeNode(
