@@ -404,7 +404,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     /// Signs out on the server, which clears the session cookie, then clears the stored tokens.
     ///
-    /// POSTs `<signOutPath>?format=json` with the stored refresh token, if any.
+    /// POSTs `<signOutPath>?format=json` with an empty JSON body. The server ends the session from its
+    /// cookie; it doesn't revoke bearer tokens, so the stored ones are only cleared locally.
     ///
     /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
     ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
@@ -415,8 +416,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   as it was. `ClientClosedError` leaves the tokens too: the request was never sent.
     @discardableResult
     public func signOut() async throws -> URL? {
-        let refreshToken = await storedToken("refresh_token")
-        let body: [String: Any] = refreshToken.map { ["refreshToken": $0] } ?? [:]
+        // The server ends the session from its cookie and reads no body, so no token is sent.
+        let body: [String: Any] = [:]
         let json: [String: Any]
         do {
             // A custom block's route may ignore `format=json` and answer an empty 204.

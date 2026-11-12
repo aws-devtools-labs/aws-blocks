@@ -493,7 +493,7 @@ final class OIDCClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/auth/signout")
             XCTAssertEqual(request.url?.query, "format=json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            XCTAssertEqual(requestJSON(request) as? [String: String], ["refreshToken": "rt"])
+            XCTAssertEqual(requestJSON(request).count, 0, "the body is {}, even with a refresh token stored")
             return (okResponse(for: request.url!), Data("{}".utf8))
         }
 
@@ -525,7 +525,7 @@ final class OIDCClientTests: XCTestCase {
 
     func testSignOutReturnsTheLogoutURL() async throws {
         OIDCMockURLProtocol.handler = { request in
-            XCTAssertEqual(requestJSON(request).count, 0, "no refresh token is stored, so the body is {}")
+            XCTAssertEqual(requestJSON(request).count, 0, "the body is {}")
             let body = ["logoutUrl": "https://idp.example.com/logout?client_id=cid"]
             return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
