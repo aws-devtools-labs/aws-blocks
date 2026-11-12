@@ -277,22 +277,22 @@ An option with the value `null` counts as an option that you did not pass, in ev
 
 ```typescript
 import { ApiNamespace } from '@aws-blocks/core';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 
-const auth = new AuthBasic(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 
 export const todoApi = new ApiNamespace(scope, 'todo-api', (context) => ({
 	async listTodos(cursor?: string) {
 		const user = await auth.requireAuth(context);
 		// The partition comes from the signed-in user, never from the request.
-		const page = todos.query({ where: { userId: { equals: user.userId } }, limit: 20, cursor });
+		const page = todos.query({ where: { userId: { equals: user.userSub } }, limit: 20, cursor });
 		const entries = await Array.fromAsync(page);
 		return { todos: entries.map((entry) => entry.value), cursor: page.cursor };
 	},
 	async addTodo(title: string) {
 		const user = await auth.requireAuth(context);
 		const todoId = crypto.randomUUID();
-		await todos.put({ userId: user.userId, todoId }, { title, done: false, version: 1 }, { ifNotExists: true });
+		await todos.put({ userId: user.userSub, todoId }, { title, done: false, version: 1 }, { ifNotExists: true });
 		return { todoId };
 	},
 }));

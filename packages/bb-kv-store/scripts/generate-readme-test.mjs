@@ -14,8 +14,8 @@
  *
  * What the generator does to a block, and nothing else:
  * - `import { a, b } from 'module'` lines move to the top of the file. The
- *   package's own name resolves to the mock entry. `@aws-blocks/bb-auth-basic`
- *   depends on this package, so it cannot be imported here: `AuthBasic` gets a
+ *   package's own name resolves to the mock entry. `@aws-blocks/bb-auth`
+ *   depends on this package, so it cannot be imported here: `Auth` gets a
  *   declared stand-in with the one method the README calls.
  * - A leading `export ` is dropped, because the code is inside a function.
  * - A line of the form `// <code>;   compile error...` is a claim that `<code>`
@@ -45,11 +45,11 @@ const MODULE_ALIASES = { '@aws-blocks/bb-kv-store': './index.mock.js' };
 
 /** Modules that cannot be imported from this package, and the declaration that stands in for what the README uses. */
 const STAND_INS = {
-	'@aws-blocks/bb-auth-basic': [
-		'/** Stand-in for `AuthBasic`: bb-auth-basic depends on this package, so it cannot be imported here. */',
-		'declare class AuthBasic {',
+	'@aws-blocks/bb-auth': [
+		'/** Stand-in for `Auth`: bb-auth depends on this package, so it cannot be imported here. */',
+		'declare class Auth {',
 		'\tconstructor(scope: ScopeParent, id: string);',
-		'\trequireAuth(context: unknown): Promise<{ userId: string; username: string }>;',
+		'\trequireAuth(context: unknown): Promise<{ userSub: string; username: string }>;',
 		'}',
 	],
 };
