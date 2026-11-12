@@ -93,6 +93,7 @@ void main() {
         callback,
       );
       expect(oidc.refreshPath, '/aws-blocks/auth/exchange/refresh');
+      expect(oidc.sessionPath, '/aws-blocks/auth/session');
       expect(oidc.signOutPath, '/aws-blocks/auth/signout');
     });
 
@@ -117,6 +118,7 @@ void main() {
         'http://localhost:3001/aws-blocks/auth/sso/return',
       );
       expect(oidc.refreshPath, '/aws-blocks/auth/sso/exchange/refresh');
+      expect(oidc.sessionPath, '/aws-blocks/auth/sso/session');
       expect(oidc.signOutPath, '/aws-blocks/auth/sso/signout');
     });
 

@@ -40,6 +40,13 @@ class OidcClient implements AuthProvider {
   /// Defaults to [defaultCallbackPath].
   final String callbackPath;
 
+  /// The backend's session route, which [restore] reads.
+  ///
+  /// Defaults to the directory of [callbackPath] followed by `/session`, the
+  /// route the auth block serves (`/aws-blocks/auth/session` for the default
+  /// [callbackPath]).
+  final String sessionPath;
+
   /// The auth block's default authorize-params route
   /// (`POST /aws-blocks/auth/authorize-params/<provider>`), used when neither
   /// the constructor nor the descriptor names one.
@@ -85,10 +92,14 @@ class OidcClient implements AuthProvider {
     required this.tokenStore,
     this.authorizeParamsBasePath = defaultAuthorizeParamsBasePath,
     this.callbackPath = defaultCallbackPath,
+    String? sessionPath,
     this.relayTo,
     SessionStore? sessionStore,
     http.Client? httpClient,
-  }) : sessionStore = sessionStore ?? InMemorySessionStore(),
+  }) : sessionPath =
+           sessionPath ??
+           '${callbackPath.substring(0, callbackPath.lastIndexOf('/'))}/session',
+       sessionStore = sessionStore ?? InMemorySessionStore(),
        _httpClient = httpClient ?? http.Client();
 
   /// The prefix every `Auth` route lives under.
@@ -158,6 +169,7 @@ class OidcClient implements AuthProvider {
       signOutPath: signOutPath,
       authorizeParamsBasePath: '$base/authorize-params',
       callbackPath: callbackPath,
+      sessionPath: '$base/session',
       providers: List.unmodifiable(providers),
       providerConfigs: const {},
       baseUrl: client.baseUrl,
@@ -604,42 +616,72 @@ class OidcClient implements AuthProvider {
 
   // --- Restore session ---
 
-  Future<void> restore() async {
-    _controller.add(OidcLoading());
+  /// Restores the signed-in user from the backend's session, as an app does
+  /// on launch, and returns it, or null when there is no session.
+  ///
+  /// GETs [sessionPath] with the session cookie, plus an
+  /// `Authorization: Bearer` header when an access token is stored:
+  ///
+  /// - 200: emits [OidcSignedIn] with the server's user and returns it.
+  /// - 401: clears the stored tokens, emits [OidcSignedOut] and returns null.
+  /// - 404: the block serves no session route, because it has no sign-in
+  ///   providers. Throws an [OidcRequestException] that says so.
+  /// - Any other status throws an [OidcRequestException], and a transport
+  ///   failure throws the HTTP client's error. Neither changes the state.
+  Future<OidcUser?> restore() async {
+    final url = Uri.parse('$_authBaseUrl$sessionPath');
     final accessToken = await tokenStore.get('access_token');
-    final refreshToken = await tokenStore.get('refresh_token');
+    final cookie = sessionStore.cookieHeaderFor(url);
+    final response = await _httpClient.get(
+      url,
+      headers: {
+        'cookie': ?cookie,
+        if (accessToken != null) 'authorization': 'Bearer $accessToken',
+      },
+    );
+    sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
 
-    if (accessToken == null || refreshToken == null) {
-      _controller.add(OidcSignedOut());
-      return;
-    }
-
-    if (await _isExpired()) {
-      try {
-        await refresh();
-      } catch (_) {
+    switch (response.statusCode) {
+      case 200:
+        final json = jsonDecode(response.body);
+        final userJson = json is Map<String, dynamic> ? json['user'] : null;
+        if (userJson is! Map<String, dynamic>) {
+          throw OidcRequestException(
+            "Session response missing 'user' field",
+            statusCode: 200,
+          );
+        }
+        final user = OidcUser.fromJson(userJson);
+        _controller.add(OidcSignedIn(user));
+        return user;
+      case 401:
         await _clearTokens();
         _controller.add(OidcSignedOut());
-        return;
-      }
+        return null;
+      case 404:
+        throw OidcRequestException(
+          'GET $url returned 404: the auth block serves no session route, '
+          'which means it has no sign-in providers',
+          statusCode: 404,
+          name: _errorName(response),
+        );
+      default:
+        throw OidcRequestException(
+          'Session request failed: HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+          name: _errorName(response),
+        );
     }
+  }
 
-    // Decode user from access token (JWT payload)
-    final parts = (await tokenStore.get('access_token'))!.split('.');
-    if (parts.length == 3) {
-      final payload =
-          jsonDecode(
-                utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-              )
-              as Map<String, dynamic>;
-      final user = OidcUser(
-        userId: payload['sub'] as String? ?? '',
-        username: payload['username'] as String? ?? '',
-        groups: (payload['groups'] as List<dynamic>?)?.cast<String>() ?? [],
-      );
-      _controller.add(OidcSignedIn(user));
-    } else {
-      _controller.add(OidcSignedOut());
+  /// The error name a JSON error body carries (`{"name": …}`), if any.
+  static String? _errorName(http.Response response) {
+    try {
+      final json = jsonDecode(response.body);
+      final name = json is Map<String, dynamic> ? json['name'] : null;
+      return name is String ? name : null;
+    } on FormatException {
+      return null;
     }
   }
 

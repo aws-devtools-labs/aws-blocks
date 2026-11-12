@@ -71,6 +71,7 @@ const blocksRuntimeTypeNames = {
   'OidcExchangeException',
   'OidcLoading',
   'OidcProvider',
+  'OidcRequestException',
   'OidcSignedIn',
   'OidcSignedOut',
   'OidcUnknownProviderException',
