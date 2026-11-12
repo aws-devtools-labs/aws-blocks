@@ -44,7 +44,7 @@ const DEFAULT_SPEC = join(BACKEND_DIR, 'aws-blocks', 'blocks.spec.json');
  * Fixture 18 *is* the `Auth` sign-in state machine (`createApi()`'s
  * `getAuthState` and `setAuthState`, which are identical for every `Auth`
  * configuration: the TS client narrows them per block, but the spec describes
- * the wide union — `@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
+ * the wide union (`@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
  * fixture 23 is `Auth.signIn` / `confirmSignIn`'s nested result unions, as
  * native-bindings' `api.cognitoSignIn` / `api.cognitoConfirmSignIn` return them.
  */
@@ -159,7 +159,8 @@ for (const fixture of FIXTURES) {
 	);
 
 	for (const [i, expected] of expectedMethods.entries()) {
-		if (!same(actualMethods[i], expected)) problems.push(`method ${expected.name} differs`);
+		if (actualMethods[i] === null) problems.push(`method ${expected.name} is missing`);
+		else if (!same(actualMethods[i], expected)) problems.push(`method ${expected.name} differs`);
 	}
 	for (const name of new Set([...expectedClosure, ...actualClosure])) {
 		if (!expectedClosure.has(name)) problems.push(`schema ${name} is no longer reachable from the live methods`);
@@ -193,20 +194,25 @@ for (const fixture of FIXTURES) {
 	console.log(`✎ ${fixture.dir}: rewrote spec.json (${problems.length} change(s))`);
 }
 
-// Every `Auth` namespace's `setAuthState` is fixture 18's, however its block is
-// configured: native-bindings' three blocks differ in emailPassword, mfa and
-// providers, and must still generate one shared native input type.
+// Every `Auth` namespace's `getAuthState` and `setAuthState` are fixture 18's,
+// however its block is configured: native-bindings' blocks differ in
+// emailPassword, mfa and providers, and must still generate one shared native
+// state type and input type.
 {
 	const fixture18 = JSON.parse(readFileSync(join(FIXTURES_DIR, '18-hybrid-arm', 'spec.json'), 'utf8'));
-	const wide = fixture18.methods.find((m) => m.name === 'authApi.setAuthState');
 	const strip = ({ name: _name, ...rest }) => rest;
-	const authStateApis = live.methods.filter((m) => m.name.endsWith('.setAuthState') && liveMethods.has(m.name.replace(/setAuthState$/, 'getAuthState')));
-	const narrowed = authStateApis.filter((m) => !same(strip(m), strip(wide)));
-	if (narrowed.length > 0) {
-		drifted++;
-		console.error(`✗ setAuthState is not the full action union in: ${narrowed.map((m) => m.name).join(', ')}`);
-	} else {
-		console.log(`✓ every Auth namespace's setAuthState (${authStateApis.length}) is fixture 18's`);
+	const namespaces = live.methods
+		.filter((m) => m.name.endsWith('.setAuthState') && liveMethods.has(m.name.replace(/setAuthState$/, 'getAuthState')))
+		.map((m) => m.name.slice(0, -'.setAuthState'.length));
+	for (const method of ['getAuthState', 'setAuthState']) {
+		const wide = fixture18.methods.find((m) => m.name === `authApi.${method}`);
+		const narrowed = namespaces.filter((ns) => !wide || !same(strip(liveMethods.get(`${ns}.${method}`)), strip(wide)));
+		if (narrowed.length > 0) {
+			drifted++;
+			console.error(`✗ ${method} is not fixture 18's in: ${narrowed.map((ns) => `${ns}.${method}`).join(', ')}`);
+		} else {
+			console.log(`✓ every Auth namespace's ${method} (${namespaces.length}) is fixture 18's`);
+		}
 	}
 }
 

@@ -55,11 +55,11 @@ jobs:
             CHANGED="$(git diff --name-only origin/main...HEAD)"
             # Shared inputs affect EVERY platform: the test backend that
             # generates the OpenRPC spec all SDKs are code-genned from, the Auth
-            # block and its shared types (every SDK's auth e2e runs against
-            # them), and this workflow file itself. A change here forces all
+            # block's and its shared types' code (every SDK's auth e2e runs
+            # against them; their docs don't count), and this workflow file itself. A change here forces all
             # platforms to run.
             shared=false
-            if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^packages/(bb-auth|auth-common)/|^\.github/workflows/native-sdk-e2e\.yml$'; then
+            if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^packages/(bb-auth|auth-common)/(src/|package\.json$)|^\.github/workflows/native-sdk-e2e\.yml$'; then
               shared=true
             fi
             # Each platform runs when a shared input changed OR its own SDK dir
@@ -69,7 +69,7 @@ jobs:
             if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
             if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
             fixtures=false
-            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/(generate-spec|extract-ts-types|native-catalogs|validate-native-catalogs)|^native/codegen-fixtures/'; then
+            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/(generate-spec|extract-ts-types|native-catalogs|validate-native-catalogs|read-native-declarations|validate-spec)|^native/codegen-fixtures/'; then
               fixtures=true
             fi
           fi
