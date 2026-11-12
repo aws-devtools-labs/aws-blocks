@@ -375,7 +375,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
-- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards. List plain origins such as `'https://app.example.com'` (matched exactly); in a regex entry, escape every dot (`'https://app\\.example\\.com'`) — invalid regex entries fail `cdk synth`
 - `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
 - For cross-domain deployments, pass `session: { crossDomain: true }` to `Auth` (enables `SameSite=None; Secure; Partitioned`)
 - Enable `frontDoor: { features: { monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] } } }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only; the top-level `monitoring` prop is its deprecated alias)

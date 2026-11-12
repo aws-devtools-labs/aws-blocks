@@ -55,10 +55,32 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
-	 * CORS origins the compute's API accepts, as regular-expression patterns
-	 * matched against the request `Origin` header. Empty means no cross-origin
-	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
-	 * frontend can reach a deployed API; `production` allows none by default.
+	 * CORS origins the compute's API accepts, matched against the request
+	 * `Origin` header. Empty means no cross-origin requests are allowed. The
+	 * `sandbox` preset allows localhost so a local dev frontend can reach a
+	 * deployed API; `production` allows none by default.
+	 *
+	 * Each entry is either:
+	 * - a **plain origin** (`scheme://host[:port]`, e.g. `'https://app.example.com'`),
+	 *   matched exactly and case-insensitively — its dots are literal. An
+	 *   `http`/`https` origin is compared as the browser sends it (default port
+	 *   dropped, internationalized host in punycode); user info, a path, a query
+	 *   or a fragment is rejected; or
+	 * - a **regex pattern** (any entry with regex syntax such as `^`, `$`, `\`,
+	 *   `(`, `|` or `*`), anchored as `^(?:<entry>)$` and matched case-sensitively.
+	 *   Dots must be escaped (`'https://app\\.example\\.com'`) unless followed
+	 *   by a quantifier (`.*`, `.+`), and the entry must compile on its own. For
+	 *   any subdomain use e.g. `'https://[a-z0-9-]+\\.example\\.com'` (glob
+	 *   wildcards such as `'https://*.example.com'` are not supported). Brace
+	 *   quantifiers are limited to `{n}` (`{n,m}` contains a comma, and entries
+	 *   are comma-joined), and a group repeated with `*`, `+` or `{n}` that
+	 *   itself contains `*`, `+`, `{n}` or an alternation (e.g. `(a+)+`,
+	 *   `(a|b)+`) is not supported (this does not rule out every slow pattern);
+	 *   for subdomains at any depth use e.g.
+	 *   `'https://[a-z0-9.-]+\\.example\\.com'`.
+	 *
+	 * Invalid entries fail `cdk synth` (`BlocksStack.create()` /
+	 * `BlocksBackend.create()`), and are ignored at runtime.
 	 */
 	allowedOrigins: string[];
 
