@@ -446,17 +446,19 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// Restores the signed-in user from the server's session, e.g. on launch.
     ///
     /// Reads `GET <base>/session` with the stored session cookie (and the stored access token, if
-    /// any). The user is the server's, never one decoded from a token.
+    /// any and not expired). The user is the server's, never one decoded from a token.
     ///
     /// - Returns: The signed-in user, after emitting `.signedIn`. `nil` when the server has no
     ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`.
-    /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route (its
-    ///   `Auth` block has no federated providers). Any other failure, including a transport error or
+    /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route: an
+    ///   `Auth` block without federated providers, or a custom block that doesn't serve `<base>/session`. Any other failure, including a transport error or
     ///   `ClientClosedError`, is thrown and leaves the state and stored tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
         var headers: [String: String] = [:]
-        if let token = await storedToken("access_token") {
+        // An expired token would only get a 401 that clears the refresh token with it. It isn't
+        // refreshed here either: a failed refresh signs out, and a failed restore changes nothing.
+        if let token = await storedToken("access_token"), !(await isExpired()) {
             headers["Authorization"] = "Bearer \(token)"
         }
         let json: [String: Any]
@@ -468,8 +470,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             return nil
         } catch let error as RawRouteError where error.statusCode == 404 {
             throw RawRouteError(
-                message: "\(sessionPath) answered HTTP 404: the backend serves no session route. "
-                    + "An Auth block has one only when it has federated providers.",
+                message: "\(sessionPath) answered HTTP 404: the backend serves no session route at that path. "
+                    + "An Auth block serves one only when it has federated providers; "
+                    + "a custom block must serve GET \(sessionPath).",
                 statusCode: 404,
                 errorName: error.errorName
             )

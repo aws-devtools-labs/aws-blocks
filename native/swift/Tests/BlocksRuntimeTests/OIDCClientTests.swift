@@ -711,11 +711,32 @@ final class OIDCClientTests: XCTestCase {
         }
         let client = makeClient(session: makeMockSession())
         await client.client.tokenStore.set(tokenKey("access_token"), value: "at-1")
+        await client.client.tokenStore.set(tokenKey("expires_at"), value: "9999999999000")
 
         let user = try await client.restore()
 
         XCTAssertEqual(user?.userId, "u1")
         XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1)
+    }
+
+    func testRestoreLeavesAnExpiredAccessTokenOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "expired")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        await store.set(tokenKey("expires_at"), value: "0")
+
+        let user = try await client.restore()
+
+        XCTAssertEqual(user?.userId, "u1")
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "restore doesn't refresh")
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
     }
 
     func testRestoreOn401ClearsTokensAndEmitsSignedOut() async throws {
