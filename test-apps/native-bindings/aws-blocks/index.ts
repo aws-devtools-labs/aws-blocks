@@ -114,6 +114,10 @@ const oidcAuth = new Auth(scope, 'auth-oidc', {
       e2eIdpIssuer && e2eIdpClientId
         ? { type: 'oidc', issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
         : stubIdp({ onAuthorize: (req) => req.users[0] }),
+    // A second provider, so the suites cover a block with more than one:
+    // `getAuthState()` lists one `signIn:<id>` action per provider. Always the
+    // stub, also when `google` federates a real IdP.
+    github2: stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
     allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
