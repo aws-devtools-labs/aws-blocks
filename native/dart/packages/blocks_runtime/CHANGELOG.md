@@ -22,6 +22,9 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- `OidcUser` gains the optional fields the backend sends: `displayName`,
+  `userSub`, `signInProvider` and `attributes`. Each is null when the server
+  doesn't send it.
 - **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
   provider's logout URL, or null when it has none. Open it with the app's
   launcher to end the provider's own session; the client doesn't open it. It
