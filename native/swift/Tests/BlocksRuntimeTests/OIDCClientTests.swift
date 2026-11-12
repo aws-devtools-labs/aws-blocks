@@ -536,6 +536,24 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(logoutURL?.absoluteString, "https://idp.example.com/logout?client_id=cid")
     }
 
+    func testSignOutAcceptsAnEmpty204() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 204), Data())
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let state = await firstState(of: client)
+
+        let logoutURL = try await client.signOut()
+
+        XCTAssertNil(logoutURL)
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        let event = await state.value
+        XCTAssertEqual(event, .signedOut)
+    }
+
     func testSignOutIncompleteSignsOutLocallyAndThrows() async throws {
         OIDCMockURLProtocol.handler = { request in
             let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]

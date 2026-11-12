@@ -243,8 +243,9 @@ public final class BlocksClient: Sendable {
     }
 
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
-    func postRawRoute(path: String, body: [String: Any]) async throws -> [String: Any] {
-        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:])
+    /// With `emptyBodyIsEmptyObject`, an empty 2xx body reads as `{}` instead of failing to parse.
+    func postRawRoute(path: String, body: [String: Any], emptyBodyIsEmptyObject: Bool = false) async throws -> [String: Any] {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:], emptyBodyIsEmptyObject: emptyBodyIsEmptyObject)
     }
 
     /// GET a raw route (not JSON-RPC). Handles cookies automatically.
@@ -256,7 +257,8 @@ public final class BlocksClient: Sendable {
         method: String,
         path: String,
         body: [String: Any]?,
-        headers: [String: String]
+        headers: [String: String],
+        emptyBodyIsEmptyObject: Bool = false
     ) async throws -> [String: Any] {
         guard let requestURL = URL(string: rawRouteBase + path) else {
             throw RawRouteError(message: "Invalid URL: \(rawRouteBase + path)")
@@ -311,6 +313,9 @@ public final class BlocksClient: Sendable {
             }
         }
 
+        if emptyBodyIsEmptyObject, data.isEmpty {
+            return [:]
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RawRouteError(message: "Invalid JSON response from \(path)")
         }
