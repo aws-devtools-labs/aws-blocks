@@ -674,6 +674,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 					});
 					return;
 				}
+				// `state` is required for wire compatibility but not verified here: PKCE binds the code, and the client checks the CSRF.
 				const iss = str(body, 'iss');
 				const { user, identity } = await host.completeExchange(ctx, providerId, {
 					code,
@@ -813,7 +814,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 				const body = await jsonBody(ctx);
 				const refreshToken = body && str(body, 'refreshToken');
 				// `provider` may be omitted when only one provider is configured
-				// (the Swift and Dart SDKs send only the refresh token).
+				// (older Swift and Dart SDKs sent only the refresh token).
 				const providerId =
 					(body && str(body, 'provider')) ??
 					(host.providers.length === 1 ? host.providers[0].provider.id : undefined);
