@@ -22,6 +22,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- `OidcClient` resolves the auth routes against its base URL cut at the
+  first path segment that is `aws-blocks`, keeping any API Gateway stage. It
+  used to strip one trailing `/aws-blocks/api`, so a base URL that repeated
+  it (`…/aws-blocks/api/aws-blocks/api`) sent auth requests under the RPC
+  path.
 - Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
   `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
   of type `P` (and send its `providerName`) instead of a name, so a typo or
