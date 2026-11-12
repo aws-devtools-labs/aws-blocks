@@ -37,6 +37,11 @@ jobs:
       swift-changed: ${{ steps.check.outputs.swift-changed }}
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
+      # The sandbox (real-deploy) jobs: the same flags without the Auth block's
+      # code, whose wire contract the local e2e jobs already cover.
+      dart-sandbox: ${{ steps.check.outputs.dart-sandbox }}
+      swift-sandbox: ${{ steps.check.outputs.swift-sandbox }}
+      kotlin-sandbox: ${{ steps.check.outputs.kotlin-sandbox }}
       # The auth-derived codegen fixtures (18, 23) must match the live Auth
       # block's spec; a change to the block, the spec generator or the
       # fixtures re-runs that check (setup job) without the platform suites.
@@ -51,23 +56,33 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             dart=true; swift=true; kotlin=true; fixtures=true
+            dart_sandbox=true; swift_sandbox=true; kotlin_sandbox=true
           else
             CHANGED="$(git diff --name-only origin/main...HEAD)"
             # Shared inputs affect EVERY platform: the test backend that
-            # generates the OpenRPC spec all SDKs are code-genned from, the Auth
-            # block's and its shared types' code (every SDK's auth e2e runs
-            # against them; their docs don't count), and this workflow file itself. A change here forces all
-            # platforms to run.
+            # generates the OpenRPC spec all SDKs are code-genned from, and this
+            # workflow file itself. A change here forces all platforms to run,
+            # sandbox jobs included.
             shared=false
-            if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^packages/(bb-auth|auth-common)/(src/|package\.json$)|^\.github/workflows/native-sdk-e2e\.yml$'; then
+            if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^\.github/workflows/native-sdk-e2e\.yml$'; then
               shared=true
+            fi
+            # The Auth block's code runs the local suites only, not the sandbox
+            # deploys. Its tests, fixtures and codemod don't reach the wire.
+            auth=false
+            if echo "$CHANGED" \
+              | grep -vE '\.test\.ts$|/__fixtures__/|/src/migrate/' \
+              | grep -qE '^packages/(bb-auth|auth-common)/(src/|package\.json$|tsconfig\.json$)'; then
+              auth=true
             fi
             # Each platform runs when a shared input changed OR its own SDK dir
             # changed — so a Dart-only change no longer triggers Kotlin/Swift.
-            dart=$shared; swift=$shared; kotlin=$shared
-            if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
-            if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
-            if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
+            dart_sandbox=$shared; swift_sandbox=$shared; kotlin_sandbox=$shared
+            if echo "$CHANGED" | grep -qE '^native/dart/';   then dart_sandbox=true;   fi
+            if echo "$CHANGED" | grep -qE '^native/swift/';  then swift_sandbox=true;  fi
+            if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin_sandbox=true; fi
+            dart=$dart_sandbox; swift=$swift_sandbox; kotlin=$kotlin_sandbox
+            if [ "$auth" = true ]; then dart=true; swift=true; kotlin=true; fi
             fixtures=false
             if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/(generate-spec|extract-ts-types|native-catalogs|validate-native-catalogs|read-native-declarations|validate-spec)|^native/codegen-fixtures/'; then
               fixtures=true
@@ -81,6 +96,9 @@ jobs:
             echo "dart-changed=$dart"
             echo "swift-changed=$swift"
             echo "kotlin-changed=$kotlin"
+            echo "dart-sandbox=$dart_sandbox"
+            echo "swift-sandbox=$swift_sandbox"
+            echo "kotlin-sandbox=$kotlin_sandbox"
             echo "any-changed=$any"
             echo "auth-fixtures-changed=$fixtures"
           } >> "$GITHUB_OUTPUT"
@@ -454,7 +472,7 @@ jobs:
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
-      needs.detect-changes.outputs.dart-changed == 'true' &&
+      needs.detect-changes.outputs.dart-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -621,7 +639,7 @@ jobs:
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
-      needs.detect-changes.outputs.swift-changed == 'true' &&
+      needs.detect-changes.outputs.swift-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
@@ -745,7 +763,7 @@ jobs:
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-
-      needs.detect-changes.outputs.kotlin-changed == 'true' &&
+      needs.detect-changes.outputs.kotlin-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
