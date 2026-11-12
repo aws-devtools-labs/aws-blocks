@@ -496,6 +496,162 @@ void main() {
     });
   });
 
+  group('OidcClient signOut', () {
+    final origin = Uri.parse('http://localhost:3000/');
+
+    Future<
+      ({
+        OidcClient client,
+        InMemoryTokenStore store,
+        InMemorySessionStore session,
+        List<OidcAuthState> states,
+        List<http.Request> sent,
+      })
+    >
+    signOutClient(Future<http.Response> Function(http.Request) handler) async {
+      final store = InMemoryTokenStore();
+      await store.set('access_token', 'at');
+      await store.set('refresh_token', 'rt');
+      final session = InMemorySessionStore()
+        ..setCookies('blocks_session=live; Path=/', requestUri: origin);
+      final sent = <http.Request>[];
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: store,
+        sessionStore: session,
+        httpClient: MockClient((req) {
+          sent.add(req);
+          return handler(req);
+        }),
+      );
+      final states = <OidcAuthState>[];
+      client.authStateChanges.listen(states.add);
+      return (
+        client: client,
+        store: store,
+        session: session,
+        states: states,
+        sent: sent,
+      );
+    }
+
+    test('posts ?format=json and returns the logout URL', () async {
+      final t = await signOutClient(
+        (_) async => http.Response(
+          jsonEncode({'logoutUrl': 'https://idp.example.com/logout?x=1'}),
+          200,
+        ),
+      );
+
+      final logoutUrl = await t.client.signOut();
+      await Future<void>.delayed(Duration.zero);
+
+      final req = t.sent.single;
+      expect(req.method, 'POST');
+      expect(
+        req.url.toString(),
+        'http://localhost:3000/aws-blocks/auth/signout?format=json',
+      );
+      expect(req.headers['content-type'], startsWith('application/json'));
+      expect(req.headers['cookie'], 'blocks_session=live');
+      expect(jsonDecode(req.body), {'refreshToken': 'rt'});
+      expect(logoutUrl, Uri.parse('https://idp.example.com/logout?x=1'));
+      expect(t.states, [isA<OidcSignedOut>()]);
+      expect(await t.store.get('access_token'), isNull);
+      expect(await t.store.get('refresh_token'), isNull);
+      expect(t.session.cookies, isEmpty);
+    });
+
+    test('sends {} when no refresh token is stored', () async {
+      final t = await signOutClient((_) async => http.Response('{}', 200));
+      await t.store.delete('refresh_token');
+      expect(await t.client.signOut(), isNull);
+      expect(jsonDecode(t.sent.single.body), <String, dynamic>{});
+    });
+
+    test('returns null for a 204 with no body', () async {
+      final t = await signOutClient((_) async => http.Response('', 204));
+      expect(await t.client.signOut(), isNull);
+      await Future<void>.delayed(Duration.zero);
+      expect(t.states, [isA<OidcSignedOut>()]);
+    });
+
+    test(
+      '503 SignOutIncompleteException: signs out locally, then throws',
+      () async {
+        final t = await signOutClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'error': 'Sign-out did not complete',
+              'name': 'SignOutIncompleteException',
+            }),
+            503,
+          ),
+        );
+
+        await expectLater(
+          t.client.signOut(),
+          throwsA(
+            isA<OidcRequestException>()
+                .having((e) => e.statusCode, 'statusCode', 503)
+                .having((e) => e.name, 'name', 'SignOutIncompleteException'),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(t.states, [isA<OidcSignedOut>()]);
+        expect(await t.store.get('refresh_token'), isNull);
+        expect(t.session.cookies, isEmpty);
+      },
+    );
+
+    for (final status in [400, 404, 500, 503]) {
+      test(
+        '$status: throws, clears tokens, keeps the cookie and state',
+        () async {
+          final t = await signOutClient(
+            (_) async => http.Response(jsonEncode({'error': 'no'}), status),
+          );
+
+          await expectLater(
+            t.client.signOut(),
+            throwsA(
+              isA<OidcRequestException>().having(
+                (e) => e.statusCode,
+                'statusCode',
+                status,
+              ),
+            ),
+          );
+          await Future<void>.delayed(Duration.zero);
+          expect(t.states, isEmpty);
+          expect(await t.store.get('access_token'), isNull);
+          expect(await t.store.get('refresh_token'), isNull);
+          expect(t.session.cookies['blocks_session'], 'live');
+        },
+      );
+    }
+
+    test('a transport error throws, clears tokens, keeps the state', () async {
+      final t = await signOutClient(
+        (_) async => throw http.ClientException('offline'),
+      );
+
+      await expectLater(
+        t.client.signOut(),
+        throwsA(isA<http.ClientException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(t.states, isEmpty);
+      expect(await t.store.get('refresh_token'), isNull);
+      expect(t.session.cookies['blocks_session'], 'live');
+    });
+  });
+
   group('OidcClient fromJson', () {
     test('parses descriptor correctly', () {
       final descriptor = {
