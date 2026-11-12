@@ -11,6 +11,7 @@
 
 import { STUB_IDP_ROUTES, stubIssuerPath } from '../engines/stub-idp-routes.js';
 import type { ResolvedAuthOptions } from '../resolve-options.js';
+import type { StubUser } from '../types.js';
 import { bearerAuthEnabled, federationRedirectPaths } from './contract.js';
 
 /** One route key, `'<METHOD> <path>'`, with `//` collapsed and no trailing `/`. */
@@ -60,4 +61,27 @@ export function authRoutes(
 			routes: STUB_IDP_ROUTES.map(([, method, path]) => authRouteKey(method, `${stubIssuerPath(key)}${path}`)),
 		})),
 	};
+}
+
+/** A provider's `stubIdp` settings object, read structurally (the declared union does not list it). */
+function stubSettingsOf(provider: object): object | undefined {
+	const settings: unknown = Reflect.get(provider, 'stubIdp');
+	return typeof settings === 'object' && settings !== null ? settings : undefined;
+}
+
+/** The configured `stubIdp()` providers, with their inline users (the keys `claimAuthRoutes` claims stub routes for). */
+export function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
+	const out: Array<{ id: string; users: readonly StubUser[] }> = [];
+	for (const [id, provider] of Object.entries(opts.oidcProviders ?? {})) {
+		const settings = provider ? stubSettingsOf(provider) : undefined;
+		if (!settings) continue;
+		const users: unknown = Reflect.get(settings, 'users');
+		out.push({
+			id,
+			users: Array.isArray(users)
+				? users.filter((u): u is StubUser => typeof u === 'object' && u !== null && typeof u.email === 'string')
+				: [],
+		});
+	}
+	return out;
 }
