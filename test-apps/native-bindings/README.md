@@ -94,7 +94,7 @@ AWS_REGION=<region> BLOCKS_STACK_NAME=<stack> npm run seed:cognito
 
 `503 SignOutIncompleteException` (the cookie cleared but the server-side session not removed) can't be produced against this backend; cover it with unit tests.
 
-**Bearer tokens are not configured.** Native auth is cookie-only for now, so no block here sets `allowBearerAuth`: exchange returns no tokens and the session cookie carries the sign-in. Refresh (`<base>/exchange/refresh`) answers `404` on every block. To cover bearer later, turn it on in its own block rather than on `auth-oidc`, so the cookie suites keep running unchanged. A refresh there needs `{refreshToken, provider}` when the block has two or more providers, returns `expiresIn` in seconds, and rotates the refresh token (reusing the old one returns `401`).
+**Bearer tokens are not configured.** Native auth is cookie-only for now, so no block here sets `allowBearerAuth`: exchange returns no tokens and the session cookie carries the sign-in. Refresh (`<base>/exchange/refresh`) answers `404` on every block. To cover bearer later, turn it on in its own block rather than on `auth-oidc`, so the cookie suites keep running unchanged. A refresh there needs `{refreshToken, provider}` when the block has two or more providers (as `auth-oidc` does), and returns `expiresIn` in seconds. With the stub IdP the refresh token rotates, and reusing the old one returns `401` on the local dev server. On a deployed sandbox that check is best-effort, and a real IdP may not rotate.
 
 ### Realtime (WebSocket)
 
