@@ -155,6 +155,13 @@ dependencies:
     File(
       '${work.path}/bin/auth.dart',
     ).writeAsStringSync(_generate('18-hybrid-arm'));
+    File('${work.path}/bin/collide.dart').writeAsStringSync(
+      const DartCodeGenerator().generate(
+        CodegenModelBuilder().build(
+          const OpenRpcParser().parse(_collisionSpec),
+        ),
+      ),
+    );
     File('${work.path}/bin/main.dart').writeAsStringSync(_check);
 
     final get = await Process.run(Platform.resolvedExecutable, [
@@ -175,6 +182,7 @@ const _check = r'''
 import 'dart:convert';
 
 import 'auth.dart' as auth;
+import 'collide.dart' as collide;
 import 'tasks.dart';
 
 void check(bool ok, String what) {
@@ -232,6 +240,44 @@ void main() {
   check(state.actions[0].fields[0].type is auth.AuthFieldTypeUnknown, 'field type');
   check(state.actions[0].capability is auth.AuthActionCapabilityUnknown, 'capability');
   check(state.toJson()['state'] == 'enrollingTotp', 'auth round trip');
+
+  // `StatusUnknown` is a spec type, so the fallback is `StatusUnknown$`.
+  final odd = collide.Status.fromJson('later');
+  check(odd is collide.StatusUnknown$, 'renamed fallback');
+  check(odd.toString() == r'StatusUnknown$(later)', 'renamed toString');
   print('ok');
 }
 ''';
+
+const _collisionSpec = r'''
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.get",
+      "params": [],
+      "result": {
+        "name": "GetResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "status": { "$ref": "#/components/schemas/Status" },
+            "other": { "$ref": "#/components/schemas/StatusUnknown" }
+          },
+          "required": ["status", "other"]
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Status": { "type": "string", "enum": ["now"] },
+      "StatusUnknown": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "required": ["id"]
+      }
+    }
+  }
+}''';
