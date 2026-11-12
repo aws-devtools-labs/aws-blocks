@@ -404,11 +404,37 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Sign out
 
-    public func signOut() async {
+    /// Signs out on the server, which clears the session cookie, then clears the stored tokens.
+    ///
+    /// POSTs `<signOutPath>?format=json` with the stored refresh token, if any.
+    ///
+    /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
+    ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
+    ///   own session, so the next sign-in asks which account to use.
+    /// - Throws: A `RawRouteError` named `SignOutIncompleteException` (HTTP 503) when the server
+    ///   cleared the cookie but could not remove its session; the client is signed out locally
+    ///   first. Any other failure is thrown after clearing the stored tokens, with the state left
+    ///   as it was. `ClientClosedError` leaves the tokens too: the request was never sent.
+    @discardableResult
+    public func signOut() async throws -> URL? {
         let refreshToken = await storedToken("refresh_token")
-        _ = try? await client.postRawRoute(path: signOutPath, body: ["refreshToken": refreshToken ?? ""])
+        let body: [String: Any] = refreshToken.map { ["refreshToken": $0] } ?? [:]
+        let json: [String: Any]
+        do {
+            json = try await client.postRawRoute(path: signOutPath + "?format=json", body: body)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as RawRouteError where error.statusCode == 503 && error.errorName == "SignOutIncompleteException" {
+            await clearTokens()
+            emit(.signedOut)
+            throw error
+        } catch {
+            await clearTokens()
+            throw error
+        }
         await clearTokens()
         emit(.signedOut)
+        return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
     }
 
     // MARK: - Restore session

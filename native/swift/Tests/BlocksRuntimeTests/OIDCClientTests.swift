@@ -488,9 +488,12 @@ final class OIDCClientTests: XCTestCase {
 
     // MARK: - Sign out
 
-    func testSignOutClearsTokensAndEmitsSignedOut() async {
+    func testSignOutClearsTokensAndEmitsSignedOut() async throws {
         OIDCMockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/auth/signout")
+            XCTAssertEqual(request.url?.query, "format=json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(requestJSON(request) as? [String: String], ["refreshToken": "rt"])
             return (okResponse(for: request.url!), Data("{}".utf8))
         }
 
@@ -509,14 +512,81 @@ final class OIDCClientTests: XCTestCase {
             return events
         }
 
-        await client.signOut()
+        let logoutURL = try await client.signOut()
 
+        XCTAssertNil(logoutURL)
         let accessToken = await store.get(tokenKey("access_token"))
         let refreshToken = await store.get(tokenKey("refresh_token"))
         let events = await collector.value
         XCTAssertNil(accessToken)
         XCTAssertNil(refreshToken)
         XCTAssertEqual(events, [.signedOut])
+    }
+
+    func testSignOutReturnsTheLogoutURL() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(requestJSON(request).count, 0, "no refresh token is stored, so the body is {}")
+            let body = ["logoutUrl": "https://idp.example.com/logout?client_id=cid"]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+
+        let logoutURL = try await client.signOut()
+
+        XCTAssertEqual(logoutURL?.absoluteString, "https://idp.example.com/logout?client_id=cid")
+    }
+
+    func testSignOutIncompleteSignsOutLocallyAndThrows() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 503), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let state = await firstState(of: client)
+
+        do {
+            _ = try await client.signOut()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 503)
+            XCTAssertEqual(error.errorName, "SignOutIncompleteException")
+        }
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        let event = await state.value
+        XCTAssertEqual(event, .signedOut)
+    }
+
+    func testSignOutFailureClearsTokensAndKeepsTheState() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 500), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let stream = await client.authStateChanges()
+        let collector = Task<[OIDCAuthState], Never> {
+            var events: [OIDCAuthState] = []
+            for await event in stream {
+                events.append(event)
+            }
+            return events
+        }
+
+        do {
+            _ = try await client.signOut()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 500)
+        }
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        try await Task.sleep(for: .milliseconds(50))
+        collector.cancel()
+        let events = await collector.value
+        XCTAssertEqual(events, [], "a failed sign-out emits no state")
     }
 
     // MARK: - Restore
@@ -713,7 +783,7 @@ final class OIDCClientTests: XCTestCase {
         }
 
         try await auth.refresh()
-        await admin.signOut()
+        try await admin.signOut()
 
         let authToken = await auth.getAccessToken()
         let adminToken = await admin.getAccessToken()
