@@ -88,6 +88,33 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 });
 
 describe('stubIdp() at synth: one stub per provider key on a backend', () => {
+	test("a signOutPath on a stub IdP's route fails synth: in its own block, and in another block, in either order", () => {
+		const logout = "signOutPath: '/aws-blocks/auth/idp/google/logout'";
+		assert.throws(
+			() =>
+				synth(
+					`new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() }, redirects: { ${logout} } })`,
+				),
+			/Auth '[^']*one': it would mount (GET|POST) \/aws-blocks\/auth\/idp\/google\/logout twice/,
+		);
+		assert.throws(
+			() =>
+				synth(
+					`(new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() } }), ` +
+						`new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/aws-blocks/auth/two/callback', ${logout} } }))`,
+				),
+			/Auth '[^']*two': its sign-out route \(\/aws-blocks\/auth\/idp\/google\/logout\) is already mounted by Auth '[^']*one'/,
+		);
+		assert.throws(
+			() =>
+				synth(
+					`(new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/aws-blocks/auth/two/callback', ${logout} } }), ` +
+						`new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() } }))`,
+				),
+			/Auth '[^']*one': the stub IdP routes of providers\.google \(\/aws-blocks\/auth\/idp\/google\/…\) are already mounted by Auth '[^']*two' as its redirects\.callbackPath or redirects\.signOutPath/,
+		);
+	});
+
 	test('two blocks with a stub under the same key fail synth, even with their own redirects (the stub routes ignore them)', () => {
 		const own = (id: string) =>
 			`redirects: { callbackPath: '/aws-blocks/auth/${id}/callback', signOutPath: '/aws-blocks/auth/${id}/signout' }`;

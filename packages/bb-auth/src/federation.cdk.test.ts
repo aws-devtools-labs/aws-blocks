@@ -1173,6 +1173,22 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 		});
 	});
 
+	test('one block whose signOutPath lands on one of its own sign-in routes fails synth', () => {
+		for (const route of ['exchange', 'session', 'callback']) {
+			assert.throws(
+				() =>
+					new Auth(newStack(), 'auth', {
+						store: 'builtin',
+						providers: { okta },
+						redirects: { signOutPath: `${AUTH_ROUTE_PREFIX}/${route}` },
+					}),
+				new RegExp(
+					`Auth '[^']*auth': it would mount (GET|POST) /aws-blocks/auth/${route} twice\\. Its redirects\\.callbackPath`,
+				),
+			);
+		}
+	});
+
 	test('own redirects on each block, and the same paths on another backend, synthesize', () => {
 		const stack = newStack();
 		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });

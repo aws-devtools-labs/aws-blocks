@@ -43,16 +43,15 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { lazyBackendApiUrl } from './cdk/api-url.js';
+import { authRoutes } from './cdk/auth-routes.js';
 import {
 	AUTH_ROUTE_PREFIX,
 	assertBearerClientIds,
-	bearerAuthEnabled,
 	bearerClientIds,
 	bearerClientIdsConfigKey,
 	cognitoConfigKeys,
 	cognitoFederatedProviderIds,
 	emailPasswordEnabled,
-	federationRedirectPaths,
 	ownsPreSignUpTrigger,
 	preSignUpTriggerConfigKey,
 	requiresUserPool,
@@ -78,7 +77,7 @@ import {
 } from './cdk/mappers.js';
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { scopeSmsRoleTrust } from './cdk/sms-role.js';
-import { STUB_IDP_ROUTES, stubIssuerPath } from './engines/stub-idp-routes.js';
+import { STUB_ROOT, stubIssuerPath } from './engines/stub-idp-routes.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
@@ -661,7 +660,10 @@ function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: re
 	return out;
 }
 
-/** The route claims of every `Auth` block on one backend root (one Lambda): `'<METHOD> <path>'` → the claiming block. */
+/**
+ * The route claims of every `Auth` block on one backend root (one Lambda): `'<METHOD> <path>'` → the claiming block,
+ * and whether the route is one of its stub IdP's.
+ */
 const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
 
 /**
@@ -670,59 +672,64 @@ const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
  * loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the runtime's route table: per
  * backend, so the same paths in two stacks are fine. A block's sign-in routes (`exchange`, `session`, …) live beside
  * `callbackPath`, its sign-out routes are `signOutPath`, and a stub IdP's routes are keyed by its provider key alone,
- * so one block's `signOutPath` can still land on another block's sign-in route (`/aws-blocks/auth/session`).
+ * so one block's `signOutPath` can still land on another block's sign-in route (`/aws-blocks/auth/session`). A block
+ * whose own `redirects` put two of its routes on one path (`signOutPath: '/aws-blocks/auth/session'`) fails too.
  */
 function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): void {
-	const claims = getOrCreateOnRoot(block, AUTH_ROUTE_CLAIMS, () => new Map<string, string>());
-	const route = (method: 'GET' | 'POST', path: string) => `${method} ${path.replace(/\/+/g, '/').replace(/\/$/, '')}`;
-	const { callbackPath, signOutPath } = federationRedirectPaths(opts);
-	const base = callbackPath.slice(0, callbackPath.lastIndexOf('/'));
-	const providerIds = [opts.socialProviders, opts.oidcProviders, opts.samlProviders].flatMap((m) =>
-		Object.entries(m ?? {})
-			.filter(([, entry]) => Boolean(entry))
-			.map(([key]) => encodeURIComponent(key)),
+	const claims = getOrCreateOnRoot(
+		block,
+		AUTH_ROUTE_CLAIMS,
+		() => new Map<string, { owner: string; stub: boolean }>(),
 	);
-	const signIn = [
-		route('GET', callbackPath),
-		route('POST', `${base}/exchange`),
-		route('GET', `${base}/session`),
-		...providerIds.flatMap((p) => [
-			route('GET', `${base}/signin/${p}`),
-			route('GET', `${base}/authorize-params/${p}`),
-			route('POST', `${base}/authorize-params/${p}`),
-		]),
-		...(bearerAuthEnabled(opts)
-			? [route('POST', `${base}/refresh`), route('POST', `${base}/exchange/refresh`)]
-			: []),
-	];
+	const { callbackPath, signOutPath, base, signIn, signOut, stubs } = authRoutes(
+		opts,
+		stubProviders(opts).map((st) => st.id),
+	);
 	const groups = [
 		{ routes: signIn, what: `its sign-in routes (${base}/…) are` },
-		{
-			routes: [route('POST', signOutPath), route('GET', signOutPath)],
-			what: `its sign-out route (${signOutPath}) is`,
-		},
+		{ routes: signOut, what: `its sign-out route (${signOutPath}) is` },
 	];
+	const own = new Set<string>();
+	for (const r of [...groups.flatMap((g) => g.routes), ...stubs.flatMap((st) => st.routes)]) {
+		if (own.has(r)) {
+			throw new Error(
+				`Auth '${block.fullId}': it would mount ${r} twice. Its redirects.callbackPath (${callbackPath}) or ` +
+					`redirects.signOutPath (${signOutPath}) lands on another of its own routes (${base}/exchange, ` +
+					`${base}/session, ${base}/signin/<id>, ${base}/authorize-params/<id>, ${STUB_ROOT}/<id>/…): move it.`,
+			);
+		}
+		own.add(r);
+	}
+	const claimedBy = (routes: readonly string[]) =>
+		routes.map((r) => claims.get(r)).find((c) => c !== undefined && c.owner !== block.fullId);
 	const redirectsFix =
 		'Each Auth block with `providers` needs its own `redirects.callbackPath` and `redirects.signOutPath`, e.g. ' +
 		`\`redirects: { callbackPath: '${AUTH_ROUTE_PREFIX}/${id}/callback', signOutPath: '${AUTH_ROUTE_PREFIX}/${id}/signout' }\`.`;
 	for (const { routes, what } of groups) {
-		const other = routes.map((r) => claims.get(r)).find((o) => o !== undefined && o !== block.fullId);
-		if (other !== undefined) {
-			throw new Error(`Auth '${block.fullId}': ${what} already mounted by Auth '${other}'. ${redirectsFix}`);
-		}
-	}
-	for (const { id: key } of stubProviders(opts)) {
-		const routes = STUB_IDP_ROUTES.map(([, method, path]) => route(method, `${stubIssuerPath(key)}${path}`));
-		const other = routes.map((r) => claims.get(r)).find((o) => o !== undefined && o !== block.fullId);
+		const other = claimedBy(routes);
 		if (other !== undefined) {
 			throw new Error(
-				`Auth '${block.fullId}': providers.${key} is a stubIdp() provider, but Auth '${other}' already serves a stub IdP ` +
+				`Auth '${block.fullId}': ${what} already mounted by Auth '${other.owner}'. ${redirectsFix}`,
+			);
+		}
+	}
+	for (const { key, routes } of stubs) {
+		const other = claimedBy(routes);
+		if (other?.stub) {
+			throw new Error(
+				`Auth '${block.fullId}': providers.${key} is a stubIdp() provider, but Auth '${other.owner}' already serves a stub IdP ` +
 					`under that key (${stubIssuerPath(key)}/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.`,
 			);
 		}
-		for (const r of routes) claims.set(r, block.fullId);
+		if (other !== undefined) {
+			throw new Error(
+				`Auth '${block.fullId}': the stub IdP routes of providers.${key} (${stubIssuerPath(key)}/…) are already mounted by ` +
+					`Auth '${other.owner}' as its redirects.callbackPath or redirects.signOutPath. Move that block's redirects out of ${STUB_ROOT}/.`,
+			);
+		}
 	}
-	for (const { routes } of groups) for (const r of routes) claims.set(r, block.fullId);
+	for (const { routes } of stubs) for (const r of routes) claims.set(r, { owner: block.fullId, stub: true });
+	for (const { routes } of groups) for (const r of routes) claims.set(r, { owner: block.fullId, stub: false });
 }
 
 /** Per-block `'destroy' | 'retain'` wins; unset falls back to the stack default. */
