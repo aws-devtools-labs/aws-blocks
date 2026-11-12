@@ -81,12 +81,18 @@ AWS_REGION=<region> BLOCKS_STACK_NAME=<stack> npm run seed:cognito
 - Two providers, `google` and `github2`, so `getAuthState()` lists two `signIn:<id>` actions. `github2` is always the stub, also when `google` federates a real IdP.
 - Deployed with a real IdP (optional): set `NATIVE_E2E_OIDC_ISSUER` and `NATIVE_E2E_OIDC_CLIENT_ID` when you deploy, and the `google` provider federates that IdP instead of the stub (a public PKCE client); the native OIDC suites then run against it with `RUN_OIDC=1`. The IdP must complete authorization without a login page and accept the sandbox's `/aws-blocks/auth/callback` redirect URI; `.github/workflows/native-sdk-e2e.yml` lists the requirements.
 
-**Second federated block (`auth-sso`)**: a `store: 'builtin'` block with one stub provider, `corp`, exported as `ssoAuthApi`. Two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/aws-blocks/auth/sso/callback` and `redirects.signOutPath` to `/aws-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/aws-blocks/auth/sso/{authorize-params/<id>, exchange, session}`. A native client has to derive them from `callbackPath` rather than assume the defaults. It accepts the same relay origins as `auth-oidc`, keeps its own session cookie, and has `api.ssoRequireAuth` / `api.ssoGetCurrentUser` to check a sign-in. Its stub is keyed `corp` because a stub IdP's routes are keyed by provider key alone, so two blocks can't both serve a `google` stub.
+**Second federated block (`auth-sso`)**: a `store: 'builtin'` block with one stub provider, `corp`, exported as `ssoAuthApi`. Two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/aws-blocks/auth/sso/callback` and `redirects.signOutPath` to `/aws-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/aws-blocks/auth/sso/{authorize-params/<id>, exchange, session, signin/<id>}`. `getAuthState()` shows the last one as the `signIn:corp` action's URL, and the signed-in `signOut` action's URL is the `signOutPath`. A native client has to derive them from `callbackPath` rather than assume the defaults. It accepts the same relay origins as `auth-oidc`, keeps its own session cookie, and has `api.ssoRequireAuth` / `api.ssoGetCurrentUser` to check a sign-in. Its stub is keyed `corp` because a stub IdP's routes are keyed by provider key alone, so two blocks can't both serve a `google` stub.
 
 **What the native e2e suites can cover here**, per federated block:
 - relay sign-in through any provider, then `GET <base>/session` (`200 {user}`, or `401` when signed out);
 - sign-out through `POST <signOutPath>?format=json`, which returns `200 {logoutUrl}` (the stub IdP's logout URL), or `200 {}` when the block has no session;
-- `getAuthState()` / `setAuthState()` on each `*AuthApi` namespace.
+- `getAuthState()` / `setAuthState()` on each `*AuthApi` namespace;
+- the blocks stay separate: signing out of `auth-sso` leaves `auth-oidc` signed in (`/aws-blocks/auth/sso/session` is `401`, `/aws-blocks/auth/session` is still `200`), and while only `auth-oidc` is signed in, `api.ssoRequireAuth` throws `NotAuthenticatedException` and `api.ssoGetCurrentUser` returns `null`;
+- `provider` on `api.oidcRequireAuth` / `api.ssoRequireAuth` names the provider that signed in (`github2`, `corp`);
+- `GET <base>/session` on a base with no block (for example `/aws-blocks/auth/none/session`) is `404`, the case where a client's `restore()` should throw;
+- a provider the client lists but the block lacks (`POST /aws-blocks/auth/sso/authorize-params/github2`) is `404` with an empty body, so a client sees an HTTP error rather than a named one.
+
+`503 SignOutIncompleteException` (the cookie cleared but the server-side session not removed) can't be produced against this backend; cover it with unit tests.
 
 ### Realtime (WebSocket)
 
