@@ -368,6 +368,14 @@ export interface JsonSchema {
  */
 export const DECLARATION_MARKER = 'x-blocks-declaration';
 
+/**
+ * Set on an inline union schema (`oneOf`) to the name of the type alias it is
+ * declared as (`type AuthActionInput = ...`), so native codegen can name the
+ * union's generated type after it. Written to the spec; a generator that does
+ * not read it names the union as before.
+ */
+export const TYPE_NAME_HINT = 'x-blocks-type-name';
+
 // ── Main entry point ────────────────────────────────────────────────────────
 
 /**
@@ -1575,10 +1583,12 @@ function unionTypeToJsonSchema(type: ts.UnionType, checker: ts.TypeChecker, dept
 		}
 	}
 
-	// General union → oneOf
+	// General union → oneOf. A union declared as a type alias stays inline, but
+	// carries the alias name so native codegen can name it after the alias.
 	if (nonNullish.length > 1) {
 		const allMembers = nullish.length > 0 ? [...nonNullish, { type: 'null' }] : nonNullish;
-		return { oneOf: allMembers };
+		const name = type.aliasSymbol?.getName();
+		return name && !name.startsWith('__') ? { oneOf: allMembers, [TYPE_NAME_HINT]: name } : { oneOf: allMembers };
 	}
 
 	return members[0] || { type: 'unknown' };
