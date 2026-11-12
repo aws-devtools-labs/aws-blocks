@@ -63,16 +63,20 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
         XCTAssertEqual(me.provider, "corp")
 
         try await assertRestoreThenSignOut(userId: user.userId, provider: "corp", client: ssoClient)
+        let afterSignOut = try await api.ssoGetCurrentUser()
+        XCTAssertNil(afterSignOut)
     }
 
     /// On `blocks`' one cookie store: `auth-sso` refuses an `auth-oidc` session, and signing out of
-    /// `auth-sso` leaves `auth-oidc` signed in.
+    /// either block leaves the other signed in.
     func testBlocksKeepSeparateSessions() async throws {
         try skipWithoutHeadlessIdp()
         let oidc = oidcClient(on: blocks)
         let sso = ssoClient(on: blocks)
 
         _ = try await oidc.signIn(provider: "github2", launcher: HttpRelayLauncher())
+        let oidcSignedIn = try await api.oidcRequireAuth()
+        XCTAssertEqual(oidcSignedIn.provider, "github2")
         await assertThrowsBlocksError(AuthErrorNames.notAuthenticated) {
             _ = try await self.api.ssoRequireAuth()
         }
@@ -85,7 +89,15 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
         XCTAssertNil(ssoAfter)
         let oidcAfter = try await api.oidcRequireAuth()
         XCTAssertEqual(oidcAfter.provider, "github2", "auth-oidc is still signed in")
+
+        // The other direction: signing out of auth-oidc leaves auth-sso signed in.
+        _ = try await sso.signIn(provider: "corp", launcher: HttpRelayLauncher())
         _ = try await oidc.signOut()
+        let oidcRestored = try await oidc.restore()
+        XCTAssertNil(oidcRestored)
+        let ssoStill = try await api.ssoRequireAuth()
+        XCTAssertEqual(ssoStill.provider, "corp", "auth-sso is still signed in")
+        _ = try await sso.signOut()
     }
 
     /// A relaunch: a fresh `Blocks` shares the Keychain cookie store, so `restore()` finds the
