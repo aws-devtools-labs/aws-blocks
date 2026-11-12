@@ -198,6 +198,13 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
+            /// The discriminator of an arm this client was generated without; nil for a known arm.
+            public var unknownDiscriminator: String? {
+                guard case .unknownValue(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["kind"] else { return nil }
+                return tag
+            }
+
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .kind)

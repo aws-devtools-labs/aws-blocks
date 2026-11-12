@@ -22,9 +22,12 @@ final class OpenUnionTests: XCTestCase {
 
     func testResultUnionHasAnUnknownCase() throws {
         let api = try generate(fixture: "45-open-enums").api
-        XCTAssertTrue(api.contains("            case unknown(JSONValue)"))
-        XCTAssertTrue(api.contains("                    self = .unknown(try JSONValue(from: decoder))"))
-        XCTAssertTrue(api.contains("                case .unknown(let value):\n                    try value.encode(to: encoder)"))
+        // `GetEvent.Result` has an arm tagged `unknown`, so the fallback case is `unknownValue`.
+        XCTAssertTrue(api.contains("            case unknown(Unknown)"))
+        XCTAssertTrue(api.contains("            case unknownValue(JSONValue)"))
+        XCTAssertTrue(api.contains("                    self = .unknownValue(try JSONValue(from: decoder))"))
+        XCTAssertTrue(api.contains("                case .unknownValue(let value):\n                    try value.encode(to: encoder)"))
+        XCTAssertTrue(api.contains("            public var unknownDiscriminator: String? {"))
     }
 
     func testParameterOnlyUnionStaysClosed() throws {
@@ -53,9 +56,8 @@ final class OpenUnionTests: XCTestCase {
             switch event {
             case .moved: return "moved"
             case .flagged: return "flagged"
-            case .unknown(let value):
-                if case .dictionary(let object) = value, case .string(let kind)? = object["kind"] { return "unknown \(kind)" }
-                return "unknown"
+            case .unknown: return "arm tagged unknown"
+            case .unknownValue: return "unknown \(event.unknownDiscriminator ?? "?")"
             }
         }
 
@@ -67,6 +69,9 @@ final class OpenUnionTests: XCTestCase {
         check(String(decoding: try encoder.encode(event), as: UTF8.self) == wire, "round trip")
         let moved = try JSONDecoder().decode(Api.GetEvent.Result.self, from: Data(#"{"kind":"moved","to":"done"}"#.utf8))
         check(label(moved) == "moved", "known arm")
+        check(moved.unknownDiscriminator == nil, "no discriminator for a known arm")
+        let tagged = try JSONDecoder().decode(Api.GetEvent.Result.self, from: Data(#"{"kind":"unknown","note":"n"}"#.utf8))
+        check(label(tagged) == "arm tagged unknown", "arm tagged unknown")
         check(String(decoding: try encoder.encode(moved), as: UTF8.self) == #"{"kind":"moved","to":"done"}"#, "known round trip")
         print("ok")
         """#
