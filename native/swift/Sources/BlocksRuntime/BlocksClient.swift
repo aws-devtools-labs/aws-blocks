@@ -245,16 +245,35 @@ public final class BlocksClient: Sendable {
 
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
     func postRawRoute(path: String, body: [String: Any]) async throws -> [String: Any] {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:])
+    }
+
+    /// GET a raw route (not JSON-RPC). Handles cookies automatically.
+    func getRawRoute(path: String, headers: [String: String] = [:]) async throws -> [String: Any] {
+        try await sendRawRoute(method: "GET", path: path, body: nil, headers: headers)
+    }
+
+    private func sendRawRoute(
+        method: String,
+        path: String,
+        body: [String: Any]?,
+        headers: [String: String]
+    ) async throws -> [String: Any] {
         guard let requestURL = URL(string: rawRouteBase + path) else {
             throw RawRouteError(message: "Invalid URL: \(rawRouteBase + path)")
         }
 
         var urlRequest = URLRequest(url: requestURL)
-        urlRequest.httpMethod = "POST"
+        urlRequest.httpMethod = method
         urlRequest.httpShouldHandleCookies = false
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        }
+        for (name, value) in headers {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
 
         // Attach stored cookies
         if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {

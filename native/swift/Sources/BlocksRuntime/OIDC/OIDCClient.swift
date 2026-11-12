@@ -120,8 +120,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
-    /// subscriber receives every emitted state. Emits on sign-in, sign-out,
-    /// and loading transitions.
+    /// subscriber receives every emitted state. Emits on sign-in and sign-out.
+    /// The client doesn't emit `.loading`: it is the state an app shows until
+    /// `restore()` returns.
     ///
     /// The async signature ensures the subscriber is registered with the
     /// actor *before* the call returns — callers can safely kick off an
@@ -412,50 +413,49 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Restore session
 
-    public func restore() async {
-        emit(.loading)
+    /// The session route, `<base>/session`, where `<base>` is the directory of the callback path.
+    nonisolated var sessionPath: String {
+        let base = routeBase ?? String(exchangePath[..<(exchangePath.lastIndex(of: "/") ?? exchangePath.endIndex)])
+        return "\(base)/session"
+    }
 
-        let accessToken = await storedToken("access_token")
-        let refreshToken = await storedToken("refresh_token")
-
-        guard accessToken != nil, refreshToken != nil else {
+    /// Restores the signed-in user from the server's session, e.g. on launch.
+    ///
+    /// Reads `GET <base>/session` with the stored session cookie (and the stored access token, if
+    /// any). The user is the server's, never one decoded from a token.
+    ///
+    /// - Returns: The signed-in user, after emitting `.signedIn`. `nil` when the server has no
+    ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`.
+    /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route (its
+    ///   `Auth` block has no federated providers). Any other failure, including a transport error or
+    ///   `ClientClosedError`, is thrown and leaves the state and stored tokens as they were.
+    @discardableResult
+    public func restore() async throws -> OIDCUser? {
+        var headers: [String: String] = [:]
+        if let token = await storedToken("access_token") {
+            headers["Authorization"] = "Bearer \(token)"
+        }
+        let json: [String: Any]
+        do {
+            json = try await client.getRawRoute(path: sessionPath, headers: headers)
+        } catch let error as RawRouteError where error.statusCode == 401 {
+            await clearTokens()
             emit(.signedOut)
-            return
+            return nil
+        } catch let error as RawRouteError where error.statusCode == 404 {
+            throw RawRouteError(
+                message: "\(sessionPath) answered HTTP 404: the backend serves no session route. "
+                    + "An Auth block has one only when it has federated providers.",
+                statusCode: 404,
+                errorName: error.errorName
+            )
         }
-
-        if await isExpired() {
-            do {
-                try await refresh()
-            } catch is ClientClosedError {
-                // The tokens stay for a new Blocks to restore.
-                emit(.signedOut)
-                return
-            } catch {
-                await clearTokens()
-                emit(.signedOut)
-                return
-            }
+        guard let userJSON = json["user"] as? [String: Any] else {
+            throw OIDCError.invalidResponse
         }
-
-        guard let token = await storedToken("access_token") else {
-            emit(.signedOut)
-            return
-        }
-
-        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let payload = Self.decodeJWTPayload(String(parts[1]))
-        else {
-            emit(.signedOut)
-            return
-        }
-
-        let user = OIDCUser(
-            userId: payload["sub"] as? String ?? "",
-            username: payload["username"] as? String ?? "",
-            groups: (payload["groups"] as? [String]) ?? []
-        )
+        let user = try OIDCUser.fromJSON(userJSON)
         emit(.signedIn(user))
+        return user
     }
 
     // MARK: - AuthProvider
@@ -590,17 +590,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         if let number = value as? NSNumber { return number.stringValue }
         if let str = value as? String { return str }
         return "0"
-    }
-
-    private static func decodeJWTPayload(_ segment: String) -> [String: Any]? {
-        var base64 = segment.replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = base64.count % 4
-        if padding > 0 { base64 += String(repeating: "=", count: 4 - padding) }
-        guard let data = Data(base64Encoded: base64),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json
     }
 }
 

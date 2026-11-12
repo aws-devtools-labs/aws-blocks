@@ -204,7 +204,7 @@ final class BlocksClientLifecycleTests: XCTestCase {
         }
         let token = await oidc.getAccessToken()
         await oidc.onAuthFailure()
-        await oidc.restore()
+        _ = try? await oidc.restore()
         let access = await store.get("/auth/exchange#access_token")
         let refresh = await store.get("/auth/exchange#refresh_token")
         XCTAssertNil(token)
