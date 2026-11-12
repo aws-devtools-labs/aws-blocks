@@ -1355,6 +1355,11 @@ class AuthApiApi {
     final result = await _client.call('authApi.setAuthState', params);
     return AuthState.fromJson(result as Map<String, dynamic>);
   }
+
+  Future<AuthState> getAuthState() async {
+    final result = await _client.call('authApi.getAuthState', const <dynamic>[]);
+    return AuthState.fromJson(result as Map<String, dynamic>);
+  }
 }
 
 

@@ -21,6 +21,14 @@ public final nonisolated class AuthApi: Sendable {
         return try JSONDecoder().decode(AuthState.self, from: result)
     }
 
+    /// Calls `authApi.getAuthState`.
+    public func getAuthState() async throws -> AuthState {
+        let request = BlocksRequest(method: "authApi.getAuthState", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for authApi.getAuthState") }
+        return try JSONDecoder().decode(AuthState.self, from: result)
+    }
+
     public enum SetAuthState {
 
         public struct SignUp: Codable {
