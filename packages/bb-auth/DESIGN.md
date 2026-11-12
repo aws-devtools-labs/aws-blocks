@@ -141,7 +141,9 @@ Tests: `native-mock.test.ts` (sessions from before a reset by alias are rejected
 
 ### Bearer tokens (`allowBearerAuth` — `bearer.ts`)
 
-With `allowBearerAuth: true` the guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, and so `getAuthState`) also accept `Authorization: Bearer <access token>`. Off (the default), the header is ignored exactly as before. The wire behaviour is `AuthOIDC`'s, so the native SDKs work unchanged:
+With `allowBearerAuth: true` the guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, and so `getAuthState`) also accept `Authorization: Bearer <access token>`. Off (the default), the header is ignored exactly as before. The wire behaviour is `AuthOIDC`'s. The native SDKs (Dart, Swift, Kotlin) sign in through the relay and use the session cookie that `/exchange` sets; bearer tokens from the native SDKs aren't supported yet. Identities federated through the Cognito hosted UI never get tokens from `/exchange` (only direct-OIDC sign-ins do), so for those users a bearer token has to come from a client that signs in against the pool directly (see *Pool users* below).
+
+How the guards treat a bearer token:
 
 - **Precedence:** the session cookie first; the bearer token only when the request has no valid cookie session (an unreadable cookie is still cleared, then the bearer is tried).
 - **Direct-OIDC users:** the IdP's JWT access token — what `/exchange` returns as `accessToken` and `/exchange/refresh` renews. `DirectFederationEngine.verifyBearer` (the optional `FederationEngine.verifyBearer`) checks it as `AuthOIDC` did: `iss` = the provider's issuer (pre-checked before any network call), signature against the provider's JWKS (asymmetric algorithms only), `aud` = the client id, `exp` / `nbf` with 30 s tolerance, a `sub`. Identity `` `${iss}:${sub}` ``, projected like a direct sign-in (profile claims, `attributeMapping`), groups from `groupsClaim` in the access token. Bare OAuth 2.0 providers' access tokens are opaque and are not accepted (nor were they by `AuthOIDC`).
