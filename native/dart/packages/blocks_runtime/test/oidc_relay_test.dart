@@ -627,8 +627,9 @@ void main() {
         });
         final client = buildClient(httpClient: httpClient);
         final launcher = FakeLauncher(
-          onLaunch: (_, __) => Uri.parse(
-            '$_relayTo?error=access_denied&error_description=User+cancelled',
+          onLaunch: (url, __) => Uri.parse(
+            '$_relayTo?error=access_denied&error_description=User+cancelled'
+            '&state=${Uri.encodeComponent(url.queryParameters['state']!)}',
           ),
         );
 
@@ -648,6 +649,54 @@ void main() {
         );
       },
     );
+
+    for (final (label, state) in [
+      ('no state', null),
+      ('a state from another sign-in', 'forged.sig'),
+    ]) {
+      test(
+        'an IdP error with $label fails the state check, not the IdP error',
+        () async {
+          final httpClient = MockClient((req) async {
+            if (req.url.path.contains('/auth/authorize-params/')) {
+              final csrf = (jsonDecode(req.body) as Map)['csrf'] as String;
+              return http.Response(
+                jsonEncode({
+                  'authorizeUrl': 'https://idp.example.com/authorize',
+                  'clientId': 'cid',
+                  'scopes': ['openid'],
+                  'kind': 'oidc-builtin',
+                  'state': makeStateEnvelope(csrf: csrf),
+                }),
+                200,
+              );
+            }
+            return http.Response('{}', 200);
+          });
+          final client = buildClient(httpClient: httpClient);
+          final launcher = FakeLauncher(
+            onLaunch: (_, __) => Uri.parse(
+              '$_relayTo?error=access_denied'
+              '${state == null ? '' : '&state=$state'}',
+            ),
+          );
+
+          await expectLater(
+            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+            throwsA(
+              isA<OidcCallbackException>().having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  matches(RegExp('state', caseSensitive: false)),
+                  isNot(contains('access_denied')),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
 
     test(
       'throws OidcCallbackException when authorize-params request fails',
