@@ -608,8 +608,8 @@ class OidcClient implements AuthProvider {
   /// Signs out on the backend and locally, and returns the identity
   /// provider's logout URL, or null when the provider has none.
   ///
-  /// POSTs `{signOutPath}?format=json` with the session cookie, and the
-  /// stored refresh token when there is one. The app may open the returned
+  /// POSTs `{signOutPath}?format=json` with the session cookie and an empty
+  /// JSON body, which the server ignores. The app may open the returned
   /// URL with its launcher to end the identity provider's own session too;
   /// otherwise the next sign-in can complete without asking the user. This
   /// client doesn't open it.
@@ -620,27 +620,23 @@ class OidcClient implements AuthProvider {
   ///   but couldn't remove its session. Clears the stored tokens, emits
   ///   [OidcSignedOut], then throws an [OidcRequestException] with that
   ///   [OidcRequestException.errorName].
+  /// - Any other status throws an [OidcRequestException], and a transport
+  ///   failure throws the HTTP client's error. Both clear the stored tokens
+  ///   but keep the session cookie and the state.
   ///
   /// The session store is never cleared, because it may hold the cookies of
   /// other `Auth` blocks on the same app. This block's cookie is removed by
   /// the `Set-Cookie` the server sends on the response.
-  /// - Any other status throws an [OidcRequestException], and a transport
-  ///   failure throws the HTTP client's error. Both clear the stored tokens
-  ///   but keep the session cookie and the state.
   Future<Uri?> signOut() async {
-    final refreshToken = await tokenStore.get(_key('refresh_token'));
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
     final http.Response response;
     try {
       // Carries the session cookie via _jsonHeaders so the backend can
-      // invalidate the server-side session (cookie flow). Bearer flow sends
-      // the refresh token.
+      // invalidate the server-side session.
       response = await _httpClient.post(
         url,
         headers: _jsonHeaders(url),
-        body: jsonEncode(
-          refreshToken != null ? {'refreshToken': refreshToken} : {},
-        ),
+        body: '{}',
       );
     } catch (_) {
       await _clearTokens();
