@@ -387,7 +387,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let body: [String: Any] = refreshToken.map { ["refreshToken": $0] } ?? [:]
         let json: [String: Any]
         do {
-            json = try await client.postRawRoute(path: signOutPath + "?format=json", body: body)
+            // A custom block's route may ignore `format=json` and answer an empty 204.
+            json = try await client.postRawRoute(path: signOutPath + "?format=json", body: body, emptyBodyIsEmptyObject: true)
         } catch let error as ClientClosedError {
             throw error
         } catch where Self.isSignOutIncomplete(error) {
