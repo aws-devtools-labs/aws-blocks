@@ -76,7 +76,7 @@
     "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/client-sts": "^3.1156.0",
     "aws-jwt-verify": "^5.2.1",
-    "jose": "^6.2.12"
+    "jose": "^6.2.16"
   },
   "devDependencies": {
     "@aws-blocks/bb-secret": "^0.3.0",
