@@ -16,9 +16,11 @@
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
 ///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client is built with
-///                    [OidcClient]'s default authorize-params and callback
-///                    paths, which are exactly those routes.
+///                    (/aws-blocks/api). The client comes from
+///                    oidcAuthApi.getClient() on the RPC URL and cuts the
+///                    origin itself.
+///   - state machine: oidcAuthStateApi.getAuthState for the signed-in state;
+///                    the sign-in button comes from the client's `providers`.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend
 /// serves the stub only on a sandbox deployment (the native-bindings test app
@@ -150,13 +152,43 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client apps get: `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
-  // hydrated by the generated client, which shares its session store, so the
-  // session cookie the exchange sets lands in [session].
-  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
-  final oidc = await discovery.oidcAuthApi.getClient();
+  // The OIDC client comes from the backend's `oidcAuthApi.getClient()`
+  // (`Auth.createOidcApi()`). The generated client hydrates it with its own
+  // session store, so the cookie the exchange sets is the one the generated
+  // calls send.
+  Future<TypedOidcClient<OidcAuthApiGetClientProvider>> oidcFor(
+    SessionStore sessionStore,
+  ) => Blocks(
+    baseUrl: rpcUrl,
+    sessionStore: sessionStore,
+  ).oidcAuthApi.getClient();
+  final oidc = await oidcFor(session);
+  final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
 
   final launcher = HttpRelayLauncher(httpClient);
+
+  // S1: signed out, as the state machine says, and one sign-in button per
+  // provider in the client's `providers`, as an app renders them. The
+  // backend may serve other providers too, so only google's is checked.
+  group('OIDC: signed out, with a sign-in button per provider');
+  try {
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedOut,
+      'getAuthState is signedOut (${state.state.toJson()})',
+    );
+    final buttons = [
+      for (final name in oidc.providers)
+        ?OidcAuthApiGetClientProvider.fromProviderName(name),
+    ];
+    check(
+      buttons.contains(_provider),
+      'oidc.providers gives a ${_provider.providerName} button '
+      '(got ${buttons.map((b) => b.providerName).toList()})',
+    );
+  } catch (e) {
+    check(false, 'getAuthState and providers before sign-in, threw: $e');
+  }
 
   // A1 — authorize-params returns a server-signed state envelope that decodes
   // and round-trips the SDK-supplied csrf + relayTo.
@@ -193,7 +225,11 @@ void main() async {
   group('OIDC: signIn completes + session cookie captured');
   OidcUser? user;
   try {
-    user = await oidc.signIn(_provider, launcher: launcher, relayTo: _relayTo);
+    user = await oidc.signIn(
+      _provider,
+      launcher: launcher,
+      relayTo: _relayTo,
+    );
     final cookieCaptured =
         session.cookies.isNotEmpty && session.cookieHeader != null;
     check(
@@ -205,6 +241,19 @@ void main() async {
     stderr.writeln('  launcher trace:\n    ${launcher.trace.join('\n    ')}');
   }
 
+  // S2: the state machine reports the federated session.
+  group('OIDC: getAuthState after sign-in');
+  try {
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedIn &&
+          state.user?.userId == user?.userId,
+      'getAuthState is signedIn as ${state.user?.userId}',
+    );
+  } catch (e) {
+    check(false, 'getAuthState after sign-in, threw: $e');
+  }
+
   // Let the fire-and-forget write-through to the TokenStore flush before we
   // read it back into a fresh store (proves real persistence).
   await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -214,7 +263,6 @@ void main() async {
   // (the Blocks client shares the SAME SessionStore instance).
   group('OIDC: authenticated RPC via the replayed cookie');
   try {
-    final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
     final me = await blocks.api.oidcRequireAuth();
     check(
       me.userId.isNotEmpty,
@@ -246,16 +294,42 @@ void main() async {
     );
   }
 
-  // A5 — sign out clears the session.
+  // S3: a fresh client on a cookie store reloaded from the same backing
+  // store restores the session, as an app does on launch.
+  group('OIDC: restore() from a reloaded cookie store');
+  try {
+    final reloaded = PersistentSessionStore(store: tokenStore);
+    await reloaded.load();
+    final restored = await (await oidcFor(reloaded)).restore();
+    check(
+      restored != null && restored.userId == user?.userId,
+      'restore() returns ${restored?.userId}',
+    );
+  } catch (e) {
+    check(false, 'restore() while signed in, threw: $e');
+  }
+
+  // A5: sign out returns the IdP logout URL and ends the session.
   group('OIDC: sign out');
   try {
-    final out = await Blocks(
-      baseUrl: rpcUrl,
-      sessionStore: session,
-    ).api.oidcSignOut();
-    check(out.success, 'oidcSignOut returns success');
+    final logoutUrl = await oidc.signOut();
+    check(
+      logoutUrl != null,
+      'signOut() returns a logout URL (${logoutUrl?.path})',
+    );
   } catch (e) {
-    check(false, 'oidcSignOut — threw: $e');
+    check(false, 'signOut() threw: $e');
+  }
+  try {
+    final restored = await (await oidcFor(session)).restore();
+    check(restored == null, 'restore() is null after signOut()');
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedOut,
+      'getAuthState is signedOut after signOut() (${state.state.toJson()})',
+    );
+  } catch (e) {
+    check(false, 'restore() / getAuthState after signOut(), threw: $e');
   }
 
   httpClient.close();
