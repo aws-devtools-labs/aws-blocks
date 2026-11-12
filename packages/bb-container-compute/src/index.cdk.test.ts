@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /**
@@ -337,6 +338,110 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 		// The tagged case is covered by 'a custom image is used verbatim' above.
 		const pinned = `public.ecr.aws/example/custom-node@sha256:${'a'.repeat(64)}`;
 		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);
+	});
+});
+
+describe('ContainerCompute — the default image runs as a non-root user', () => {
+	type ContainerDef = {
+		User?: string;
+		WorkingDirectory?: string;
+		Command?: string[];
+		Environment?: Array<{ Name: string; Value: unknown }>;
+	};
+
+	async function synthContainer(id: string, image?: string): Promise<ContainerDef> {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		new ContainerCompute(stack as never, 'worker', { ...(image ? { image } : {}) });
+		const taskDefs = Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ECS::TaskDefinition');
+		const containers = Object.values(taskDefs).flatMap(
+			(td: any) => (td.Properties?.ContainerDefinitions ?? []) as ContainerDef[],
+		);
+		assert.strictEqual(containers.length, 1, `expected one container; got ${containers.length}`);
+		return containers[0];
+	}
+
+	const envOf = (c: ContainerDef, name: string) => c.Environment?.find((e) => e.Name === name)?.Value;
+
+	test("the default image's container runs as the image's unprivileged node user (uid/gid 1000)", async () => {
+		const container = await synthContainer('ContainerNonRootDefaultStack');
+		assert.strictEqual(container.User, '1000:1000');
+	});
+
+	test('the default image boots from a directory the node user owns, not the root-owned /app', async () => {
+		const container = await synthContainer('ContainerNonRootAppDirStack');
+		assert.strictEqual(envOf(container, 'BLOCKS_APP_DIR'), '/home/node/app');
+		const launcher = container.Command?.[0] ?? '';
+		assert.match(launcher, /\/home\/node\/app\/bootstrap\.mjs/);
+		assert.doesNotMatch(launcher, /"\/app[/"]/, 'the launcher must not write under /app for the default image');
+	});
+
+	test("the default image starts in the node user's home, so relative writes don't hit the root-owned /", async () => {
+		const container = await synthContainer('ContainerNonRootWorkdirStack');
+		// The image sets no WorkingDir, so without this the process starts in `/`.
+		// Not the boot dir itself: the runtime would create a missing cwd as root.
+		assert.strictEqual(container.WorkingDirectory, '/home/node');
+	});
+
+	test('a custom image keeps its own user, working directory and the /app boot directory', async () => {
+		const container = await synthContainer('ContainerNonRootCustomStack', 'public.ecr.aws/example/custom-node:24');
+		assert.strictEqual(container.User, undefined, 'Blocks must not override the user of a custom image');
+		assert.strictEqual(container.WorkingDirectory, undefined, 'Blocks must not override the WORKDIR of a custom image');
+		assert.strictEqual(envOf(container, 'BLOCKS_APP_DIR'), '/app');
+		assert.match(container.Command?.[0] ?? '', /"\/app\/bootstrap\.mjs"/);
+	});
+
+	test('the parent entry points the job worker at the boot directory', () => {
+		// Run the generated entry against stub modules and read the path it sets,
+		// rather than matching its source text.
+		const dir = join(tmpDir, 'entry-run');
+		const coreDir = join(dir, 'node_modules', '@aws-blocks', 'core');
+		mkdirSync(coreDir, { recursive: true });
+		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-blocks/core","type":"module","main":"index.js"}');
+		writeFileSync(
+			join(coreDir, 'index.js'),
+			'export const loadConfigToProcessEnv = async () => {};\n' +
+				'export const runContainer = async () => { console.log(process.env.BLOCKS_JOB_WORKER_ENTRY); };\n',
+		);
+		const backend = join(dir, 'backend.mjs');
+		writeFileSync(backend, 'export default {};\n');
+		const entryFile = join(dir, 'entry.mjs');
+		writeFileSync(entryFile, containerMainEntry(backend));
+
+		const workerEntry = (appDir?: string) => {
+			const env: NodeJS.ProcessEnv = { PATH: process.env.PATH };
+			if (appDir !== undefined) env.BLOCKS_APP_DIR = appDir;
+			const result = spawnSync(process.execPath, [entryFile], { cwd: dir, encoding: 'utf8', env });
+			assert.strictEqual(result.status, 0, result.stderr);
+			return result.stdout.trim();
+		};
+		assert.strictEqual(workerEntry('/home/node/app'), '/home/node/app/worker.js');
+		assert.strictEqual(workerEntry(), '/app/worker.js', 'falls back to /app when BLOCKS_APP_DIR is unset');
+	});
+
+	test('bootstrap.mjs creates the boot directory from BLOCKS_APP_DIR before fetching anything', () => {
+		const appDir = join(tmpDir, 'boot-dir', 'app');
+		const result = spawnSync(process.execPath, [join(__dirname, '..', 'src', 'bootstrap.mjs')], {
+			encoding: 'utf8',
+			env: {
+				PATH: process.env.PATH,
+				BLOCKS_APP_DIR: appDir,
+				BLOCKS_CODE_BUCKET: 'bucket',
+				BLOCKS_CODE_MAIN_KEY: 'main.js',
+				BLOCKS_CODE_WORKER_KEY: 'worker.js',
+				BLOCKS_CODE_PKG_KEY: 'package.json',
+				AWS_REGION: 'us-east-1',
+			},
+		});
+		// No credentials endpoint is set, so it stops there; the directory must already exist.
+		assert.strictEqual(result.status, 1);
+		assert.match(result.stderr, /no ECS container credentials endpoint/);
+		assert.ok(existsSync(appDir), `bootstrap should create ${appDir} from BLOCKS_APP_DIR`);
 	});
 });
 
@@ -850,7 +955,7 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 // roles and any other stack or helper stack's roles included) must carry the
 // configured boundary and be listed in the synth-time IAM report.
 //
-// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
+// Keep in sync: the same helper is copied in the bb-auth (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
 // cdk test files, and mirrors core's `assertEveryRoleBounded` in
 // `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
 // belongs in all of them.

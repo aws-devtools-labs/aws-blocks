@@ -1086,6 +1086,10 @@ describe('telemetry/identifiers first-run notice', () => {
     assert.doesNotMatch(notice, /\bPII\b/);
     assert.doesNotMatch(notice, /anonymous/i);
     assert.ok(notice.includes('The collection endpoint also receives your IP address, as with any HTTPS request.'), notice);
+    // What the service keeps, and for how long: the IP address is dropped from accepted requests,
+    // events are kept for up to 1 year and logs of all requests for up to 10 years.
+    assert.match(notice, /It is not stored, except in logs of requests that the endpoint's firewall blocks\./);
+    assert.match(notice, /Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years\./);
     // The sender sets no User-Agent header, so only the payload's package manager user agent is claimed.
     assert.doesNotMatch(notice, /IP address and user agent/);
     // What the event itself carries, and what it never carries.

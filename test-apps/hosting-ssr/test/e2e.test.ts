@@ -1,30 +1,95 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 
+/**
+ * Wait until React has hydrated the current document. Every interactive control in this app
+ * is server-rendered, so it is visible (and "actionable" to `click()` / `fill()`) before React
+ * attaches its handlers. `page.goto()` and `waitForURL()` return at `load`, which does not
+ * guarantee hydration has run, and an interaction that lands before it is silently lost: a
+ * click does nothing, and a value typed into a controlled input never reaches React state.
+ * The root layout's `HydrationMarker` sets `data-hydrated` on `<html>` from a `useEffect`,
+ * which runs only once hydration has committed.
+ */
+async function waitForHydration(page: Page, opts?: { timeout?: number }) {
+  await page.waitForFunction(() => document.documentElement.dataset.hydrated === 'true', null, {
+    timeout: opts?.timeout ?? 15_000,
+  });
+}
+
+/** Navigate to a page and wait for React hydration before the test interacts with it. */
+async function gotoHydrated(page: Page, url: string, opts?: { timeout?: number }) {
+  await page.goto(url);
+  await waitForHydration(page, opts);
+}
+
+/**
+ * This run's test-support secret: `BLOCKS_TEST_SUPPORT_SECRET`, which the CI
+ * workflow or the e2e `globalSetup` set before the deploy (see "Sandbox e2e
+ * test support" in `aws-blocks/index.ts`). Never log it.
+ */
+function readTestSupportSecret(): string {
+  const value = process.env.BLOCKS_TEST_SUPPORT_SECRET;
+  if (!value) throw new Error('BLOCKS_TEST_SUPPORT_SECRET is not set — the e2e globalSetup sets it before deploying');
+  return value;
+}
+
+/**
+ * Call `testSupport.provisionUser` and return the raw JSON-RPC response body.
+ * The RPC URL comes from the served `config.json`: relative on a deployed site,
+ * the API server's own origin in local dev (Next.js doesn't proxy it).
+ */
+async function callProvisionUser(
+  request: APIRequestContext,
+  baseUrl: string,
+  secret: string,
+  username: string,
+  password: string,
+) {
+  const config = await (await request.get(`${baseUrl}/.blocks-sandbox/config.json`)).json();
+  const resp = await request.post(new URL(config.apiUrl, baseUrl).href, {
+    headers: { 'Content-Type': 'application/json' },
+    data: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'testSupport.provisionUser',
+      params: [secret, username, password],
+      id: 1,
+    }),
+  });
+  return await resp.json();
+}
+
+/** The deployed stack's test-support secret (sandbox only). Never log it. */
+let testSupportSecret = '';
+
+/**
+ * Create a confirmed user through the backend's `testSupport.provisionUser`
+ * RPC (sandbox only — see `aws-blocks/index.ts`). Cognito emails the sign-up
+ * code and a deployed run has no mailbox to read it from.
+ */
+async function provisionUser(request: APIRequestContext, baseUrl: string, username: string, password: string) {
+  const body = await callProvisionUser(request, baseUrl, testSupportSecret, username, password);
+  expect(body.result).toEqual({ success: true });
+}
+
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 let buildCacheBucketName: string;
 
-// ── Deploy / Teardown ──────────────────────────────────────────────────────
+// ── Stack outputs (deployed by test/global-setup.ts) ────────────────────────
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
+    // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
@@ -33,6 +98,7 @@ test.beforeAll(async () => {
     hostingUrl = hostingKey ? stackOutputs[hostingKey] : '';
     if (!hostingUrl) throw new Error('HostingHostingUrl* not found in stack outputs: ' + JSON.stringify(stackOutputs));
     if (!hostingUrl.startsWith('http')) hostingUrl = `https://${hostingUrl}`;
+    testSupportSecret = readTestSupportSecret();
 
     console.log(`\n✅ Deployed at: ${hostingUrl}\n`);
 
@@ -44,15 +110,7 @@ test.beforeAll(async () => {
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
+// Teardown: `globalTeardown` (test/global-teardown.ts) destroys the stack once, after all tests and retries.
 
 // ── Full User Journey ──────────────────────────────────────────────────────
 
@@ -87,19 +145,27 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     }
   });
 
-  test('3. Sign up + confirm + login', async ({ page }) => {
-    await page.goto(`${hostingUrl}/login`);
+  test('3. Sign up + confirm + login', async ({ page, request }) => {
+    await gotoHydrated(page, `${hostingUrl}/login`);
 
-    // Sign up
-    await page.fill('#login-username', testUser);
-    await page.fill('#login-password', testPassword);
-    await page.click('#btn-signup');
-    await expect(page.locator('#auth-info')).toContainText('Account created');
-    await expect(page.locator('#confirm-section')).toBeVisible();
+    if (ENV === 'sandbox') {
+      // No mailbox for the emailed sign-up code: provision a confirmed user.
+      // The local run covers the sign-up form and the code step.
+      await provisionUser(request, hostingUrl, testUser, testPassword);
+      await page.fill('#login-username', testUser);
+      await page.fill('#login-password', testPassword);
+    } else {
+      // Sign up
+      await page.fill('#login-username', testUser);
+      await page.fill('#login-password', testPassword);
+      await page.click('#btn-signup');
+      await expect(page.locator('#auth-info')).toContainText('Account created');
+      await expect(page.locator('#confirm-section')).toBeVisible();
 
-    // Confirm
-    await page.click('#btn-confirm');
-    await expect(page.locator('#auth-info')).toContainText('Confirmed');
+      // Confirm
+      await page.click('#btn-confirm');
+      await expect(page.locator('#auth-info')).toContainText('Confirmed');
+    }
 
     // Login → redirects to dashboard
     await page.click('#btn-login');
@@ -108,7 +174,7 @@ test.describe('Blog with Auth — SSR Hosting', () => {
 
   test('4. Dashboard SSR shows empty state (proves cookie forwarding)', async ({ page }) => {
     // Login first
-    await page.goto(`${hostingUrl}/login`);
+    await gotoHydrated(page, `${hostingUrl}/login`);
     await page.fill('#login-username', testUser);
     await page.fill('#login-password', testPassword);
     await page.click('#btn-login');
@@ -120,13 +186,13 @@ test.describe('Blog with Auth — SSR Hosting', () => {
   });
 
   test('5. Create a post "Hello World"', async ({ page }) => {
-    await page.goto(`${hostingUrl}/login`);
+    await gotoHydrated(page, `${hostingUrl}/login`);
     await page.fill('#login-username', testUser);
     await page.fill('#login-password', testPassword);
     await page.click('#btn-login');
     await page.waitForURL('**/dashboard');
 
-    await page.goto(`${hostingUrl}/create`);
+    await gotoHydrated(page, `${hostingUrl}/create`);
     await page.fill('#post-title', 'Hello World');
     await page.fill('#post-body', 'My first blog post from the SSR e2e test!');
     await page.click('#btn-publish');
@@ -139,7 +205,7 @@ test.describe('Blog with Auth — SSR Hosting', () => {
 
   test('6. Dashboard SSR shows the post (auth-protected SSR)', async ({ page, request }) => {
     // Login
-    await page.goto(`${hostingUrl}/login`);
+    await gotoHydrated(page, `${hostingUrl}/login`);
     await page.fill('#login-username', testUser);
     await page.fill('#login-password', testPassword);
     await page.click('#btn-login');
@@ -192,7 +258,7 @@ test.describe('Blog with Auth — SSR Hosting', () => {
 
   test('9. Profile page is server-rendered with user data (cookie forwarding proof)', async ({ page, request }) => {
     // Login
-    await page.goto(`${hostingUrl}/login`);
+    await gotoHydrated(page, `${hostingUrl}/login`);
     await page.fill('#login-username', testUser);
     await page.fill('#login-password', testPassword);
     await page.click('#btn-login');
@@ -215,11 +281,14 @@ test.describe('Blog with Auth — SSR Hosting', () => {
   });
 
   test('10. Delete post from dashboard', async ({ page }) => {
-    await page.goto(`${hostingUrl}/login`);
+    await gotoHydrated(page, `${hostingUrl}/login`);
     await page.fill('#login-username', testUser);
     await page.fill('#login-password', testPassword);
     await page.click('#btn-login');
     await page.waitForURL('**/dashboard');
+    // The delete button is server-rendered, so it is visible (and "actionable" to `click()`)
+    // before React attaches its `onClick`. Wait for hydration, or the click does nothing.
+    await waitForHydration(page);
 
     await expect(page.locator('[data-testid="my-post-card"]')).toHaveCount(1);
     await page.locator('[data-testid="btn-delete"]').first().click();
@@ -407,6 +476,80 @@ test.describe('SSR cache isolation (per-session cache key)', () => {
     // never exercise a cache entry.
     expect(resp.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
   });
+
+  // The hosting SSR cache guard runs in the deployed server only (local mode
+  // serves `next start`/`next dev` directly), so these assertions skip local.
+  // Each request carries its own query string, so it reaches the origin rather
+  // than an entry a previous attempt (or another test) cached.
+  test('a cookie outside the cache key makes the s-maxage response private (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const resp = await request.get(`${isolationUrl}?probe=${randomBytes(4).toString('hex')}`, {
+      headers: { Cookie: `bb_other=${randomBytes(4).toString('hex')}` },
+    });
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['cache-control']).toBe('private, no-store');
+    // A request with only the cache-key cookie keeps the origin's value.
+    const keyed = await request.get(`${isolationUrl}?probe=${randomBytes(4).toString('hex')}`, {
+      headers: { Cookie: `bb_session=probe-${randomBytes(4).toString('hex')}` },
+    });
+    expect(keyed.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
+  });
+
+  // Cross-visitor isolation over the edge: each pair of requests shares one
+  // URL (the same `k`, fresh per run), so the second request reaches whatever
+  // the first one left in the cache.
+  test('a response rendered with a cookie outside the cache key is not served to another visitor (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation?k=${randomBytes(6).toString('hex')}`;
+    const marker = `marker-${randomBytes(6).toString('hex')}`;
+    const a = await request.get(url, { headers: { Cookie: `bb_other=${marker}` } });
+    expect(a.status()).toBe(200);
+    expect(await a.text()).toContain(`other=${marker}`);
+    // A visitor without the cookie, at the same URL: its own render, never A's.
+    for (let i = 0; i < 2; i++) {
+      const b = await request.get(url);
+      expect(b.status()).toBe(200);
+      const body = await b.text();
+      expect(body).not.toContain(marker);
+      expect(body).toContain('other=none');
+    }
+  });
+
+  test('a cookie-setting response is not replayed to the next request (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation/set-cookie?k=${randomBytes(6).toString('hex')}`;
+    const visit = async (): Promise<string | undefined> => {
+      const resp = await request.get(url);
+      expect(resp.status()).toBe(200);
+      return /bb_visit=([^;]+)/.exec(resp.headers()['set-cookie'] || '')?.[1];
+    };
+    const first = await visit();
+    const second = await visit();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+  });
+
+  test('a response that sets a cookie is private (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const resp = await request.get(`${hostingUrl}/cache-isolation/set-cookie?probe=${randomBytes(4).toString('hex')}`);
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['set-cookie'] || '').toContain('bb_visit=');
+    expect(resp.headers()['cache-control']).toBe('private, no-store');
+  });
 });
 
 test.describe('Build cache infrastructure', () => {
@@ -472,8 +615,22 @@ test.describe('Secrets & config (secret() → Secrets Manager, config() → SSM)
     } finally {
       // The values are written out of band, so `destroy` won't remove them — clean
       // up here (best-effort; ignore if the role can't delete). Fixes the leak.
-      await removeSecret('DEMO_SECRET').catch(() => {});
+      // `force`: a recoverable delete would reserve the fixed name for 30 days, and
+      // the next run's `setSecret` would fail with "scheduled for deletion".
+      await removeSecret('DEMO_SECRET', { force: true }).catch(() => {});
       await removeConfig('DEMO_CONFIG').catch(() => {});
     }
+  });
+});
+
+// `testSupport.provisionUser` creates accounts, so it must not exist on a normal
+// build (local dev included), and on the sandbox e2e build it must refuse a
+// caller without the deploy's secret.
+test.describe('Test support endpoint is gated', () => {
+  test('absent from a normal build; refuses a wrong secret on the e2e build', async ({ request }) => {
+    const user = `e2e-gate-${Date.now()}@example.com`;
+    const body = await callProvisionUser(request, hostingUrl, 'not-the-secret', user, 'TestPass123!');
+    expect(body.result).toBeUndefined();
+    expect(body.error.code).toBe(ENV === 'sandbox' ? 403 : -32601);
   });
 });

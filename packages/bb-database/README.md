@@ -1,6 +1,6 @@
 # @aws-blocks/bb-database
 
-`Database` is a PostgreSQL schema on an Aurora DSQL cluster. The block owns the cluster or shares it with other blocks. Query it with the `sql` tag. Write migration files in DSQL, as the AWS documentation shows them; the block runs them unchanged on the cluster. The query code is the same on every cluster.
+`Database` is a PostgreSQL schema on a cluster: Aurora DSQL by default, or Aurora PostgreSQL Serverless v2 created with the express configuration. The block owns the cluster or shares it with other blocks. Query it with the `sql` tag. Write migration files for the cluster's engine (DSQL as the AWS documentation shows it, or plain PostgreSQL); the block runs them unchanged on the cluster. The query code is the same on every cluster.
 
 ```sh
 npm install @aws-blocks/bb-database
@@ -8,7 +8,9 @@ npm install @aws-blocks/bb-database
 
 **When to use:** relational data, joins, foreign keys, views, and multi-statement transactions, on a cluster with no VPC to manage.
 
-**When not to use:** data that one key or one table pattern can serve. `KVStore` and `DistributedTable` have no cluster to manage. Triggers, PL/pgSQL, extensions, Row Level Security on raw SQL, and transactions over 3,000 rows need full PostgreSQL. A `provisioned` cluster (Aurora Serverless v2) is planned for this block and not yet available.
+**When not to use:** data that one key or one table pattern can serve. `KVStore` and `DistributedTable` have no cluster to manage.
+
+**Which cluster:** the default `dsql` cluster for most apps. Triggers, PL/pgSQL, extensions, Row Level Security on raw SQL, and transactions over 3,000 rows need full PostgreSQL: put the block on an `aurora` cluster (`new DatabaseCluster(scope, 'main', { type: 'aurora' })`). It is created in seconds, scales to zero, needs no VPC, and runs the PostgreSQL migration files you already have. Its storage is encrypted with an AWS-owned key (the express configuration accepts no customer managed KMS key) and the first request after five idle minutes waits about 20 seconds for the cluster to resume unless `minCapacity` is at least `0.5`.
 
 This is a preview. `@aws-blocks/bb-data` and `@aws-blocks/bb-distributed-data` are unchanged. The umbrella package `@aws-blocks/blocks` still exports `bb-data`'s `Database`. Import this block from `@aws-blocks/bb-database`. Internals and local-versus-AWS differences are in [DESIGN.md](./DESIGN.md).
 
@@ -18,12 +20,12 @@ Define the blocks in `aws-blocks/index.ts`:
 
 ```ts
 import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Database, DatabaseCluster, sql } from '@aws-blocks/bb-database';
 
 const scope = new Scope('app');
-const auth = new AuthBasic(scope, 'auth');
-export const authApi = auth.createApi(); // clients sign in with authApi.setAuthState({ action: 'signUp', username, password })
+const auth = new Auth(scope, 'auth');
+export const authApi = auth.createApi(); // clients sign up with authApi.setAuthState({ action: 'signUp', username, password }), then confirm the emailed code
 
 // 1. Default. The block owns an Aurora DSQL cluster.
 const shop = new Database(scope, 'shop');
@@ -119,8 +121,11 @@ Cluster options:
 
 | Option | Type | Description |
 |---|---|---|
-| `type` | `'dsql'` | Required. Aurora DSQL; a second kind is planned. |
-| `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
+| `type` | `'dsql' \| 'aurora'` | Required. `dsql` is Aurora DSQL. `aurora` is Aurora PostgreSQL Serverless v2 created with the express configuration: all of PostgreSQL, no VPC, IAM authentication, scales to zero. |
+| `removalPolicy` | `'retain' \| 'destroy' \| 'snapshot'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. `snapshot` (an `aurora` cluster only) takes a final snapshot before deleting it. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
+| `minCapacity` | `number` | `aurora` only. The floor in Aurora Capacity Units, in 0.5 steps. Default `0`: the cluster pauses after five idle minutes and costs nothing while paused; the first connection afterwards takes about 20 seconds. `0.5` keeps it warm. |
+| `maxCapacity` | `number` | `aurora` only. The ceiling in ACUs, 1 to 256 in 0.5 steps. Default `2`. Raised in place, without replacing the cluster. |
+| `pointInTimeRecovery` | `boolean \| { retentionDays }` | `aurora` only. Automated backups, which are Aurora's point-in-time recovery window: `true` keeps 15 days, `{ retentionDays: n }` pins the window (1 to 35), `false` keeps the one day the service always keeps. Defaults to the stack-wide `defaults.pointInTimeRecovery`: on in production, off in a sandbox. |
 
 Block options:
 
@@ -142,7 +147,14 @@ const audit = new Database(scope, 'audit', { cluster: shared });
 const search = new Database(scope, 'search', { cluster: shared });
 ```
 
-The `DatabaseCluster` provisions the cluster. Each `Database` on it gets a schema named after its id, with its own migrations and tables. An unqualified table name resolves to the block's schema: ``audit.query(sql`SELECT * FROM events`)`` reads `audit.events`, and the same text on `search` reads `search.events`. Locally the cluster is one PGlite with the same schemas.
+The `DatabaseCluster` provisions the cluster, of either type:
+
+```ts
+const main = new DatabaseCluster(scope, 'main', { type: 'aurora', minCapacity: 0.5 });
+const reports = new Database(scope, 'reports', { cluster: main }); // PostgreSQL migrations, triggers, large transactions
+```
+
+Each `Database` on it gets a schema named after its id, with its own migrations and tables. An unqualified table name resolves to the block's schema: ``audit.query(sql`SELECT * FROM events`)`` reads `audit.events`, and the same text on `search` reads `search.events`. Locally the cluster is one PGlite with the same schemas.
 
 **Isolation is by namespace, not by permission.** Both blocks connect as one role that has DML on every schema on the cluster. Qualified table names and joins across schemas work from any block on the cluster. The schema is a naming convention that keeps two blocks' tables apart. It is not a boundary between tenants or trust levels. A block that must not see another block's data belongs on its own cluster.
 
@@ -150,7 +162,9 @@ The `DatabaseCluster` provisions the cluster. Each `Database` on it gets a schem
 
 ## Migrations
 
-Your `Database` runs on Aurora DSQL, so write its migrations in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
+A `Database` on an `aurora` cluster runs PostgreSQL: write its migrations as you would for any PostgreSQL 17, nothing is rewritten, and each file runs in one transaction, so it applies entirely or not at all; on AWS a file must finish within the migration function's ten-minute invocation (see [How migrations deploy](#how-migrations-deploy)). The only check is for the two DSQL-only forms, `ASYNC` and `sys.wait_for_job()`; a file that carries them is stopped at `npm run dev` and at `cdk synth` with a message that names the file and what to change. The rest of this section is about the default `dsql` cluster. A statement PostgreSQL refuses inside a transaction block (`CREATE INDEX CONCURRENTLY`, `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE`) stops the file at construction with a message that names it: drop `CONCURRENTLY`, and keep the rest out of migrations.
+
+A `Database` on Aurora DSQL needs its migrations written in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
 
 Each block has one directory of `.sql` files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Block ids are unique per app because they name this directory and, on a shared cluster, the block's schema. Files run in name order, once each:
 
@@ -188,7 +202,7 @@ On DSQL the rows an `ON DELETE CASCADE` foreign key deletes count toward the 3,0
 Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) at `npm run dev` and at `cdk synth`, before any deploy, for what DSQL cannot run (triggers, extensions, policies, `TRUNCATE`, array columns) and for the PostgreSQL spellings of DSQL forms. Nothing is rewritten for you. The error names the file, the rule, dsql-lint's suggestion and the DSQL documentation page:
 
 ```
-DsqlMigrationValidationError: Migration validation failed for Aurora DSQL (cluster kind 'dsql'):
+MigrationValidationError: Migration validation failed for Aurora DSQL (cluster kind 'dsql'):
   001_init.sql: serial_type: Column `id` uses SERIAL, which is not supported in DSQL. Use `BIGINT GENERATED BY DEFAULT AS IDENTITY (CACHE 1)` instead. CACHE 65536 avoids a coordination round trip per value (values can have gaps); CACHE 1 keeps them close to sequential. Checked against https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
   002_index.sql: index_async: CREATE INDEX without ASYNC is not supported in DSQL. Index: orders_customer Use `CREATE INDEX ASYNC ...` instead. Checked against https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
 ```
@@ -199,7 +213,11 @@ DsqlMigrationValidationError: Migration validation failed for Aurora DSQL (clust
 
 Locally, a block applies its pending files before its first query. On AWS they run during `cdk deploy`, before any function on the stack is updated, so new code never runs against the old schema. Blocks on one cluster migrate one at a time.
 
-If a deploy fails in a migration, the error names the file and the failed statement. Fix the cause and deploy again; the file resumes where it stopped. A failed index build or constraint validation usually means the data does not satisfy it: fix the rows, then deploy again. Do not edit a file that has partly run. The next deploy detects the edit, refuses the file and names it. Put the change in a new file instead.
+If a deploy fails in a migration, the error names the file and the failed statement. What to do next depends on the cluster.
+
+On an `aurora` cluster the file is one transaction, so nothing from it was applied: fix the file itself and deploy again; it runs from the start. A file must also finish within the migration function's ten-minute invocation. A transaction that runs longer is cancelled by the server, and the error names the file and the statement and says so; split the file, or move a long backfill out of the migrations.
+
+On a `dsql` cluster the file resumes where it stopped. A failed index build or constraint validation usually means the data does not satisfy it: fix the rows, then deploy again. Do not edit a `dsql` file that has partly run. The next deploy detects the edit, refuses the file and names it. Put the change in a new file instead.
 
 ## Transactions
 
@@ -223,9 +241,34 @@ await shop.transaction(async (tx) => {
 
 For tests, `simulateConflict(shop)` from `@aws-blocks/bb-database/testing` makes the next commit fail with `SerializationFailure` in local mode. It throws in the Lambda runtime.
 
+## Kysely
+
+`DatabaseDialect` is a [Kysely](https://kysely.dev) dialect for a `Database`. Kysely is the supported query builder. It is an optional peer dependency of the block: install it in your application (`npm install kysely`) and import the dialect from `@aws-blocks/bb-database/kysely`. An application that does not use Kysely does not load it.
+
+```ts
+import { type Generated, Kysely } from 'kysely';
+import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+
+interface Tables {
+  orders: { id: Generated<number>; customer_id: string; total: number; created_at: Generated<Date> };
+}
+
+const kysely = new Kysely<Tables>({ dialect: new DatabaseDialect(shop) });
+
+const recent = await kysely.selectFrom('orders').select(['id', 'total']).where('customer_id', '=', customerId).execute();
+```
+
+Statements run through the same engine as `query()`: they use the block's schema, the same DML-only access and the errors under [Errors](#errors). Create the Kysely instance at module scope; it is safe during CDK synth. Plugins and logging are options of Kysely.
+
+- **Types.** Declare the tables yourself. A `bigint` column is a `number`, a `numeric` column is a `string` and a `timestamp` column is a `Date`, locally and on AWS.
+- **Transactions.** Inside a Kysely transaction, run every statement on `trx`. A statement on the block or on the root Kysely instance is not part of that transaction: on AWS it runs on another connection, and in local mode it fails after five seconds. A Kysely statement inside the block's `transaction()` callback runs in that transaction.
+- **Errors.** An error that the callback of a Kysely transaction throws reaches the caller as thrown; the block does not change it to `TransactionFailed`. A Kysely transaction is not re-run on a conflict, so on a `dsql` cluster use `transaction(fn, { retryOnConflict: true })` for work that can conflict.
+- **`dsql` clusters.** Isolation levels and savepoints are not available.
+- **Not supported.** Streaming (`.stream()`). `destroy()` on the Kysely instance does not close the block's connections.
+
 ## Errors
 
-Query and transaction failures carry a `DatabaseErrors` name. Match them with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. Only the name and a message free of row values cross the wire; the driver error stays on the server. Three kinds of error are not for `catch`: setup mistakes (`DatabaseConfigurationError`: a duplicate id, a missing `migrationsPath`), `dsql-lint` findings (`DsqlMigrationValidationError` in a file, `DsqlValidationError` in a handler's statement), and migration failures (`MigrationFailedException`). Fix the cause.
+Query and transaction failures carry a `DatabaseErrors` name. Match them with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. Only the name and a message free of row values cross the wire; the driver error stays on the server. Three kinds of error are not for `catch`: setup mistakes (`DatabaseConfigurationError`: a duplicate id, a missing `migrationsPath`), migration file findings (`MigrationValidationError`: a `dsql-lint` finding, or a DSQL-only form in a file for an `aurora` cluster; `DsqlValidationError` in a handler's statement), and migration failures (`MigrationFailedException`). Fix the cause.
 
 | Error | When | Retried automatically |
 |---|---|---|
@@ -253,13 +296,15 @@ try {
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production.
+A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides, so only the privilege rule applies locally: the deployed app role can read and write rows, not create tables or `TRUNCATE` them, and the mock refuses the same statements. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them. Locally, statements run as PGlite's superuser, so Row Level Security policies are not enforced under `npm run dev`; on AWS the app connects as its own role and they are.
+
+A connection to an `aurora` cluster is closed ten seconds after its last statement while the function is running, so a cluster at `minCapacity: 0` can pause between requests (an open connection keeps it running); the next request reconnects. A frozen Lambda execution environment keeps its socket until it is thawed or reclaimed, so the pause can come later than five minutes after the last request.
 
 Your DSQL migration files run unchanged. `ASYNC` index builds and constraint validations complete at once, and a `sys.wait_for_job(…)` copied from the AWS examples returns immediately.
 
 | | Owned default | `DatabaseCluster` |
 |---|---|---|
-| Engine | PGlite with `dsql-lint` and the DSQL limits | One PGlite per cluster, one schema per block, same checks |
+| Engine | PGlite with `dsql-lint` and the DSQL limits | One PGlite per cluster, one schema per block; the DSQL checks for `type: 'dsql'`, plain PostgreSQL for `type: 'aurora'` |
 | Data | `.bb-data/{fullId}/pglite/` | `.bb-data/{clusterFullId}/pglite/` |
 | Migrations | Before the block's first query | Same, per block, into its schema |
 
@@ -273,15 +318,15 @@ Tests that call gated methods through the dev server need the auth cookie to per
 
 Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
 
-- **One Aurora DSQL cluster** (`AWS::DSQL::Cluster`). IAM token authentication; no VPC, no secret, no security group, no proxy. Deletion protection follows the stack `defaults`.
+- **One cluster.** `dsql`: an Aurora DSQL cluster (`AWS::DSQL::Cluster`). `aurora`: an Aurora PostgreSQL Serverless v2 cluster created with the express configuration (`AWS::RDS::DBCluster` with `WithExpressConfiguration`), which also creates its writer instance; IAM authentication for the master user (`postgres`, no password), the capacity range from `minCapacity`/`maxCapacity`, backups from `pointInTimeRecovery` (15 days under production defaults), storage encrypted with an AWS-owned key (the express configuration accepts no customer managed KMS key). Either way: IAM token authentication; no VPC, no secret, no security group, no proxy. Deletion protection follows the stack `defaults`.
 - **Two migration Lambdas** (`onEvent` and `isComplete`), one log group, and a custom-resource provider that waits for DSQL index and validation jobs for up to 55 minutes.
-- **IAM:** the app's execution role gets `dsql:DbConnect` on the cluster; the migration Lambdas get `dsql:DbConnectAdmin`.
+- **IAM:** on `dsql`, the app's execution role gets `dsql:DbConnect` on the cluster and the migration Lambdas get `dsql:DbConnectAdmin`. On `aurora`, the execution role gets `rds-db:connect` for the app's database role and the migration Lambdas get it for `postgres`.
 - **Config:** `BLOCKS_{CLUSTER_ID}_ENDPOINT` and `BLOCKS_{CLUSTER_ID}_REGION` (the cluster's full id upper-cased, with `_` for other characters), injected through the config bucket.
 
-Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any. The migration Lambda also creates a per-cluster database role for the app, maps it to the execution role with `AWS IAM GRANT`, and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
+Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any. The migration Lambda also creates a per-cluster database role for the app, maps it to IAM (`AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it), and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
 
-**Cost.** See [Aurora DSQL pricing](https://aws.amazon.com/rds/aurora/dsql/pricing/). The migration Lambdas run only during deploys. A `Database` that owns its cluster takes one slot of the account's [cluster quota](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html); blocks on a shared `DatabaseCluster` take one together.
+**Cost.** See [Aurora DSQL pricing](https://aws.amazon.com/rds/aurora/dsql/pricing/) and [Aurora pricing](https://aws.amazon.com/rds/aurora/pricing/) (Serverless v2 is billed per ACU-second; an `aurora` cluster with `minCapacity: 0` costs nothing while paused, `0.5` is about $44 a month). The migration Lambdas run only during deploys. A `Database` that owns its cluster takes one slot of the account's [cluster quota](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html); blocks on a shared `DatabaseCluster` take one together.
 
 ## Access through the AWS SDK
 
-`getSdkIdentifiers(db)` from `@aws-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` needs to open your own `pg` connection as the same role. The umbrella's typed overloads do not know this block yet, so the result is a `Record<string, string>`.
+`getSdkIdentifiers(db)` from `@aws-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` (`dsql`) or an RDS `Signer` from `@aws-sdk/rds-signer` (`aurora`, port 5432) needs to open your own `pg` connection as the same role. The umbrella's typed overloads do not know this block yet, so the result is a `Record<string, string>`.

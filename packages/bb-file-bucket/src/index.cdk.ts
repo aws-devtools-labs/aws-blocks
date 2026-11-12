@@ -12,6 +12,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef } from './types.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
+import { validateUploadConstraintOptions } from './upload-constraints.js';
 import { BB_NAME } from './version.js';
 
 export { FileBucketErrors } from './errors.js';
@@ -72,6 +73,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 						`configure ${ignored.length > 1 ? 'them' : 'it'} on the existing bucket itself.`,
 				);
 			}
+			// Upload constraints are enforced at runtime, so they still apply to a
+			// wrapped bucket: reject a malformed shape at synth, as for a provisioned one.
+			validateUploadConstraintOptions(this.fullId, options);
 			this.bucket = s3.Bucket.fromBucketName(this, 'bucket', options.bucket.bucketName);
 			this.bucket.grantReadWrite(this.executionRole);
 			return;

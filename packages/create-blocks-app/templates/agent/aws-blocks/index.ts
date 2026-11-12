@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthBasic, Agent, BedrockModels } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, Agent, BedrockModels } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
@@ -7,7 +7,19 @@ import { z } from 'zod';
 const scope = new Scope('my-app');
 
 const store = new KVStore(scope, 'app-store', {});
-const auth = new AuthBasic(scope, 'auth');
+// Auth: email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the caller
+// submits it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  // Users sign in with their email, matched ignoring case. Both are fixed when
+  // the user pool is created.
+  users: { signInWith: ['email'], caseSensitive: false },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
+});
 
 // Agent: an AI agent with tools; each chat turn here is independent. On deploy it runs
 // against Amazon Bedrock; locally it uses the built-in `canned` provider — a
@@ -51,7 +63,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // request/response caller needs. Gated so each turn is tied to a signed-in user.
   async chat(message: string) {
     const user = await auth.requireAuth(context);
-    const result = await agent.stream(message, { userId: user.username, context: { userId: user.username } });
+    const result = await agent.stream(message, { userId: user.userSub, context: { userId: user.userSub } });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },
@@ -60,6 +72,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // tool-calling turn actually executed its handler (not just produced text).
   async lastNote() {
     const user = await auth.requireAuth(context);
-    return await store.get(`${user.username}:agent-note`);
+    return await store.get(`${user.userSub}:agent-note`);
   },
 }));

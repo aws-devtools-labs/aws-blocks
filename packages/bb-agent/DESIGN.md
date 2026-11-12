@@ -104,6 +104,13 @@ Two storage backends, same FileBucket BB:
 
 **Missing-snapshot parity (D-002/D-008).** A genuinely missing first-turn snapshot already comes back as `NoSuchKey`/`NoSuchBucket` → `null` (and a missing manifest as an empty one) from `S3Storage` itself, which Strands' `SessionManager` treats as "start fresh" — the same contract the local `FileBucketSnapshotStorage` honours (it returns `null` when `bucket.get` is falsy). So the deployed read paths are delegated to `S3Storage` **unchanged**: no wrapper is needed to start a true first turn fresh. A read that fails for any **other** reason — `AccessDenied`, a 5xx, a corrupt object — means the snapshot may exist and simply was not read, so it **rethrows and surfaces**. It must NOT degrade to a fresh start: `SessionManager` overwrites `snapshot_latest.json` after a fresh start, so swallowing a transient fault on turn N would silently overwrite an established conversation's saved history with a blank one (a local Strands reproduction confirmed a single 503 on turn N erased turns 1..N-1). A read fault cannot be distinguished from a genuine first turn, which is exactly why it must not be treated as one. The diagnostic value is kept where it belongs: a rethrown restore error propagates into `runAgent`'s catch, which logs the deepest cause's `name`, `httpStatusCode` and `requestId` (flattened out of the non-enumerable `.cause` by `errorCauseShape`) at **`error`** level — above the deployed agent's default `error` log level, so the concrete production error shape is captured for the first time, without the data-loss fallback. See the `createDeployedSnapshotStorage` JSDoc in `src/agent.aws.ts`, the `errorCauseShape` guard, and the rethrow regression tests plus the parity tripwire (`SessionManager does not read the manifest on a fresh-session restore`) in `index.test.ts`.
 
+## Untrusted tool output
+
+`ToolDefinition.untrustedOutput` wraps a tool's result in `<untrusted-data id="<nonce>" source="<tool>">…</untrusted-data id="<nonce>">` (see `src/untrusted.ts`). The nonce is random per Strands agent instance, and the system prompt names it and tells the model the block is data.
+
+- **Both paths are wrapped.** Strands turns a thrown tool error into an error tool result whose text is `Error: <message>`, which reaches the model like a result does. So the tool callback catches the handler's error and rethrows a new `Error` whose message is the wrapped text (the original stays on a non-enumerable `cause`, and its shape — name plus any AWS status and request id, never the message, which can echo untrusted content — is logged at `warn` via `errorCauseShape`). Strands' `InterruptError` is rethrown untouched, because an `interrupt()` call is control flow, not a failure.
+- **Detect on the normalized form, rewrite only on a hit.** The nonce and delimiter-shaped text are looked for in an NFKC-normalized copy (fullwidth and other compatibility forms fold to ASCII) stripped of invisible characters: zero-width spaces and joiners, the combining grapheme joiner, the word joiner and invisible operators, the BOM, the soft hyphen, bidirectional controls (including U+061C), Mongolian free variation selectors, Hangul fillers, variation selectors (U+FE00–U+FE0F, U+E0100–U+E01EF), and the Unicode tag block (U+E0000–U+E007F). `untrusted` and `data` joined by whitespace, any dash or a connector are all neutralized to `untrusted_data`. Without this, `＜/ｕｎｔｒｕｓｔｅｄ-data id="…"＞` or `untrusted​-data` slip past an exact match while a model still reads them as the closing tag. Only a string with a hit is replaced by its normalized, neutralized form, so that string can change (`x²` → `x2`, ZWNJ dropped from Persian, emoji ZWJ sequences split). Every other string reaches the model unchanged, apart from tag characters, which are always removed because some models read them as hidden ASCII. A structured result is sanitized string by string (keys and values) before `JSON.stringify`: normalizing the serialized text instead would fold a fullwidth `＂`/`＼` (which `JSON.stringify` doesn't escape) into a raw `"`/`\` and break the JSON. A last nonce/delimiter pass on the serialized text catches anything formed across tokens; it adds no `"` or `\`, so the JSON stays valid. None of this touches trusted tool results.
+
 ## Runaway-protection caps
 
 `AgentConfig.maxLlmCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
@@ -197,6 +204,18 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
   `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A turn that failed during the gap** is recovered from the row the backend saves for it: an
+  assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
+  turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)
+  stopped it. The client adopts any partial text under the same `extendsStream` guard, then ends the
+  turn through `failTurn()`, the same path a live `error` chunk takes: `loading` clears, the failsafe
+  is disarmed, and `onError` fires once with the recorded message (typed by `errorName`, e.g.
+  `AgentErrors.ModelUnavailable`, as for a live chunk), instead of waiting out the failsafe below.
+  The backend writes a turn's user row inside the turn, after `stream()` returns, so the read can miss
+  it and end at the previous turn's last row. Rows carry no turn id, so when the previous turn may have
+  failed (it failed, its send failed, the failsafe ended it, or a loaded conversation ends in an error
+  row) an error row is not trusted: the client waits for the terminal chunk or the failsafe, as for a
+  turn still running.
 - **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect

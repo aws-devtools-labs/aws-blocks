@@ -18,6 +18,7 @@ import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from '../rpc-dispatch.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
@@ -82,6 +83,7 @@ const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-readi
 const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
 const reexportBackendPath = join(__dirname, '__fixtures__', 'reexport-backend.js');
 const deploymentTypeBackendPath = join(__dirname, '__fixtures__', 'deployment-type-backend.js');
+const httpErrorStatusBackendPath = join(__dirname, '__fixtures__', 'http-error-status-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -99,6 +101,17 @@ const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
 		defaults: BlocksPresets.production,
 		defaultComputeFactory: stubComputeFactory,
 	});
+
+describe('httpErrorStatus namespaces are recorded on the backend owner (for Hosting)', () => {
+	test('BlocksStack and BlocksBackend record exactly the httpErrorStatus exports', async () => {
+		const app = new cdk.App();
+		const stack = await makeStack(app, 'HttpErrorStatusStack', httpErrorStatusBackendPath);
+		assert.deepStrictEqual(Reflect.get(stack, HTTP_ERROR_STATUS_EXPORTS), ['strictApi']);
+		const backendStack = new cdk.Stack(app, 'HttpErrorStatusBackendHost');
+		const backend = await makeBackend(backendStack, 'Backend', httpErrorStatusBackendPath);
+		assert.deepStrictEqual(Reflect.get(backend, HTTP_ERROR_STATUS_EXPORTS), ['strictApi']);
+	});
+});
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksStack.create() with same backendCDKPath but different IDs produces constructs in each', async () => {

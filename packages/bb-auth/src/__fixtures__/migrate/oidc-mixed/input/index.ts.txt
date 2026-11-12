@@ -1,0 +1,35 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { AuthOIDC, cognitoFederated, customOidc } from '@aws-blocks/bb-auth-oidc';
+import { sharedProvider } from './providers.js';
+
+const scope = new Scope('app');
+const googleId = new AppSetting(scope, 'google-id', { secret: true });
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const entraId = new AppSetting(scope, 'entra-id', { secret: true });
+const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
+
+// Direct and Cognito-federated providers in one block: Auth cannot hold both kinds in one block.
+export const auth = new AuthOIDC(scope, 'auth', {
+	providers: [
+		customOidc({ name: 'okta', issuerUrl: 'https://dev-1.okta.com', clientId: 'okta-client' }),
+		cognitoFederated({
+			name: 'google',
+			identityProvider: 'Google',
+			cognitoDomain: 'myapp',
+			region: 'us-east-1',
+			clientId: googleId,
+			clientSecret: googleSecret,
+		}),
+		cognitoFederated({
+			name: 'entra',
+			identityProvider: 'Entra',
+			idpIssuerUrl: 'https://login.microsoftonline.com/tenant/v2.0',
+			cognitoDomain: 'myapp',
+			region: 'us-east-1',
+			clientId: entraId,
+			clientSecret: entraSecret,
+		}),
+		sharedProvider,
+	],
+});

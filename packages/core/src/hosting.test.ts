@@ -39,6 +39,7 @@ import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
 import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 
 // ================================================================
 // Hosting construct tests
@@ -1430,7 +1431,7 @@ describe('Hosting', () => {
   // ── Issue #728: SSR cache policy honors origin Cache-Control ──
 
   describe('SSR cache policy (issue #728)', () => {
-    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=31536000 for compute behaviors', () => {
+    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=86400 for compute behaviors', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1445,13 +1446,13 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // The L3 construct should create an SsrCachePolicy with these values.
-      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
-      // values to at most a year.
+      // maxTtl is 1 day (86400s): it clamps origin Cache-Control values
+      // (e.g. `s-maxage=31536000`) to at most a day at the edge.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 31536000,
+          MaxTTL: 86400,
         }),
       });
     });
@@ -2039,6 +2040,34 @@ describe('Hosting', () => {
       const has404 = errorResponses.some((r: any) => r.ErrorCode === 404);
       assert.ok(has404, 'Should configure 404 error response');
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('fails synth when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+      createSpaBuildOutput(tmpDir);
+      const notFoundPath = path.join(tmpDir, '404.html');
+      fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
+      const synth = (exports: string[] | undefined, errorPages: boolean) => () => {
+        const app = new App();
+        const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
+        // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
+        const api: BlocksStackApi = { ...MOCK_API };
+        if (exports) Reflect.set(api, HTTP_ERROR_STATUS_EXPORTS, exports);
+        new Hosting(stack, 'Hosting', { root: tmpDir, api, ...(errorPages ? { errorPages: { notFound: notFoundPath } } : {}) });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
+      };
+
+      assert.throws(synth(['api'], true), (err: Error) => {
+        assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
+        assert.match(err.message, /'api'/);
+        assert.match(err.message, /404/);
+        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
+        return true;
+      });
+
+      assert.deepStrictEqual(synth([], true)(), [], 'no httpErrorStatus namespace: synths, no warning');
+      assert.deepStrictEqual(synth(undefined, true)(), [], 'a plain { apiUrl } backend: synths, no warning');
+      assert.deepStrictEqual(synth(['api'], false)(), [], 'no 4xx error page: synths, no warning');
     });
 
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {

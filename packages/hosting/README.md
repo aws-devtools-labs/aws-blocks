@@ -602,6 +602,22 @@ Some apps need the CloudFront door:
   `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
   `open-next.config.ts` with a streaming wrapper).
 
+**CloudFront error pages and the API.** A CloudFront distribution's custom
+error responses apply to every path it serves, the proxied API (`/aws-blocks/*`)
+included. The CloudFront door maps 403 / 404 to a page when the app has one —
+`errorPages.notFound`, a static build's own `404.html` — and, for a static
+multi-page site with no server, no SPA fallback and no 404 page of its own, to
+the built-in not-found page. The Blocks API normally answers every call with
+HTTP 200, so this never touches it; but an `ApiNamespace` created with
+`httpErrorStatus: true` (`@aws-blocks/core`) answers a 4xx `ApiError` with that
+status, and its 403 / 404 then reach the browser as that HTML page instead of
+the JSON-RPC error, which the typed client cannot read. CloudFront cannot
+scope error responses away from `/aws-blocks/*`, so `Hosting` from
+`@aws-blocks/core` fails synth when it sees both, with a `HostingError` named
+`HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
+Remove the 4xx error pages, or leave `httpErrorStatus` off for those
+namespaces.
+
 ### Settings per door kind
 
 Each door kind takes its settings as `features`, typed for that kind: a
@@ -661,11 +677,10 @@ certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
 cookies and every RPC then travel unencrypted.
 
 The session cookie can't be `Secure` behind such a door either: a browser
-discards a `Secure` cookie set by a plain-HTTP origin. `AuthBasic` therefore
+discards a `Secure` cookie set by a plain-HTTP origin. `Auth` therefore
 omits `Secure` from its same-origin session cookie behind a standalone
 `{ kind: 'alb' }` door with no certificate, so the cookie and the session it
-carries cross the network in clear text. `AuthCognito` and `AuthOIDC` keep
-`Secure`, so the browser drops their session cookie and sign-in doesn't persist.
+carries cross the network in clear text.
 Use a plain-HTTP door for testing only: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
@@ -1272,11 +1287,70 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-The guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
+The synth guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
 emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
-Astro SSR) are not seen by synth, so those routes must set the cache-key options
-themselves or emit `Cache-Control: private`. Any route that sets cookies or
-otherwise varies per user should emit `Cache-Control: private`.
+Astro SSR) are not seen by synth; for those, the SSR server's responses pass
+through a runtime cache guard that the construct installs in front of the SSR
+server, and in front of every other regional compute a route targets (such as a
+Next.js split function built regional): Lambda handlers, and Node.js servers on
+the Lambda Web Adapter or a Web Function, for every framework. Where the guard cannot be installed (for example
+a Lambda Web Adapter server that is not Node.js, or a handler module missing from
+the bundle), synth emits a `@aws-blocks/hosting:SsrCacheGuardNotInstalled`
+warning and that server's responses are cached as its `Cache-Control` says. The
+guard sends `Cache-Control: private, no-store` instead of the origin's value
+when:
+
+- the response sets cookies (`Set-Cookie`) and is not already `private` or
+  `no-store` — CloudFront stores `Set-Cookie` with a cached object and replays
+  it on every hit; or
+- the request carries `Authorization` (unless `'authorization'` is in
+  `cacheKeyHeaders`) or a cookie whose name is not in the cache key (the Next.js
+  preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`),
+  and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without
+  `private`, a future `Expires`, no caching headers while `ssrDefaultTtl > 0`,
+  or an error status CloudFront caches without caching headers (404, 414 and
+  500 to 504).
+
+Responses that are already `private`/`no-store`, or `no-cache` without
+`s-maxage`, are left as they are. To keep a credentialed route cacheable, list
+its credential in `cacheKeyCookies`/`cacheKeyHeaders` so the cache is keyed per
+credential. Any route that otherwise varies per user should still emit
+`Cache-Control: private`.
+
+Client-side analytics and consent cookies (`_ga`, `_gid`, `_fbp`, a consent
+manager's cookie) are not in the cache key, so by default a visitor carrying one
+gets ISR/SSR pages as `private, no-store` and they are not edge-cached for that
+visitor. List such cookies in `cacheGuardIgnoredCookies`
+(`frontDoor.features.cacheGuardIgnoredCookies`) to have the guard ignore them.
+They stay out of the cache key, so a listed cookie must never change what the
+server renders. A name may not be in both `cacheKeyCookies` and
+`cacheGuardIgnoredCookies`.
+
+```ts
+frontDoor: { features: { cacheKeyCookies: ['session'], cacheGuardIgnoredCookies: ['_ga', '_gid', '_fbp'] } }
+```
+
+Behind the CloudFront-over-ALB door the server-route cache key holds every
+cookie, so cookies never lead to a rewrite there; `Authorization` and
+`Set-Cookie` still do.
+
+CloudFront caches the 500, 501, 502, 503 and 504 responses of an origin for the
+error caching minimum TTL and, except for 501, does so whatever their
+`Cache-Control` says. A distribution with a server (the CloudFront door and the
+CloudFront-over-ALB door) therefore sets that TTL to 0 for those statuses,
+keeping any error page configured for them.
+
+The guard models CloudFront's own caching inputs only: `CDN-Cache-Control` and
+`Surrogate-Control` are not CloudFront TTL inputs, and CloudFront ignores `Vary`
+for the cache key, so the guard does not read them.
+
+CloudFront uses `max-age` as its edge TTL when `s-maxage` is absent, so a bare
+`max-age` is cached at the edge and counts as shared-cacheable. A credentialed
+route that should still be cached by the browser should send
+`Cache-Control: private, max-age=…`, which the guard leaves unchanged.
+
+The SSR cache policy clamps edge TTLs to at most **1 day**, whatever
+`s-maxage` the origin sends.
 
 CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
 **8 cookies** and **5 headers** for callers. `accept-encoding` is handled

@@ -142,13 +142,13 @@ describe('addBlocksStackMetadata', () => {
 
 		addBlocksStackMetadata(stack);
 
-		recordBuildingBlock(new Construct(stack, 'b'), 'AuthCognito');
+		recordBuildingBlock(new Construct(stack, 'b'), 'Auth');
 		recordBuildingBlock(new Construct(stack, 'c'), 'KVStore');
 		recordBuildingBlock(new Construct(stack, 'd'), 'FileBucket');
 
 		assert.strictEqual(
 			blocksValue(stack),
-			`1;core=${CORE_VERSION};mode=production;bb=AuthCognito,FileBucket,KVStore;custom=0`,
+			`1;core=${CORE_VERSION};mode=production;bb=Auth,FileBucket,KVStore;custom=0`,
 		);
 	});
 

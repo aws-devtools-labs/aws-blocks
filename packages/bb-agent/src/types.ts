@@ -289,6 +289,11 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * structured (object or array) result is presented to the model as JSON text rather than
 	 * as a structured tool result.
 	 *
+	 * If the handler throws, the error message reaches the model inside the same block (an error
+	 * can echo upstream content too). The content is NFKC-normalized and stripped of invisible
+	 * characters (zero-width, bidirectional controls, Unicode tags) before delimiter-shaped text
+	 * is neutralized, so lookalike delimiters can't close the block early.
+	 *
 	 * @example
 	 * ```ts
 	 * searchDocs: tool({

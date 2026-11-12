@@ -1,0 +1,6 @@
+import * as blocks from '@aws-blocks/blocks';
+
+// Nothing in this project reads the creation date: the type is renamed with no TODO.
+export function owner(user: blocks.AuthenticatedUser): string {
+	return user.userId;
+}

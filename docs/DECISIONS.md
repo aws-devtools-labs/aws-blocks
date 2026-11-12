@@ -112,6 +112,7 @@ An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatc
 
 **Date**: 2026-04-07
 **Authors:** Jon Wire
+**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
 
 ### Context
 Auth Building Blocks span multiple packages (`AuthBasic`, `AuthOIDC`, `AuthCognito`) and share a common interface. We needed a naming convention for the classes, types, and packages.
@@ -134,7 +135,7 @@ Use **auth-first** naming: the word `Auth` comes first in all auth-related ident
 
 ### References
 - Common interface: `packages/auth-common/src/index.ts`
-- Design docs: `docs/tech-design/BB-auth-common.md`, `docs/tech-design/BB-auth-basic.md`
+- Design docs: [`packages/auth-common/DESIGN.md`](../packages/auth-common/DESIGN.md), [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md). (This record originally cited `docs/tech-design/BB-auth-common.md` and `docs/tech-design/BB-auth-basic.md`; neither file was ever committed.)
 
 ## D-005: Auth state machine uses a unified form model (no redirect action type)
 
@@ -196,6 +197,7 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 **Date**: 2026-06-08
 **Authors:** pranavosu
+**Status:** Still in force. Since [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) there is one auth block: `Auth` applies this recipe through the same helper (`packages/bb-auth/src/cookies.ts`), with the opt-in at `session: { crossDomain: true }`. The original record follows unchanged.
 
 ### Context
 The three auth Building Blocks disagreed on the session cookie's `SameSite` attribute (and the coupled `Secure` / `Partitioned` handling):
@@ -271,7 +273,7 @@ Every reference doc MUST ship via `"files"` in package.json (so it reaches `node
 ### References
 - Amends: D-002 (original two-file rule)
 - Skill convention this mirrors: `.skills/blocks-pr-review/` (`SKILL.md` + `references/`)
-- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md`
+- First third-file instance: [`packages/bb-auth/CUSTOMIZING-AUTH-UI.md`](../packages/bb-auth/CUSTOMIZING-AUTH-UI.md) (moved from `packages/auth-common/` when the auth Building Blocks were unified into `Auth`)
 
 ## D-009: External databases — Blocks-applied, version-controlled schema migrations
 
@@ -905,3 +907,123 @@ What the bound needs is an ordering rather than a margin: 64 characters sits bel
 - D-020 — what a native generator validates
 - `packages/core/src/scripts/validate-native-catalogs.ts` — `EXPORT_GRAMMAR`, the alphabet the generators follow; `MAX_EXPORT_LENGTH`, the 64-character bound shared with `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/parser/NativeCatalogParser.kt` alone; and `seenTags`, which a derived type name is distinct from
 - `native/swift/Sources/BlocksCodegen/CodegenModel.swift`, `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/NamingUtils.kt`, `native/dart/packages/blocks_codegen/lib/src/builder.dart` — the three derivations
+
+## D-022: Each deploy stage writes its own CDK outputs document
+
+**Date**: 2026-11-05
+**Authors:** phandpau
+
+### Context
+`npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
+
+The CDK CLI does not merge into that file. It writes the stacks of the one invocation that produced it, and it writes from a `finally` block, so the write lands even when the deploy throws (confirmed in review against the pinned `aws-cdk@2.1138.0`). Two consequences followed. A production deploy replaced the sandbox's record with its own stack alone, so anything reading the file for the sandbox got production's stack. And a deploy that failed on its first stack wrote an empty document, blanking the record of a stack that was still standing.
+
+Readers have been working around this rather than relying on the file. `.blocks-sandbox/last-deploy.json` exists because the shared document cannot be trusted after the runner exits, and `sandbox console` derives the sandbox stack name instead of reading a stack out of the document at all.
+
+### Decision
+One outputs document per stage, by name:
+
+- sandbox keeps `.blocks-sandbox/outputs.json`
+- production writes `.blocks-sandbox/outputs.production.json`
+
+The names live in one place, `OUTPUTS_FILE` in `packages/core/src/scripts/deploy-outputs.ts`, with `outputsFileIn` for the sandbox commands, whose out directory is an option. The CLI's record cleanup takes the document of the stage it is forgetting, so destroying one stage no longer leaves the other's record behind, and no longer fails to clean its own. A production destroy also clears its stack from a pre-split `outputs.json`, the one document the two stages can still share on an app that upgrades.
+
+### Rationale
+Two distinct file names are the whole fix, because the write is the CDK CLI's and it cannot be asked to merge. Nothing downstream has to detect or repair a mixed document: a stage's file holds only ever that stage's stacks, and a failed production deploy can only blank production's record.
+
+Both documents stay in `.blocks-sandbox/`. The directory's name is a wart (it holds per-deploy state for every stage, not only the sandbox) but it is already ignored everywhere, while `.blocks/` is committed for the `config.json` carrying the app's stable `stackId` (D-012). A per-deploy, account-specific file placed there would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record. Renaming the directory is a separate, breaking change: the Hosting construct serves it as a public URL path.
+
+An app that upgrades still has a pre-split `outputs.json` on disk, and it can hold production's stack alone. For `cdk-blocks sandbox console` that document is only corroboration for a stack name derived from `sandbox-id.txt`, so the CLI cannot name the wrong stack from it. That is not true of every reader: the public `openConsole({ outputsFile })` still takes the document's first stack, and the Kotlin and Swift example scripts plus any app scaffolded before the CLI call it that way, so those open production until one `npm run sandbox` rewrites the file. A production destroy now removes that entry too, which closes the case where the named stack no longer exists. The CLI tests keep a mixed document as a fixture for both destroy directions.
+
+### Alternatives Considered
+**Keep one file and choose the right stack when reading it.** Rejected: after a deploy the file physically holds only that invocation's stacks, so there is no second stack to choose between. The other stage's record is gone, not ambiguous.
+
+**Record production's outputs in `.blocks/` instead.** Rejected: that directory is committed, so it would need a per-file ignore everywhere a template or example is scaffolded, and a single omission commits a developer's deployment record.
+
+**Rely on `last-deploy.json` alone and leave the shared document as it is.** Rejected: it records only a successful deploy made through the CLI runner, so a failed deploy and an app driven by the old npm-script wrappers leave no entry, and it is owned by the CLI while core and the dashboard sit below it. It remains the right source for what a deploy reported; it is not a substitute for the document being correct.
+
+**Merge each invocation's stacks into the existing file after the deploy.** Rejected: it re-derives state the CDK CLI just wrote, and a deploy killed between the CLI's write and the merge leaves the file in the state this decision exists to prevent.
+
+### References
+- `packages/core/src/scripts/deploy-outputs.ts` — `OUTPUTS_FILE`, the two names, and `outputsFileIn` for a caller-supplied out directory
+- `packages/core/src/scripts/deploy.ts` — the production write and the post-deploy read
+- `packages/core/src/scripts/sandbox.ts` — the sandbox writes and read, via `outputsFileIn`
+- `packages/blocks/src/cli/commands.ts` — `OUTPUTS_BASENAME`, mirrored rather than imported because core is resolved lazily and version-checked, and pinned against core by a test
+- D-012 — the committed `.blocks/config.json` and the app's stable `stackId`
+
+## D-023: One auth Building Block: `Auth` replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`
+
+**Date**: 2026-10-03
+**Authors:** Harshdeep Singh
+
+### Context
+AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` — plus `auth-common`. Users could not tell which to pick or why, and nothing in the framework answered the question. The blocks also disagreed on error names and on what `userId` means, and `AuthBasic` and `AuthCognito` used the same cookie name with incompatible payloads.
+
+### Decision
+Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
+
+- **Two federation engines.** A provider either federates through a Cognito user pool (`store: 'cognito'`, the default) or is verified by your backend directly, with no Cognito involved (`store: 'builtin'`). Google, Facebook, Amazon, Apple and SAML providers always federate through Cognito.
+- **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
+- **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
+- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
+
+### Rationale
+1. **One import, no "which block?" decision.** Adding a sign-in method is a new option or `providers` entry on an `Auth` block, not a migration to another block.
+2. **Direct federation avoids a pricing cliff.** Cognito bills users federated through OIDC or SAML on a separate meter with 50 free MAUs, against 10,000 for direct and social sign-in. Direct federation involves no Cognito, runs offline against the built-in stub IdP, and supports PKCE-only (public) clients, which Cognito cannot federate because it requires a client secret.
+3. **Federating through Cognito adds no MFA.** Cognito leaves all authentication of federated users to their IdP. The case for federating through Cognito is having those users in the pool (Cognito groups, `auth.admin`, Cognito-issued tokens).
+4. **Offline development survives.** The local Cognito user pool runs fully offline, so removing `AuthBasic` does not remove offline development.
+
+### Alternatives Considered
+- **Keep three blocks and document the choice.** Leaves the decision with the user and keeps three error vocabularies and `userId` meanings.
+- **Route every provider through Cognito.** One token format, but a 200× smaller free tier for OIDC users, no offline federated sign-in and no PKCE-only IdPs.
+- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
+
+### References
+- User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
+- Upgrade guide and codemod: [`packages/bb-auth/MIGRATION.md`](../packages/bb-auth/MIGRATION.md)
+- Design: [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md)
+- Options shape: [D-024](#d-024-auth-options-store--providers)
+- Supersedes the three-block naming in [D-004](#d-004-auth-first-naming-convention-for-auth-building-blocks)
+
+## D-024: Auth options: `store` + `providers`
+
+**Date**: 2026-11-04
+**Authors:** Harshdeep Singh
+
+### Context
+The decision that matters most when configuring `Auth` is where a block's users live. A user either has a record in a Cognito user pool (groups, `auth.admin`, Cognito-issued tokens, the 50-free-MAU federated meter) or is verified by the backend alone (no Cognito charge, offline `stubIdp()`, PKCE-only clients). An options shape organised by protocol (one map each for social, OIDC and SAML providers, with a per-provider engine switch) would leave that decision implicit, a consequence of which key and which switch an entry used. It would also let one block hold both kinds of user, each with different features and no account linking between them.
+
+### Decision
+Every `Auth` block has one `store`, and all of its sign-in providers go in one `providers` map whose entries carry a `type`:
+
+- **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` is unchanged): users live in a Cognito user pool. It allows email + password, `mfa`, `passkeys`, `admin` and `userPool`, plus `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. `oidc` federates through Cognito and requires `clientSecret`.
+- **`store: 'builtin'`**: there is no user pool. The backend verifies each provider itself, and the only storage is the session table. It allows `providers` of `type: 'oidc' | 'oauth2' | 'stub'` (`github()` / `customOauth2()` and `stubIdp()` set the latter two), `users.groups` and `allowBearerAuth: true`. `validateUser` runs at sign-in only.
+- **One block holds one kind of user.** An app that wants password users and backend-verified IdP users uses two `Auth` blocks, with two session cookies and two `createApi()`s.
+- **Compile time first, runtime as a backstop.** `AuthOptions` is a union discriminated on `store`. Each arm declares the other arm's keys with named error types (`ERROR_needs_store_cognito<'emailPassword'>`), because `Auth` captures its options as a `const` generic, where TypeScript does no excess-property check. The constructor rejects the same combinations with readable messages, and also what the compiler can't see: options built from JSON or env, casts, and a social entry keyed differently from its `type`.
+- **One internal shape.** An internal resolver (`resolveOptions()`) maps the public shape, at the constructor, onto per-family maps with a per-provider `federateVia`. The CDK, runtime and mock layers and the engines read only that resolved shape.
+
+### Rationale
+1. **The store is visible at the call site.** "Where do my users live?" is one explicit key with a safe default, not a consequence of which provider keys or per-provider switches a block uses.
+2. **The strongest compile-time guard.** Each store accepts only its own options and provider types. With `store` set, autocomplete for `type:` lists only that store's types; with `store` omitted it lists every type, and the compiler rejects `'oauth2'` / `'stub'`.
+3. **Mixing stores in one block was ruled a non-goal.** A block's users never shared identities across the two kinds (no account linking), and features differed per user (`auth.admin` and pool groups for one kind, `groupsClaim` for the other). Two blocks make that split explicit. Without mixing as a goal, the main advantage of grouping options by store over one store per block went away.
+4. **Upgrade-safe.** Provider keys pass through the resolver unchanged, and construct ids are derived from them, so no deployed pool, identity provider or session moves.
+5. **Leaves room for later.** A future store, or an injectable engine construct created at the existing `<authId>/pool` path, would fit behind `store` without reshaping `providers`.
+
+### Alternatives Considered
+- **Per-protocol provider maps with a per-provider engine switch** (`socialProviders`, `samlProviders`, `oidcProviders: { x: { federateVia: 'direct' | 'cognito' } }`), with a decision tree in the README. This keeps every capability but leaves the store implicit.
+- **Per-protocol maps, with OIDC split by engine** (a separate `directOidcProviders` key instead of the switch). One setting fewer to get wrong, but the store stays implicit and the provider keys multiply.
+- **Group options by store** (`{ cognito: { emailPassword, social, saml, oidc }, direct: { oidc } }`). Explicit and extensible, and it allows both kinds of user in one block, but that is a non-goal (Rationale 3), and it nests every option one level deeper.
+- **An injectable engine construct** (`engine: new CognitoAuthEngine(…)`). Consistent with blocks that take a `compute:` or `cluster:` construct, but it moves the pool's construct path unless the default engine is pinned to `<authId>/pool`. It remains possible later, behind `store`.
+- **Cognito only.** Remove direct federation. This loses PKCE-only clients, `github()`, offline `stubIdp()` and the no-Cognito-charge path.
+- **Compose per-method handler blocks** into `Auth`. Flexible, but it adds the most constructs, the most decisions and the most effort.
+- **Cognito by default, with direct OIDC as a separate plugin block.** Close to the chosen design in effect, but it adds a second block type and a plugin seam to keep stable.
+
+### Invariants
+The options shape does not affect: construct ids (`<authId>/pool`, `client`, `sessions`, `session-secret`, `saml-<id>`, `idp-<id>`); user ids (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users); the session row format, including its internal `kind: 'direct'` discriminator; the default store (`'cognito'`); and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`).
+
+### References
+- User doc: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#where-do-your-users-live)
+- Design (the resolver and the store → engine mapping): [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md#options-store-providers-and-the-resolved-shape)
+- Amends [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc)

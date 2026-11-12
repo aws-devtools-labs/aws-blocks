@@ -15,8 +15,9 @@ that kind needs to reconstitute itself.
 The client reads the tag, builds the matching Kotlin object, and hands you that rather than the
 descriptor. The spec marks the result schema with `x-blocks-transferable` (plus
 `x-blocks-type-args` for generic arguments) so codegen knows to emit `RealtimeChannel<Cursor>`
-where the raw schema would have produced a struct. Transferables travel in the result position
-only — they are what a method hands back, never something you pass in.
+where the raw schema would have produced a struct. A transferable is sent back as its
+`{ "__blocks": … }` descriptor (its `toJson()`), so an operation can also take one as a parameter
+(see [Nested transferables](#nested-transferables)).
 
 ## The built-in bindings
 
@@ -60,13 +61,16 @@ bindings. Only the unbound case is rejected at code generation.
 
 ## Nested transferables
 
-A transferable is usually a method's whole result, but it can also be a property of one. Nested
-position supports `realtime/channel`, `file-bucket/download` and `file-bucket/upload`. An
-`oidc/client` has to be returned directly, and a tag with no binding has to be a direct result to
-get the `UnknownTransferable` fallback.
-
-That gap is tracked in
-[#1206](https://github.com/aws-devtools-labs/aws-blocks/issues/1206).
+A transferable the runtime binds (a realtime channel, a file handle, an OIDC client) hydrates into
+its live object wherever it appears: returned directly, inside a list or map, in a property of a
+model, or in the messages of a realtime channel (`RealtimeChannel<List<FileDownloadHandle>>`, or a
+channel whose message model holds one). An OIDC client needs the calling client and the configured
+`oidc { relayTo }`, so a model that holds one decodes through its generated operation; to decode one
+yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`. A
+transferable is sent back as its descriptor, so an operation can take one as a parameter, directly,
+in a list or map, or in a model (a model holding an OIDC client encodes with `OidcClient.json`, as
+the generated operation does). A tag with no binding has to be a direct result to get the
+`UnknownTransferable` fallback.
 
 ## HTTP clients
 
@@ -76,5 +80,4 @@ its `Blocks` instance owns, in either position. `Blocks.close()` does not reach 
 many handles accumulates engines for the lifetime of the process. An `OidcClient` is the
 exception — it runs on the instance's engine.
 
-This is tracked in [#1206](https://github.com/aws-devtools-labs/aws-blocks/issues/1206) alongside
-the nested-position gap; both come from hydration having no path back to the calling client.
+This is tracked in [#1206](https://github.com/aws-devtools-labs/aws-blocks/issues/1206).

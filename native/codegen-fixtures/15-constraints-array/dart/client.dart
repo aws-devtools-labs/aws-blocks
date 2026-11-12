@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -36,10 +37,10 @@ class ApiSetTagsInput {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ApiSetTagsInput &&
-          tags == other.tags;
+          blocksDeepEquals(tags, other.tags);
 
   @override
-  int get hashCode => tags.hashCode;
+  int get hashCode => blocksDeepHash(tags);
 
   @override
   String toString() => 'ApiSetTagsInput(tags: $tags)';
@@ -84,9 +85,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SetTagsResult> setTags({required ApiSetTagsInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.setTags', params);
     return SetTagsResult.fromJson(result as Map<String, dynamic>);
   }

@@ -35,7 +35,22 @@ self-starts the SQS pollers for the event handlers assigned to it.
   it). The `Container default image digest` workflow runs it on every pull
   request that changes the pin, so a typo'd or single-platform digest fails
   before merge, and weekly to open a tracking issue when the pin is behind.
-  The customer's `image` is never rewritten. Blocks builds **no**
+  The customer's `image` is never rewritten.
+  **Container user.** The default image runs as its unprivileged `node` user:
+  the container definition sets `user: '1000:1000'` (`DEFAULT_CONTAINER_USER`)
+  and `BLOCKS_APP_DIR=/home/node/app` (`DEFAULT_CONTAINER_APP_DIR`), a
+  directory that user owns, since the root-owned `/app` isn't writable by it.
+  The image sets no `WorkingDir`, so the container definition also sets
+  `workingDirectory: '/home/node'` (`DEFAULT_CONTAINER_WORKDIR`): relative
+  writes land in the user's home, not the root-owned `/`. It isn't the boot dir
+  itself because that dir doesn't exist at container start, and a working
+  directory the runtime has to create may be created as root.
+  Nothing else needs root: the API and readiness ports (8080/8081) aren't
+  privileged. A custom `image` gets no `user` or `workingDirectory` (its own
+  `USER` and `WORKDIR` apply) and keeps
+  `BLOCKS_APP_DIR=/app`, so an image that needs root, or that prepared `/app`
+  for its own user, behaves as before; setting `image` explicitly is the opt-out
+  for root. Blocks builds **no**
   container image, so `cdk deploy` never needs a local Docker daemon. The app
   code is co-bundled with esbuild (a `main.js` parent + a `worker.js` per-job
   worker, same bundle as the Lambda handler path) and shipped as an **S3 asset**
@@ -43,7 +58,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
   (`node -e …`) inlines a dependency-free bootstrap (`bootstrap.mjs`) that, at
   every container start, reads the task-role credentials from the ECS container
   credentials endpoint, SigV4-fetches `main.js`/`worker.js` from the asset's S3
-  location, writes them to `/app`, and execs `node /app/main.js`. This is the
+  location, writes them to `BLOCKS_APP_DIR` (above), and execs `node <dir>/main.js`. This is the
   sanctioned ECS pattern of a generic image + an entrypoint/command override that
   pulls what it needs with the task role — see
   [container credentials](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)
