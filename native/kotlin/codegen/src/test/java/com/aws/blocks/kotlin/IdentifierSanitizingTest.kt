@@ -109,8 +109,9 @@ class IdentifierSanitizingTest : FunSpec({
     test("enum values and discriminator values that can't be declared are sanitized") {
         val union = """{ "oneOf": [ ${obj("kind" to enumOf("x.y"), "v" to STRING)}, ${obj("kind" to enumOf("p\\q"), "w" to STRING)} ] }"""
         val source = generate(listOf(method("api.get", result = obj("level" to enumOf("a.b", "c\\d", "ok"), "pick" to union)))).getValue("Api")
-        source shouldContain "@SerialName(\"a.b\")\n        AB,"
-        source shouldContain "@SerialName(\"c\\\\d\")\n        CD,"
+        // `level` is a result, so its enum is open: each constant carries its wire value.
+        source shouldContain "public data object AB : Level() {\n          override val `value`: String = \"a.b\""
+        source shouldContain "public data object CD : Level() {\n          override val `value`: String = \"c\\\\d\""
         source shouldContain "@SerialName(\"x.y\")\n        public data class XY("
         source shouldContain "@SerialName(\"p\\\\q\")\n        public data class PQ("
     }

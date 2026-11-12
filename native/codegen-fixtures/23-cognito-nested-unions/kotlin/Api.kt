@@ -10,8 +10,14 @@ import kotlin.OptIn
 import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -69,14 +75,57 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSelection.AllowedMFATypes>,
           ) : NextStep() {
-            @Serializable
-            public enum class AllowedMFATypes {
-              @SerialName("SMS")
-              Sms,
-              @SerialName("TOTP")
-              Totp,
-              @SerialName("EMAIL")
-              Email,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AllowedMFATypes.Serializer::class)
+            public sealed class AllowedMFATypes {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Sms : AllowedMFATypes() {
+                override val `value`: String = "SMS"
+              }
+
+              public data object Totp : AllowedMFATypes() {
+                override val `value`: String = "TOTP"
+              }
+
+              public data object Email : AllowedMFATypes() {
+                override val `value`: String = "EMAIL"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AllowedMFATypes()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AllowedMFATypes> by lazy { listOf(Sms, Totp, Email) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AllowedMFATypes> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AllowedMFATypes", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AllowedMFATypes) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AllowedMFATypes = fromValue(decoder.decodeString())
+              }
             }
           }
 
@@ -86,12 +135,53 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSetupSelection.AllowedMFATypes>,
           ) : NextStep() {
-            @Serializable
-            public enum class AllowedMFATypes {
-              @SerialName("TOTP")
-              Totp,
-              @SerialName("EMAIL")
-              Email,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AllowedMFATypes.Serializer::class)
+            public sealed class AllowedMFATypes {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Totp : AllowedMFATypes() {
+                override val `value`: String = "TOTP"
+              }
+
+              public data object Email : AllowedMFATypes() {
+                override val `value`: String = "EMAIL"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AllowedMFATypes()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AllowedMFATypes> by lazy { listOf(Totp, Email) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AllowedMFATypes> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AllowedMFATypes", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AllowedMFATypes) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AllowedMFATypes = fromValue(decoder.decodeString())
+              }
             }
           }
 
@@ -122,16 +212,62 @@ public class Api(
             public val availableChallenges:
                 List<ContinueSignInWithFirstFactorSelection.AvailableChallenges>,
           ) : NextStep() {
-            @Serializable
-            public enum class AvailableChallenges {
-              @SerialName("PASSWORD")
-              Password,
-              @SerialName("EMAIL_OTP")
-              EmailOtp,
-              @SerialName("SMS_OTP")
-              SmsOtp,
-              @SerialName("WEB_AUTHN")
-              WebAuthn,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AvailableChallenges.Serializer::class)
+            public sealed class AvailableChallenges {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Password : AvailableChallenges() {
+                override val `value`: String = "PASSWORD"
+              }
+
+              public data object EmailOtp : AvailableChallenges() {
+                override val `value`: String = "EMAIL_OTP"
+              }
+
+              public data object SmsOtp : AvailableChallenges() {
+                override val `value`: String = "SMS_OTP"
+              }
+
+              public data object WebAuthn : AvailableChallenges() {
+                override val `value`: String = "WEB_AUTHN"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AvailableChallenges()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AvailableChallenges> by
+                    lazy { listOf(Password, EmailOtp, SmsOtp, WebAuthn) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AvailableChallenges = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AvailableChallenges> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AvailableChallenges", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AvailableChallenges) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AvailableChallenges = fromValue(decoder.decodeString())
+              }
             }
           }
 
@@ -220,14 +356,57 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSelection.AllowedMFATypes>,
           ) : NextStep() {
-            @Serializable
-            public enum class AllowedMFATypes {
-              @SerialName("SMS")
-              Sms,
-              @SerialName("TOTP")
-              Totp,
-              @SerialName("EMAIL")
-              Email,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AllowedMFATypes.Serializer::class)
+            public sealed class AllowedMFATypes {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Sms : AllowedMFATypes() {
+                override val `value`: String = "SMS"
+              }
+
+              public data object Totp : AllowedMFATypes() {
+                override val `value`: String = "TOTP"
+              }
+
+              public data object Email : AllowedMFATypes() {
+                override val `value`: String = "EMAIL"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AllowedMFATypes()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AllowedMFATypes> by lazy { listOf(Sms, Totp, Email) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AllowedMFATypes> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AllowedMFATypes", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AllowedMFATypes) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AllowedMFATypes = fromValue(decoder.decodeString())
+              }
             }
           }
 
@@ -237,12 +416,53 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSetupSelection.AllowedMFATypes>,
           ) : NextStep() {
-            @Serializable
-            public enum class AllowedMFATypes {
-              @SerialName("TOTP")
-              Totp,
-              @SerialName("EMAIL")
-              Email,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AllowedMFATypes.Serializer::class)
+            public sealed class AllowedMFATypes {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Totp : AllowedMFATypes() {
+                override val `value`: String = "TOTP"
+              }
+
+              public data object Email : AllowedMFATypes() {
+                override val `value`: String = "EMAIL"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AllowedMFATypes()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AllowedMFATypes> by lazy { listOf(Totp, Email) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AllowedMFATypes> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AllowedMFATypes", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AllowedMFATypes) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AllowedMFATypes = fromValue(decoder.decodeString())
+              }
             }
           }
 
@@ -273,16 +493,62 @@ public class Api(
             public val availableChallenges:
                 List<ContinueSignInWithFirstFactorSelection.AvailableChallenges>,
           ) : NextStep() {
-            @Serializable
-            public enum class AvailableChallenges {
-              @SerialName("PASSWORD")
-              Password,
-              @SerialName("EMAIL_OTP")
-              EmailOtp,
-              @SerialName("SMS_OTP")
-              SmsOtp,
-              @SerialName("WEB_AUTHN")
-              WebAuthn,
+            /**
+             * A string enum that keeps a value this client was generated without as [Unknown].
+             */
+            @Serializable(with = AvailableChallenges.Serializer::class)
+            public sealed class AvailableChallenges {
+              /**
+               * The value as it is sent on the wire.
+               */
+              public abstract val `value`: String
+
+              public data object Password : AvailableChallenges() {
+                override val `value`: String = "PASSWORD"
+              }
+
+              public data object EmailOtp : AvailableChallenges() {
+                override val `value`: String = "EMAIL_OTP"
+              }
+
+              public data object SmsOtp : AvailableChallenges() {
+                override val `value`: String = "SMS_OTP"
+              }
+
+              public data object WebAuthn : AvailableChallenges() {
+                override val `value`: String = "WEB_AUTHN"
+              }
+
+              /**
+               * A value this client was generated without, as the server sent it.
+               */
+              public data class Unknown(
+                override val `value`: String,
+              ) : AvailableChallenges()
+
+              public companion object {
+                /**
+                 * The known values, in the spec's order.
+                 */
+                public val entries: List<AvailableChallenges> by
+                    lazy { listOf(Password, EmailOtp, SmsOtp, WebAuthn) }
+
+                /**
+                 * The case for [value]: a known one, else [Unknown].
+                 */
+                public fun fromValue(`value`: String): AvailableChallenges = entries.firstOrNull { it.value == value } ?: Unknown(value)
+              }
+
+              public object Serializer : KSerializer<AvailableChallenges> {
+                override val descriptor: SerialDescriptor =
+                    PrimitiveSerialDescriptor("com.example.app.AvailableChallenges", PrimitiveKind.STRING)
+
+                override fun serialize(encoder: Encoder, `value`: AvailableChallenges) {
+                  encoder.encodeString(value.value)
+                }
+
+                override fun deserialize(decoder: Decoder): AvailableChallenges = fromValue(decoder.decodeString())
+              }
             }
           }
 

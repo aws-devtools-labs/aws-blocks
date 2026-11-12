@@ -5,8 +5,13 @@ import kotlin.Int
 import kotlin.String
 import kotlin.collections.List
 import kotlin.collections.Map
-import kotlinx.serialization.SerialName
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 @Serializable
 public data class Invoice(
@@ -61,12 +66,53 @@ public data class Shipment(
         public val meters: Double,
         public val source: Source,
       ) {
-        @Serializable
-        public enum class Source {
-          @SerialName("gps")
-          Gps,
-          @SerialName("cell")
-          Cell,
+        /**
+         * A string enum that keeps a value this client was generated without as [Unknown].
+         */
+        @Serializable(with = Source.Serializer::class)
+        public sealed class Source {
+          /**
+           * The value as it is sent on the wire.
+           */
+          public abstract val `value`: String
+
+          public data object Gps : Source() {
+            override val `value`: String = "gps"
+          }
+
+          public data object Cell : Source() {
+            override val `value`: String = "cell"
+          }
+
+          /**
+           * A value this client was generated without, as the server sent it.
+           */
+          public data class Unknown(
+            override val `value`: String,
+          ) : Source()
+
+          public companion object {
+            /**
+             * The known values, in the spec's order.
+             */
+            public val entries: List<Source> by lazy { listOf(Gps, Cell) }
+
+            /**
+             * The case for [value]: a known one, else [Unknown].
+             */
+            public fun fromValue(`value`: String): Source = entries.firstOrNull { it.value == value } ?: Unknown(value)
+          }
+
+          public object Serializer : KSerializer<Source> {
+            override val descriptor: SerialDescriptor =
+                PrimitiveSerialDescriptor("com.example.app.Source", PrimitiveKind.STRING)
+
+            override fun serialize(encoder: Encoder, `value`: Source) {
+              encoder.encodeString(value.value)
+            }
+
+            override fun deserialize(decoder: Decoder): Source = fromValue(decoder.decodeString())
+          }
         }
       }
     }

@@ -188,10 +188,31 @@ class KotlinCodeGenerator(
     private val localTimeClass = ClassNames.localTime
     private val uuidClass = ClassNames.uuid
 
+    /** The named types an operation's result reaches; their enums are open ([OpenEnumGenerator]). */
+    private var openTypeNames: Set<String> = emptySet()
+
+    /** Whether the enums generated now are open. */
+    private var openEnums = false
+
+    /** Runs [body] with [openEnums] set to [open], then restores it. */
+    private fun <T> withOpenEnums(open: Boolean, body: () -> T): T {
+        val saved = openEnums
+        openEnums = open
+        try {
+            return body()
+        } finally {
+            openEnums = saved
+        }
+    }
+
     // ── Main entry point ─────────────────────────────────────────────
 
     fun generate(model: CodegenModel): GeneratorResult {
         val index = buildTypeIndex(model)
+        openTypeNames = OpenEnumGenerator.reachableNames(
+            model.apiNamespaces.flatMap { ns -> ns.operations.map { it.result.type } },
+            model.typeDefinitions.associate { it.name to it.type },
+        )
         val files = mutableListOf<FileSpec>()
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
@@ -577,12 +598,16 @@ class KotlinCodeGenerator(
         // Route enum and sealed classes first (they may be schema children)
         for ((_, entry) in index.enumClasses) {
             val enumType = entry.typeDef.type as ResolvedType.Enum
-            val spec = generateEnumClass(entry.shortName, enumType.values)
+            val spec = withOpenEnums(isOpenDefinition(entry.typeDef)) {
+                generateEnumClass(entry.shortName, enumType.values)
+            }
             routeType(entry.typeDef, spec)
         }
         for ((_, entry) in index.sealedClasses) {
             val unionType = entry.typeDef.type as ResolvedType.Union
-            val spec = generateSealedClass(entry.shortName, unionType, index, serializerRegistry = serializerRegistry)
+            val spec = withOpenEnums(isOpenDefinition(entry.typeDef)) {
+                generateSealedClass(entry.shortName, unionType, index, serializerRegistry = serializerRegistry)
+            }
             routeType(entry.typeDef, spec)
         }
 
@@ -593,7 +618,9 @@ class KotlinCodeGenerator(
             .sortedByDescending { entry -> entry.typeDef.parentSchema?.let { it.count { c -> c == '.' } + 1 } ?: 0 }
         for (entry in dataClassesInnermostFirst) {
             val recordType = entry.typeDef.type as ResolvedType.Record
-            var spec = generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
+            var spec = withOpenEnums(isOpenDefinition(entry.typeDef)) {
+                generateDataClass(entry.shortName, recordType, index, serializerRegistry = serializerRegistry)
+            }
 
             val nestedTypes = schemaNestedTypes[entry.typeDef.name]
             if (nestedTypes != null) {
@@ -951,10 +978,21 @@ class KotlinCodeGenerator(
 
     // ── Enum class generation ─────────────────────────────────────────
 
+    /**
+     * A top-level type, or one nested in a component schema, is open when a result reaches it or
+     * the schema it is nested in.
+     */
+    private fun isOpenDefinition(typeDef: TypeDefinition): Boolean =
+        typeDef.name in openTypeNames ||
+            typeDef.parentSchema?.substringBefore('.')?.let { it in openTypeNames } == true
+
     private fun generateEnumClass(
         name: String,
         values: List<String>,
     ): TypeSpec {
+        if (openEnums) {
+            return OpenEnumGenerator.generate(name, enumConstantNames(values), "$packageName.$name", ::kotlinStringLiteral)
+        }
         val enumBuilder = TypeSpec
             .enumBuilder(name)
             .addAnnotation(ClassNames.serializable)
@@ -1633,15 +1671,18 @@ class KotlinCodeGenerator(
             objectBuilder.addType(generateNarrowedTypeArgEnum(narrowed.values, narrowed.binding))
         }
 
+        val resultRoots = OpenEnumGenerator.resultRootNames(operation.result.type)
         for (node in operation.nestedTypes) {
             objectBuilder.addType(
-                generateNestedTypeSpec(
-                    node,
-                    index,
-                    listOf(objectName),
-                    serializerRegistry,
-                    serializerContext,
-                ),
+                withOpenEnums(node.name in resultRoots) {
+                    generateNestedTypeSpec(
+                        node,
+                        index,
+                        listOf(objectName),
+                        serializerRegistry,
+                        serializerContext,
+                    )
+                },
             )
         }
 

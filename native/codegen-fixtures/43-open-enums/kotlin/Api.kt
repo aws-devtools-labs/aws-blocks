@@ -12,8 +12,14 @@ import kotlin.OptIn
 import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -82,12 +88,53 @@ public class Api(
       public data class Flagged(
         public val severity: Flagged.Severity,
       ) : Result() {
-        @Serializable
-        public enum class Severity {
-          @SerialName("low")
-          Low,
-          @SerialName("high")
-          High,
+        /**
+         * A string enum that keeps a value this client was generated without as [Unknown].
+         */
+        @Serializable(with = Severity.Serializer::class)
+        public sealed class Severity {
+          /**
+           * The value as it is sent on the wire.
+           */
+          public abstract val `value`: String
+
+          public data object Low : Severity() {
+            override val `value`: String = "low"
+          }
+
+          public data object High : Severity() {
+            override val `value`: String = "high"
+          }
+
+          /**
+           * A value this client was generated without, as the server sent it.
+           */
+          public data class Unknown(
+            override val `value`: String,
+          ) : Severity()
+
+          public companion object {
+            /**
+             * The known values, in the spec's order.
+             */
+            public val entries: List<Severity> by lazy { listOf(Low, High) }
+
+            /**
+             * The case for [value]: a known one, else [Unknown].
+             */
+            public fun fromValue(`value`: String): Severity = entries.firstOrNull { it.value == value } ?: Unknown(value)
+          }
+
+          public object Serializer : KSerializer<Severity> {
+            override val descriptor: SerialDescriptor =
+                PrimitiveSerialDescriptor("com.example.app.Severity", PrimitiveKind.STRING)
+
+            override fun serialize(encoder: Encoder, `value`: Severity) {
+              encoder.encodeString(value.value)
+            }
+
+            override fun deserialize(decoder: Decoder): Severity = fromValue(decoder.decodeString())
+          }
         }
       }
     }
@@ -99,12 +146,53 @@ public class Api(
       public val taskId: String,
       public val change: Result.Change,
     ) {
-      @Serializable
-      public enum class Change {
-        @SerialName("created")
-        Created,
-        @SerialName("deleted")
-        Deleted,
+      /**
+       * A string enum that keeps a value this client was generated without as [Unknown].
+       */
+      @Serializable(with = Change.Serializer::class)
+      public sealed class Change {
+        /**
+         * The value as it is sent on the wire.
+         */
+        public abstract val `value`: String
+
+        public data object Created : Change() {
+          override val `value`: String = "created"
+        }
+
+        public data object Deleted : Change() {
+          override val `value`: String = "deleted"
+        }
+
+        /**
+         * A value this client was generated without, as the server sent it.
+         */
+        public data class Unknown(
+          override val `value`: String,
+        ) : Change()
+
+        public companion object {
+          /**
+           * The known values, in the spec's order.
+           */
+          public val entries: List<Change> by lazy { listOf(Created, Deleted) }
+
+          /**
+           * The case for [value]: a known one, else [Unknown].
+           */
+          public fun fromValue(`value`: String): Change = entries.firstOrNull { it.value == value } ?: Unknown(value)
+        }
+
+        public object Serializer : KSerializer<Change> {
+          override val descriptor: SerialDescriptor =
+              PrimitiveSerialDescriptor("com.example.app.Change", PrimitiveKind.STRING)
+
+          override fun serialize(encoder: Encoder, `value`: Change) {
+            encoder.encodeString(value.value)
+          }
+
+          override fun deserialize(decoder: Decoder): Change = fromValue(decoder.decodeString())
+        }
       }
     }
   }
