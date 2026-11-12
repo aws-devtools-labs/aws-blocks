@@ -208,6 +208,20 @@ describe('PreSignUp trigger: each trigger source maps to the UserCandidate valid
 		assert.strictEqual(parsePreSignUpEvent({ triggerSource: 'PreSignUp_SignUp' }), null);
 		assert.strictEqual(parsePreSignUpEvent(null), null);
 	});
+
+	test('an attribute or metadata key named __proto__ is kept as an ordinary key', () => {
+		// The Lambda runtime JSON.parses the event, so `__proto__` is an own key.
+		const event = cognitoEvent(
+			'PreSignUp_SignUp',
+			'ada',
+			JSON.parse('{"__proto__":"x","email":"ada@example.com"}'),
+			JSON.parse('{"__proto__":"y"}'),
+		);
+		const p = parsed(event);
+		assert.deepStrictEqual(Object.keys(p.userAttributes), ['__proto__', 'email']);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(p.userAttributes, '__proto__')?.value, 'x');
+		assert.strictEqual(Object.getOwnPropertyDescriptor(p.clientMetadata, '__proto__')?.value, 'y');
+	});
 });
 
 describe('PreSignUp trigger: accept / reject', () => {

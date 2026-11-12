@@ -386,6 +386,57 @@ describe('requireRole', () => {
 		const role = await b.request((ctx) => h.auth.requireRole(ctx, 'admins'));
 		assert.deepStrictEqual(role.groups, ['admins']);
 	});
+
+	test('a direct-federated claim named __proto__ is an ordinary attribute, also on a later request', async () => {
+		const h = makeAuth({
+			store: 'builtin',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
+		const okta = h.federation.get('okta');
+		assert.ok(okta);
+		okta.identity = {
+			kind: 'direct',
+			issuer: 'https://okta.example.com',
+			subject: 'u-1',
+			// A decoded ID token: `__proto__` is an own key after JSON.parse.
+			claims: JSON.parse('{"sub":"u-1","__proto__":"x","nickname":"eve"}'),
+			groups: [],
+			expiresAt: Date.now() + 3600_000,
+		};
+		const b = new Browser();
+		const signedIn = await b.request((ctx) => h.auth.completeFederated(ctx, 'okta'));
+		assert.deepStrictEqual(Object.keys(signedIn.attributes).sort(), ['__proto__', 'nickname']);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(signedIn.attributes, '__proto__')?.value, 'x');
+		const later = await b.request((ctx) => h.auth.requireAuth(ctx));
+		assert.deepStrictEqual(Object.keys(later.attributes).sort(), ['__proto__', 'nickname']);
+	});
+
+	test('an attributeMapping target named __proto__ is an ordinary attribute', async () => {
+		const h = makeAuth({
+			store: 'builtin',
+			providers: {
+				okta: {
+					type: 'oidc',
+					issuer: 'https://okta.example.com',
+					clientId: 'c',
+					// Options loaded from JSON: `__proto__` is an own key of the mapping.
+					attributeMapping: JSON.parse('{"__proto__":"nickname"}'),
+				},
+			},
+		});
+		const okta = h.federation.get('okta');
+		assert.ok(okta);
+		okta.identity = {
+			kind: 'direct',
+			issuer: 'https://okta.example.com',
+			subject: 'u-1',
+			claims: { sub: 'u-1', nickname: 'eve' },
+			groups: [],
+			expiresAt: Date.now() + 3600_000,
+		};
+		const user = await new Browser().request((ctx) => h.auth.completeFederated(ctx, 'okta'));
+		assert.strictEqual(Object.getOwnPropertyDescriptor(user.attributes, '__proto__')?.value, 'eve');
+	});
 });
 
 describe('federated sessions in the same table', () => {

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, type TestContext, test } from 'node:te
 import type { AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
 import type { BlocksContext } from '@aws-blocks/core';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { parseUser } from './engines/native-mock-store.js';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser, captureLogger, makeContext } from './test-helpers.js';
@@ -1142,6 +1143,18 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 		const reloaded = new Auth(r, 'auth');
 		assert.strictEqual((await b.request((ctx) => reloaded.signIn('__proto__', PASSWORD, ctx))).status, 'signedIn');
 		assert.strictEqual(Object.getPrototypeOf(JSON.parse('{}')), Object.prototype);
+	});
+
+	test('a stored attribute or device key named __proto__ is read back as an ordinary key', () => {
+		const user = parseUser(
+			JSON.parse(
+				'{"userSub":"s","password":"p","attributes":{"__proto__":"x"},"devices":{"__proto__":{"deviceKey":"d"}}}',
+			),
+		);
+		assert.ok(user);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(user.attributes, '__proto__')?.value, 'x');
+		assert.strictEqual(Object.getOwnPropertyDescriptor(user.devices, '__proto__')?.value.deviceKey, 'd');
+		assert.strictEqual(Object.getPrototypeOf(user.devices), Object.prototype);
 	});
 
 	test('AuthBasic → Auth (same id): the old session cookie signs out and is cleared; its files are left alone', async (t) => {

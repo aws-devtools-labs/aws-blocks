@@ -400,6 +400,17 @@ describe('DirectFederationEngine', () => {
 		assert.strictEqual(identity.claims.email, 'ada@example.com', 'the verified ID-token claim wins');
 	});
 
+	test('userinfo fills a claim named like an Object.prototype member (__proto__, constructor)', async () => {
+		idp.userInfoClaims = JSON.parse('{"__proto__":"p","constructor":"c"}');
+		const { engine } = makeEngine(okta());
+		const identity = await signIn(idp, engine, { email: 'ada@example.com' });
+		assert.strictEqual(identity.kind, 'direct');
+		if (identity.kind !== 'direct') return;
+		assert.strictEqual(Object.getOwnPropertyDescriptor(identity.claims, '__proto__')?.value, 'p');
+		assert.strictEqual(Object.getOwnPropertyDescriptor(identity.claims, 'constructor')?.value, 'c');
+		assert.strictEqual(Object.getPrototypeOf(identity.claims), Object.prototype);
+	});
+
 	test('browser-PKCE exchange: the client’s own verifier and nonce', async () => {
 		const { engine } = makeEngine(okta());
 		const verifier = 'client-generated-verifier-0123456789-abcdefghijklmnop';

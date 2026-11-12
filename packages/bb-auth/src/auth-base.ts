@@ -1738,15 +1738,20 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		const authTime = typeof claims.auth_time === 'number' ? claims.auth_time : Math.floor(Date.now() / 1000);
 		// Profile attributes: string claims minus OIDC protocol claims, then the
 		// provider's `attributeMapping` (attribute ← claim) on top.
-		const profile: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(claims)) {
-			if (!OIDC_PROTOCOL_CLAIMS.has(k)) profile[k] = v;
-		}
+		const profile = Object.fromEntries(Object.entries(claims).filter(([k]) => !OIDC_PROTOCOL_CLAIMS.has(k)));
 		const attributes = extractUserAttributes(profile);
 		const mapping = this.providers.get(providerId)?.provider.config.attributeMapping ?? {};
 		for (const [attribute, claim] of Object.entries(mapping)) {
 			const value = typeof claim === 'string' ? claims[claim] : undefined;
-			if (typeof value === 'string') attributes[attribute] = value;
+			// Defined, not assigned: a mapping target named `__proto__` stays a key.
+			if (typeof value === 'string') {
+				Object.defineProperty(attributes, attribute, {
+					value,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
+			}
 		}
 		const record: DirectSessionRecord = {
 			kind: 'direct',
@@ -2201,7 +2206,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private readAttributes(source: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>> {
 		const attributes: Partial<Record<ReadAttrOf<O>, string>> = {};
 		for (const [k, v] of Object.entries(source)) {
-			if (this.isReadAttribute(k)) attributes[k] = v;
+			// Defined, not assigned: a stored attribute named `__proto__` stays a key.
+			if (this.isReadAttribute(k)) {
+				Object.defineProperty(attributes, k, {
+					value: v,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
+			}
 		}
 		return attributes;
 	}
