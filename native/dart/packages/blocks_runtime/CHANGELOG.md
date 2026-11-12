@@ -115,6 +115,9 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   the provider returns a token. It used to drop the cookie whenever an
   `authProvider` was set, so an app that set an `OidcClient` signed in with the
   session cookie as its `authProvider` sent neither.
+- `OidcClient.exchange` sends `tokens: false`, so a backend with bearer tokens
+  enabled doesn't mint tokens for a client that signs in with the session
+  cookie.
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
