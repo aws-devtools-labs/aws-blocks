@@ -24,6 +24,7 @@
   "files": [
     "dist",
     "README.md",
+    "CUSTOM-FRONT-DOOR.md",
     "src",
     "LICENSE"
   ],
