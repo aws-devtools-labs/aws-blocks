@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-blocks/core": minor
 "@aws-blocks/hosting": patch
 "@aws-blocks/blocks": patch
 ---
