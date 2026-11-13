@@ -61,6 +61,77 @@ describe('CronJob mock – schedules far in the future', () => {
 	});
 });
 
+describe('CronJob mock – rate schedules longer than a timer allows', () => {
+	afterEach(() => {
+		mock.timers.reset();
+		mock.restoreAll();
+	});
+
+	test('rate(30 days) never schedules a timer delay Node would clamp to 1 ms', () => {
+		mock.method(console, 'log', () => {});
+		const setTimeoutSpy = mock.method(globalThis, 'setTimeout');
+		const setIntervalSpy = mock.method(globalThis, 'setInterval');
+		new CronJob(fakeScope, 'monthly-rate', {
+			schedule: 'rate(30 days)',
+			handler: async () => {},
+		});
+
+		// Node treats a timer delay above 2^31-1 ms as 1 ms, so such a timer would fire every millisecond.
+		const delays = [...setTimeoutSpy.mock.calls, ...setIntervalSpy.mock.calls].map((c) => Number(c.arguments[1]));
+		assert.notDeepStrictEqual(delays, []);
+		assert.ok(
+			delays.every((d) => d <= 2_147_483_647),
+			`timer delays: ${delays.join(', ')}`,
+		);
+	});
+
+	test('rate(30 days) fires every 30 days', () => {
+		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
+		mock.method(console, 'log', () => {});
+		const fired: string[] = [];
+		new CronJob(fakeScope, 'monthly-rate', {
+			schedule: 'rate(30 days)',
+			handler: async (event) => {
+				fired.push(event.scheduledTime);
+			},
+		});
+
+		const until = new Date('2026-05-01T00:00:00Z').getTime();
+		while (Date.now() < until) {
+			mock.timers.tick(Math.min(86_400_000, until - Date.now()));
+		}
+		assert.deepStrictEqual(fired, ['2026-03-31T00:00:00.000Z', '2026-04-30T00:00:00.000Z']);
+	});
+
+	test('rate(30 days) runs once after the clock jumps past several intervals, then resumes its cadence', () => {
+		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
+		mock.method(console, 'log', () => {});
+		const fired: string[] = [];
+		new CronJob(fakeScope, 'monthly-rate-after-sleep', {
+			schedule: 'rate(30 days)',
+			handler: async (event) => {
+				fired.push(event.scheduledTime);
+			},
+		});
+
+		const beforeSleep = new Date('2026-03-30T00:00:00Z').getTime();
+		while (Date.now() < beforeSleep) {
+			mock.timers.tick(Math.min(86_400_000, beforeSleep - Date.now()));
+		}
+		assert.deepStrictEqual(fired, []);
+
+		// One jump of 75 days passes the slots due on 03-31, 04-30 and 05-30.
+		mock.timers.tick(75 * 86_400_000);
+		assert.deepStrictEqual(fired, ['2026-06-13T00:00:00.000Z']);
+
+		const until = new Date('2026-06-30T00:00:00Z').getTime();
+		while (Date.now() < until) {
+			mock.timers.tick(Math.min(86_400_000, until - Date.now()));
+		}
+		assert.deepStrictEqual(fired, ['2026-06-13T00:00:00.000Z', '2026-06-29T00:00:00.000Z']);
+	});
+});
+
 describe('CronJob mock – schedules that cannot match', () => {
 	beforeEach(() => {
 		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
