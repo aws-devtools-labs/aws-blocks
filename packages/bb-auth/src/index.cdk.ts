@@ -339,7 +339,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					user: emailPassword && authFlow === 'USER_AUTH',
 				},
 				// Only what end users may set (no `*_verified` flag, no `userWritable: false`
-				// attribute); Cognito's default is every attribute. Updates in place.
+				// attribute); Cognito's default is every standard and custom attribute. Updates in place.
 				writeAttributes: endUserWriteAttributes(opts.users?.attributes),
 			});
 

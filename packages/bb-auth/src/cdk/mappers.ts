@@ -119,7 +119,7 @@ const VERIFIED_FLAGS = new Set(['email_verified', 'phone_number_verified']);
  *
  * `mapped` adds the pool attributes a federated provider maps (`email`,
  * `custom:team`, …): the hosted-UI client writes them at federated sign-in, and
- * Cognito requires them to be writable by it. The option validation refuses a
+ * Cognito's `CreateUserPoolClient` reference asks for them in its write attributes. The option validation refuses a
  * mapping onto a `userWritable: false` attribute while self sign-up is on.
  *
  * @internal

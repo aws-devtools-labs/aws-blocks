@@ -11,8 +11,9 @@
  *
  * The pool's schema is the one the CDK layer provisions: Cognito's standard
  * attributes plus the declared `users.attributes`, `custom:`-prefixed, with
- * their mutability (`mapCustomAttributes`). The app client sets no
- * `WriteAttributes`, so Cognito's default write permissions apply.
+ * their mutability (`mapCustomAttributes`). The app client's `WriteAttributes`
+ * leave out the verified flags and every `userWritable: false` attribute
+ * (`endUserWriteAttributes`); the rules below follow from that.
  *
  * Rules (sources: the Cognito developer guide, "Working with user attributes",
  * <https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html>;

@@ -329,9 +329,9 @@ export function provisionHostedUiFederation(
 		supportedIdentityProviders: registrations.map((r) =>
 			cognito.UserPoolClientIdentityProvider.custom(r.providerName),
 		),
-		// What end users may set, plus every attribute a provider maps (Cognito requires a
-		// mapped attribute to be writable by this client). Cognito's default is every
-		// attribute. Updates in place.
+		// What end users may set, plus every attribute a provider maps (Cognito's
+		// `CreateUserPoolClient` reference asks for every mapped attribute in `WriteAttributes`).
+		// Cognito's default is every standard and custom attribute. Updates in place.
 		writeAttributes: endUserWriteAttributes(
 			options.users?.attributes,
 			registrations.flatMap((r) => Object.keys(r.attributeMapping)),
