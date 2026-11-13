@@ -101,9 +101,10 @@ function importGraph(entry: string): Graph {
 		const file = queue.pop() as string;
 		if (graph.files.has(file)) continue;
 		graph.files.add(file);
-		// Static imports and re-exports only: what a bundler always includes. Guarded
-		// dynamic imports (core's client reads `node:fs` only when running in Node,
-		// behind `webpackIgnore`) are the importing package's own contract.
+		// Static imports and re-exports only: what a bundler always includes. A
+		// dynamic import is the importing package's own contract (core's client has
+		// none: it reads `node:fs` through `process.getBuiltinModule` when running
+		// in Node, and its own test keeps `import()` out of its graph).
 		const sf = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, false);
 		const specifiers = sf.statements.flatMap((st) =>
 			(ts.isImportDeclaration(st) || ts.isExportDeclaration(st)) &&
