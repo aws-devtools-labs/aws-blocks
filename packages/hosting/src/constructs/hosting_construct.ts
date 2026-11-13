@@ -205,11 +205,10 @@ export type HostingConstructProps = {
     /**
      * Lambda timeout. Accepts either a `cdk.Duration` (preferred) or a
      * number of seconds for ergonomics — the L3 normalizes both to
-     * `Duration` before handing them to the Lambda construct. A plain
-     * number used to slip through the type at the user-facing API
-     * surface (e.g. when consumed via JS-compiled wrappers) and crash
-     * synth deep inside aws-cdk-lib with `props.timeout.toSeconds is
-     * not a function`. Coercing here makes that surface forgiving.
+     * `Duration` before handing them to the Lambda construct. Coercing a
+     * plain number keeps a caller outside the type system (e.g. a
+     * JS-compiled wrapper) from crashing synth deep inside aws-cdk-lib with
+     * `props.timeout.toSeconds is not a function`.
      */
     timeout?: Duration | number;
     reservedConcurrency?: number;
@@ -217,12 +216,11 @@ export type HostingConstructProps = {
      * Reserved concurrent executions for the image-optimization Lambda.
      * Default: undefined (no reservation).
      *
-     * Historically this was hardcoded to 10, which broke `cdk deploy` on
-     * fresh AWS accounts: the default account-level unreserved-concurrency
+     * There is no reservation by default because one can break `cdk deploy`
+     * on fresh AWS accounts: the default account-level unreserved-concurrency
      * limit is 10, so reserving all 10 for image-opt drops the account
      * below its required minimum and Lambda rejects the stack with a 400.
-     * Defaulting to no reservation keeps deploys working out of the box
-     * while still letting operators cap image-opt explicitly.
+     * Operators can still cap image-opt explicitly.
      */
     imageOptimization?: {
       reservedConcurrency?: number;
@@ -354,7 +352,7 @@ export type HostingConstructProps = {
     encryptionKey?: IKey;
     retainOnDelete?: boolean;
     buildRetentionDays?: number;
-    /** Advisory hint used at synth to warn when deploy cadence ≥ retention (#480). */
+    /** Advisory hint used at synth to warn when deploy cadence ≥ retention. */
     deployIntervalDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };

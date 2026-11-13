@@ -453,7 +453,7 @@ export type HostingProps = {
      * ONLY at synth to emit a warning when your rollback window
      * (`buildRetentionDays`) is shorter than your deploy cadence, which would
      * let superseded builds expire before your next deploy. The live build is
-     * never affected (#480), so this is a rollback-window note, not an error.
+     * never affected, so this is a rollback-window note, not an error.
      */
     deployIntervalDays?: number;
     /**
