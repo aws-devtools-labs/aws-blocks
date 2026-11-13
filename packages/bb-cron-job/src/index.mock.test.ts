@@ -102,6 +102,34 @@ describe('CronJob mock – rate schedules longer than a timer allows', () => {
 		}
 		assert.deepStrictEqual(fired, ['2026-03-31T00:00:00.000Z', '2026-04-30T00:00:00.000Z']);
 	});
+
+	test('rate(30 days) runs once after the clock jumps past several intervals, then resumes its cadence', () => {
+		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
+		mock.method(console, 'log', () => {});
+		const fired: string[] = [];
+		new CronJob(fakeScope, 'monthly-rate-after-sleep', {
+			schedule: 'rate(30 days)',
+			handler: async (event) => {
+				fired.push(event.scheduledTime);
+			},
+		});
+
+		const beforeSleep = new Date('2026-03-30T00:00:00Z').getTime();
+		while (Date.now() < beforeSleep) {
+			mock.timers.tick(Math.min(86_400_000, beforeSleep - Date.now()));
+		}
+		assert.deepStrictEqual(fired, []);
+
+		// One jump of 75 days passes the slots due on 03-31, 04-30 and 05-30.
+		mock.timers.tick(75 * 86_400_000);
+		assert.deepStrictEqual(fired, ['2026-06-13T00:00:00.000Z']);
+
+		const until = new Date('2026-06-30T00:00:00Z').getTime();
+		while (Date.now() < until) {
+			mock.timers.tick(Math.min(86_400_000, until - Date.now()));
+		}
+		assert.deepStrictEqual(fired, ['2026-06-13T00:00:00.000Z', '2026-06-29T00:00:00.000Z']);
+	});
 });
 
 describe('CronJob mock – schedules that cannot match', () => {
