@@ -32,12 +32,11 @@ function runScript(scriptBody: string, env: Record<string, string>, cwd?: string
   const fullScript = `import { ApiNamespaceClient } from '${importPath}';\n${scriptBody}`;
   writeFileSync(scriptPath, fullScript);
   try {
-    // A fresh directory, so no `.blocks-sandbox/config.json` of the cwd answers before the browser fetch.
+    // By default a fresh directory, so no `.blocks-sandbox/config.json` of the cwd answers before the browser fetch.
     return execSync(`node ${scriptPath}`, {
-      cwd: tmp,
+      cwd: cwd ?? tmp,
       encoding: 'utf-8',
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
-      cwd,
       timeout: 10000,
     }).trim();
   } finally {
