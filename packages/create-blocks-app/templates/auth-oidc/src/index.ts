@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
       authStatus.textContent = 'Not signed in';
       return;
     }
-    // whoAmI is the requireAuth-gated source of truth (provider + claims),
+    // whoAmI is the protected source of truth (provider + claims),
     // richer than the state-machine user.
     try {
       const me = await api.whoAmI();

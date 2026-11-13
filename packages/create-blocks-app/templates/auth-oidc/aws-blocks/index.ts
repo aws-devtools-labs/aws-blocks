@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
+import { Scope, KVStore, Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -36,30 +36,35 @@ const auth = new Auth(scope, 'auth', {
 // redirect to the per-provider `signin` route the block mounts.
 export const authApi = auth.createApi();
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async ping() {
-    return { message: 'pong', timestamp: Date.now() };
-  },
+// Deny by default: `auth.protect` runs `methods` only after the session check,
+// with the signed-in `user`, so no method there can be left open by a missing
+// (or un-awaited) `requireAuth`. A signed-out call to anything but a `public`
+// method gets 401 `NotAuthenticatedException`.
+export const api = auth.protect(scope, 'api', {
+  public: () => ({
+    async ping() {
+      return { message: 'pong', timestamp: Date.now() };
+    },
+  }),
 
-  async whoAmI() {
-    const user = await auth.requireAuth(context);
-    return {
-      userId: user.userId,
-      email: user.attributes.email ?? null,
-      name: user.attributes.name ?? null,
-      provider: user.signInProvider,
-    };
-  },
+  methods: (context, user) => ({
+    async whoAmI() {
+      return {
+        userId: user.userId,
+        email: user.attributes.email ?? null,
+        name: user.attributes.name ?? null,
+        provider: user.signInProvider,
+      };
+    },
 
-  // Keys are namespaced per user so each signed-in caller sees only their own.
-  async getValue(key: string) {
-    const user = await auth.requireAuth(context);
-    return await store.get(`${user.userId}:${key}`);
-  },
+    // Keys are namespaced per user so each signed-in caller sees only their own.
+    async getValue(key: string) {
+      return await store.get(`${user.userId}:${key}`);
+    },
 
-  async setValue(key: string, value: string) {
-    const user = await auth.requireAuth(context);
-    await store.put(`${user.userId}:${key}`, value);
-    return { success: true };
-  },
-}));
+    async setValue(key: string, value: string) {
+      await store.put(`${user.userId}:${key}`, value);
+      return { success: true };
+    },
+  }),
+});

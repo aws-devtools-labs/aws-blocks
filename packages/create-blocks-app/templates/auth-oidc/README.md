@@ -32,7 +32,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, requireAuth-gated API |
+| `aws-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, an `auth.protect` API |
 | `src/index.ts` | Frontend: Authenticator sign-in + per-user KV demo |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
@@ -44,11 +44,12 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
   user pool. The sign-in kickoff, callback, token exchange and session cookie
   are all owned by the block under `/aws-blocks/auth/*`. A user's `userId` is
   `` `${issuer}:${sub}` ``.
-- **requireAuth-gated API** — `whoAmI` returns the signed-in user's
-  `userId`, `email` and `name` (from the provider's claims) and `provider`; it
-  (and the KV methods) throw `401` for a signed-out caller.
-- **KVStore** — a per-user key/value store, keyed by the `userId`, gated by
-  `auth.requireAuth(context)` so each user sees only their own namespace.
+- **Deny-by-default API** (`auth.protect`) — `ping` is the one public method;
+  every method under `methods` runs only for a signed-in caller and gets the
+  `user`, so a signed-out call gets `401`. `whoAmI` returns the signed-in user's
+  `userId`, `email` and `name` (from the provider's claims) and `provider`.
+- **KVStore** — a per-user key/value store, keyed by the `userId`, so each user
+  sees only their own namespace.
 
 ## Commands
 

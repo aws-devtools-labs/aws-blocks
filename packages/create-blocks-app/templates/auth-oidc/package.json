@@ -11,7 +11,7 @@
     "aws-blocks"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b --force",
     "spec": "cdk-blocks generate spec",
     "dev:server": "cdk-blocks dev",
     "dev": "cdk-blocks dev",
@@ -23,14 +23,14 @@
     "sandbox:console": "cdk-blocks sandbox console",
     "cleanup": "cdk-blocks dev stop --all",
     "prebuild": "cdk-blocks generate client",
-    "build": "tsc && vite build",
+    "build": "tsc -b --force && vite build",
     "preview": "vite preview",
     "deploy": "cdk-blocks deploy",
     "secret": "cdk-blocks secret",
     "config": "cdk-blocks config",
     "typegen": "cdk-blocks generate types",
     "destroy": "cdk-blocks destroy",
-    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "test:e2e": "tsx --tsconfig tsconfig.node.json -C browser --test-force-exit test/e2e.test.ts",
     "vendorize": "cdk-blocks vendorize"
   },
   "blocks": {
@@ -40,8 +40,7 @@
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
-    "@aws-blocks/hosting": "*",
-    "zod": "^4.6.7"
+    "@aws-blocks/hosting": "*"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

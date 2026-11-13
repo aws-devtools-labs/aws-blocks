@@ -102,7 +102,7 @@ test('api: public method needs no session', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('Auth - requireAuth rejects a signed-out caller', async () => {
+test('Auth - a protected method rejects a signed-out caller', async () => {
   await authApi.setAuthState({ action: 'signOut' });
   await assert.rejects(api.whoAmI(), { status: 401 });
   await assert.rejects(api.getValue('k'), { status: 401 });
@@ -135,9 +135,9 @@ async function signInThroughStub(provider: string): Promise<void> {
   throw new Error('sign-in did not land on postSignInPath within the hop budget');
 }
 
-test('Auth - stub sign-in authorises a requireAuth call', async (t) => {
+test('Auth - stub sign-in authorises a protected call', async (t) => {
   if (!isLocalMock) {
-    t.skip('needs the local mock: the stub IdP only exists in `npm run dev`');
+    t.skip('needs the local mock (npm run dev): against a deployed stack this test does not control the sign-in provider');
     return;
   }
 
@@ -147,7 +147,7 @@ test('Auth - stub sign-in authorises a requireAuth call', async (t) => {
 
   await signInThroughStub('demo');
 
-  // The session cookie now authorises a requireAuth-gated call, and whoAmI
+  // The session cookie now authorises a protected call, and whoAmI
   // reports the stub user the backend's onAuthorize approved.
   const me = await api.whoAmI();
   assert.strictEqual(me.email, 'alice@stub.invalid');
@@ -161,7 +161,7 @@ test('Auth - stub sign-in authorises a requireAuth call', async (t) => {
 
 test('KV Store - set and get (signed in, keys namespaced per user)', async (t) => {
   if (!isLocalMock) {
-    t.skip('needs the local mock: the stub IdP only exists in `npm run dev`');
+    t.skip('needs the local mock (npm run dev): against a deployed stack this test does not control the sign-in provider');
     return;
   }
   await authApi.setAuthState({ action: 'signOut' });
