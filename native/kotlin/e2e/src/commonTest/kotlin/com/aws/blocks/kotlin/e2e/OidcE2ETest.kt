@@ -2,15 +2,15 @@
 
 package com.aws.blocks.kotlin.e2e
 
+import blocks.e2e.OidcAuthApi
+import blocks.e2e.oidcAuthApi
 import com.aws.blocks.kotlin.InternalBlocksApi
-import com.aws.blocks.kotlin.oidc.AnyProvider
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
 import com.aws.blocks.kotlin.oidc.OidcSignInOptions
 import com.aws.blocks.kotlin.oidc.OidcSignInOutcome
-import com.aws.blocks.kotlin.oidc.signIn
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
@@ -71,7 +71,8 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
 /**
  * Native relay sign-in against the `auth-oidc` block: authorize-params, the IdP redirect chain,
  * the relay to `nativebindings://auth`, the code exchange (which sets the session cookie) and
- * sign-out. The client comes from the block's fixed routes ([OidcClient.forAuth]).
+ * sign-out. The client comes from the backend's `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
+ * typed by the block's provider ids, so `signIn` takes [OidcAuthApi.GetClient.Provider].
  *
  * Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
  * on a sandbox deployment (the native-bindings test app always deploys as one), so the
@@ -83,9 +84,8 @@ class OidcE2ETest {
 
     private val api = createApi()
 
-    private fun oidcClient(): OidcClient<AnyProvider> =
-        OidcClient.forAuth(e2eBlocks().client(), listOf("google"), "nativebindings://auth")
-            .also { it.platformLauncher = RedirectFollowingLauncher() }
+    private suspend fun oidcClient(): OidcClient<OidcAuthApi.GetClient.Provider> =
+        e2eBlocks().oidcAuthApi.getClient().also { it.platformLauncher = RedirectFollowingLauncher() }
 
     /** Whether the backend under test serves an IdP this suite can drive headlessly. */
     private fun hasHeadlessIdp(): Boolean = isLocalEndpoint() || getEnv("RUN_OIDC") == "1"
@@ -98,7 +98,7 @@ class OidcE2ETest {
         }
         val client = oidcClient()
 
-        val user = client.signIn("google")
+        val user = client.signIn(OidcAuthApi.GetClient.Provider.Google)
 
         user.userId.shouldNotBeBlank()
         client.authState.value shouldBe OidcAuthState.SignedIn(user)
@@ -112,7 +112,7 @@ class OidcE2ETest {
             return@runTest
         }
         val client = oidcClient()
-        client.signIn("google")
+        client.signIn(OidcAuthApi.GetClient.Provider.Google)
 
         client.signOut()
 

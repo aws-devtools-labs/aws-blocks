@@ -41,15 +41,15 @@ import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
-import blocks.testapp.Servers
+import blocks.testapp.OidcAuthApi
 import blocks.testapp.Todo
 import blocks.testapp.api
 import blocks.testapp.authApi
+import blocks.testapp.oidcAuthApi
 import blocks.testapp.invoke
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
-import com.aws.blocks.kotlin.oidc.signIn
 import com.aws.blocks.example.ui.theme.BlocksKotlinExampleTheme
 import kotlinx.coroutines.launch
 
@@ -64,15 +64,6 @@ class MainViewModel : ViewModel() {
     val blocks = Blocks().also(::addCloseable)
 }
 
-/** Provider ids from the backend's `providers` (`../typescript/aws-blocks/index.ts`). */
-private val providers = listOf("google")
-
-/**
- * Where the backend relays the sign-in result. It must match `oidc { relayTo }` in
- * `app/build.gradle.kts` and the backend's `redirects.allowedRelayOrigins`.
- */
-private const val RELAY_TO = "blocks.testapp://oidcRedirect"
-
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
@@ -80,6 +71,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val auth = viewModel.blocks.authApi
+        val oidcAuth = viewModel.blocks.oidcAuthApi
         val api = viewModel.blocks.api
         setContent {
             BlocksKotlinExampleTheme {
@@ -90,7 +82,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        OidcAuth(auth = auth, blocks = viewModel.blocks)
+                        OidcAuth(auth = auth, oidcAuth = oidcAuth)
                         Spacer(modifier = Modifier.height(16.dp))
                         CursorTracker(api = api)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -109,10 +101,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun OidcAuth(auth: AuthApi, blocks: Blocks) {
-    // The `Auth` block serves its sign-in routes at fixed paths, so the client is built locally.
-    // It keeps the signed-in user in memory, so it is remembered for the composition's lifetime.
-    val client = remember { OidcClient.forAuth(blocks.client(), providers, RELAY_TO) }
+fun OidcAuth(auth: AuthApi, oidcAuth: OidcAuthApi) {
+    // The spec names the backend's providers, so the client is typed by the enum generated for
+    // them and sign-in takes one of its constants rather than a string.
+    var oidcClient by remember { mutableStateOf<OidcClient<OidcAuthApi.GetClient.Provider>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // A client that has not signed in this launch reports no user, so the starting point comes
@@ -123,6 +115,19 @@ fun OidcAuth(auth: AuthApi, blocks: Blocks) {
     LaunchedEffect(Unit) {
         // A failure here only means no session to restore, so the screen falls back to sign-in.
         runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
+        oidcClient = runCatching { oidcAuth.getClient() }.getOrElse {
+            error = it.message
+            null
+        }
+    }
+
+    val client = oidcClient
+    if (client == null) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
+            Text(text = error ?: "Loading...")
+        }
+        return
     }
 
     val authState by client.authState.collectAsState()
@@ -151,19 +156,23 @@ fun OidcAuth(auth: AuthApi, blocks: Blocks) {
                 Text("Sign Out")
             }
         } else {
-            client.providers.forEach { provider ->
-                Button(
-                    onClick = {
-                        scope.launch {
-                            error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Sign in with $provider")
+            // `entries` is what the spec named when it was generated; `client.providers` is what
+            // the deployed backend reports now, so show the ones both agree on.
+            OidcAuthApi.GetClient.Provider.entries
+                .filter { it.providerName in client.providers }
+                .forEach { provider ->
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Sign in with ${provider.providerName}")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
         }
 
         if (error != null) {

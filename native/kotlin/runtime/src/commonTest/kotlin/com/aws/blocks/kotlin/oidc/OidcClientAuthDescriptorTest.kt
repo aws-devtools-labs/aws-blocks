@@ -20,16 +20,51 @@ import kotlin.io.encoding.Base64
 import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
- * [OidcClient.forAuth] builds a client from the `Auth` block's fixed federation routes, with no
- * server-supplied descriptor.
+ * A client hydrated from the `oidc/client` descriptor an AWS Blocks `Auth` block's
+ * `createOidcApi().getClient()` returns: the block's federation routes under one base path, and
+ * its providers. The keys and paths are exactly what `packages/bb-auth` emits
+ * (`oidc-client-api.test.ts` pins that side).
  */
-class OidcClientForAuthTest {
+class OidcClientAuthDescriptorTest {
 
     private val server = BlocksServer("local", "http://localhost:3001/aws-blocks/api")
+
+    /** `Auth`'s descriptor for routes under [base], the directory of `redirects.callbackPath`. */
+    private fun authDescriptor(providers: List<String>, base: String): JsonElement = buildJsonObject {
+        put("__blocks", "oidc/client")
+        putJsonArray("providers") { providers.forEach { add(it) } }
+        putJsonObject("providerConfigs") {
+            providers.forEach { id ->
+                putJsonObject(id) {
+                    put("authorizeUrl", "https://idp.example.com/authorize")
+                    put("clientId", "cid")
+                    putJsonArray("scopes") { add("openid") }
+                    put("kind", "oidc-custom")
+                }
+            }
+        }
+        put("callbackPath", "$base/callback")
+        put("exchangePath", "$base/exchange")
+        put("signOutPath", "$base/signout")
+        put("signInBasePath", "$base/signin")
+        put("authorizeParamsBasePath", "$base/authorize-params")
+    }
+
+    private fun authClient(
+        http: HttpClient,
+        providers: List<String>,
+        base: String = "/aws-blocks/auth",
+    ): OidcClient<AnyProvider> = OidcClient.fromJson(authDescriptor(providers, base), http, server, "myapp://auth")
 
     /** Every request the client made, as `"METHOD path"`. */
     private val requests = mutableListOf<String>()
@@ -92,16 +127,16 @@ class OidcClientForAuthTest {
     }
 
     @Test
-    fun `forAuth exposes the given providers`() {
-        val client = OidcClient.forAuth(backend(), server, listOf("google", "okta"), "myapp://auth")
+    fun `the client exposes the block's providers`() {
+        val client = authClient(backend(), listOf("google", "okta"))
 
         client.providers shouldBe listOf("google", "okta")
     }
 
     @Test
-    fun `forAuth signs in and out through the default Auth routes`() = runTest {
+    fun `signs in and out through the default Auth routes`() = runTest {
         val launcher = RelayingLauncher()
-        val client = OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth")
+        val client = authClient(backend(), listOf("google"))
             .also { it.platformLauncher = launcher }
 
         val user = client.signIn("google")
@@ -120,7 +155,7 @@ class OidcClientForAuthTest {
     }
 
     @Test
-    fun `forAuth sends the relay target and the callback URL in the exchange`() = runTest {
+    fun `sends the relay target and the callback URL in the exchange`() = runTest {
         var exchangeBody: String? = null
         var authorizeParamsBody: String? = null
         val recording = HttpClient(MockEngine) {
@@ -148,7 +183,7 @@ class OidcClientForAuthTest {
                 }
             }
         }
-        val client = OidcClient.forAuth(recording, server, listOf("google"), "myapp://auth")
+        val client = authClient(recording, listOf("google"))
             .also { it.platformLauncher = RelayingLauncher() }
 
         client.signIn("google")
@@ -162,30 +197,29 @@ class OidcClientForAuthTest {
     }
 
     @Test
-    fun `forAuth follows a moved callback path`() = runTest {
+    fun `a second block's own redirects move every route`() = runTest {
         val launcher = RelayingLauncher()
-        val client = OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth", basePath = "/login/")
+        val client = authClient(backend(), listOf("google"), base = "/aws-blocks/auth/second")
             .also { it.platformLauncher = launcher }
 
         client.signIn("google")
+        client.signOut()
 
-        requests shouldBe listOf("POST /login/authorize-params/google", "POST /login/exchange")
-        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe "http://localhost:3001/login/callback"
+        requests shouldBe listOf(
+            "POST /aws-blocks/auth/second/authorize-params/google",
+            "POST /aws-blocks/auth/second/exchange",
+            "POST /aws-blocks/auth/second/signout",
+        )
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe
+            "http://localhost:3001/aws-blocks/auth/second/callback"
     }
 
     @Test
-    fun `forAuth rejects a provider it was not given`() = runTest {
-        val client = OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth")
+    fun `rejects a provider the block does not serve`() = runTest {
+        val client = authClient(backend(), listOf("google"))
             .also { it.platformLauncher = RelayingLauncher() }
 
         shouldThrow<OidcUnknownProviderException> { client.signIn("github") }.provider shouldBe "github"
         requests shouldBe emptyList()
-    }
-
-    @Test
-    fun `forAuth rejects a relative base path`() {
-        shouldThrow<IllegalArgumentException> {
-            OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth", basePath = "aws-blocks/auth")
-        }
     }
 }

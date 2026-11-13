@@ -140,16 +140,21 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client is built from the `Auth` block's fixed routes
-  // (packages/bb-auth DESIGN.md → Routes), with no server-supplied descriptor.
-  // The authorize-params and callback paths are left to OidcClient's defaults,
-  // which name exactly those routes.
+  // Pull the relay route config from the backend (`oidcAuthApi.getClient()`,
+  // `Auth.createOidcApi()`). The generated client resolves the descriptor
+  // against the RPC base; the relay routes live at the API *origin*, so the
+  // client is rebuilt at [oidcBase] from the descriptor's own paths, sharing
+  // the same session/token store.
+  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
+  final raw = await discovery.oidcAuthApi.getClient();
   final oidc = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
-    providers: const [_provider],
-    providerConfigs: const {},
+    exchangePath: raw.exchangePath,
+    refreshPath: raw.refreshPath,
+    signOutPath: raw.signOutPath,
+    authorizeParamsBasePath: raw.authorizeParamsBasePath,
+    callbackPath: raw.callbackPath,
+    providers: raw.providers,
+    providerConfigs: raw.providerConfigs,
     baseUrl: oidcBase,
     tokenStore: tokenStore,
     sessionStore: session,
