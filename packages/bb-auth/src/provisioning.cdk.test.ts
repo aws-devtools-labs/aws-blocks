@@ -344,4 +344,22 @@ describe('the native app client writes only what end users may set', () => {
 		);
 		assert.deepStrictEqual(clientOf(s.template).Properties?.WriteAttributes, [...STANDARD, 'custom:team'].sort());
 	});
+
+	// The block's client in an existing pool lists the declared custom attributes too, so each
+	// must exist in that pool: Cognito refuses a client whose write attributes name one it lacks.
+	test('`Auth.fromExisting`: the client in the existing pool lists the declared, user-writable attributes', () => {
+		const s = synth(
+			"new Auth(stack, 'auth', { userPool: Auth.fromExisting('us-east-1_existing'), users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] } })",
+		);
+		// No pool is created; the one Cognito resource is the block's client in the existing pool.
+		assert.deepStrictEqual(
+			Object.values(s.template.Resources)
+				.filter((r) => r.Type.startsWith('AWS::Cognito::'))
+				.map((r) => r.Type),
+			['AWS::Cognito::UserPoolClient'],
+		);
+		const client = clientOf(s.template);
+		assert.strictEqual(client.Properties?.UserPoolId, 'us-east-1_existing');
+		assert.deepStrictEqual(client.Properties?.WriteAttributes, [...STANDARD, 'custom:team'].sort());
+	});
 });
