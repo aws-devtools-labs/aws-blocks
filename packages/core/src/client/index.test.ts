@@ -474,8 +474,9 @@ try {
   console.log('ERROR:' + e.message);
 }
 `, {}, projectDir);
-      assert.ok(!result.includes('from-config-file.example.com'), `Expected the config file to be skipped, got: ${result}`);
-      assert.ok(result.includes('FETCH:/.blocks-sandbox/config.json'), `Expected the fetch step to run next, got: ${result}`);
+      // The only request is the fetch step: the apiUrl in the config file is never used.
+      const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
+      assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
       assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
