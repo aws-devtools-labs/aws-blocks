@@ -42,6 +42,12 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
+  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  Its placeholder works locally (the mock sends nothing), but replace it with a
+  verified SES identity before deploying to production: the placeholder is on the
+  reserved `.invalid` domain, which SES can never verify, so every send from it
+  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  until you do.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
