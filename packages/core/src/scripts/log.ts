@@ -60,8 +60,8 @@ export function progressToStderr(env: NodeJS.ProcessEnv = process.env): boolean 
 }
 
 /**
- * The scripts' logger. Each method keeps the console method (and so the stream)
- * of the line it replaced, and only decides whether the line prints:
+ * The scripts' logger. Each method writes to the stream in the table below and
+ * only decides whether the line prints:
  *
  * | method       | stream | legacy | quiet | normal | verbose | debug |
  * |--------------|--------|--------|-------|--------|---------|-------|
@@ -90,7 +90,7 @@ export const log = {
 	},
 	/**
 	 * The stack of an error the caller caught and reported as a warning. Prints
-	 * only at `debug` (never at `legacy`, which never printed it).
+	 * only at `debug` (never at `legacy`).
 	 */
 	debugError(error: unknown): void {
 		if (resolveLogLevel() !== 'debug') return;
