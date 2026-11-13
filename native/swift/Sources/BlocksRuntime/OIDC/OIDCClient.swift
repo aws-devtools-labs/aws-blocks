@@ -59,6 +59,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
+    /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
+    /// before the first one. Reading it needs no subscription, so an app can check the state once, such as on
+    /// launch after `restore()`: `if case .signedIn(let user) = await client.authState { ... }`.
+    public private(set) var authState: OIDCAuthState = .loading
+
     public init(
         exchangePath: String,
         refreshPath: String,
@@ -145,6 +150,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     private func emit(_ state: OIDCAuthState) {
+        authState = state
         for continuation in subscribers.values {
             continuation.yield(state)
         }

@@ -917,6 +917,89 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(token, "at-1")
     }
 
+    // MARK: - authState
+
+    func testAuthStateIsLoadingBeforeAnyStateIsEmitted() async {
+        let client = makeClient(session: makeMockSession())
+        let state = await client.authState
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testAuthStateIsTheStateMostRecentlyEmitted() async throws {
+        let client = makeClient(session: makeMockSession())
+        let user = OIDCUser(userId: "u1", username: "alice", groups: [])
+
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = [
+                "accessToken": "at", "refreshToken": "rt", "expiresIn": 3_600,
+                "user": ["userId": "u1", "username": "alice", "groups": [String]()]
+            ]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        var events = try await states(of: client) {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "myapp://callback", provider: "google", state: "s", nonce: "n"
+            )
+        }
+        var state = await client.authState
+        XCTAssertEqual(events, [.signedIn(user)])
+        XCTAssertEqual(state, events.last)
+
+        // A restore that fails emits nothing and leaves the state as it was.
+        OIDCMockURLProtocol.handler = { request in (errorResponse(for: request.url!, status: 500), Data("{}".utf8)) }
+        events = await states(of: client) {
+            _ = try? await client.restore()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [])
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in (okResponse(for: request.url!), Data("{}".utf8)) }
+        events = try await states(of: client) {
+            _ = try await client.signOut()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, events.last)
+    }
+
+    /// A `forAuth` client sets the state on the relay sign-in and on a restore that finds no session.
+    func testAuthStateFollowsAForAuthClientsSignInAndRestore() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        let user = try await client.signIn(provider: "google", launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c"))
+        var state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "Not signed in", "name": "NotAuthenticatedException"]
+            return (errorResponse(for: request.url!, status: 401), try JSONSerialization.data(withJSONObject: body))
+        }
+        let restored = try await client.restore()
+        state = await client.authState
+        XCTAssertNil(restored)
+        XCTAssertEqual(state, .signedOut)
+    }
+
+    func testAuthStateIsSignedOutAfterAnIncompleteSignOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 503), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        await client.client.tokenStore.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            _ = try? await client.signOut()
+        }
+
+        let state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, .signedOut)
+    }
+
     // MARK: - authStateChanges fan-out
 
     func testAuthStateChangesFanOutToMultipleSubscribers() async throws {
