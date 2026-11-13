@@ -19,11 +19,32 @@ public struct OIDCUser: Sendable, Equatable, Codable {
     public let userId: String
     public let username: String
     public let groups: [String]
+    /// The Cognito `sub`, or `<issuer>:<sub>` for a directly federated user. `nil` when the server sent none.
+    public let userSub: String?
+    /// `"password"` for email and password sign-in, otherwise the federated provider id. `nil` when the server sent none.
+    public let signInProvider: String?
+    /// The user's attributes, keyed by attribute name. `nil` when the server sent none.
+    public let attributes: [String: String]?
+    /// The name to show the signed-in user ("Signed in as ..."), for display only. `nil` when the
+    /// server sent none: the code exchange doesn't, `restore()` does. Fall back to `username`.
+    public let displayName: String?
 
-    public init(userId: String, username: String, groups: [String]) {
+    public init(
+        userId: String,
+        username: String,
+        groups: [String],
+        userSub: String? = nil,
+        signInProvider: String? = nil,
+        attributes: [String: String]? = nil,
+        displayName: String? = nil
+    ) {
         self.userId = userId
         self.username = username
         self.groups = groups
+        self.userSub = userSub
+        self.signInProvider = signInProvider
+        self.attributes = attributes
+        self.displayName = displayName
     }
 
     public static func fromJSON(_ json: [String: Any]) throws -> OIDCUser {
@@ -34,7 +55,15 @@ public struct OIDCUser: Sendable, Equatable, Codable {
             throw OIDCError.malformedDescriptor("username")
         }
         let groups = (json["groups"] as? [String]) ?? []
-        return OIDCUser(userId: userId, username: username, groups: groups)
+        return OIDCUser(
+            userId: userId,
+            username: username,
+            groups: groups,
+            userSub: json["userSub"] as? String,
+            signInProvider: json["signInProvider"] as? String,
+            attributes: (json["attributes"] as? [String: Any])?.compactMapValues { $0 as? String },
+            displayName: json["displayName"] as? String
+        )
     }
 }
 

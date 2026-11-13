@@ -69,9 +69,9 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
 }
 
 /// OIDC server-relay E2E tests against the `auth-oidc` block: authorize-params, the IdP redirect
-/// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie)
-/// and an authenticated RPC. The client is built from the block's fixed routes, with no
-/// server-supplied descriptor.
+/// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie),
+/// an authenticated RPC, session restore and sign-out. The client is `OIDCClient.forAuth` on the
+/// generated `Blocks`' own client, as an app builds it.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
 /// on a sandbox deployment (the native-bindings test app always deploys as one), so
@@ -88,33 +88,27 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         isLocalEndpoint || ProcessInfo.processInfo.environment["RUN_OIDC"] == "1"
     }
 
-    private func getOidcClient() throws -> OIDCClient<String> {
+    private func skipWithoutHeadlessIdp() throws {
         try XCTSkipUnless(
             Self.hasHeadlessIdp,
             "Auth's stub IdP runs only locally and on sandbox deployments. Against a deployed backend "
                 + "these tests need RUN_OIDC=1 and a headless IdP: that deployed stub, or a real, auto-approving one "
                 + "(NATIVE_E2E_OIDC_ISSUER; see .github/workflows/native-sdk-e2e.yml)"
         )
-        let client = BlocksClient(server: Self.server)
-        // `Auth`'s fixed routes (packages/bb-auth DESIGN.md → Routes). `OIDCClient` derives the
-        // authorize-params and callback paths from `exchangePath`.
-        return OIDCClient<String>(
-            exchangePath: "/aws-blocks/auth/exchange",
-            refreshPath: "/aws-blocks/auth/exchange/refresh",
-            signOutPath: "/aws-blocks/auth/signout",
-            providers: [provider],
-            providerConfigs: [:],
-            baseUrl: client.baseUrl,
-            client: client
-        )
+    }
+
+    /// The `auth-oidc` block's client, on `blocks`' own client (its default routes).
+    private func oidcClient(on blocks: Blocks) -> OIDCClient<String> {
+        OIDCClient.forAuth(client: blocks.client, providers: [provider], relayTo: relayTo)
     }
 
     func testSignInRelayAndAuthenticatedRPC() async throws {
-        let oidc = try getOidcClient()
-        let launcher = HttpRelayLauncher()
+        try skipWithoutHeadlessIdp()
+        let oidc = oidcClient(on: blocks)
 
-        let user = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
-        XCTAssertFalse(user.userId.isEmpty, "signInRelay returned a user")
+        let user = try await oidc.signIn(provider: provider, launcher: HttpRelayLauncher())
+        XCTAssertFalse(user.userId.isEmpty, "signIn returned a user")
+        XCTAssertEqual(user.signInProvider, provider)
 
         let currentUser = try await api.oidcRequireAuth()
         XCTAssertFalse(currentUser.userId.isEmpty)
@@ -123,15 +117,48 @@ final class OIDCE2ETests: BlocksE2ETestCase {
     }
 
     func testSignOut() async throws {
-        let oidc = try getOidcClient()
-        let launcher = HttpRelayLauncher()
+        try skipWithoutHeadlessIdp()
+        let oidc = oidcClient(on: blocks)
 
-        _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+        _ = try await oidc.signIn(provider: provider, launcher: HttpRelayLauncher())
 
-        let result = try await api.oidcSignOut()
-        XCTAssertTrue(result.success)
+        let logoutURL = try await oidc.signOut()
+        XCTAssertNotNil(logoutURL, "the stub IdP has a logout URL")
 
         let authed = try await api.oidcCheckAuth()
         XCTAssertFalse(authed)
+    }
+
+    /// The native flow over the `Auth` sign-in state machine: render `getAuthState()`'s actions,
+    /// sign in with a `signIn:<id>` action through the OIDC client, then read the state again.
+    func testFederatedSignInThroughTheAuthStateMachine() async throws {
+        try skipWithoutHeadlessIdp()
+        let signedOut = try await blocks.oidcAuthApi.getAuthState()
+        XCTAssertEqual(signedOut.state, .signedOut)
+        let action = try XCTUnwrap(signedOut.actions.first { $0.name == "signIn:\(provider)" })
+        let providerId = try XCTUnwrap(OIDCClient.providerIdOf(action.name))
+        XCTAssertEqual(providerId, provider)
+
+        let oidc = oidcClient(on: blocks)
+        let user = try await oidc.signIn(provider: providerId, launcher: HttpRelayLauncher())
+
+        let signedIn = try await blocks.oidcAuthApi.getAuthState()
+        XCTAssertEqual(signedIn.state, .signedIn)
+        XCTAssertEqual(signedIn.user?.userId, user.userId)
+
+        // A relaunch: a fresh `Blocks` shares the Keychain cookie store and restores the session.
+        let relaunched = Blocks(server: Self.server)
+        defer { relaunched.close() }
+        let restoredClient = oidcClient(on: relaunched)
+        let restored = try await restoredClient.restore()
+        XCTAssertEqual(restored?.userId, user.userId)
+
+        let logoutURL = try await restoredClient.signOut()
+        XCTAssertNotNil(logoutURL, "the stub IdP has a logout URL")
+
+        let afterSignOut = try await restoredClient.restore()
+        XCTAssertNil(afterSignOut)
+        let finalState = try await blocks.oidcAuthApi.getAuthState()
+        XCTAssertEqual(finalState.state, .signedOut)
     }
 }

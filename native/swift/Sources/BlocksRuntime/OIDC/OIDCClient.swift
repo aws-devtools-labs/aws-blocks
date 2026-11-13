@@ -44,12 +44,25 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
 
+    /// The routes' base, the directory of `callbackPath`, for a client built with `forAuth`.
+    /// `nil` for a client built with `init` or `fromJSON`, which derives its routes from `exchangePath`.
+    nonisolated let routeBase: String?
+    /// The IdP `redirect_uri` path, for a client built with `forAuth`.
+    nonisolated let callbackPath: String?
+    /// The `relayTo` that `signIn(provider:launcher:)` uses.
+    nonisolated let relayTo: String?
+
     /// The descriptor this client was hydrated from, as the server sent it. `nil` for a client built with `init`.
     /// `encode(to:)` writes it back unchanged.
     nonisolated let wireDescriptor: [String: JSONValue]?
 
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
+
+    /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
+    /// before the first one. Reading it needs no subscription, so an app can check the state once, such as on
+    /// launch after `restore()`: `if case .signedIn(let user) = await client.authState { ... }`.
+    public private(set) var authState: OIDCAuthState = .loading
 
     public init(
         exchangePath: String,
@@ -80,7 +93,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         providerConfigs: [String: OIDCProviderConfig],
         baseUrl: String,
         client: BlocksClient,
-        wireDescriptor: [String: JSONValue]?
+        wireDescriptor: [String: JSONValue]?,
+        routeBase: String? = nil,
+        callbackPath: String? = nil,
+        relayTo: String? = nil
     ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
@@ -90,11 +106,28 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.baseUrl = baseUrl
         self.client = client
         self.wireDescriptor = wireDescriptor
+        self.routeBase = routeBase
+        self.callbackPath = callbackPath
+        self.relayTo = relayTo
+    }
+
+    /// Why `forAuth` refuses these paths, or `nil` when they are valid.
+    static func authPathsProblem(callbackPath: String, signOutPath: String) -> String? {
+        let prefix = "/aws-blocks/auth/"
+        for (name, path) in [("callbackPath", callbackPath), ("signOutPath", signOutPath)] where !path.hasPrefix(prefix) {
+            return "OIDCClient.forAuth: \(name) must start with '\(prefix)', got '\(path)'"
+        }
+        let rest = callbackPath.dropFirst(prefix.count)
+        if rest.isEmpty || rest.hasSuffix("/") {
+            return "OIDCClient.forAuth: callbackPath needs a segment after '\(prefix)' and no trailing '/', got '\(callbackPath)'"
+        }
+        return nil
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
-    /// subscriber receives every emitted state. Emits on sign-in, sign-out,
-    /// and loading transitions.
+    /// subscriber receives every emitted state. Emits on sign-in and sign-out.
+    /// The client doesn't emit `.loading`: it is the state an app shows until
+    /// `restore()` returns.
     ///
     /// The async signature ensures the subscriber is registered with the
     /// actor *before* the call returns — callers can safely kick off an
@@ -117,6 +150,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     private func emit(_ state: OIDCAuthState) {
+        authState = state
         for continuation in subscribers.values {
             continuation.yield(state)
         }
@@ -153,6 +187,24 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Sign In
 
+    /// Sign in through the server relay, back to the `relayTo` this client was built with
+    /// (`forAuth(client:providers:relayTo:)`).
+    ///
+    /// - Throws: `OIDCError.unknownProvider` for a provider the client wasn't built with, and
+    ///   `OIDCConfigurationError` when the client has no `relayTo`, both before any request.
+    public func signIn(provider: Provider, launcher: BrowserLauncher) async throws -> OIDCUser {
+        guard providers.contains(provider.providerName) else {
+            throw OIDCError.unknownProvider(provider.providerName)
+        }
+        guard let relayTo, !relayTo.isEmpty else {
+            throw OIDCConfigurationError(
+                message: "OIDCClient has no relayTo: pass relayTo to forAuth (a custom scheme listed in the "
+                    + "backend's redirects.allowedRelayOrigins), or call signIn(provider:relayTo:launcher:)"
+            )
+        }
+        return try await signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+    }
+
     /// Sign in using the server-relay flow.
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
@@ -172,7 +224,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         // Step 1: Fetch signed authorize params from server
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
-        let authorizeParamsPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
+        let authorizeParamsPath = if let routeBase {
+            "\(routeBase)/authorize-params/\(Self.encodeURIComponent(provider))"
+        } else {
+            exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
+        }
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
         let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
 
@@ -185,7 +241,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let nonce = paramsJSON["nonce"] as? String
 
         // Step 2: Build full authorize URL with server's callback as redirect_uri
-        let callbackPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
+        let callbackPath = callbackPath ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
         let serverCallbackUrl = client.rawRouteBase + callbackPath
 
         guard var components = URLComponents(string: authorizeUrl) else {
@@ -223,6 +279,23 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             }
         )
 
+        // The state comes first: only a relay carrying the state this sign-in was given can report
+        // an IdP error, so another page can't end the sign-in with a message of its choosing.
+        guard let returnedState = resultParams["state"], returnedState == signedState else {
+            throw OIDCError.stateMismatch
+        }
+
+        // Then the CSRF inside the state envelope, also before the error. Fail closed: a state whose
+        // payload can't be decoded, or that carries no csrf, is refused like a mismatched one.
+        guard let dotIndex = signedState.firstIndex(of: "."),
+              let payloadData = Data(base64URLDecoded: String(signedState[signedState.startIndex ..< dotIndex])),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let returnedCsrf = payload["csrf"] as? String,
+              returnedCsrf == csrf
+        else {
+            throw OIDCError.stateMismatch
+        }
+
         if let error = resultParams["error"] {
             let desc = resultParams["error_description"] ?? ""
             throw OIDCError.callbackError("\(error): \(desc)")
@@ -230,25 +303,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         guard let code = resultParams["code"] else {
             throw OIDCError.missingAuthorizationCode
-        }
-        guard let returnedState = resultParams["state"] else {
-            throw OIDCError.stateMismatch
-        }
-
-        if returnedState != signedState {
-            throw OIDCError.stateMismatch
-        }
-
-        // Step 5: Verify CSRF inside state envelope
-        if let dotIndex = signedState.firstIndex(of: ".") {
-            let payloadB64 = String(signedState[signedState.startIndex ..< dotIndex])
-            if let payloadData = Data(base64URLDecoded: payloadB64),
-               let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-               let returnedCsrf = payload["csrf"] as? String {
-                if returnedCsrf != csrf {
-                    throw OIDCError.stateMismatch
-                }
-            }
         }
 
         // Step 6: Exchange code for tokens
@@ -275,13 +329,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         nonce: String,
         iss: String? = nil
     ) async throws -> OIDCUser {
+        guard providers.contains(provider) else {
+            throw OIDCError.unknownProvider(provider)
+        }
         var body: [String: Any] = [
             "code": code,
             "verifier": verifier,
             "callbackUrl": callbackURL,
             "provider": provider,
             "state": state,
-            "nonce": nonce
+            "nonce": nonce,
+            // Cookie session only: the server mints no bearer tokens for this client.
+            "tokens": false
         ]
         if let iss { body["iss"] = iss }
 
@@ -296,7 +355,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             if let refreshToken = json["refreshToken"] as? String {
                 await storeToken("refresh_token", refreshToken)
             }
-            await storeToken("expires_at", Self.stringifyExpiry(json["expiresIn"]))
+            await storeToken("expires_at", Self.expiresAt(json))
+            await storeToken("provider", provider)
         }
 
         let user = try OIDCUser.fromJSON(userJSON)
@@ -326,7 +386,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         let json: [String: Any]
         do {
-            json = try await client.postRawRoute(path: refreshPath, body: ["refreshToken": refreshToken])
+            var body: [String: Any] = ["refreshToken": refreshToken]
+            // Required by a backend with two or more providers.
+            if let provider = await storedToken("provider") { body["provider"] = provider }
+            json = try await client.postRawRoute(path: refreshPath, body: body)
         } catch let error as ClientClosedError {
             // A closed client says nothing about the session, so the tokens stay.
             throw error
@@ -343,7 +406,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         }
 
         await storeToken("access_token", accessToken)
-        await storeToken("expires_at", Self.stringifyExpiry(json["expiresAt"]))
+        await storeToken("expires_at", Self.expiresAt(json))
         if let newRefresh = json["refreshToken"] as? String {
             await storeToken("refresh_token", newRefresh)
         }
@@ -351,59 +414,90 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Sign out
 
-    public func signOut() async {
-        let refreshToken = await storedToken("refresh_token")
-        _ = try? await client.postRawRoute(path: signOutPath, body: ["refreshToken": refreshToken ?? ""])
+    /// Signs out on the server, which clears the session cookie, then clears the stored tokens.
+    ///
+    /// POSTs `<signOutPath>?format=json` with an empty JSON body. The server ends the session from its
+    /// cookie; it doesn't revoke bearer tokens, so the stored ones are only cleared locally.
+    ///
+    /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
+    ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
+    ///   own session, so the next sign-in asks which account to use.
+    /// - Throws: A `RawRouteError` named `SignOutIncompleteException` (HTTP 503) when the server
+    ///   cleared the cookie but could not remove its session; the client is signed out locally
+    ///   first. Any other failure is thrown after clearing the stored tokens, with the state left
+    ///   as it was. `ClientClosedError` leaves the tokens too: the request was never sent.
+    @discardableResult
+    public func signOut() async throws -> URL? {
+        // The server ends the session from its cookie and reads no body, so no token is sent.
+        let body: [String: Any] = [:]
+        let json: [String: Any]
+        do {
+            // A custom block's route may ignore `format=json` and answer an empty 204.
+            json = try await client.postRawRoute(path: signOutPath + "?format=json", body: body, emptyBodyIsEmptyObject: true)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as RawRouteError where error.statusCode == 503 && error.errorName == "SignOutIncompleteException" {
+            await clearTokens()
+            emit(.signedOut)
+            throw error
+        } catch {
+            await clearTokens()
+            throw error
+        }
         await clearTokens()
         emit(.signedOut)
+        return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
     }
 
     // MARK: - Restore session
 
-    public func restore() async {
-        emit(.loading)
+    /// The session route, `<base>/session`, where `<base>` is the directory of the callback path.
+    nonisolated var sessionPath: String {
+        let base = routeBase ?? String(exchangePath[..<(exchangePath.lastIndex(of: "/") ?? exchangePath.endIndex)])
+        return "\(base)/session"
+    }
 
-        let accessToken = await storedToken("access_token")
-        let refreshToken = await storedToken("refresh_token")
-
-        guard accessToken != nil, refreshToken != nil else {
+    /// Restores the signed-in user from the server's session, e.g. on launch.
+    ///
+    /// Reads `GET <base>/session` with the stored session cookie (and the stored access token, if
+    /// any and not expired). The user is the server's, never one decoded from a token.
+    ///
+    /// - Returns: The signed-in user, after emitting `.signedIn`. `nil` when the server has no
+    ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`.
+    /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route: an
+    ///   `Auth` block without federated providers, or a custom block that doesn't serve
+    ///   `<base>/session`. Any other failure, including a transport error or `ClientClosedError`, is
+    ///   thrown and leaves the state and stored tokens as they were.
+    @discardableResult
+    public func restore() async throws -> OIDCUser? {
+        var headers: [String: String] = [:]
+        // An expired token would only get a 401 that clears the refresh token with it. It isn't
+        // refreshed here either: a failed refresh signs out, and a failed restore changes nothing.
+        if let token = await storedToken("access_token"), !(await isExpired()) {
+            headers["Authorization"] = "Bearer \(token)"
+        }
+        let json: [String: Any]
+        do {
+            json = try await client.getRawRoute(path: sessionPath, headers: headers)
+        } catch let error as RawRouteError where error.statusCode == 401 {
+            await clearTokens()
             emit(.signedOut)
-            return
+            return nil
+        } catch let error as RawRouteError where error.statusCode == 404 {
+            throw RawRouteError(
+                message: "\(sessionPath) answered HTTP 404: the backend serves no session route at that path. "
+                    + "An Auth block serves one only when it has federated providers; "
+                    + "a custom block must serve GET \(sessionPath).",
+                statusCode: 404,
+                errorName: error.errorName
+            )
         }
-
-        if await isExpired() {
-            do {
-                try await refresh()
-            } catch is ClientClosedError {
-                // The tokens stay for a new Blocks to restore.
-                emit(.signedOut)
-                return
-            } catch {
-                await clearTokens()
-                emit(.signedOut)
-                return
-            }
+        guard let userJSON = json["user"] as? [String: Any] else {
+            throw OIDCError.invalidResponse
         }
-
-        guard let token = await storedToken("access_token") else {
-            emit(.signedOut)
-            return
-        }
-
-        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let payload = Self.decodeJWTPayload(String(parts[1]))
-        else {
-            emit(.signedOut)
-            return
-        }
-
-        let user = OIDCUser(
-            userId: payload["sub"] as? String ?? "",
-            username: payload["username"] as? String ?? "",
-            groups: (payload["groups"] as? [String]) ?? []
-        )
+        let user = try OIDCUser.fromJSON(userJSON)
         emit(.signedIn(user))
+        return user
     }
 
     // MARK: - AuthProvider
@@ -434,6 +528,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     // MARK: - Factory
+
+    /// `encodeURIComponent`, as the server applies it to a provider id in a route path.
+    private static func encodeURIComponent(_ value: String) -> String {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
+    }
 
     /// Hydrates an `OIDCClient` from a server-supplied transferable descriptor.
     ///
@@ -495,7 +595,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     // Computed: a generic type can't store a static property.
-    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at"] }
+    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at", "provider"] }
 
     /// Scoped by exchange path, so OIDC blocks sharing one `TokenStore` keep separate sessions.
     private func tokenKey(_ name: String) -> String {
@@ -528,21 +628,90 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         }
     }
 
-    private static func stringifyExpiry(_ value: Any?) -> String {
-        if let number = value as? NSNumber { return number.stringValue }
-        if let str = value as? String { return str }
+    /// The expiry to store, in epoch milliseconds: now plus the response's `expiresIn` seconds, or its
+    /// `expiresAt` (epoch milliseconds) when it has no `expiresIn`. `"0"` (already expired) for neither.
+    private static func expiresAt(_ json: [String: Any]) -> String {
+        if let seconds = json["expiresIn"] as? NSNumber {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
+            return String(nowMs + Int64(seconds.doubleValue * 1_000))
+        }
+        if let number = json["expiresAt"] as? NSNumber { return number.stringValue }
+        if let str = json["expiresAt"] as? String { return str }
         return "0"
     }
+}
 
-    private static func decodeJWTPayload(_ segment: String) -> [String: Any]? {
-        var base64 = segment.replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = base64.count % 4
-        if padding > 0 { base64 += String(repeating: "=", count: 4 - padding) }
-        guard let data = Data(base64Encoded: base64),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json
+// MARK: - Auth block
+
+public extension OIDCClient where Provider == String {
+    /// The provider id of an `Auth` sign-in state action named `signIn:<id>`, or `nil` for any other action.
+    ///
+    /// A native app signs in with such an action through ``signIn(provider:launcher:)`` instead of
+    /// opening its `url`, which starts a browser-cookie sign-in the app never sees:
+    ///
+    /// ```swift
+    /// if let provider = OIDCClient.providerIdOf(action.name) {
+    ///     _ = try await oidc.signIn(provider: provider, launcher: launcher)
+    ///     state = try await blocks.authApi.getAuthState()
+    /// }
+    /// ```
+    static func providerIdOf(_ actionName: String) -> String? {
+        let prefix = "signIn:"
+        guard actionName.hasPrefix(prefix), actionName.count > prefix.count else { return nil }
+        return String(actionName.dropFirst(prefix.count))
+    }
+
+    /// A client for the `Auth` block's federated sign-in, on the app's own `BlocksClient`, so it shares
+    /// the app's `URLSession`, cookies and token store. It makes no request until you call it.
+    ///
+    /// ```swift
+    /// let blocks = Blocks()
+    /// let oidc = OIDCClient.forAuth(client: blocks.client, providers: ["google"], relayTo: "myapp://auth")
+    /// let user = try await oidc.signIn(provider: "google", launcher: launcher)
+    /// ```
+    ///
+    /// The routes are derived the way the server derives them: the base is `callbackPath` up to its
+    /// last `/`, and authorize-params, exchange, session and refresh sit under it. Pass the paths only
+    /// when the backend sets `redirects.callbackPath` or `redirects.signOutPath`. The routes are
+    /// requested at the client's URL cut before its first `aws-blocks` path segment, so an API Gateway
+    /// stage prefix is kept.
+    ///
+    /// - Parameters:
+    ///   - client: The app's client, e.g. `blocks.client`.
+    ///   - providers: The block's provider ids. `signIn` refuses any other id before making a request.
+    ///   - relayTo: The URL the server relays the sign-in back to, usually the app's custom scheme. It
+    ///     must be listed in the backend's `redirects.allowedRelayOrigins`.
+    ///   - callbackPath: The backend's `redirects.callbackPath`.
+    ///   - signOutPath: The backend's `redirects.signOutPath`.
+    /// - Precondition: Both paths start with `/aws-blocks/auth/`, and `callbackPath` has a segment
+    ///   after that and no trailing `/`. The paths are constants of the app's backend, so a path that
+    ///   breaks this stops the app with `preconditionFailure`, naming the path, instead of throwing.
+    ///   This differs from the Kotlin and Dart SDKs, whose `forAuth` throws an argument error: pass
+    ///   the backend's own `redirects.callbackPath` and `redirects.signOutPath`, never user input.
+    static func forAuth(
+        client: BlocksClient,
+        providers: [String],
+        relayTo: String? = nil,
+        callbackPath: String = "/aws-blocks/auth/callback",
+        signOutPath: String = "/aws-blocks/auth/signout"
+    ) -> OIDCClient<String> {
+        if let problem = authPathsProblem(callbackPath: callbackPath, signOutPath: signOutPath) {
+            preconditionFailure(problem)
+        }
+        let base = String(callbackPath[..<callbackPath.lastIndex(of: "/")!])
+        return OIDCClient<String>(
+            exchangePath: "\(base)/exchange",
+            refreshPath: "\(base)/exchange/refresh",
+            signOutPath: signOutPath,
+            providers: providers,
+            providerConfigs: [:],
+            baseUrl: client.baseUrl,
+            client: client,
+            wireDescriptor: nil,
+            routeBase: base,
+            callbackPath: callbackPath,
+            relayTo: relayTo
+        )
     }
 }
 
@@ -658,6 +827,15 @@ public enum OIDCError: BlocksError, Equatable {
         case .callbackError(let detail):
             return "OIDC callback error: \(detail)"
         }
+    }
+}
+
+/// A client that is missing configuration a call needs, such as `relayTo` for `signIn(provider:launcher:)`.
+public struct OIDCConfigurationError: BlocksError {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
     }
 }
 

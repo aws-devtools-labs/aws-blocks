@@ -222,33 +222,59 @@ public final class BlocksClient: Sendable {
     /// Derived by stripping the RPC path segments from the end of the URL.
     /// e.g. `https://host/prod/aws-blocks/api` → `https://host/prod`
     ///      `http://localhost:3001/aws-blocks/api` → `http://localhost:3001`
+    /// The cut is at the first `aws-blocks` segment, so a doubled `/aws-blocks/api/aws-blocks/api`
+    /// gives the origin. A URL with no such segment is used as it is, without a trailing `/`.
     var rawRouteBase: String {
-        guard let parsed = URL(string: url) else { return url }
-        let pathComponents = parsed.pathComponents.filter { $0 != "/" }
-        // Find where "aws-blocks" starts in the path and drop from there
-        if let idx = pathComponents.firstIndex(of: "aws-blocks") {
-            let keepComponents = pathComponents[..<idx]
-            let scheme = parsed.scheme ?? "https"
-            let host = parsed.host ?? "localhost"
-            let port = parsed.port.map { ":\($0)" } ?? ""
-            let basePath = keepComponents.isEmpty ? "" : "/" + keepComponents.joined(separator: "/")
-            return "\(scheme)://\(host)\(port)\(basePath)"
+        // `URLComponents` keeps an IPv6 host's brackets and the path's percent-encoding as they were.
+        guard var components = URLComponents(string: url), components.host != nil else { return url }
+        let segments = components.percentEncodedPath.split(separator: "/")
+        if let idx = segments.firstIndex(of: "aws-blocks") {
+            let kept = segments[..<idx]
+            components.percentEncodedPath = kept.isEmpty ? "" : "/" + kept.joined(separator: "/")
+            components.query = nil
+            components.fragment = nil
+            return components.string ?? url
         }
-        return url
+        var trimmed = Substring(url)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return String(trimmed)
     }
 
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
-    func postRawRoute(path: String, body: [String: Any]) async throws -> [String: Any] {
+    /// With `emptyBodyIsEmptyObject`, an empty 2xx body reads as `{}` instead of failing to parse.
+    func postRawRoute(path: String, body: [String: Any], emptyBodyIsEmptyObject: Bool = false) async throws -> [String: Any] {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:], emptyBodyIsEmptyObject: emptyBodyIsEmptyObject)
+    }
+
+    /// GET a raw route (not JSON-RPC). Handles cookies automatically.
+    func getRawRoute(path: String, headers: [String: String] = [:]) async throws -> [String: Any] {
+        try await sendRawRoute(method: "GET", path: path, body: nil, headers: headers)
+    }
+
+    private func sendRawRoute(
+        method: String,
+        path: String,
+        body: [String: Any]?,
+        headers: [String: String],
+        emptyBodyIsEmptyObject: Bool = false
+    ) async throws -> [String: Any] {
         guard let requestURL = URL(string: rawRouteBase + path) else {
             throw RawRouteError(message: "Invalid URL: \(rawRouteBase + path)")
         }
 
         var urlRequest = URLRequest(url: requestURL)
-        urlRequest.httpMethod = "POST"
+        urlRequest.httpMethod = method
         urlRequest.httpShouldHandleCookies = false
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        }
+        for (name, value) in headers {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
 
         // Attach stored cookies
         if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
@@ -287,6 +313,9 @@ public final class BlocksClient: Sendable {
             }
         }
 
+        if emptyBodyIsEmptyObject, data.isEmpty {
+            return [:]
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RawRouteError(message: "Invalid JSON response from \(path)")
         }

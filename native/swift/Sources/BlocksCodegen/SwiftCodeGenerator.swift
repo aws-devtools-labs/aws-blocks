@@ -53,8 +53,8 @@ public struct SwiftCodeGenerator {
     static let blocksRuntimeTypeNames: Set<String> = [
         "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
         "BrowserLauncher", "ClientClosedError", "CodegenError", "FileBucketError", "FileDownloadHandle", "FileUploadHandle",
-        "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
-        "RawRouteError", "RealtimeChannel", "RealtimeError", "RPCError", "TokenStore", "UnknownTransferable",
+        "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCConfigurationError", "OIDCError", "OIDCProviderConfig",
+        "OIDCProviderName", "OIDCUser", "RawRouteError", "RealtimeChannel", "RealtimeError", "RPCError", "TokenStore", "UnknownTransferable",
         "WebSocketConnection", "WebSocketDelegate"
     ]
 

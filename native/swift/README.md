@@ -57,9 +57,53 @@ _ = try await blocks.authApi.setAuthState(input: .signUp(AuthApi.SetAuthState.Si
 )))
 ```
 
-`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `tokenStore:` your own `TokenStore` to keep OIDC tokens across launches (each OIDC block keeps its own keys there), or `session:` a `URLSession` you own.
+`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there.
 
 Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
+
+## Using `Auth`
+
+The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state machine. `getAuthState()` returns the current `state` and the `actions` the block offers in it, each with the `fields` to collect; `setAuthState(input:)` runs one and returns the next state. Render the actions generically and the same screen covers sign-in, sign-up, MFA and password reset, whatever the block has turned on.
+
+Two kinds of action carry a `url`, which a native app doesn't open (it would sign in the system browser, not the app). Run them through an `OIDCClient` for the block instead:
+
+- `signIn:<id>`, a federated provider: `OIDCClient.providerIdOf(action.name)` gives the id. Call `oidc.signIn(provider:launcher:)`, then `getAuthState()`.
+- `signOut` with a `url`, a federated user's sign-out: call `oidc.signOut()`, then `getAuthState()`. Never submit this one through `setAuthState`: that ends the session but drops the provider's logout URL. A `signOut` without a `url` goes through `setAuthState` like any other action.
+
+```swift
+let blocks = Blocks()
+// The block's provider ids. `relayTo` is your app's Universal Link or custom scheme, listed in the
+// backend's `redirects.allowedRelayOrigins`.
+let oidc = OIDCClient.forAuth(client: blocks.client, providers: ["google"], relayTo: "myapp://auth")
+
+// On launch: the state reflects the session the Keychain cookie still holds.
+var state = try await blocks.authApi.getAuthState()
+
+/// Runs `action`; `input` is what the form collected for a plain (non-federated) action.
+func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throws -> AuthState {
+    if let provider = OIDCClient.providerIdOf(action.name) {
+        _ = try await oidc.signIn(provider: provider, launcher: launcher)
+    } else if action.name == "signOut", action.url != nil {
+        if let logoutURL = try await oidc.signOut() {
+            await UIApplication.shared.open(logoutURL)
+        }
+    } else if let input {
+        return try await blocks.authApi.setAuthState(input: input)
+    }
+    return try await blocks.authApi.getAuthState()
+}
+```
+
+`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme.
+
+Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
+
+- **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws (HTTP 404).
+- **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
+- **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it to end the provider's own session; otherwise the next sign-in can pick the same account without asking.
+- **Passkeys.** Hide actions whose `capability` is set (`webauthn-get`, `webauthn-create`): they need platform WebAuthn APIs the runtime doesn't call yet.
+- **New actions.** The block can add actions in a later release, so keep a `default` branch when you switch over action names.
+- **Custom routes.** A block that sets `redirects.callbackPath` or `redirects.signOutPath` (for example a second federated block) needs the same paths here: `OIDCClient.forAuth(client:providers:relayTo:callbackPath:signOutPath:)`.
 
 ## Features
 
@@ -76,7 +120,7 @@ Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a
 - **Schema-ref reuse.** A `oneOf` variant referencing a component schema reuses that named type instead of inventing a duplicate struct.
 - **Unbound transferables.** A direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of a raw `Data?` that did not type-check. Only bare direct results are covered.
 - **Declared native packages.** When `x-blocks-native-bindings` binds the tag and its package has a `swift` field, generated source imports the declared module and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
-- **Typed OIDC providers.** `OIDCClient` is generic over the providers it signs in with. When the spec names an OIDC client's providers, the method's namespace gets a `CaseIterable` `Provider` enum and `getClient()` returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, so `let user = try await client.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)` accepts only that client's own providers. An untyped spec returns `OIDCClient<String>`, whose `signIn` takes a `String`. When the method's own types already use the name `Provider`, the enum is `ResultProvider` and codegen prints a `swift:` warning that names it.
+- **Typed OIDC providers.** For a custom block whose method returns an `oidc/client` (the `Auth` block returns none; see [Using `Auth`](#using-auth)): `OIDCClient` is generic over the providers it signs in with. When the spec names an OIDC client's providers, the method's namespace gets a `CaseIterable` `Provider` enum and `getClient()` returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, so `let user = try await client.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)` accepts only that client's own providers. An untyped spec returns `OIDCClient<String>`, whose `signIn` takes a `String`. When the method's own types already use the name `Provider`, the enum is `ResultProvider` and codegen prints a `swift:` warning that names it.
 
 ## Configuration
 

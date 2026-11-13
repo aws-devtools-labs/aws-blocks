@@ -217,6 +217,7 @@ final class OIDCClientTests: XCTestCase {
             return events
         }
 
+        let before = Int64(Date().timeIntervalSince1970 * 1_000)
         let user = try await client.exchange(
             code: "code-1",
             verifier: "verifier-1",
@@ -234,10 +235,42 @@ final class OIDCClientTests: XCTestCase {
         let expiresAt = await store.get(tokenKey("expires_at"))
         XCTAssertEqual(accessToken, "access-1")
         XCTAssertEqual(refreshToken, "refresh-1")
-        XCTAssertEqual(expiresAt, "3600")
+        // Now plus `expiresIn` seconds, in epoch milliseconds.
+        let expiry = try XCTUnwrap(expiresAt.flatMap { Int64($0) })
+        XCTAssertGreaterThanOrEqual(expiry, before + 3_600_000)
+        XCTAssertLessThan(expiry, before + 3_660_000)
+        let provider = await store.get(tokenKey("provider"))
+        XCTAssertEqual(provider, "google")
 
         let events = await collector.value
         XCTAssertEqual(events, [.signedIn(user)])
+    }
+
+    func testExchangeRefusesAnUnknownProviderBeforeAnyRequest() async {
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "github", state: "s", nonce: "n")
+            XCTFail("Expected unknownProvider")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .unknownProvider("github"))
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    func testExchangeAsksForNoBearerTokens() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(requestJSON(request)["tokens"] as? Bool, false)
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+
+        _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
+
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1)
     }
 
     func testExchangeThrowsOnMalformedResponse() async {
@@ -400,15 +433,40 @@ final class OIDCClientTests: XCTestCase {
 
     // MARK: - Refresh
 
-    func testRefreshUpdatesAccessToken() async throws {
+    /// The response the server sends (`federation-routes.ts`): `{ accessToken, refreshToken, expiresIn }`,
+    /// `expiresIn` in seconds, with a rotated refresh token.
+    func testRefreshStoresTheRotatedTokensAndExpiry() async throws {
         OIDCMockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/auth/refresh")
-            let body: [String: Any] = [
-                "accessToken": "access-2",
-                "expiresAt": 9_999_999_999_000
-            ]
-            let data = try JSONSerialization.data(withJSONObject: body)
-            return (okResponse(for: request.url!), data)
+            XCTAssertEqual(requestJSON(request) as? [String: String], ["refreshToken": "refresh-1", "provider": "github"])
+            let body: [String: Any] = ["accessToken": "access-2", "refreshToken": "refresh-2", "expiresIn": 3_600]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "refresh-1")
+        await store.set(tokenKey("provider"), value: "github")
+        let before = Int64(Date().timeIntervalSince1970 * 1_000)
+
+        try await client.refresh()
+
+        let accessToken = await store.get(tokenKey("access_token"))
+        let refreshToken = await store.get(tokenKey("refresh_token"))
+        let storedExpiry = await store.get(tokenKey("expires_at"))
+        let expiry = try XCTUnwrap(storedExpiry.flatMap { Int64($0) })
+        XCTAssertEqual(accessToken, "access-2")
+        XCTAssertEqual(refreshToken, "refresh-2")
+        XCTAssertGreaterThanOrEqual(expiry, before + 3_600_000)
+        let token = await client.getAccessToken()
+        XCTAssertEqual(token, "access-2", "a refreshed token reads as not expired")
+    }
+
+    func testRefreshFallsBackToExpiresAtAndKeepsAnUnrotatedRefreshToken() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertNil(requestJSON(request)["provider"], "no provider was stored")
+            let body: [String: Any] = ["accessToken": "access-2", "expiresAt": 9_999_999_999_000]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
 
         let client = makeClient(session: makeMockSession())
@@ -417,10 +475,10 @@ final class OIDCClientTests: XCTestCase {
 
         try await client.refresh()
 
-        let accessToken = await store.get(tokenKey("access_token"))
         let refreshToken = await store.get(tokenKey("refresh_token"))
-        XCTAssertEqual(accessToken, "access-2")
+        let expiry = await store.get(tokenKey("expires_at"))
         XCTAssertEqual(refreshToken, "refresh-existing")
+        XCTAssertEqual(expiry, "9999999999000")
     }
 
     func testRefreshFailureClearsTokensAndEmitsSignedOut() async throws {
@@ -474,9 +532,12 @@ final class OIDCClientTests: XCTestCase {
 
     // MARK: - Sign out
 
-    func testSignOutClearsTokensAndEmitsSignedOut() async {
+    func testSignOutClearsTokensAndEmitsSignedOut() async throws {
         OIDCMockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/auth/signout")
+            XCTAssertEqual(request.url?.query, "format=json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(requestJSON(request).count, 0, "the body is {}, even with a refresh token stored")
             return (okResponse(for: request.url!), Data("{}".utf8))
         }
 
@@ -495,8 +556,9 @@ final class OIDCClientTests: XCTestCase {
             return events
         }
 
-        await client.signOut()
+        let logoutURL = try await client.signOut()
 
+        XCTAssertNil(logoutURL)
         let accessToken = await store.get(tokenKey("access_token"))
         let refreshToken = await store.get(tokenKey("refresh_token"))
         let events = await collector.value
@@ -505,24 +567,337 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(events, [.signedOut])
     }
 
-    // MARK: - Restore
-
-    func testRestoreEmitsSignedOutWhenNoTokens() async {
+    func testSignOutReturnsTheLogoutURL() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(requestJSON(request).count, 0, "the body is {}")
+            let body = ["logoutUrl": "https://idp.example.com/logout?client_id=cid"]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
         let client = makeClient(session: makeMockSession())
 
+        let logoutURL = try await client.signOut()
+
+        XCTAssertEqual(logoutURL?.absoluteString, "https://idp.example.com/logout?client_id=cid")
+    }
+
+    func testSignOutAcceptsAnEmpty204() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 204), Data())
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let state = await firstState(of: client)
+
+        let logoutURL = try await client.signOut()
+
+        XCTAssertNil(logoutURL)
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        let event = await state.value
+        XCTAssertEqual(event, .signedOut)
+    }
+
+    func testSignOutIncompleteSignsOutLocallyAndThrows() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 503), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let state = await firstState(of: client)
+
+        do {
+            _ = try await client.signOut()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 503)
+            XCTAssertEqual(error.errorName, "SignOutIncompleteException")
+        }
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        let event = await state.value
+        XCTAssertEqual(event, .signedOut)
+    }
+
+    func testSignOutFailureClearsTokensAndKeepsTheState() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 500), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
         let stream = await client.authStateChanges()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
                 events.append(event)
-                if events.count == 2 { break }
             }
             return events
         }
 
-        await client.restore()
+        do {
+            _ = try await client.signOut()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 500)
+        }
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        try await Task.sleep(for: .milliseconds(50))
+        collector.cancel()
         let events = await collector.value
-        XCTAssertEqual(events, [.loading, .signedOut])
+        XCTAssertEqual(events, [], "a failed sign-out emits no state")
+    }
+
+    /// Two `Auth` blocks on one app keep their cookies in the one jar. Signing out of one clears only
+    /// what its server expires: the other block's session cookie is still sent.
+    func testSignOutOfOneBlockKeepsTheOtherBlocksSessionCookie() async throws {
+        BlocksClient.clearCookies()
+        defer { BlocksClient.clearCookies() }
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let path = url.path
+            let (cookie, body): (String?, [String: Any]) = if path == "/aws-blocks/auth/exchange" {
+                ("authsession_a=a1; Path=/aws-blocks/auth; Secure; HttpOnly", ["user": ["userId": "a", "username": "a"]])
+            } else if path == "/aws-blocks/auth/sso/exchange" {
+                ("authsession_b=b1; Path=/aws-blocks/auth/sso; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
+            } else if path == "/aws-blocks/auth/signout" {
+                ("authsession_a=; Max-Age=0; Path=/aws-blocks/auth; Secure; HttpOnly", [:])
+            } else {
+                (nil, ["user": ["userId": "b", "username": "b"]])
+            }
+            let headers = cookie.map { ["Set-Cookie": $0] } ?? [:]
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
+            return (response, try JSONSerialization.data(withJSONObject: body))
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let main = OIDCClient.forAuth(client: blocksClient, providers: ["google"])
+        let sso = OIDCClient.forAuth(
+            client: blocksClient,
+            providers: ["corp"],
+            callbackPath: "/aws-blocks/auth/sso/callback",
+            signOutPath: "/aws-blocks/auth/sso/signout"
+        )
+        _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
+        _ = try await sso.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
+
+        _ = try await main.signOut()
+        _ = try await sso.restore()
+
+        let session = try XCTUnwrap(OIDCMockURLProtocol.requests.last)
+        XCTAssertEqual(session.url?.path, "/aws-blocks/auth/sso/session")
+        let cookies = session.value(forHTTPHeaderField: "Cookie") ?? ""
+        XCTAssertTrue(cookies.contains("authsession_b=b1"), cookies)
+        XCTAssertFalse(cookies.contains("authsession_a"), cookies)
+    }
+
+    /// Subscribes to `client` and returns every state it emits in the next 50 ms after `body` runs.
+    private func states(of client: OIDCClient<String>, during body: () async throws -> Void) async rethrows -> [OIDCAuthState] {
+        let stream = await client.authStateChanges()
+        let collector = Task<[OIDCAuthState], Never> {
+            var events: [OIDCAuthState] = []
+            for await event in stream {
+                events.append(event)
+            }
+            return events
+        }
+        try await body()
+        try? await Task.sleep(for: .milliseconds(50))
+        collector.cancel()
+        return await collector.value
+    }
+
+    func testSignOutOnAClosedClientKeepsTheTokens() async throws {
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        client.client.close()
+
+        let events = await states(of: client) {
+            do {
+                _ = try await client.signOut()
+                XCTFail("Expected ClientClosedError")
+            } catch {
+                XCTAssertTrue(error is ClientClosedError, "got \(error)")
+            }
+        }
+
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt", "the request was never sent")
+        XCTAssertEqual(events, [])
+    }
+
+    // MARK: - Restore
+
+    /// The first state `client` emits after `subscribe` returns, collected in the background.
+    private func firstState(of client: OIDCClient<String>) async -> Task<OIDCAuthState?, Never> {
+        let stream = await client.authStateChanges()
+        return Task {
+            for await event in stream {
+                return event
+            }
+            return nil
+        }
+    }
+
+    func testRestoreReadsTheServersSession() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "no token is stored")
+            let body: [String: Any] = ["user": ["userId": "https://idp.example.com:sub-1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"])
+        let state = await firstState(of: client)
+
+        let user = try await client.restore()
+
+        XCTAssertEqual(user?.userId, "https://idp.example.com:sub-1")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            ["https://api.example.com/prod/aws-blocks/auth/session"]
+        )
+        let event = await state.value
+        XCTAssertEqual(event, user.map(OIDCAuthState.signedIn))
+    }
+
+    func testRestoreSendsAStoredAccessToken() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/auth/session")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer at-1")
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        await client.client.tokenStore.set(tokenKey("access_token"), value: "at-1")
+        await client.client.tokenStore.set(tokenKey("expires_at"), value: "9999999999000")
+
+        let user = try await client.restore()
+
+        XCTAssertEqual(user?.userId, "u1")
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1)
+    }
+
+    func testRestoreLeavesAnExpiredAccessTokenOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "expired")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        await store.set(tokenKey("expires_at"), value: "0")
+
+        let user = try await client.restore()
+
+        XCTAssertEqual(user?.userId, "u1")
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "restore doesn't refresh")
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
+    }
+
+    func testRestoreOn401ClearsTokensAndEmitsSignedOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["error": "Not signed in", "name": "NotAuthenticatedException"]
+            return (errorResponse(for: request.url!, status: 401), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "at")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        let state = await firstState(of: client)
+
+        let user = try await client.restore()
+
+        XCTAssertNil(user)
+        let access = await store.get(tokenKey("access_token"))
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(access)
+        XCTAssertNil(refresh)
+        let event = await state.value
+        XCTAssertEqual(event, .signedOut)
+    }
+
+    func testRestoreOn404NamesTheMissingSessionRoute() async {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 404), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.restore()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 404)
+            XCTAssertTrue(error.message.contains("no session route"), error.message)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+    }
+
+    func testRestoreOnAServerErrorThrowsAndKeepsTheTokens() async {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 500), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        do {
+            _ = try await client.restore()
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertEqual(error.statusCode, 500)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
+    }
+
+    func testRestoreOnATransportErrorThrowsAndChangesNothing() async throws {
+        // No handler: the mock fails the request with `URLError(.cannotConnectToHost)`.
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            do {
+                _ = try await client.restore()
+                XCTFail("Expected a transport error")
+            } catch {
+                XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost, "got \(error)")
+            }
+        }
+
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
+        XCTAssertEqual(events, [])
+    }
+
+    func testRestoreWithoutAUserInTheResponseThrowsInvalidResponse() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (okResponse(for: request.url!), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+
+        let events = await states(of: client) {
+            do {
+                _ = try await client.restore()
+                XCTFail("Expected invalidResponse")
+            } catch let error as OIDCError {
+                XCTAssertEqual(error, .invalidResponse)
+            } catch {
+                XCTFail("Expected OIDCError, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(events, [])
     }
 
     // MARK: - getAccessToken
@@ -540,6 +915,89 @@ final class OIDCClientTests: XCTestCase {
         await store.set(tokenKey("expires_at"), value: "9999999999000")
         let token = await client.getAccessToken()
         XCTAssertEqual(token, "at-1")
+    }
+
+    // MARK: - authState
+
+    func testAuthStateIsLoadingBeforeAnyStateIsEmitted() async {
+        let client = makeClient(session: makeMockSession())
+        let state = await client.authState
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testAuthStateIsTheStateMostRecentlyEmitted() async throws {
+        let client = makeClient(session: makeMockSession())
+        let user = OIDCUser(userId: "u1", username: "alice", groups: [])
+
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = [
+                "accessToken": "at", "refreshToken": "rt", "expiresIn": 3_600,
+                "user": ["userId": "u1", "username": "alice", "groups": [String]()]
+            ]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        var events = try await states(of: client) {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "myapp://callback", provider: "google", state: "s", nonce: "n"
+            )
+        }
+        var state = await client.authState
+        XCTAssertEqual(events, [.signedIn(user)])
+        XCTAssertEqual(state, events.last)
+
+        // A restore that fails emits nothing and leaves the state as it was.
+        OIDCMockURLProtocol.handler = { request in (errorResponse(for: request.url!, status: 500), Data("{}".utf8)) }
+        events = await states(of: client) {
+            _ = try? await client.restore()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [])
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in (okResponse(for: request.url!), Data("{}".utf8)) }
+        events = try await states(of: client) {
+            _ = try await client.signOut()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, events.last)
+    }
+
+    /// A `forAuth` client sets the state on the relay sign-in and on a restore that finds no session.
+    func testAuthStateFollowsAForAuthClientsSignInAndRestore() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        let user = try await client.signIn(provider: "google", launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c"))
+        var state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "Not signed in", "name": "NotAuthenticatedException"]
+            return (errorResponse(for: request.url!, status: 401), try JSONSerialization.data(withJSONObject: body))
+        }
+        let restored = try await client.restore()
+        state = await client.authState
+        XCTAssertNil(restored)
+        XCTAssertEqual(state, .signedOut)
+    }
+
+    func testAuthStateIsSignedOutAfterAnIncompleteSignOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 503), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        await client.client.tokenStore.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            _ = try? await client.signOut()
+        }
+
+        let state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, .signedOut)
     }
 
     // MARK: - authStateChanges fan-out
@@ -609,7 +1067,7 @@ final class OIDCClientTests: XCTestCase {
         }
 
         try await auth.refresh()
-        await admin.signOut()
+        try await admin.signOut()
 
         let authToken = await auth.getAccessToken()
         let adminToken = await admin.getAccessToken()
@@ -703,21 +1161,7 @@ final class OIDCClientTests: XCTestCase {
     /// `POST <base>/exchange/refresh` as the default refresh path.
     func testSignInDerivesTheAuthBlockRoutesFromExchangePath() async throws {
         let session = makeMockSession()
-        OIDCMockURLProtocol.handler = { request in
-            let url = try XCTUnwrap(request.url)
-            if url.path.hasSuffix("/authorize-params/google") {
-                let body = try JSONSerialization.data(withJSONObject: [
-                    "authorizeUrl": "https://idp.example.com/authorize",
-                    "clientId": "cid",
-                    "scopes": ["openid"],
-                    "kind": "oidc",
-                    "state": "signed-state"
-                ])
-                return (okResponse(for: url), body)
-            }
-            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
-            return (okResponse(for: url), body)
-        }
+        stubAuthRoutes()
         let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: session)
         let client = try OIDCClient<String>.fromJSON(
             [
@@ -728,7 +1172,7 @@ final class OIDCClientTests: XCTestCase {
             baseUrl: blocksClient.baseUrl,
             client: blocksClient
         )
-        let launcher = CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=signed-state")
+        let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
 
         let user = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
 
@@ -745,6 +1189,255 @@ final class OIDCClientTests: XCTestCase {
         let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "redirect_uri" }?.value
         XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+    }
+
+    // MARK: - forAuth
+
+    /// Answers authorize-params with a signed-state envelope carrying the request's `csrf`, as the
+    /// server does, and the exchange with a user.
+    private func stubAuthRoutes() {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path.contains("/authorize-params/") {
+                let csrf = requestJSON(request)["csrf"] as? String ?? ""
+                let payload = try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": csrf])
+                let state = Self.base64URL(payload) + ".sig"
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize",
+                    "clientId": "cid",
+                    "scopes": ["openid"],
+                    "kind": "oidc",
+                    "state": state
+                ])
+                return (okResponse(for: url), body)
+            }
+            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
+            return (okResponse(for: url), body)
+        }
+    }
+
+    private static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    func testForAuthDerivesTheRoutesFromTheDefaultCallbackPath() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "nativebindings://auth")
+        let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
+
+        let user = try await client.signIn(provider: "google", launcher: launcher)
+
+        XCTAssertEqual(user.userId, "u1")
+        XCTAssertTrue(client.client === blocksClient, "forAuth shares the app's client")
+        XCTAssertEqual(client.exchangePath, "/aws-blocks/auth/exchange")
+        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/exchange/refresh")
+        XCTAssertEqual(client.signOutPath, "/aws-blocks/auth/signout")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            [
+                "https://api.example.com/prod/aws-blocks/auth/authorize-params/google",
+                "https://api.example.com/prod/aws-blocks/auth/exchange"
+            ]
+        )
+        let params = requestJSON(OIDCMockURLProtocol.requests[0])
+        XCTAssertEqual(params["relayTo"] as? String, "nativebindings://auth")
+        let exchange = requestJSON(OIDCMockURLProtocol.requests[1])
+        XCTAssertEqual(exchange["callbackUrl"] as? String, "https://api.example.com/prod/aws-blocks/auth/callback")
+        XCTAssertEqual(exchange["provider"] as? String, "google")
+        let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
+        let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "redirect_uri" }?.value
+        XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+    }
+
+    /// A custom callback name and a second block's routes: the base is the directory of
+    /// `callbackPath`, not a string replacement on `exchangePath`.
+    func testForAuthDerivesTheRoutesFromACustomCallbackPath() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(
+            client: blocksClient,
+            providers: ["corp sso"],
+            relayTo: "myapp://auth",
+            callbackPath: "/aws-blocks/auth/sso/login",
+            signOutPath: "/aws-blocks/auth/sso/signout"
+        )
+        let launcher = EchoStateRelayLauncher(relay: "myapp://auth?code=c")
+
+        _ = try await client.signIn(provider: "corp sso", launcher: launcher)
+
+        XCTAssertEqual(client.exchangePath, "/aws-blocks/auth/sso/exchange")
+        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/sso/exchange/refresh")
+        XCTAssertEqual(client.signOutPath, "/aws-blocks/auth/sso/signout")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            [
+                "http://localhost:3001/aws-blocks/auth/sso/authorize-params/corp%20sso",
+                "http://localhost:3001/aws-blocks/auth/sso/exchange"
+            ]
+        )
+        let exchange = requestJSON(OIDCMockURLProtocol.requests[1])
+        XCTAssertEqual(exchange["callbackUrl"] as? String, "http://localhost:3001/aws-blocks/auth/sso/login")
+    }
+
+    func testForAuthRefusesAnUnknownProviderBeforeAnyRequest() async {
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        do {
+            _ = try await client.signIn(provider: "github", launcher: EchoStateRelayLauncher(relay: "myapp://auth"))
+            XCTFail("Expected unknownProvider")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .unknownProvider("github"))
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    func testForAuthWithoutRelayToThrowsAConfigurationErrorOnSignIn() async {
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"])
+
+        do {
+            _ = try await client.signIn(provider: "google", launcher: EchoStateRelayLauncher(relay: "myapp://auth"))
+            XCTFail("Expected OIDCConfigurationError")
+        } catch let error as OIDCConfigurationError {
+            XCTAssertTrue(error.message.contains("relayTo"), error.message)
+        } catch {
+            XCTFail("Expected OIDCConfigurationError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    /// The relay's state is checked against the csrf this client sent, and refused when its
+    /// envelope can't be decoded or carries no csrf.
+    func testSignInRefusesAStateWhoseCsrfCannotBeChecked() async throws {
+        let payloads: [String] = [
+            "no-dot-state",
+            "!!!.sig",
+            Self.base64URL(Data("not json".utf8)) + ".sig",
+            Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1])) + ".sig",
+            Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": "someone-elses"])) + ".sig"
+        ]
+        for state in payloads {
+            OIDCMockURLProtocol.reset()
+            OIDCMockURLProtocol.handler = { request in
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid",
+                    "scopes": ["openid"], "kind": "oidc", "state": state
+                ])
+                return (okResponse(for: request.url!), body)
+            }
+            let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+            let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+            do {
+                _ = try await client.signIn(provider: "google", launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c"))
+                XCTFail("Expected stateMismatch for \(state)")
+            } catch let error as OIDCError {
+                XCTAssertEqual(error, .stateMismatch, state)
+            }
+            XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange for \(state)")
+        }
+    }
+
+    func testSignInChecksTheStateBeforeTheIdPError() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        // An error without the sign-in's state is refused as a mismatch, whatever its text.
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: FixedRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=chosen-text")
+            )
+            XCTFail("Expected stateMismatch")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .stateMismatch)
+        }
+
+        // With the sign-in's state, the IdP error is reported.
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: EchoStateRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=denied")
+            )
+            XCTFail("Expected callbackError")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .callbackError("access_denied: denied"))
+        }
+        XCTAssertFalse(
+            OIDCMockURLProtocol.requests.contains { $0.url?.path.hasSuffix("/exchange") == true },
+            "no exchange after a refused relay"
+        )
+    }
+
+    /// A relay with the right state and an IdP error, but whose envelope carries another sign-in's
+    /// csrf, is refused as a mismatch: the csrf is checked before the error is reported.
+    func testSignInChecksTheEnvelopeCsrfBeforeTheIdPError() async throws {
+        let state = Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": "someone-elses"])) + ".sig"
+        OIDCMockURLProtocol.handler = { request in
+            let body = try JSONSerialization.data(withJSONObject: [
+                "authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid",
+                "scopes": ["openid"], "kind": "oidc", "state": state
+            ])
+            return (okResponse(for: request.url!), body)
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: EchoStateRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=chosen-text")
+            )
+            XCTFail("Expected stateMismatch")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .stateMismatch)
+        }
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange")
+    }
+
+    func testProviderIdOfReadsTheSignInActionName() {
+        XCTAssertEqual(OIDCClient.providerIdOf("signIn:google"), "google")
+        XCTAssertEqual(OIDCClient.providerIdOf("signIn:corp:sso"), "corp:sso")
+        XCTAssertNil(OIDCClient.providerIdOf("signIn"))
+        XCTAssertNil(OIDCClient.providerIdOf("signIn:"))
+        XCTAssertNil(OIDCClient.providerIdOf("signOut"))
+        XCTAssertNil(OIDCClient.providerIdOf("signUp"))
+    }
+
+    func testForAuthPathValidation() {
+        let problem = OIDCClient<String>.authPathsProblem
+        XCTAssertNil(problem("/aws-blocks/auth/callback", "/aws-blocks/auth/signout"))
+        XCTAssertNil(problem("/aws-blocks/auth/sso/callback", "/aws-blocks/auth/sso/signout"))
+        XCTAssertNotNil(problem("/auth/callback", "/aws-blocks/auth/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/callback", "/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/", "/aws-blocks/auth/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/callback/", "/aws-blocks/auth/signout"))
+    }
+
+    /// The origin raw routes are requested at: the client URL cut at its first `aws-blocks` segment.
+    func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstAwsBlocksSegment() {
+        let cases = [
+            ("https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api",
+             "https://x.execute-api.us-east-1.amazonaws.com/prod"),
+            ("https://d1.cloudfront.net/aws-blocks/api", "https://d1.cloudfront.net"),
+            ("https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api", "https://d1.cloudfront.net"),
+            ("http://localhost:3001", "http://localhost:3001"),
+            ("http://[::1]:3001/aws-blocks/api", "http://[::1]:3001"),
+            ("https://x.example.com/pr%20od/aws-blocks/api", "https://x.example.com/pr%20od"),
+            ("http://localhost:3001/", "http://localhost:3001")
+        ]
+        for (url, origin) in cases {
+            XCTAssertEqual(BlocksClient(url: url).rawRouteBase, origin, url)
+        }
     }
 
     func testFromJSONThrowsOnMissingExchangePath() {
@@ -764,6 +1457,30 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testOIDCUserFromJSONReadsTheOptionalFields() throws {
+        let user = try OIDCUser.fromJSON([
+            "userId": "https://idp.example.com:sub-1",
+            "username": "alice",
+            "userSub": "https://idp.example.com:sub-1",
+            "signInProvider": "google",
+            "groups": ["admins"],
+            "attributes": ["email": "alice@example.com", "custom:team": "platform"],
+            "displayName": "alice@example.com"
+        ])
+        XCTAssertEqual(user.userSub, "https://idp.example.com:sub-1")
+        XCTAssertEqual(user.signInProvider, "google")
+        XCTAssertEqual(user.groups, ["admins"])
+        XCTAssertEqual(user.attributes, ["email": "alice@example.com", "custom:team": "platform"])
+        XCTAssertEqual(user.displayName, "alice@example.com")
+
+        let minimal = try OIDCUser.fromJSON(["userId": "u1", "username": "bob"])
+        XCTAssertNil(minimal.userSub)
+        XCTAssertNil(minimal.signInProvider)
+        XCTAssertNil(minimal.attributes)
+        XCTAssertNil(minimal.displayName)
+        XCTAssertEqual(minimal.groups, [])
+    }
+
     func testOIDCProviderConfigFromJSONThrowsOnMissingFields() {
         XCTAssertThrowsError(try OIDCProviderConfig.fromJSON(["authorizeUrl": "x", "clientId": "y", "scopes": [String]()])) { error in
             guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
@@ -772,8 +1489,8 @@ final class OIDCClientTests: XCTestCase {
     }
 }
 
-/// Returns a fixed relay redirect and records the authorize URL it was launched with.
-private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable {
+/// Relays back to `relay` with the `state` the authorize URL carried, as the server's callback does.
+private final class EchoStateRelayLauncher: BrowserLauncher, @unchecked Sendable {
     private let relay: String
     private(set) var authorizeURL: URL?
 
@@ -783,6 +1500,19 @@ private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable
 
     func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
         self.authorizeURL = authorizeURL
-        return try XCTUnwrap(URL(string: relay))
+        let state = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "state" }?.value ?? ""
+        var components = try XCTUnwrap(URLComponents(string: relay))
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "state", value: state)]
+        return try XCTUnwrap(components.url)
+    }
+}
+
+/// Relays back to `relay` unchanged, without the sign-in's state.
+private struct FixedRelayLauncher: BrowserLauncher {
+    let relay: String
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        try XCTUnwrap(URL(string: relay))
     }
 }

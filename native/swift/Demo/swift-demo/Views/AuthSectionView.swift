@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import BlocksRuntime
 import SwiftUI
 
 struct AuthSectionView: View {
@@ -32,8 +33,9 @@ struct AuthSectionView: View {
                 }
             }
 
-            // Dynamic action forms
-            if let actions = appState.authState?.actions {
+            // Dynamic action forms. Passkey actions (`capability` set) need platform WebAuthn
+            // APIs, so they are hidden.
+            if let actions = appState.authState?.actions.filter({ $0.capability == nil }) {
                 ForEach(actions, id: \.name) { action in
                     Section(action.label) {
                         AuthActionFormView(action: action)
@@ -80,7 +82,8 @@ struct AuthActionFormView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isLoading)
+        // An action that carries `unavailable` can't run in this state.
+        .disabled(isLoading || action.unavailable != nil)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .onAppear {
             for field in action.fields {
@@ -88,6 +91,12 @@ struct AuthActionFormView: View {
                     fieldValues[field.name] = defaultValue
                 }
             }
+        }
+
+        if let reason = action.unavailable {
+            Text(reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -111,6 +120,16 @@ struct AuthActionFormView: View {
         isLoading = true
         defer { isLoading = false }
 
+        // Federated actions carry a `url` that would sign in the system browser, not the app:
+        // they go through the OIDC client instead of `setAuthState`.
+        if let provider = OIDCClient.providerIdOf(action.name) {
+            await appState.federatedSignIn(provider: provider)
+            return
+        }
+        if action.name == "signOut", action.url != nil {
+            await appState.federatedSignOut()
+            return
+        }
         let input = buildInput()
         guard let input else { return }
         await appState.performAuthAction(input)
