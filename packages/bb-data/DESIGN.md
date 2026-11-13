@@ -55,6 +55,23 @@ bb-data (this package)
   63-byte limit, dropping whole parent entries rather than truncating
   mid-token. Attribution only — no query-behavior impact. Not set on the
   `DataApiEngine` path (RDS Data API is HTTP, not a pg wire connection).
+- An idle pooled connection dropped by the server or network (a pooler's idle
+  timeout, a reset, a Lambda freeze/thaw) is discarded by `pg.Pool` and logged
+  as a fixed warning; it does not crash the process. The warning never includes
+  the driver's error message (it can carry server-supplied text) and includes
+  the error code only when it is a SQLSTATE or a Node errno name. The pool opens
+  a replacement connection when one is needed; with more than one connection,
+  another healthy one may serve the next query.
+- A connection dropped during a transaction (checked out by `beginTransaction`)
+  is handled the same way: a warning is logged, the transaction's remaining
+  queries fail, and the connection is discarded on release. Each transaction
+  client carries this `'error'` listener only while checked out; `query()` and
+  `execute()` rely on `pg.Pool`'s own per-query listener.
+- A failed `BEGIN` releases its client with the error, so pg closes that
+  connection instead of reusing it and the pool slot is freed.
+- On the AWS runtime, the connection string (an AppSetting) is read once and the
+  engine is cached only after a successful read. A failed read is not cached:
+  the next call retries. Concurrent first calls share one read.
 
 ## Error Translation
 

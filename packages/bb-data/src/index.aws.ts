@@ -47,15 +47,29 @@ export class Database extends Scope {
     registerSdkIdentifiers(this.fullId, { clusterArn, secretArn, databaseName });
   }
 
-  /** @internal Resolve the underlying RLSEnabledDatabase (async due to SSM SecureString fetch). */
+  /**
+   * @internal Resolve the underlying RLSEnabledDatabase (async due to SSM SecureString fetch).
+   *
+   * Concurrent callers share one in-flight init. Only a successful init is cached: if it
+   * rejects (e.g. a transient connection-string read failure), the in-flight promise is
+   * cleared so the next call retries instead of the warm runtime rejecting forever.
+   */
   private async resolveBase(): Promise<RLSEnabledDatabase> {
     if (this._base) return this._base;
     if (this._basePromise) return this._basePromise;
 
-    this._basePromise = this._initBase();
-    this._base = await this._basePromise;
-    this._basePromise = null;
-    return this._base;
+    const pending = this._initBase().then((base) => {
+      this._base = base;
+      return base;
+    });
+    this._basePromise = pending;
+    // Settle-time cleanup (also marks a rejection as handled on this branch;
+    // callers still observe it through `pending`).
+    const clear = () => {
+      if (this._basePromise === pending) this._basePromise = null;
+    };
+    pending.then(clear, clear);
+    return pending;
   }
 
   private async _initBase(): Promise<RLSEnabledDatabase> {
@@ -156,6 +170,8 @@ export class Database extends Scope {
 
 /**
  * Creates a proxy that defers crud handler creation until the first method call.
+ * Concurrent first calls share one init; a failed init is not cached, so the next
+ * call retries.
  */
 function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, schema: TableSchema, options: CrudOptions<any>): any {
   let handlers: any = null;
@@ -176,14 +192,16 @@ function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, sc
   async function ensureHandlers() {
     if (handlers) return handlers;
     if (initPromise) return initPromise;
-    initPromise = (async () => {
-      const base = await resolveBase();
+    const pending = resolveBase().then((base) => {
       handlers = createCrudHandlers(base, schema, options);
       return handlers;
-    })();
-    handlers = await initPromise;
-    initPromise = null;
-    return handlers;
+    });
+    initPromise = pending;
+    const clear = () => {
+      if (initPromise === pending) initPromise = null;
+    };
+    pending.then(clear, clear);
+    return pending;
   }
 
   const target: Record<string, any> = {};
