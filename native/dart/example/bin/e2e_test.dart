@@ -20,6 +20,10 @@ void main() async {
     // or a real IdP); otherwise it prints a visible SKIP
     // (see oidc_test.dart).
     'oidc_test.dart',
+    // OidcClient.forAuth against two federated blocks: a second provider on
+    // the default routes, and a block on its own callback and sign-out paths.
+    // Same RUN_OIDC rule as oidc_test.dart.
+    'oidc_multi_block_test.dart',
     // The JSON-RPC wire contract: positional params, a left-out optional's
     // slot kept as null.
     'rpc_wire_test.dart',
