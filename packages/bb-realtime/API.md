@@ -18,6 +18,9 @@ export interface GetChannelOptions {
 }
 
 // @public
+export type InferMessage<C> = C extends NamespaceConfig<infer T> ? T : unknown;
+
+// @public
 export interface NamespaceConfig<T = unknown> {
     // (undocumented)
     schema: StandardSchemaV1<T>;
@@ -68,7 +71,6 @@ export interface RealtimeOptions<T extends NamespaceDefs> {
 // @public
 export interface RealtimeServer<T extends NamespaceDefs> {
     getChannel<K extends string & keyof T>(namespace: K, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<InferMessage<T[K]>>>;
-    // Warning: (ae-forgotten-export) The symbol "InferMessage" needs to be exported by the entry point index.aws.d.ts
     publish<K extends string & keyof T>(namespace: K, channel: string, data: InferMessage<T[K]>): Promise<void>;
     subscribe<K extends string & keyof T>(namespace: K, channel: string, handler: (message: InferMessage<T[K]>) => void): () => void;
 }

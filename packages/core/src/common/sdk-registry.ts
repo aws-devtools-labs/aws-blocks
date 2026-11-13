@@ -44,7 +44,7 @@ const registry = new Map<string, ResourceEntry>();
  * registerSdkIdentifiers(this.fullId, { tableName: 'myapp-users' });
  * ```
  */
-export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntry): void {
+export function registerSdkIdentifiers(fullId: string, identifiers: Record<string, string>): void {
   registry.set(fullId, { ...registry.get(fullId), ...identifiers });
 }
 
@@ -124,7 +124,7 @@ export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string
  * //   myapp-auth: { userPoolId: 'us-east-1_abc', clientId: '123abc' }
  * ```
  */
-export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry> {
+export function getAllSdkIdentifiers(): ReadonlyMap<string, Record<string, string>> {
   return new Map(registry);
 }
 

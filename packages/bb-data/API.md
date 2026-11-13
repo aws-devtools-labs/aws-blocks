@@ -138,6 +138,17 @@ export type ExternalSslOptions = {
 export const fromExisting: (config: ExternalDatabaseRef) => ExternalDatabaseRef;
 
 // @public
+export type Operator<T> = {
+    gt?: T;
+    gte?: T;
+    lt?: T;
+    lte?: T;
+    like?: string;
+    ilike?: string;
+    in?: T[];
+};
+
+// @public
 export class PgClientEngine implements DatabaseEngine {
     constructor(config: PgClientEngineConfig);
     // (undocumented)
@@ -183,8 +194,6 @@ export interface QueryOpts<Row> {
     orderBy?: string | string[];
     // (undocumented)
     select?: (keyof Row & string)[];
-    // Warning: (ae-forgotten-export) The symbol "WhereClause" needs to be exported by the entry point index.aws.d.ts
-    //
     // (undocumented)
     where?: WhereClause<Row>;
 }
@@ -252,6 +261,13 @@ export interface TableTypeMeta {
 }
 
 export { Transaction }
+
+// @public
+export type WhereClause<Row> = {
+    [K in keyof Row]?: Row[K] | Operator<Row[K]> | null;
+} & {
+    or?: WhereClause<Row>[];
+};
 
 // (No @packageDocumentation comment for this package)
 

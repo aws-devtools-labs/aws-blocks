@@ -252,4 +252,4 @@ export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
 export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions, SubnetSelection } from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
-export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';
+export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, WhereClause, Operator, TableTypeMeta, CrudAuthResult } from './crud/types.js'
