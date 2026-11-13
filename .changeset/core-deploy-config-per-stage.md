@@ -18,3 +18,5 @@ Every deploy rewrote `.blocks-sandbox/config.json` with its AWS `apiUrl`. The No
 - The Admin UI's RPC playground falls back to the stage's `config.<stage>.json` when the stack publishes no `ApiUrl` output. It no longer reads `config.json`, which now holds a dev server's local URL.
 
 Scripts that read a deployed URL from `config.json` after a deploy should read `config.sandbox.json` or `config.production.json`, or `cdk-blocks sandbox deploy --query apiUrl`.
+
+**After upgrading:** an app that was deployed with an earlier version may still have a deployed URL in `.blocks-sandbox/config.json`. A Node.js script, an e2e test or an SSR host that reads that file then fails with the error above, until you run `cdk-blocks dev`, `cdk-blocks deploy`, `cdk-blocks sandbox deploy` or a destroy once, or set `BLOCKS_API_URL`. The client itself can't move the file: it is also the browser and React Native entry, and it reads the file only.
