@@ -158,7 +158,7 @@ operate.
 // my-existing-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, registerConfig } from '@aws-blocks/blocks/cdk';
 import { join } from 'node:path';
 
 export class MyApiStack extends cdk.Stack {
@@ -250,6 +250,8 @@ front and surface it both ways:
 
 ```ts
 // index.cdk.ts
+import { registerConfig } from '@aws-blocks/blocks/cdk';
+
 const LEGACY_TABLE = 'my-existing-sessions-table';
 process.env.LEGACY_SESSIONS_TABLE = LEGACY_TABLE; // synth-time
 // ... BlocksStack.create(...) — this loads index.ts, which reads the env above ...
