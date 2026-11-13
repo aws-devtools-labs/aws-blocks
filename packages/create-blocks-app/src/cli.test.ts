@@ -57,7 +57,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, auth-oidc, agent, cron, observability, amplify, demo/);
     assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
@@ -271,6 +271,7 @@ describe('create-blocks-app template metadata', () => {
       observability: { port: 3001, frontend: false },
       nextjs: frontend,
       auth: frontend,
+      'auth-oidc': frontend,
       agent: frontend,
       bare: frontend,
       default: frontend,
@@ -295,7 +296,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, auth: vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, auth: vite, 'auth-oidc': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
@@ -992,6 +993,8 @@ describe('create-blocks-app auto-detection', () => {
       const construct =
         /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
       if (!construct) continue;
+      // A `store: 'builtin'` block creates no user pool, and rejects `users` options.
+      if (/store: 'builtin'/.test(construct[1])) continue;
       checked++;
       if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
         offenders.push(name);
