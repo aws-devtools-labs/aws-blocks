@@ -155,11 +155,14 @@ class KeyCustodySelectionTest {
         // the decision production actually makes. Every other case here injects a candidate, which
         // proves the selection logic but not that this machine reaches a working store through it.
         //
-        // On a platform with a tier, this drives a real self-test: a probe written, read back and
-        // deleted under a random alias. Linux has no binding yet and so still expects the file tier.
-        val os = System.getProperty("os.name").orEmpty()
-        val hasHostStore = os.startsWith("Windows") || os.startsWith("Mac")
+        // What it expects cannot be inferred from the operating system. Linux has a tier, but it
+        // resolves to the host store only where a session keyring is running — true in the keyring
+        // CI job, false in the plain one on the same OS. So the environment states which it is, and
+        // a job that means to exercise the host store has to say so.
+        val expectsHostStore = System.getenv("BLOCKS_EXPECT_OS_KEY_TIER") == "1" ||
+            System.getProperty("os.name").orEmpty().let { it.startsWith("Windows") || it.startsWith("Mac") }
 
-        selectKeyCustody(root.toPath()).tier shouldBe if (hasHostStore) KeyTier.OS else KeyTier.FILE
+        selectKeyCustody(root.toPath()).tier shouldBe
+            if (expectsHostStore) KeyTier.OS else KeyTier.FILE
     }
 }
