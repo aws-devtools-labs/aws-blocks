@@ -587,6 +587,27 @@ const auth = new Auth(scope, 'auth', options);
 
 An option `Auth` does not recognise is an error at construction, in `npm run dev`, at synth and in Lambda alike, so a misspelled or misplaced setting can't be silently ignored. The error names each unknown option's path with a suggestion (`` `preferredChallenge`: it is not an option here; did you mean `users.preferredChallenge`? ``). The compiler alone doesn't catch these: TypeScript does no excess-property check on the inferred options type ([why](./DESIGN.md#unknown-options)). A boolean option must be `true` or `false` (or left out): a value such as `selfSignUp: 0` or `passkeys: 'false'` from untyped code is an error too, rather than turning the setting on or off by accident.
 
+## Audit records
+
+Set `audit: true` to write one log line for each session lifecycle event, so you can see and alarm on auth activity. It is off by default.
+
+```typescript
+const auth = new Auth(scope, 'auth', { audit: true });
+```
+
+| `event` | Written when |
+|---|---|
+| `auth.session.issued` | A session is issued, for any sign-in method |
+| `auth.signin.failed` | An email + password sign-in fails, a provider's callback fails, or `validateUser` / `onSignIn` rejects the sign-in |
+| `auth.signout` | `signOut` ends a session (`outcome: 'incomplete'` when it could not) |
+| `auth.sessions.revoked` | A password reset, `admin.revokeUserSessions` or `deleteUser` ends the user's sessions |
+
+Each line is the record's `event` as the message plus the fields of `AuthAuditRecord`: `block`, `provider`, `sub`, `outcome`, and on some events `username`, `reason` and the error name. No line ever holds a password, code, token, session id or error message. Users are identified by `sub`, which is also what CloudTrail records for Cognito calls.
+
+`audit: true` writes through its own `info`-level logger, so the lines appear in the function's CloudWatch log group however quiet `logger` is. Pass a logger instead (`audit: myLogger`) to send them somewhere else. To alarm on failed sign-ins, create a CloudWatch metric filter on the log group with the pattern `{ $.event = "auth.signin.failed" }` and alarm on its count.
+
+Records come from this block, so they don't include failed attempts on Cognito's managed login page or calls a client makes to Cognito directly; CloudTrail has those. Design details: [DESIGN.md](./DESIGN.md#audit-records-audit).
+
 ## Local development
 
 Locally, no email or SMS is sent. Every verification code (sign-up, password reset, MFA, attribute verification) is written to `.bb-data/<fullId>/last-code.json` as `{ username, code, purpose }`, and is passed to the optional, local-only `codeDelivery` hook. In a test, read it with `getLastAuthCode(username)` rather than the file: the path follows the scope and block names ([recipe](#end-to-end-tests-emailed-codes-and-two-users-at-once)):

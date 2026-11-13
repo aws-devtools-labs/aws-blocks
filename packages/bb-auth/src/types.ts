@@ -244,6 +244,32 @@ export interface AuthCommonOptions {
 	logger?: ChildLogger;
 
 	/**
+	 * Write an audit record for each session lifecycle event, so you can see
+	 * and alarm on auth activity. Off by default.
+	 *
+	 * - `true` writes them through a dedicated `info`-level `Logger`: one JSON
+	 *   line per event in the function's CloudWatch log group, whatever level
+	 *   `logger` is set to.
+	 * - A `ChildLogger` sends them to that logger instead, at `info`.
+	 *
+	 * Each record's message is its `event`, and its fields are an
+	 * {@link AuthAuditRecord}: `auth.session.issued`, `auth.signin.failed`
+	 * (email + password and federated sign-ins, including one `validateUser` or
+	 * `onSignIn` rejected), `auth.signout` and `auth.sessions.revoked` (after a
+	 * password reset, `admin.revokeUserSessions` and `deleteUser`). A record
+	 * never holds a password, code, token or session id, and identifies the user
+	 * by `sub`, the same id CloudTrail uses for Cognito calls. Writing a record
+	 * is best-effort: an error from the logger never changes the result.
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', { audit: true });
+	 * // CloudWatch metric filter for failed sign-ins: { $.event = "auth.signin.failed" }
+	 * ```
+	 */
+	audit?: boolean | ChildLogger;
+
+	/**
 	 * @deprecated Replaced by `providers`: move each entry there, keyed as
 	 * before, with `type: 'google' | 'facebook' | 'amazon' | 'apple'`. See
 	 * {@link ERROR_replaced_by_providers}.
@@ -3687,4 +3713,40 @@ export interface AuthClient<P extends string = string> {
 	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
 	 */
 	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}
+
+/**
+ * The fields of one audit record (the `audit` option). A record is written
+ * as one log line whose message is its `event`, so a CloudWatch metric filter
+ * such as `{ $.event = "auth.signin.failed" }` counts it.
+ */
+export interface AuthAuditRecord {
+	/** What happened. */
+	event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+	/** The `Auth` block's `fullId`, so two blocks in one app can be told apart. */
+	block: string;
+	/** How the user signed in: `'password'` or the provider id. Absent when unknown. */
+	provider?: string;
+	/**
+	 * The user's id: the Cognito `sub`, or `<issuer>:<sub>` for a direct-federated
+	 * session. Absent when the event does not know the user, such as a failed
+	 * password sign-in.
+	 */
+	sub?: string;
+	/**
+	 * The pool username, only on an `auth.sessions.revoked` record keyed by it:
+	 * the `cognito:username` after a password reset, or the value passed to
+	 * `admin.revokeUserSessions`.
+	 */
+	username?: string;
+	/** `'incomplete'`: the server-side session could not be ended (see `signOut`). */
+	outcome: 'success' | 'failure' | 'incomplete';
+	/**
+	 * Why: on `auth.signin.failed`, `'provider'` (the callback failed),
+	 * `'validate-user'` or `'on-sign-in'`; on `auth.sessions.revoked`,
+	 * `'password-reset'`, `'admin'` or `'account-deleted'`.
+	 */
+	reason?: string;
+	/** The error name of a failure, such as `NotAuthorizedException`. Never its message. */
+	error?: string;
 }

@@ -227,6 +227,18 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O ? A
 }> & MfaPreferenceInput<O>) : never);
 
 // @public
+export interface AuthAuditRecord {
+    block: string;
+    error?: string;
+    event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+    outcome: 'success' | 'failure' | 'incomplete';
+    provider?: string;
+    reason?: string;
+    sub?: string;
+    username?: string;
+}
+
+// @public
 export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope implements AuthShape<O> {
     constructor(scope: ScopeParent, id: string, options?: O);
     get admin(): AdminGetterOf<O>;
@@ -310,6 +322,7 @@ export interface AuthClientOptions {
 
 // @public
 export interface AuthCommonOptions {
+    audit?: boolean | ChildLogger;
     deletionProtection?: boolean;
     logger?: ChildLogger;
     // @deprecated (undocumented)

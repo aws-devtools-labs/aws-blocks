@@ -447,6 +447,7 @@ export const AUTH_OPTIONS_SHAPE = {
 	featurePlan: 'value',
 	email: { object: EMAIL_SENDER },
 	logger: 'value',
+	audit: 'value',
 	codeDelivery: 'value',
 	totpVerification: 'value',
 } as const satisfies ShapeOf<AuthMockOptions>;

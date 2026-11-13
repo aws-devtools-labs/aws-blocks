@@ -117,6 +117,7 @@ import type {
 	ApiMethods,
 	AttrOf,
 	AuthActionInputOf,
+	AuthAuditRecord,
 	AuthenticatedUser,
 	AuthOptions,
 	AuthSession,
@@ -163,6 +164,11 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 /** Default `session.freshAgeSeconds`: 15 minutes. */
 const DEFAULT_FRESH_AGE_SECONDS = 900;
+
+/** An error's name for a log or audit record: never its message, which can quote user input. */
+function errorName(e: unknown): string {
+	return e instanceof Error ? e.name : typeof e;
+}
 /** Auto-sign-in bridge lifetime (`AuthCognito`'s): 15 minutes. */
 const AUTO_SIGN_IN_TTL_SECONDS = 15 * 60;
 const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
@@ -379,6 +385,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	/** Logger for detail that must not reach a client. */
 	protected readonly log: ChildLogger;
+	/** Where audit records go, or `null` when the `audit` option is off. */
+	private readonly audit: ChildLogger | null;
 
 	private readonly config: ResolvedAuthOptions;
 	private readonly sessions: SessionStore;
@@ -419,6 +427,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		const config = resolveOptions(options ?? {}, id);
 		this.config = config;
 		this.log = config.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// `audit: true` gets its own `info` logger, so records are written however
+		// quiet `logger` is.
+		this.audit =
+			config.audit === true ? new Logger(this, 'audit', { level: 'info' }) : config.audit || null;
 		this.sessionTtlSeconds = config.session?.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
 		this.crossDomain = config.session?.crossDomain ?? false;
 		this.sessions = new SessionStore(this, this.sessionTtlSeconds);
@@ -634,6 +646,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			this.log.error('[bb-auth] sign-out: the session secret is unavailable; the session was not invalidated', {
 				error: e instanceof Error ? e.name : typeof e,
 			});
+			this.auditEvent({ event: 'auth.signout', outcome: 'incomplete', error: errorName(e) });
 			throw signOutIncomplete();
 		}
 		const sessionId = verifySessionId(raw, secret);
@@ -667,14 +680,28 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				});
 			}
 		}
+		const who = record ? identityOf(record) : undefined;
 		try {
 			await this.sessions.delete(sessionId);
 		} catch (e) {
 			this.log.error('[bb-auth] sign-out: the session delete failed; the session was not invalidated', {
 				error: e instanceof Error ? e.name : typeof e,
 			});
+			this.auditEvent({
+				event: 'auth.signout',
+				provider: who?.signInProvider,
+				sub: who?.userSub,
+				outcome: 'incomplete',
+				error: errorName(e),
+			});
 			throw signOutIncomplete();
 		}
+		this.auditEvent({
+			event: 'auth.signout',
+			provider: who?.signInProvider,
+			sub: who?.userSub,
+			outcome: 'success',
+		});
 	}
 
 	/**
@@ -1100,14 +1127,29 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			throw this.mapError(e, 'confirmCode', username);
 		}
 		// The password changed: end every session issued before it (#912).
+		let canonical: string | undefined;
 		try {
-			await this.sessions.revokeSessionsOf(await native.signOutEverywhere(username));
+			canonical = await native.signOutEverywhere(username);
+			await this.sessions.revokeSessionsOf(canonical);
 		} catch (e) {
 			this.log.error('[bb-auth] password reset: the password changed but ending the other sessions failed', {
 				error: e instanceof Error ? e.name : typeof e,
 			});
+			this.auditEvent({
+				event: 'auth.sessions.revoked',
+				username: canonical,
+				outcome: 'incomplete',
+				reason: 'password-reset',
+				error: errorName(e),
+			});
 			throw this.mapError(e);
 		}
+		this.auditEvent({
+			event: 'auth.sessions.revoked',
+			username: canonical,
+			outcome: 'success',
+			reason: 'password-reset',
+		});
 	}
 
 	/**
@@ -1215,10 +1257,18 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * @throws {ApiError} 400 `InvalidParameterException` for a directly federated user (no pool record to delete).
 	 */
 	async deleteUser(context: BlocksContext): Promise<void> {
-		const account = await this.account(context, 'pool');
+		const { session } = await this.requireSession(context);
+		const account = this.accountOf(session, 'pool');
 		await this.onAccount(account, context, (n, t) => n.deleteUser(t));
 		await this.sessions.delete(account.sessionId);
 		clearSessionCookie(context, this.fullId, this.crossDomain);
+		this.auditEvent({
+			event: 'auth.sessions.revoked',
+			provider: session.identity.signInProvider,
+			sub: session.identity.userSub,
+			outcome: 'success',
+			reason: 'account-deleted',
+		});
 	}
 
 	// ── MFA ─────────────────────────────────────────────────────────────────
@@ -1503,12 +1553,26 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				prefixAttributes: (attrs) => this.prefixCustomAttributes(attrs),
 				narrowGroups: (groups) => this.narrowGroups(groups),
 				readAttributes: (attrs) => this.readAttributes(attrs),
-				deleteSessionsOf: (username) =>
-					this.sessions.deleteByUsername(
-						username,
-						resolveSignInMode(this.config.users?.signInWith),
-						this.config.users?.caseSensitive !== false,
-					),
+				deleteSessionsOf: async (username) => {
+					try {
+						const deleted = await this.sessions.deleteByUsername(
+							username,
+							resolveSignInMode(this.config.users?.signInWith),
+							this.config.users?.caseSensitive !== false,
+						);
+						this.auditEvent({ event: 'auth.sessions.revoked', username, outcome: 'success', reason: 'admin' });
+						return deleted;
+					} catch (e) {
+						this.auditEvent({
+							event: 'auth.sessions.revoked',
+							username,
+							outcome: 'incomplete',
+							reason: 'admin',
+							error: errorName(e),
+						});
+						throw e;
+					}
+				},
 				validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
 			}),
 		);
@@ -1587,7 +1651,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		try {
 			identity = await (obtain ? obtain(engine) : engine.completeSignIn(context));
 		} catch (e) {
-			throw this.mapError(e);
+			const mapped = this.mapError(e);
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: providerId,
+				outcome: 'failure',
+				reason: 'provider',
+				error: mapped.name,
+			});
+			throw mapped;
 		}
 		const user = await this.issueSession(
 			context,
@@ -1702,7 +1774,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				...(bridgeSession ? { bridgeSession } : {}),
 			});
 		} catch (e) {
-			throw this.mapError(e, 'signIn', username);
+			const mapped = this.mapError(e, 'signIn', username);
+			// No username: a failed attempt's login is whatever the caller typed.
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: 'password',
+				outcome: 'failure',
+				error: mapped.name,
+			});
+			throw mapped;
 		}
 		return this.completeNativeSignIn(outcome, context);
 	}
@@ -1792,6 +1872,14 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		} catch (e) {
 			// Rejected: revoke what the engine issued, best-effort.
 			await this.revokeUpstream(record, context, false).catch(() => undefined);
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: identity.signInProvider,
+				sub: identity.userSub,
+				outcome: 'failure',
+				reason: 'validate-user',
+				error: errorName(e),
+			});
 			throw e;
 		}
 		const sessionId = await this.sessions.create(record);
@@ -1809,10 +1897,41 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			} catch (e) {
 				await this.sessions.delete(sessionId);
 				clearSessionCookie(context, this.fullId, this.crossDomain);
-				throw this.mapError(e);
+				const mapped = this.mapError(e);
+				this.auditEvent({
+					event: 'auth.signin.failed',
+					provider: identity.signInProvider,
+					sub: identity.userSub,
+					outcome: 'failure',
+					reason: 'on-sign-in',
+					error: mapped.name,
+				});
+				throw mapped;
 			}
 		}
+		this.auditEvent({
+			event: 'auth.session.issued',
+			provider: identity.signInProvider,
+			sub: identity.userSub,
+			outcome: 'success',
+		});
 		return user;
+	}
+
+	/**
+	 * Write one audit record (the `audit` option), leaving out fields the event
+	 * does not know. Best-effort: a logger that throws never changes the result.
+	 */
+	private auditEvent(record: Omit<AuthAuditRecord, 'block'>): void {
+		if (!this.audit) return;
+		const fields = Object.fromEntries(
+			Object.entries({ ...record, block: this.fullId }).filter(([, v]) => v !== undefined),
+		);
+		try {
+			this.audit.info(record.event, fields);
+		} catch {
+			// Best-effort by contract: auditing must not fail a sign-in or sign-out.
+		}
 	}
 
 	private async runValidateUser(candidate: UserCandidate): Promise<void> {
