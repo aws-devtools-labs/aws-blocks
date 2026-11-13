@@ -121,6 +121,8 @@ Two storage backends, same FileBucket BB:
 
 A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strands reports the cancellation as the call's result), so the `tool-call` row already written to the message table keeps its `tool-result` partner — no dangling `tool_use` is left for the next turn to replay. `runAgent` additionally writes an `assistant` row carrying the stop reason in `metadata.error`, so a reloaded conversation explains why it ended.
 
+**Cancelled tool calls publish no tool chunks.** Strands runs every `BeforeToolCallEvent` hook before it yields the event to the `stream()` loop (`_streamCore` awaits `_invokeCallbacks(event)` and only then yields it), so by the time `runAgent` sees the event, `event.cancel` holds the decision of the HITL hook (the user denied the approval) and of the tool cap. A cancelled call never runs, so `runAgent` publishes no `tool-call` chunk for it, and remembers its `toolUseId` to skip the `tool-result` chunk for the cancellation result that Strands emits next. A call that pauses for approval isn't yielded at all on the paused segment: the HITL hook's `interrupt()` throws, and Strands throws that back into the loop instead of yielding the event. It is yielded once, when the turn resumes with the answer, so an approved call publishes exactly one `tool-call` and one `tool-result`. The message table is unchanged: a cancelled call still writes its paired `tool-call`/`tool-result` rows, and the `tool-result` row records the denial for audit.
+
 ## Infrastructure (CDK)
 
 The CDK class provisions:
