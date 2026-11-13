@@ -162,11 +162,21 @@ export function unconditionedServicePrincipals(role: cdk.CfnResource): string[] 
 	return unconditionedTrusts(role).map((t) => t.service);
 }
 
+/**
+ * The sentence both checks' messages end with: the operators and values under
+ * which a condition key doesn't count ({@link scopingKeys}).
+ */
+const CONDITION_RULES =
+	'A key does not count under an IfExists, negated (StringNotEquals, ArnNotLike, ...), Null or ForAllValues: ' +
+	'operator, or with a value that leaves the account open (* alone, a wildcard or empty account); nor do ' +
+	'aws:SourceOrgID and aws:SourceOrgPaths, which admit every account in the organization.';
+
 function trustProblem(role: cdk.CfnResource, service: string): string {
 	return (
 		`IAM role ${role.node.path} trusts the service principal ${service} without an ` +
 		'aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack account) ' +
-		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement.'
+		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement. ' +
+		CONDITION_RULES
 	);
 }
 
@@ -303,6 +313,11 @@ export function scopeProviderWaiterTrust(provider: Construct): void {
  *   `aws:SourceOrgID` in a key policy are not supported for EventBridge
  *   publishing to an encrypted topic, so either condition stops delivery
  *   (https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services).
+ *
+ * Actions are compared as literal strings (case-insensitively), not as
+ * patterns: a statement granting `kms:GenerateDataKey` alone, which is narrower
+ * than `kms:GenerateDataKey*`, is not exempt. Grant the exact actions listed
+ * here, or add the narrower form to the set.
  */
 const KEY_POLICY_UNCONDITIONED_SERVICES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
 	['events.amazonaws.com', new Set(['kms:generatedatakey*', 'kms:decrypt'])],
@@ -380,8 +395,11 @@ const ARN_KEYS: ReadonlySet<string> = new Set(['aws:sourcearn', 'kms:encryptionc
  * account segment (the fifth `:` field) that is neither empty nor holds a
  * wildcard. An `Fn::Join` is read by its literal parts ({@link renderedText}),
  * so `arn:${stack.partition}:…:*:…` is still caught while an intrinsic in the
- * account segment (the stack account of an environment-agnostic stack) counts;
- * any other intrinsic counts.
+ * account segment (the stack account of an environment-agnostic stack) counts.
+ * An `Fn::Join` whose text has fewer than five `:` fields, such as
+ * `${topic.topicArn}/*`, counts too: an intrinsic in it stands for a whole ARN
+ * of unknown fields, so there is no literal account segment to check. Any other
+ * intrinsic counts.
  */
 function pinsAccount(key: string, rendered: unknown): boolean {
 	const value = renderedText(rendered);
@@ -389,7 +407,9 @@ function pinsAccount(key: string, rendered: unknown): boolean {
 	if (value === '*') return false;
 	if (key === 'aws:sourceaccount') return !/[*?]/.test(value);
 	if (ARN_KEYS.has(key)) {
-		const account = value.split(':')[4];
+		const fields = value.split(':');
+		if (typeof rendered !== 'string' && fields.length < 5) return true;
+		const account = fields[4];
 		return account !== undefined && account !== '' && !/[*?]/.test(account);
 	}
 	return true;
@@ -495,10 +515,8 @@ function keyPolicyProblem(key: cdk.CfnResource, { service, statement }: Unscoped
 		`KMS key ${key.node.path} lets the service principal ${service} use it (key policy statement ${statement}) ` +
 		'without an aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack ' +
 		"account) or aws:SourceArn (ArnLike, an ARN pattern for this account's resources of that service) to the " +
-		'statement. kms:EncryptionContext:aws:logs:arn also counts for CloudWatch Logs. A key does not count under ' +
-		'an IfExists, negated (StringNotEquals, ArnNotLike, ...), Null or ForAllValues: operator, or with a value ' +
-		'that leaves the account open (* alone, a wildcard or empty account); nor do aws:SourceOrgID and ' +
-		'aws:SourceOrgPaths, which admit every account in the organization.'
+		'statement. kms:EncryptionContext:aws:logs:arn also counts for CloudWatch Logs. ' +
+		CONDITION_RULES
 	);
 }
 

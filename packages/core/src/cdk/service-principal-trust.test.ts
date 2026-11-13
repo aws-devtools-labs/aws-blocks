@@ -77,12 +77,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const trustBackendPath = join(__dirname, '__fixtures__', 'trust-check-backend.js');
 
+/** The sentence both checks' messages end with: the operators and values that don't count. */
+const CONDITION_RULES =
+	'A key does not count under an IfExists, negated (StringNotEquals, ArnNotLike, ...), Null or ForAllValues: ' +
+	'operator, or with a value that leaves the account open (* alone, a wildcard or empty account); nor do ' +
+	'aws:SourceOrgID and aws:SourceOrgPaths, which admit every account in the organization.';
+
 /** The full error a role AWS Blocks owns fails synth with. */
 function trustError(rolePath: string, service: string): string {
 	return (
 		`[${rolePath}] IAM role ${rolePath} trusts the service principal ${service} without an ` +
 		'aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack account) ' +
-		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement.'
+		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement. ' +
+		CONDITION_RULES
 	);
 }
 
@@ -125,6 +132,7 @@ function trustWarning(rolePath: string, service: string, index: number): string 
 		`IAM role ${rolePath} trusts the service principal ${service} without an ` +
 		'aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack account) ' +
 		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement. ' +
+		`${CONDITION_RULES} ` +
 		"For a role a CDK construct creates with no prop for its trust, set the condition on the role's L1 resource: " +
 		`role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.${index}.Condition', ` +
 		"{ StringEquals: { 'aws:SourceAccount': ... }, ArnLike: { 'aws:SourceArn': ... } }). " +
@@ -324,7 +332,7 @@ describe('service-principal trust check', () => {
 	});
 
 	test('counts the source keys under the same operator and value rules as the key-policy check', () => {
-		const { stack } = checkedStack();
+		const { app, stack } = checkedStack();
 		const rules = `arn:${stack.partition}:events:${stack.region}`;
 		const cases: [string, Record<string, unknown>][] = [
 			['IfExists', { StringEqualsIfExists: { 'aws:SourceAccount': stack.account } }],
@@ -347,6 +355,36 @@ describe('service-principal trust check', () => {
 			}),
 		});
 		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(paired)), []);
+		// Each error names the operator and value rules, so a key that is present
+		// but doesn't count isn't reported as if it were missing.
+		assertSynthErrors(
+			app,
+			cases.map(([id]) => trustError(`TrustCheckStack/${id}/Resource`, 'events.amazonaws.com')),
+		);
+	});
+
+	test('accepts an ARN-valued source key built as an Fn::Join that starts with an intrinsic', () => {
+		const { app, stack } = checkedStack();
+		const target = new kms.Key(stack, 'Target');
+		const cases: [string, string][] = [
+			['KeyArnSuffix', `${target.keyArn}/*`],
+			['ImportedArnSuffix', `${cdk.Fn.importValue('SomeArn')}:*`],
+		];
+		for (const [id, arn] of cases) {
+			const role = new iam.Role(stack, id, {
+				assumedBy: new iam.ServicePrincipal('events.amazonaws.com', {
+					conditions: { ArnLike: { 'aws:SourceArn': arn } },
+				}),
+			});
+			const trust = JSON.stringify(stack.resolve((roleResource(role) as iam.CfnRole).assumeRolePolicyDocument));
+			assert.match(
+				trust,
+				/"aws:SourceArn":\{"Fn::Join":\["",\[\{"Fn::/,
+				`${id} renders as an Fn::Join led by an intrinsic`,
+			);
+			assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(role)), [], id);
+		}
+		assert.doesNotThrow(() => app.synth());
 	});
 
 	test('reports only the unconditioned principal of a role with several trust statements', () => {
@@ -522,10 +560,8 @@ function keyPolicyProblem(keyPath: string, service: string, statement: number): 
 		`KMS key ${keyPath} lets the service principal ${service} use it (key policy statement ${statement}) ` +
 		'without an aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack ' +
 		"account) or aws:SourceArn (ArnLike, an ARN pattern for this account's resources of that service) to the " +
-		'statement. kms:EncryptionContext:aws:logs:arn also counts for CloudWatch Logs. A key does not count under ' +
-		'an IfExists, negated (StringNotEquals, ArnNotLike, ...), Null or ForAllValues: operator, or with a value ' +
-		'that leaves the account open (* alone, a wildcard or empty account); nor do aws:SourceOrgID and ' +
-		'aws:SourceOrgPaths, which admit every account in the organization.'
+		'statement. kms:EncryptionContext:aws:logs:arn also counts for CloudWatch Logs. ' +
+		CONDITION_RULES
 	);
 }
 
@@ -621,6 +657,21 @@ describe('KMS key-policy check', () => {
 			app,
 			cases.map(([id]) => keyPolicyError(`TrustCheckStack/${id}/Resource`, 'cloudwatch.amazonaws.com', 1)),
 		);
+	});
+
+	test('accepts an aws:SourceArn built as an Fn::Join that starts with an intrinsic', () => {
+		const { app, stack } = checkedStack();
+		const target = new kms.Key(stack, 'Target');
+		const key = serviceKey(stack, 'IntrinsicLed', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'aws:SourceArn': { 'Fn::Join': ['', [{ 'Fn::GetAtt': ['TargetResource', 'Arn'] }, '/*']] } },
+		});
+		const imported = serviceKey(stack, 'ImportLed', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'aws:SourceArn': `${cdk.Fn.importValue('SomeArn')}:*` },
+		});
+		assert.ok(target);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(imported)), []);
+		assert.doesNotThrow(() => app.synth());
 	});
 
 	test('accepts kms:EncryptionContext:aws:logs:arn for the CloudWatch Logs principal only', () => {
