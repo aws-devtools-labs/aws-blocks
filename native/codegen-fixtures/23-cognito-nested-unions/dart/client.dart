@@ -430,7 +430,7 @@ sealed class ContinueSignInCognitoConfirmSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
-      default: return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(json);
+      default: return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -1164,7 +1164,7 @@ sealed class ContinueSignInCognitoSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep.fromJson(json);
-      default: return ContinueSignInCognitoSignInResultNextStepUnknown(json);
+      default: return ContinueSignInCognitoSignInResultNextStepUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -1758,7 +1758,7 @@ sealed class CognitoConfirmSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoConfirmSignInResult.fromJson(json);
-      default: return CognitoConfirmSignInResultUnknown(json);
+      default: return CognitoConfirmSignInResultUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -1864,7 +1864,7 @@ sealed class CognitoSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoSignInResult.fromJson(json);
-      default: return CognitoSignInResultUnknown(json);
+      default: return CognitoSignInResultUnknown(Map.unmodifiable(json));
     }
   }
 }

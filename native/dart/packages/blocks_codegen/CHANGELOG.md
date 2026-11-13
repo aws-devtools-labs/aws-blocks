@@ -4,8 +4,9 @@
   carry is now open, so an arm a newer backend adds no longer makes decoding
   throw `ArgumentError`. An object whose discriminator names no arm decodes
   to `XUnknown`, whose `json` is the object as sent and whose
-  `discriminator` is its tag; `toJson()` returns a copy of the object, so it
-  round-trips. An exhaustive `switch` over `X` needs an `XUnknown()` case.
+  `discriminator` is its tag; `json` is unmodifiable and `toJson()` returns a
+  copy of the object, so it round-trips. An exhaustive `switch` over `X` needs
+  an `XUnknown()` case.
   Unions only parameters use, unions with a boolean discriminator and a
   union embedded in a hybrid arm stay closed.
 - **Breaking:** a string enum that a response can carry is now open, so a

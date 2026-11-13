@@ -149,7 +149,7 @@ sealed class GetSessionResultEvent {
     switch (json['kind'] as String) {
       case 'message': return MessageGetSessionResultEvent.fromJson(json);
       case 'presence': return PresenceGetSessionResultEvent.fromJson(json);
-      default: return GetSessionResultEventUnknown(json);
+      default: return GetSessionResultEventUnknown(Map.unmodifiable(json));
     }
   }
 }

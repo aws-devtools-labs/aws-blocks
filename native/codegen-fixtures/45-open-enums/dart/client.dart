@@ -960,7 +960,7 @@ sealed class GetEventResult {
       case 'moved': return MovedGetEventResult.fromJson(json);
       case 'flagged': return FlaggedGetEventResult.fromJson(json);
       case 'unknown': return UnknownGetEventResult.fromJson(json);
-      default: return GetEventResultUnknown(json);
+      default: return GetEventResultUnknown(Map.unmodifiable(json));
     }
   }
 }

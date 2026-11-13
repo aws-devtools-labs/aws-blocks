@@ -24,7 +24,9 @@ void main() {
     final output = _generate('45-open-enums');
     expect(
       output,
-      contains('      default: return GetEventResultUnknown(json);'),
+      contains(
+        '      default: return GetEventResultUnknown(Map.unmodifiable(json));',
+      ),
     );
     expect(
       output,
@@ -123,6 +125,13 @@ void main() {
   // `toJson()` is a copy: changing it leaves the value as it was.
   (event.toJson())['kind'] = 'changed';
   check((event as GetEventResultUnknown).discriminator == 'archived', 'toJson copies');
+  var threw = false;
+  try {
+    event.json['kind'] = 'changed';
+  } on UnsupportedError {
+    threw = true;
+  }
+  check(threw, 'decoded json is unmodifiable');
   // `EventUnknown` is a spec type, so the fallback is `EventUnknown$`.
   final odd = collide.Event.fromJson({'kind': 'later'});
   check(odd is collide.EventUnknown$, 'renamed fallback');

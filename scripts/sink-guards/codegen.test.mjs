@@ -34,7 +34,7 @@ const SWIFT_CONTENT_LOCAL = (v) =>
 
 const ALLOWLIST = [
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1957',
+		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1958',
 		reason: "label is the generated class name, a Dart identifier, with its `$` escaped on the line above, so it holds no quote or interpolation.",
 	},
 	...[574, 669].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_TYPE_NAME })),

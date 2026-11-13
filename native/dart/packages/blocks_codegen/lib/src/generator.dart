@@ -554,7 +554,8 @@ class DartCodeGenerator {
         );
       }
       if (unknown != null) {
-        buf.writeln('      default: return $unknown(json);');
+        // Unmodifiable, so the value (and its hash) can't change after decoding.
+        buf.writeln('      default: return $unknown(Map.unmodifiable(json));');
       } else {
         buf.writeln(
           "      default: throw ArgumentError('Unknown ${_escapeStringContent(sealed.discriminant)}: \${$discriminant}');",
