@@ -11,10 +11,11 @@
  * block derives from its `fullId` — its table, bucket or queue, its SDK
  * identifier registry entry, its local `.bb-data` directory — would then be
  * shared. Each `Scope` claims its `fullId` with the path it came from when it is
- * constructed, and a second claim from a different path throws. The same path
- * claiming again is the same block constructed again (a test, a reloaded
- * module) and is accepted. Both layers derive the path and word the error here,
- * so a configuration that synth accepts is one the runtime accepts too.
+ * constructed, and a second claim from a different path is reported as a
+ * warning (a future release will reject it). The same path claiming again is
+ * the same block constructed again (a test, a reloaded module) and is accepted.
+ * Both layers derive the path and word the warning here, so synth and the
+ * runtime report the same collisions.
  *
  * Not re-exported from the package root.
  *
@@ -28,6 +29,18 @@
  * @internal
  */
 export type ScopePath = readonly string[];
+
+/**
+ * The claims of one registry (process-wide at runtime, per backend root at synth).
+ *
+ * @internal
+ */
+export interface ScopeFullIdClaims {
+	/** `fullId` → the path that claimed it first. */
+	readonly owners: Map<string, ScopePath>;
+	/** Every `fullId` a second path has claimed, so their descendants are not reported again. */
+	readonly collided: Set<string>;
+}
 
 /** The fields the path walk reads: a scope, a `buildingBlockParent` stand-in, or a root. */
 interface PathNode {
@@ -65,40 +78,40 @@ function scopePath(scope: { readonly id: string; readonly parent?: unknown }, fu
 }
 
 /**
- * The error for a scope whose `fullId` is already claimed by a different path.
- * Names the `fullId` and both paths.
- */
-function fullIdCollisionError(fullId: string, path: ScopePath, ownerPath: ScopePath): Error {
-	const [mine, theirs] = [path, ownerPath].map((p) => p.map((id) => `'${id}'`).join(' > '));
-	return new Error(
-		`Scope ${mine} resolves to the fullId '${fullId}', which Scope ${theirs} already uses. ` +
-			"Scope ids are joined with '-', so the two would name the same resources (a table, bucket or " +
-			"queue, and the local .bb-data directory) and read and overwrite each other's data. Rename one " +
-			'of the scopes so their joined ids differ.',
-	);
-}
-
-/**
  * Claim `fullId` for the path `scope` came from, in `claims`. A claim from the
- * same path again is accepted; one from a different path throws.
+ * same path again is accepted. A claim from a different path keeps the first
+ * owner and returns a warning that names the `fullId` and both paths, for the
+ * caller to report (`console.warn` at runtime, a CDK annotation at synth). A
+ * scope whose parent's `fullId` already collided returns no warning even when
+ * it collides too (a block's own child scopes, under both colliding paths): the
+ * parent's warning already names the paths to rename.
  *
- * @param claims - `fullId` → the path that claimed it (process-wide at runtime, per backend root at synth).
+ * @param claims - The registry to claim in.
  * @param scope - The scope being constructed.
  * @param fullId - Its `fullId`.
- * @throws {Error} When a different scope path already claimed `fullId`.
+ * @returns The warning when a different scope path already claimed `fullId`
+ *   and its parent's did not collide, else `undefined`.
  * @internal
  */
 export function claimScopeFullId(
-	claims: Map<string, ScopePath>,
+	claims: ScopeFullIdClaims,
 	scope: { readonly id: string; readonly parent?: unknown },
 	fullId: string,
-): void {
+): string | undefined {
 	const path = scopePath(scope, fullId);
-	const owner = claims.get(fullId);
+	const owner = claims.owners.get(fullId);
 	if (owner === undefined) {
-		claims.set(fullId, path);
-		return;
+		claims.owners.set(fullId, path);
+		return undefined;
 	}
-	const same = owner.length === path.length && owner.every((id, i) => id === path[i]);
-	if (!same) throw fullIdCollisionError(fullId, path, owner);
+	if (owner.length === path.length && owner.every((id, i) => id === path[i])) return undefined;
+	claims.collided.add(fullId);
+	if (claims.collided.has(path.slice(0, -1).join('-'))) return undefined;
+	const [mine, theirs] = [path, owner].map((p) => p.map((id) => `'${id}'`).join(' > '));
+	return (
+		`Scope ${mine} resolves to the fullId '${fullId}', which Scope ${theirs} already uses. ` +
+		"Scope ids are joined with '-', so the two name the same resources (a table, bucket or queue, and " +
+		"the local .bb-data directory) and read and overwrite each other's data. Rename one of the scopes " +
+		'so their joined ids differ: a future release of AWS Blocks will reject this.'
+	);
 }

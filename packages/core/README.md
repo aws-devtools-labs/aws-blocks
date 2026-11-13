@@ -21,9 +21,11 @@ see the `@aws-blocks/bb-compute` README for what follows it.
 A block's resource names (its table, bucket or queue, and its local `.bb-data`
 directory) come from its `fullId`: the scope ids from the root down, joined with
 `-`. Two different scope paths that join to the same string, such as
-`'user-service' > 'sessions'` and `'user' > 'service-sessions'`, would share those
-resources, so constructing the second one throws an error naming both paths (at
-`cdk synth` for a deployed app). Constructing the same path again is accepted.
+`'user-service' > 'sessions'` and `'user' > 'service-sessions'`, share those
+resources and overwrite each other's data. Constructing the second one logs a
+warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
+synth`); rename one of the scopes. A future release will reject the collision.
+Constructing the same path again is accepted.
 
 ### ApiNamespace
 
