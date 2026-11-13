@@ -196,31 +196,6 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 - `TS6307 ... is not listed within the file list of project` means the backend imports a file its project does not include. `TROUBLESHOOTING.md` in the docs folder has the fix for this and the other errors of the layout.
 - A Next.js or backend-only app has one `tsconfig.json` with Node types, and `npm run typecheck` is `tsc --noEmit`.
 
-## Block specifics
-
-Defaults quoted here can change between versions: the block's `README.md` in the docs folder is authoritative for the installed version.
-
-### Secrets
-
-- `Secret` is read-only at runtime unless created with `{ allowRuntimeWrite: true }`, which adds `put()`. `generate: true` seeds a random value; otherwise `get()` returns `null` until a value is set.
-- Deployed, `get()` caches the value (an unset value too) for `cacheTtlSeconds`, default `300`; the local mock ignores the option. When the next call must see a value set or rotated outside the app, set `cacheTtlSeconds: 0` in the `Secret` constructor options and call `get()` inside the method; `get()` itself takes only `{ version }`. The second constructor argument is an id scoped to the app: a secret that others set or rotate under a known name takes that name as the `name` option, e.g. `new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key', cacheTtlSeconds: 0 })`.
-- `put()` rotates the value and clears the cache. `get({ version: 'previous' })` returns the value before the latest change, or `null` before the first. Keep old key material in the `Secret`, not in a `KVStore` or table.
-
-### Querying a DistributedTable
-
-- `query({ index?, where, limit?, order? })` returns an `AsyncIterable` (collect with `Array.fromAsync`). The partition key takes `{ equals }`; the sort key takes one of `equals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, `beginsWith`.
-- For cursor pages, sort on a unique, stable key (add a tie-breaker to timestamps), put the cursor in `where` (`{ greaterThan: cursor }` ascending, `{ lessThan: cursor }` descending), and query `limit: pageSize + 1` to detect a next page. Do not read from the start and skip in JavaScript, and do not cast the options to `any`.
-
-### Concurrent writes
-
-- `get()` then `put()` is not atomic. Create once: `put(item, { ifNotExists: true })`. Optimistic update: `put(fullItem, { ifFieldEquals: { version: oldVersion } })`. There is no `update()` or `patch()`; write the full item.
-- A failed condition throws a 409 named `DistributedTableErrors.ConditionalCheckFailed` (value `'ConditionalCheckFailedException'`; import from `@aws-blocks/blocks`). Catch it with `isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)` and throw your API's named `ApiError` when the request names one.
-
-### Schemas and existing rows
-
-- Pass a Standard Schema validator (e.g. Zod) as `schema`. A hand-written `~standard.validate` returns `{ value }` or `{ issues }`, not Zod's `{ success, data }`. Validate API inputs at runtime; TypeScript types do not.
-- For fields added to existing rows, give them schema defaults: the default `readValidation: 'coerce'` fills defaults on read but does not write them back. A query on a new index does not find old rows that lack its key fields until you backfill them.
-
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)

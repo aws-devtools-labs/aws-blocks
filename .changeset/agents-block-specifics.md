@@ -9,4 +9,4 @@ The `AGENTS.md` that `create-blocks-app` adds to every new app now covers facts 
 - **Client-side imports:** browser code and tests import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`, because `@aws-blocks/blocks` exports nothing under the browser condition. Check `instanceof ApiError` before reading `.status`.
 - **Missing items:** `get()` returns `null` for a missing item, and `FileBucket.getUrl()` does not check that the file exists.
 
-A new "Block specifics" section covers `Secret` caching, rotation and named secrets; `DistributedTable` cursor pagination and conditional writes; and schema defaults for existing rows. The Quick Reference now lists which imports come from `@aws-blocks/blocks` and which from `@aws-blocks/blocks/client`. The workflow explains how `npm run test:e2e` starts and stops its own dev server on the configured port.
+The Quick Reference now lists which imports come from `@aws-blocks/blocks` and which from `@aws-blocks/blocks/client`. The workflow explains how `npm run test:e2e` starts and stops its own dev server on the configured port.
