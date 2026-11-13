@@ -7,7 +7,7 @@ Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM
 frontend.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template auth`
-> (`--template auth-cognito`, this template's former name, still works).
+> (`--template auth-cognito` is an alias for `auth`).
 
 ## Getting Started
 
