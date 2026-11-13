@@ -22,9 +22,10 @@ import javax.crypto.spec.SecretKeySpec
  */
 internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore {
     val directory = applicationStorageDirectoryOrNull(applicationId) ?: return InMemoryKeyValueStore()
-    // Non-null and non-blank, or the directory above would have been null. The id goes into the
-    // alias as supplied: an OS secret store needs none of the reduction a directory name does.
-    return EncryptedFileKeyValueStore(name, directory, keyAlias(name, applicationId.orEmpty()))
+    // The alias uses the directory's name — the already-normalized id — rather than the id as
+    // supplied. Taking the raw id would leave `app`, ` app` and `.app` sharing one directory but
+    // aliased apart, so under an OS secret store each would mint its own key for the same entries.
+    return EncryptedFileKeyValueStore(name, directory, keyAlias(name, directory.name))
 }
 
 /**

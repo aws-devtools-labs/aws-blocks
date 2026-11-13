@@ -25,8 +25,7 @@ private val jarsByLocation = ConcurrentHashMap<String, PersistentCookiesStorage>
 internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage {
     val directory = applicationStorageDirectoryOrNull(applicationId)
         ?: return PersistentCookiesStorage(InMemoryKeyValueStore())
-    // Non-null and non-blank, or the directory above would have been null.
-    return cookieJarIn(directory, applicationId.orEmpty())
+    return cookieJarIn(directory)
 }
 
 /**
@@ -34,16 +33,16 @@ internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage 
  * directory and still go through the registry, which is the part that keeps two instances from
  * discarding each other's cookies.
  *
- * [applicationId] names the key rather than the directory: a key held by the host OS sits in a
- * machine-wide store, so it needs the id to tell one application's key from another's. It is passed
- * separately because [directory] carries the id only in reduced form.
+ * The alias names the key under the directory's already-normalized name rather than the raw id,
+ * so two spellings that reduce to the same directory share one key: without that, an OS secret
+ * store would mint a separate key for each spelling, and only one of them would decrypt what the
+ * directory already holds.
  *
  * [custodyFor] is where the key is kept. A test overrides it to stay on a file beside the entries,
  * because the alternative is reaching the machine's real secret store on every run.
  */
 internal fun cookieJarIn(
     directory: File,
-    applicationId: String,
     custodyFor: (Path) -> KeyCustody = ::selectKeyCustody,
 ): PersistentCookiesStorage =
     jarsByLocation.computeIfAbsent(directory.absoluteFile.normalize().path) {
@@ -51,7 +50,7 @@ internal fun cookieJarIn(
             EncryptedFileKeyValueStore(
                 COOKIE_STORE_NAME,
                 directory,
-                keyAlias(COOKIE_STORE_NAME, applicationId),
+                keyAlias(COOKIE_STORE_NAME, directory.name),
                 custodyFor,
             ),
         )
