@@ -11,6 +11,27 @@ const { ConditionalCheckFailed } = DistributedTableErrors;
 
 function uid() { return `dt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`; }
 
+/**
+ * Wait until a secondary-index query sees every seeded row.
+ *
+ * On AWS the indexes are DynamoDB GSIs, which are updated asynchronously and
+ * don't support strongly consistent reads, so a query right after a put can
+ * miss a row. Waiting for the full seed here (rather than polling each test's
+ * own query) keeps `limit` and filter assertions exact: a query with
+ * `limit: 2` could return two rows while a third is still propagating. The
+ * local mock is consistent, so the first read returns.
+ */
+async function waitForIndex(label: string, read: () => Promise<readonly unknown[]>, expected: number, maxMs = 10_000) {
+  const start = Date.now();
+  let seen = 0;
+  while (Date.now() - start < maxMs) {
+    seen = (await read()).length;
+    if (seen >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`${label}: index returned ${seen} of ${expected} seeded rows after ${maxMs}ms`);
+}
+
 export function distributedTableTests(getApi: () => typeof apiType) {
 
   describe('DistributedTable', () => {
@@ -168,6 +189,7 @@ export function distributedTableTests(getApi: () => typeof apiType) {
         await api.tablePut({ pk, sk: 'c', data: 'C', timestamp: 3000 });
         await api.tablePut({ pk, sk: 'd', data: 'D', timestamp: 4000 });
         await api.tablePut({ pk, sk: 'e', data: 'E', timestamp: 5000 });
+        await waitForIndex('byTimestamp', () => api.tableQuery({ index: "byTimestamp", where: { pk: { equals: pk } } }), 5);
       }
       async function clean(api: typeof apiType, pk: string) {
         await api.tableDeleteBatch([
@@ -278,6 +300,7 @@ export function distributedTableTests(getApi: () => typeof apiType) {
         await api.tablePut({ pk, sk: '/images/cat.jpg', data: 'c', timestamp: 3 });
         await api.tablePut({ pk, sk: '/images/dog.jpg', data: 'd', timestamp: 4 });
         await api.tablePut({ pk, sk: '/videos/clip.mp4', data: 'e', timestamp: 5 });
+        await waitForIndex('bySk', () => api.tableQuery({ index: "bySk", where: { pk: { equals: pk } } }), 5);
       }
       async function clean(api: typeof apiType, pk: string) {
         await api.tableDeleteBatch([
