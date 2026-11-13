@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "ci-info": "^4.4.0",
-    "minimatch": "^11.0.4"
+    "minimatch": "^11.0.5"
   },
   "devDependencies": {
     "@aws-blocks/blocks": "^0.9.0",
