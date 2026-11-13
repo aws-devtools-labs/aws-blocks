@@ -1,6 +1,7 @@
 package com.aws.blocks.plugin
 
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.TestComponent
 import com.aws.blocks.kotlin.generator.RelayToRequirement
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
@@ -143,6 +144,12 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         project.pluginManager.withPlugin("com.android.library") {
             injectOidcManifestPlaceholder(project, extension)
         }
+        // A multiplatform module declares its Android target through this plugin rather than
+        // `com.android.library`, and still merges the runtime's manifest, so it needs the same
+        // placeholder values.
+        project.pluginManager.withPlugin("com.android.kotlin.multiplatform.library") {
+            injectOidcManifestPlaceholder(project, extension)
+        }
     }
 
     private fun configureAndroid(project: Project, extension: AwsBlocksExtension) {
@@ -181,8 +188,15 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             val relayTo = extension.relayTo
             val hasRedirectScheme = relayTo != null
             val scheme = relayTo?.substringBefore("://") ?: "disabled"
+            val exported = if (hasRedirectScheme) "true" else "false"
             variant.manifestPlaceholders.put("oidcRedirectScheme", scheme)
-            variant.manifestPlaceholders.put("oidcActivityExported", if (hasRedirectScheme) "true" else "false")
+            variant.manifestPlaceholders.put("oidcActivityExported", exported)
+            // A test component builds its own APK, merging the runtime's manifest into it, and
+            // keeps a placeholder map of its own: values set on the variant do not reach it.
+            variant.nestedComponents.filterIsInstance<TestComponent>().forEach { component ->
+                component.manifestPlaceholders.put("oidcRedirectScheme", scheme)
+                component.manifestPlaceholders.put("oidcActivityExported", exported)
+            }
         }
     }
 }
