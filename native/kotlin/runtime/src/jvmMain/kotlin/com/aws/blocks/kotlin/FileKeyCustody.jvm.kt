@@ -22,7 +22,7 @@ import java.nio.file.Path
  * The alias is ignored: the file's location is already the namespace, because each application has
  * a directory of its own.
  */
-internal class FileKeyCustody(directory: Path) : KeyCustody {
+internal class FileKeyCustody(private val directory: Path) : KeyCustody {
 
     override val tier = KeyTier.FILE
 
@@ -34,8 +34,14 @@ internal class FileKeyCustody(directory: Path) : KeyCustody {
 
     override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray {
         if (file.installIfAbsent(key)) return key
+        // The file exists but is not a whole key. Usually a truncated write from the no-link
+        // fallback, or a different custody's blob on top of a shared `.key`. The old error named
+        // another process, which points at the wrong fix; name the file so the next reader knows
+        // where to look.
         return file.read(isWholeKey)
-            ?: throw KeyValueStoreException("Could not read the encryption key another process installed")
+            ?: throw KeyValueStoreException(
+                "Could not read the encryption key at ${directory.resolve(KeyFile.KEY_FILE)}",
+            )
     }
 
     override fun delete(alias: String) = file.delete()
