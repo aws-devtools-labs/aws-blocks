@@ -84,10 +84,13 @@ describe('CDK bootstrap check', () => {
 		return error.message;
 	}
 
-	for (const command of ['deploy', 'sandbox']) {
+	for (const [command, expressBootstrap] of [
+		['deploy', false],
+		['sandbox', true],
+	] as const) {
 		it(`stops ${command} with a ready-to-run bootstrap command when the version parameter is missing`, async () => {
 			const { read, calls } = reader(NOT_FOUND);
-			const message = await failure(read, { command });
+			const message = await failure(read, { command, expressBootstrap });
 			// The same Region, profile and verified credentials as the deploy, and the default qualifier.
 			assert.deepEqual(calls, [
 				[
@@ -97,7 +100,14 @@ describe('CDK bootstrap check', () => {
 			]);
 			assert.match(message, /CDK is not bootstrapped in Region eu-south-2 of account 123456789012/);
 			// `--app=` keeps `cdk bootstrap` from synthesizing the Blocks app to find environments.
-			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app=$/m);
+			// The sandbox adds `--express`, which creates the bootstrap stack without waiting for each
+			// resource to stabilize and with rollback off, so it says how to recover from a failure;
+			// a production deploy never uses Express mode.
+			const flags = expressBootstrap ? '--app= --express' : '--app=';
+			assert.match(message, new RegExp(`^ {4}npx cdk bootstrap aws://123456789012/eu-south-2 ${flags}$`, 'm'));
+			const recovery = /^ {2}before you run it again: aws cloudformation delete-stack --stack-name CDKToolkit --region eu-south-2$/m;
+			if (expressBootstrap) assert.match(message, recovery);
+			else assert.doesNotMatch(message, /--express|rollback|delete-stack/);
 			assert.match(message, new RegExp(`Then re-run \`npm run ${command}\`\\.$`));
 			// The deployment target is printed before the deploy stops, so the user sees where it was going.
 			assert.match(log.join('\n'), /Deployment target: AWS profile starter, Region eu-south-2/);
@@ -187,5 +197,25 @@ describe('cdkBootstrapFailure', () => {
 			read: reader(NOT_FOUND).read,
 		});
 		assert.match(String(message), /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter$/m);
+	});
+
+	it('with express, passes --express and the profile to the recovery command', async () => {
+		const message = await cdkBootstrapFailure({
+			invocation: 'cdk-blocks sandbox --profile starter',
+			account: '123456789012',
+			region: 'eu-south-2',
+			profile: 'starter',
+			credentials: CREDENTIALS,
+			express: true,
+			read: reader(NOT_FOUND).read,
+		});
+		assert.match(
+			String(message),
+			/^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter --express$/m,
+		);
+		assert.match(
+			String(message),
+			/aws cloudformation delete-stack --stack-name CDKToolkit --region eu-south-2 --profile starter$/m,
+		);
 	});
 });

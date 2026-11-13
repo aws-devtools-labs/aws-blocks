@@ -76,6 +76,12 @@ export interface CdkBootstrapCheckOptions extends BootstrapTarget {
 	account: string;
 	/** The `@aws-cdk/core:bootstrapQualifier` context value; the default qualifier when unset. */
 	qualifier?: string;
+	/**
+	 * Print the command with `--express`, with a line on recovering from a failed
+	 * bootstrap. The sandbox commands turn it on, as they deploy in CloudFormation
+	 * Express mode themselves; production deploys never use Express mode. Default `false`.
+	 */
+	express?: boolean;
 	read?: BootstrapVersionReader;
 }
 
@@ -89,6 +95,16 @@ export interface CdkBootstrapCheckOptions extends BootstrapTarget {
  * It passes the profile the deploy used too, so that it runs in the same account
  * from a shell that does not export it. Run in the project directory, CDK still
  * reads the bootstrap qualifier from `cdk.json`.
+ *
+ * With `express` (the sandbox commands), it also passes `--express`, which creates
+ * the `CDKToolkit` stack in CloudFormation Express mode: CloudFormation reports each
+ * resource complete without waiting for it to stabilize, so the create finishes
+ * sooner. CDK CLI versions before 2.1129.0 ignore the flag and bootstrap as usual.
+ * `cdk bootstrap` has no rollback option, so an Express bootstrap runs with
+ * automatic rollback off: a failed create stays in `CREATE_FAILED` with the
+ * resources it made, which `cdk bootstrap` does not delete before trying again,
+ * and the version parameter this check reads can be among them. So the message
+ * says to delete the stack before running the command again.
  */
 export async function cdkBootstrapFailure({
 	invocation,
@@ -97,6 +113,7 @@ export async function cdkBootstrapFailure({
 	profile,
 	credentials,
 	qualifier = DEFAULT_BOOTSTRAP_QUALIFIER,
+	express = false,
 	read = sdkBootstrapVersionReader,
 }: CdkBootstrapCheckOptions): Promise<string | undefined> {
 	// CDK rejects a qualifier that the template does not accept; leave that error to CDK.
@@ -114,8 +131,14 @@ export async function cdkBootstrapFailure({
 		`CDK is not bootstrapped in Region ${regionArg} of account ${accountArg}, so \`${invocation}\` cannot deploy there ` +
 			`(SSM parameter ${parameterName} not found).`,
 		'  Bootstrap once per account and Region. From this project directory, run:',
-		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app=${profile ? ` --profile ${profileArg(profile)}` : ''}`,
+		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app=${profile ? ` --profile ${profileArg(profile)}` : ''}${express ? ' --express' : ''}`,
 		'  This creates the CDKToolkit CloudFormation stack: the S3 bucket, ECR repository and IAM roles that CDK deploys with.',
+		...(express
+			? [
+					'  --express creates it faster, with CloudFormation rollback off. If the bootstrap fails, delete the stack',
+					`  before you run it again: aws cloudformation delete-stack --stack-name CDKToolkit --region ${regionArg}${profile ? ` --profile ${profileArg(profile)}` : ''}`,
+				]
+			: []),
 		...(qualifier === DEFAULT_BOOTSTRAP_QUALIFIER
 			? [
 					'  If the app sets a custom bootstrap qualifier in code, set the same value as',
