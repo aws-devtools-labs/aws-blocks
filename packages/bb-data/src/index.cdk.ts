@@ -9,14 +9,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { materialize, grantExternalDataApi } from './infra.js';
-import {
-  ENV_NAME_SANITIZE_PATTERN,
-  ENV_VAR_PREFIX,
-  DEFAULT_BACKUP_RETENTION_DAYS,
-  ENCRYPT_STORAGE_CONTEXT_KEY,
-  ENCRYPTION_MIGRATION_DOC,
-  STORAGE_ENCRYPTION_METADATA_KEY,
-} from './constants.js';
+import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX, DEFAULT_BACKUP_RETENTION_DAYS } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -87,10 +80,19 @@ function resolveClusterSubnets(scope: BuildingBlockScope, sel?: SubnetSelection)
   };
 }
 
+/** CDK context key carrying the project's Aurora storage-encryption choice. */
+const ENCRYPT_STORAGE_CONTEXT_KEY = '@aws-blocks/bb-data:encryptStorageByDefault';
+
+/**
+ * README section with the steps to move an existing unencrypted cluster onto an
+ * encrypted one (or keep it as-is). Referenced from the synth error and warning.
+ */
+const ENCRYPTION_MIGRATION_DOC =
+  'https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-data/README.md#enabling-storage-encryption-on-an-existing-database';
+
 /**
  * Normalize the raw `@aws-blocks/bb-data:encryptStorageByDefault` context value
- * into `true` / `false` / `undefined` (absent). The caller treats an absent
- * flag the same as `true` (encrypted by default).
+ * into `true` / `false` / `undefined` (absent).
  *
  * The value can arrive as a JSON boolean or number (cdk.json / `setContext`) or as
  * a string (a `--context key=value` CLI override always arrives as a string), so
@@ -229,25 +231,33 @@ export class Database extends BuildingBlockScope {
       backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
     }
 
-    // Storage encryption is ON by default. The decision comes from the
-    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag (normalized by
-    // resolveEncryptStorageFlag):
-    //   - absent / `true` → `storageEncrypted: true` (the account's AWS-managed
-    //                `aws/rds` key).
+    // Storage encryption requires an explicit project decision, so a dependency
+    // bump can never change `StorageEncrypted` on an existing cluster (a change
+    // CloudFormation applies as a REPLACEMENT — a new, empty cluster). The
+    // decision comes from the `@aws-blocks/bb-data:encryptStorageByDefault`
+    // context flag (normalized by resolveEncryptStorageFlag):
+    //   - `true`   → `storageEncrypted: true` (the create-blocks-app templates set
+    //                this, so new projects are encrypted with the `aws/rds` key).
     //   - `false`  → explicit opt-out: leave the property unset, exactly as an
     //                existing unencrypted cluster was synthesized before, and warn.
-    // A customer-managed `storageEncryptionKeyArn` turns encryption on (with that
-    // key) regardless of the flag.
-    // Changing `StorageEncrypted` on an existing cluster is a change CloudFormation
-    // applies as a REPLACEMENT (a new, empty cluster). That case is caught before
-    // `cdk deploy` by this block's pre-deploy check (predeploy.ts), which compares
-    // the synthesized cluster with the deployed one and stops the deploy; setting
-    // the flag to `false` keeps such a cluster as-is.
+    //   - absent   → fail synth: the project has not made the choice yet.
+    // A customer-managed `storageEncryptionKeyArn` is itself that decision, so it
+    // turns encryption on regardless of the flag (and makes an absent flag fine).
     // An explicit `false` is never emitted as `StorageEncrypted: false`, since that
     // would itself be a template change on an existing cluster.
     const encryptFlag = resolveEncryptStorageFlag(this.node.tryGetContext(ENCRYPT_STORAGE_CONTEXT_KEY), this.fullId);
     const hasCmk = options?.storageEncryptionKeyArn !== undefined;
-    const storageEncrypted = hasCmk || encryptFlag !== false ? true : undefined;
+    if (!hasCmk && encryptFlag === undefined) {
+      throw new Error(
+        `Database "${this.fullId}": Aurora storage encryption must be acknowledged. ` +
+          `For a NEW database, set "${ENCRYPT_STORAGE_CONTEXT_KEY}": true in the "context" section of cdk.json ` +
+          `(projects created with create-blocks-app already set it), or pass storageEncryptionKeyArn. ` +
+          `For an EXISTING unencrypted cluster, enabling encryption replaces the cluster with a new, empty one — ` +
+          `follow the README "Enabling storage encryption on an existing database" steps, ` +
+          `or set the flag to false to keep the current cluster as-is. See ${ENCRYPTION_MIGRATION_DOC}`,
+      );
+    }
+    const storageEncrypted = hasCmk || encryptFlag === true ? true : undefined;
     if (storageEncrypted === undefined) {
       cdk.Annotations.of(this).addWarningV2(
         '@aws-blocks/bb-data:StorageEncryptionDisabled',
@@ -292,17 +302,6 @@ export class Database extends BuildingBlockScope {
       // Migration Lambda log retention follows the stack-wide default.
       logRetention: this.defaults.logRetention,
     });
-
-    // Mark an encrypted managed cluster for the pre-deploy storage-encryption
-    // check, which finds clusters in the synthesized templates by this metadata
-    // key. Added only when encryption is emitted, so an opted-out (`false`)
-    // cluster's template stays exactly as before.
-    if (storageEncrypted) {
-      const cfnCluster = infra.cluster.node.defaultChild;
-      if (cfnCluster instanceof cdk.CfnResource) {
-        cfnCluster.addMetadata(STORAGE_ENCRYPTION_METADATA_KEY, this.fullId);
-      }
-    }
 
     // Inject config so DataApiEngine can read them at runtime
     Object.entries(infra.envVars).forEach(([key, value]) => {
