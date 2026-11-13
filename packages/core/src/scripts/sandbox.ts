@@ -444,7 +444,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   await applyExternalMigrations({ stage: 'sandbox' });
 
   // Pre-deploy hooks the installed blocks declare in their package.json
-  // (`aws-blocks.predeploy`) for the sandbox stage. A stop aborts here.
+  // (`aws-blocks.hooks.predeploy`). A stop aborts here.
   await runPredeployHooks({
     stage: 'sandbox',
     projectRoot: process.cwd(),

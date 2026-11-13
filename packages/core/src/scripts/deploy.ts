@@ -288,10 +288,6 @@ async function runDeploy(options: DeployOptions) {
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
 
-    // Pre-deploy hooks the installed blocks declare in their package.json
-    // (`aws-blocks.predeploy`), for example a deploy guard. A stop aborts here.
-    await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot });
-    
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,
     // never by importing the backend here: an in-process import loads the local
@@ -301,6 +297,12 @@ async function runDeploy(options: DeployOptions) {
     const clientPath = join(dirname(foundationPath), 'client.js');
     log.progress('📝 Generating client code...');
     await generateDeployClient(foundationPath, clientPath);
+
+    // Pre-deploy hooks the installed blocks declare in their package.json
+    // (`aws-blocks.hooks.predeploy`), for example a deploy guard. A stop aborts here.
+    // After the client is generated: a hook that synthesizes the app runs the
+    // frontend build, which imports the generated client.
+    await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot });
 
     log.progress('🚀 Deploying to AWS...');
     log.detail('   (This may take a few minutes on first deploy)');

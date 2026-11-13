@@ -4,15 +4,15 @@
 /**
  * Pre-deploy hooks against a fake project: a block declares a hook in its
  * package.json, the runner finds it through the app's dependencies or the
- * umbrella's, runs it for the declared stages only, synthesizes at most once,
- * and turns stops into a thrown error.
+ * umbrella's, runs it with the stage, synthesizes at most once, and turns
+ * stops into a thrown error.
  */
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
-import { discoverPredeployHooks, resolvePackageDir, runPredeployHooks } from './predeploy-hooks.js';
+import { discoverPredeployHooks, runPredeployHooks } from './predeploy-hooks.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -22,7 +22,8 @@ afterEach(() => {
 interface FakePackage {
 	name: string;
 	dependencies?: Record<string, string>;
-	predeploy?: { module: string; stages?: string[] };
+	/** The package's `aws-blocks.hooks` declaration, written as given. */
+	hooks?: unknown;
 	/** Body of the hook module (ESM). */
 	hook?: string;
 }
@@ -42,7 +43,7 @@ function project(appDependencies: Record<string, string>, packages: FakePackage[
 				type: 'module',
 				exports: { '.': './dist/index.js' },
 				dependencies: pkg.dependencies,
-				...(pkg.predeploy ? { 'aws-blocks': { predeploy: pkg.predeploy } } : {}),
+				...(pkg.hooks !== undefined ? { 'aws-blocks': { hooks: pkg.hooks } } : {}),
 			}),
 		);
 		writeFileSync(join(dir, 'dist', 'index.js'), 'export const block = true;\n');
@@ -62,85 +63,63 @@ export async function predeploy(context) {
 }
 `;
 
+const predeploy = { predeploy: './dist/predeploy.js' };
+
 const fakeSynth = (stackName: string) => {
 	let calls = 0;
 	const synthesize = () => {
 		calls++;
-		return { stacks: [{ stackName, template: {} }], cleanup: () => {} };
+		return [{ stackName, template: {} }];
 	};
 	return { synthesize, calls: () => calls };
 };
 
 describe('pre-deploy hooks', () => {
-	test('a package behind an exports map is still located', () => {
-		const root = project({ '@aws-blocks/bb-x': '*' }, [{ name: '@aws-blocks/bb-x' }]);
-		// require.resolve returns real paths; the temp dir may sit behind a symlink (macOS /var → /private/var).
-		assert.strictEqual(
-			resolvePackageDir(root, '@aws-blocks/bb-x'),
-			realpathSync(join(root, 'node_modules', '@aws-blocks', 'bb-x')),
+	test('discovery reads the manifest field, through the app and through the umbrella', () => {
+		// Every fake package hides its package.json behind an exports map; bb-missing is not installed.
+		const root = project(
+			{ '@aws-blocks/blocks': '*', '@aws-blocks/bb-direct': '*', '@aws-blocks/bb-missing': '*' },
+			[
+				{
+					name: '@aws-blocks/blocks',
+					dependencies: { '@aws-blocks/bb-via-umbrella': '*', '@aws-blocks/bb-plain': '*' },
+				},
+				{ name: '@aws-blocks/bb-via-umbrella', hooks: predeploy, hook: guardHook },
+				{ name: '@aws-blocks/bb-direct', hooks: predeploy, hook: guardHook },
+				{ name: '@aws-blocks/bb-plain' },
+			],
 		);
-		assert.strictEqual(resolvePackageDir(root, '@aws-blocks/missing'), undefined);
-	});
-
-	test('discovery reads the manifest field, through the app and through the umbrella, with stages', () => {
-		const root = project({ '@aws-blocks/blocks': '*', '@aws-blocks/bb-direct': '*' }, [
-			{
-				name: '@aws-blocks/blocks',
-				dependencies: { '@aws-blocks/bb-via-umbrella': '*', '@aws-blocks/bb-plain': '*' },
-			},
-			{
-				name: '@aws-blocks/bb-via-umbrella',
-				predeploy: { module: './dist/predeploy.js', stages: ['production'] },
-				hook: guardHook,
-			},
-			{ name: '@aws-blocks/bb-direct', predeploy: { module: './dist/predeploy.js' }, hook: guardHook },
-			{ name: '@aws-blocks/bb-plain' },
-		]);
 		const hooks = discoverPredeployHooks(root).sort((a, b) => a.packageName.localeCompare(b.packageName));
 		assert.deepStrictEqual(
-			hooks.map((h) => [h.packageName, h.stages]),
-			[
-				['@aws-blocks/bb-direct', ['sandbox', 'production']],
-				['@aws-blocks/bb-via-umbrella', ['production']],
-			],
+			hooks.map((h) => h.packageName),
+			['@aws-blocks/bb-direct', '@aws-blocks/bb-via-umbrella'],
 		);
 		assert.ok(hooks[0].module.endsWith(join('bb-direct', 'dist', 'predeploy.js')));
 	});
 
-	test('runs the hooks for the stage, synthesizes once, prints notes', async () => {
+	test('runs every hook with the stage, synthesizes once, prints notes', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*', '@aws-blocks/bb-b': '*' }, [
-			{ name: '@aws-blocks/bb-a', predeploy: { module: './dist/predeploy.js' }, hook: guardHook },
-			{
-				name: '@aws-blocks/bb-b',
-				predeploy: { module: './dist/predeploy.js', stages: ['production'] },
-				hook: guardHook,
-			},
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
+			{ name: '@aws-blocks/bb-b', hooks: predeploy, hook: guardHook },
 		]);
 		const synth = fakeSynth('App');
 		const lines: string[] = [];
-		const sandbox = await runPredeployHooks({
+		await runPredeployHooks({
 			stage: 'sandbox',
 			projectRoot: root,
 			synthesize: synth.synthesize,
 			log: (l) => lines.push(l),
 		});
-		assert.deepStrictEqual(sandbox.ran, ['@aws-blocks/bb-a'], 'bb-b is production only');
-		assert.deepStrictEqual(lines, ['[@aws-blocks/bb-a] checked App on sandbox']);
-		assert.strictEqual(synth.calls(), 1);
-
-		const production = await runPredeployHooks({
-			stage: 'production',
-			projectRoot: root,
-			synthesize: synth.synthesize,
-			log: () => {},
-		});
-		assert.deepStrictEqual(production.ran.sort(), ['@aws-blocks/bb-a', '@aws-blocks/bb-b']);
-		assert.strictEqual(synth.calls(), 2, 'one synth per run, shared by both hooks');
+		assert.deepStrictEqual(lines.sort(), [
+			'[@aws-blocks/bb-a] checked App on sandbox',
+			'[@aws-blocks/bb-b] checked App on sandbox',
+		]);
+		assert.strictEqual(synth.calls(), 1, 'one synth, shared by both hooks');
 	});
 
 	test('a stop aborts the deploy with the hook named; a project with no hooks does nothing', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', predeploy: { module: './dist/predeploy.js' }, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
 		]);
 		const synth = fakeSynth('BadStack');
 		await assert.rejects(
@@ -148,31 +127,45 @@ describe('pre-deploy hooks', () => {
 			/^Error: \[@aws-blocks\/bb-a\] Deploy stopped: BadStack$/,
 		);
 		const empty = project({ '@aws-blocks/bb-plain': '*' }, [{ name: '@aws-blocks/bb-plain' }]);
-		assert.deepStrictEqual(
-			await runPredeployHooks({ stage: 'production', projectRoot: empty, synthesize: synth.synthesize }),
-			{
-				ran: [],
-				notes: [],
-			},
-		);
-		assert.strictEqual(synth.calls(), 1, 'no synth when nothing is registered');
+		await runPredeployHooks({ stage: 'production', projectRoot: empty, synthesize: synth.synthesize });
+		assert.strictEqual(synth.calls(), 1, 'no synth when no hook is declared');
 	});
 
 	test('a declared hook that is missing or malformed fails the deploy instead of passing silently', async () => {
 		const missing = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', predeploy: { module: './dist/nope.js' } },
+			{ name: '@aws-blocks/bb-a', hooks: { predeploy: './dist/nope.js' } },
 		]);
 		await assert.rejects(runPredeployHooks({ stage: 'production', projectRoot: missing }), /does not exist/);
 		const malformed = project({ '@aws-blocks/bb-a': '*' }, [
-			{
-				name: '@aws-blocks/bb-a',
-				predeploy: { module: './dist/predeploy.js' },
-				hook: 'export const nothing = 1;\n',
-			},
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: 'export const nothing = 1;\n' },
 		]);
 		await assert.rejects(
 			runPredeployHooks({ stage: 'production', projectRoot: malformed }),
 			/does not export a predeploy\(\)/,
+		);
+	});
+
+	test('hooks that is not an object, an unknown hook name, or a hook that is not a module path fails the deploy', async () => {
+		const notAnObject = project({ '@aws-blocks/bb-a': '*' }, [
+			{ name: '@aws-blocks/bb-a', hooks: ['./dist/predeploy.js'], hook: guardHook },
+		]);
+		await assert.rejects(
+			runPredeployHooks({ stage: 'production', projectRoot: notAnObject }),
+			/@aws-blocks\/bb-a declares "aws-blocks"\."hooks" in its package\.json, which is not an object/,
+		);
+		const misspelled = project({ '@aws-blocks/bb-a': '*' }, [
+			{ name: '@aws-blocks/bb-a', hooks: { predploy: './dist/predeploy.js' }, hook: guardHook },
+		]);
+		await assert.rejects(
+			runPredeployHooks({ stage: 'production', projectRoot: misspelled }),
+			/@aws-blocks\/bb-a declares a hook this version of @aws-blocks\/core does not run: predploy\./,
+		);
+		const notAPath = project({ '@aws-blocks/bb-a': '*' }, [
+			{ name: '@aws-blocks/bb-a', hooks: { predeploy: { module: './dist/predeploy.js' } }, hook: guardHook },
+		]);
+		await assert.rejects(
+			runPredeployHooks({ stage: 'production', projectRoot: notAPath }),
+			/@aws-blocks\/bb-a declares a pre-deploy hook that is not a module path/,
 		);
 	});
 });
