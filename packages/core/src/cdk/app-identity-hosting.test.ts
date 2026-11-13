@@ -32,7 +32,7 @@ after(() => {
 
 const appDefaults: BlocksDefaults = {
 	...BlocksPresets.production,
-	appIdentity: { id: 'appa', strict: true },
+	appIdentity: { id: 'appa' },
 	permissionsBoundary: 'apps-boundary',
 };
 
@@ -68,7 +68,7 @@ describe('defaults.appIdentity — Hosting (stackId = app id)', () => {
 		writeFileSync(join(root, '.hosting', 'static', 'index.html'), 'x');
 	});
 
-	/** An off-region app (so Hosting adds the us-east-1 support and Lambda@Edge stacks), strict. */
+	/** An off-region app (so Hosting adds the us-east-1 support and Lambda@Edge stacks), enforcing. */
 	async function synthHosting(): Promise<string> {
 		const dir = mkdtempSync(join(tmpdir(), 'blocks-app-identity-hosting-out-'));
 		dirs.push(dir);
@@ -119,14 +119,14 @@ describe('defaults.appIdentity — Hosting (stackId = app id)', () => {
 		return dir;
 	}
 
-	test("strict synth and the report pass: secret()/config(), cross-region references and the support stacks are the app's own", async () => {
+	test("synth and the report pass: secret()/config(), cross-region references and the support stacks are the app's own", async () => {
 		const dir = await synthHosting();
-		const report = readJson<{ app?: { id: string; strict: boolean }; violations?: AppViolation[] }>(
+		const report = readJson<{ app?: { id: string; reportOnly: boolean }; violations?: AppViolation[] }>(
 			dir,
 			'appa.blocks-iam.json',
 		);
 		assert.strictEqual(report.app?.id, 'appa');
-		assert.strictEqual(report.app?.strict, true);
+		assert.strictEqual(report.app?.reportOnly, false);
 		assert.deepStrictEqual(
 			(report.violations ?? []).map((v) => `[${v.rule}] ${v.message}`),
 			[],

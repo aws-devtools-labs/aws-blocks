@@ -212,7 +212,7 @@ function buildReport(root: Construct, role: iam.Role) {
 					id: app.id,
 					tagKey: BLOCKS_APP_TAG_KEY,
 					namePrefix: `${app.id}-`,
-					strict: app.strict !== false,
+					reportOnly: app.reportOnly === true,
 					stackName: stack.stackName,
 					bootstrapQualifier: (root.node.tryGetContext('@aws-cdk/core:bootstrapQualifier') as string | undefined) ?? null,
 				},
@@ -236,10 +236,10 @@ function buildReport(root: Construct, role: iam.Role) {
 	};
 }
 
-/** The error a `strict` app's synth fails with, listing every violation. */
-function strictViolationsError(file: string, violations: readonly AppViolation[]): Error {
+/** The error an app's synth fails with, listing every violation (unless `reportOnly`). */
+function appViolationsError(file: string, violations: readonly AppViolation[]): Error {
 	return new Error(
-		`[Blocks] defaults.appIdentity.strict: ${violations.length} app-isolation violation(s) (full list in ${file}):\n` +
+		`[Blocks] defaults.appIdentity: ${violations.length} app-isolation violation(s) (full list in ${file}; set reportOnly: true to only report them):\n` +
 			violations.map((v) => `  • [${v.rule}] ${v.message}`).join('\n'),
 	);
 }
@@ -265,7 +265,7 @@ export function attachIamReport(root: Construct, role: iam.Role, fileStem: strin
 			writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
 			const violations = 'violations' in report ? report.violations : undefined;
 			if (violations && violations.length > 0) {
-				if (report.app?.strict) throw strictViolationsError(file, violations);
+				if (!report.app?.reportOnly) throw appViolationsError(file, violations);
 				process.stderr.write(
 					`[Blocks] ${violations.length} app-isolation violation(s) for app "${report.app?.id}" — see ${file}\n`,
 				);

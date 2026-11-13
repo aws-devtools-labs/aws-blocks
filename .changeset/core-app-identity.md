@@ -18,7 +18,7 @@ id. Runtime API calls (`execute-api:Invoke` and `ManageConnections`) aren't
 isolated between apps; the README lists this under its limits. The app id comes
 from the platform; to AWS Blocks it is just a string.
 
-- **`defaults.appIdentity: { id, strict? }`** (new, optional). AWS Blocks tags every
+- **`defaults.appIdentity: { id, reportOnly? }`** (new, optional). AWS Blocks tags every
   resource and every IAM role it creates `app=<id>` — including the CDK
   custom-resource provider roles that `Tags.of()` doesn't reach — at a priority
   above the default `Tags.of().add()`. It checks that every name it derives
@@ -46,7 +46,7 @@ from the platform; to AWS Blocks it is just a string.
   policy, the CDK asset bucket of another bootstrap, an API Gateway stage,
   route or deployment attached to an API outside the app's own template, or a
   stack or block outside the prefix. Synth fails on any violation
-  unless `strict: false` (`strict` defaults to `true`).
+  unless `reportOnly: true`.
 - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
   the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
   Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has

@@ -5,7 +5,7 @@
  * The app-isolation rules behind `defaults.appIdentity`: pure functions over
  * CloudFormation-resolved JSON (no `aws-cdk-lib`), which the synth-time IAM
  * report applies to the roles, policies and resource policies AWS Blocks
- * renders for the app's templates (its `violations` list, and `strict`).
+ * renders for the app's templates (its `violations` list, and the synth failure).
  *
  * Every rule answers "does this reach outside the app?". An app's resources are
  * the ones whose name starts with the app's prefix: `<id>` followed by `-`, `/`

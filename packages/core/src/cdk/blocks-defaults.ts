@@ -390,9 +390,9 @@ export interface BlocksDefaults {
 	 *   can't resolve, a resource policy that opens up another app's resource, a
 	 *   role that trusts anything but an AWS service, a broad AWS managed policy, the
 	 *   CDK asset bucket of another bootstrap, or a name outside the app's prefix;
-	 * - fails synth on any violation, unless `strict: false`.
+	 * - fails synth on any violation, unless `reportOnly: true`.
 	 *
-	 * The report and `strict` are fast feedback, not the security boundary: the
+	 * The report and the synth failure are fast feedback, not the security boundary: the
 	 * app's own code runs at synth. The boundary is IAM, enforced by AWS — a
 	 * permissions boundary keyed on the `app` tag ({@link permissionsBoundary})
 	 * a per-app CloudFormation execution role that only creates bounded roles
@@ -400,7 +400,7 @@ export interface BlocksDefaults {
 	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
 	 * qualifier. The platform writes and owns the three policies; the core README
 	 * section "Running many apps in one AWS account" documents each of them, and
-	 * how a pipeline runs synth with `strict: true` and confirms the report's
+	 * how a pipeline runs synth, which fails on any violation, and confirms the report's
 	 * `app.id`.
 	 *
 	 * @example A platform's app template
@@ -452,12 +452,12 @@ export interface BlocksAppIdentity {
 	id: string;
 
 	/**
-	 * Fail synth when the IAM report lists any violation. Set `false` to only
-	 * write them to the report and print a summary, for example while adopting
-	 * `appIdentity` in an existing app.
-	 * @default true
+	 * Only write violations to the IAM report and print a summary, instead of
+	 * failing synth on any of them; for example while adopting `appIdentity` in
+	 * an existing app.
+	 * @default false
 	 */
-	strict?: boolean;
+	reportOnly?: boolean;
 }
 
 /**

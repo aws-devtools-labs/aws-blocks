@@ -64,7 +64,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     ...BlocksPresets.sandbox,
     ...(sandboxMode ? {} : { secretsStore: 'secrets-manager' as const }),
     permissionsBoundary,
-    ...(appId ? { appIdentity: { id: appId, strict: appStrict } } : {}),
+    ...(appId ? { appIdentity: { id: appId, reportOnly: !appStrict } } : {}),
   },
 });
 
