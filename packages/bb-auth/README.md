@@ -750,6 +750,37 @@ new Auth(scope, 'auth', {
 - **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
 - **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). Note that `user.userId` is the block's id; Amplify's `getCurrentUser().userId` is the Cognito `sub`, which is `user.userSub` here.
 
+## Native apps (Swift, Kotlin, Dart)
+
+A native app signs in with a federated provider through the SDK's OIDC client, which uses the block's relay routes. Export the client next to `createApi()`:
+
+```typescript
+import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+  redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] }, // the app's return URL
+});
+
+export const authApi = auth.createApi();         // the sign-in state machine
+export const oidcAuthApi = auth.createOidcApi(); // the native SDKs' OIDC client
+```
+
+`oidcAuthApi.getClient()` returns an `oidc/client` transferable: the block's routes and the providers available in this runtime. The generated native client turns it into the SDK's OIDC client, and its `signIn` takes only the block's provider ids:
+
+```swift
+let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
+let user = try await oidc.signIn(provider: .okta, relayTo: "myapp://auth", launcher: launcher)
+```
+
+- **Return URL.** List the app's scheme in `redirects.allowedRelayOrigins`. Desktop loopback (`http://127.0.0.1:<port>`) is always allowed.
+- **Several blocks.** Each block's client carries that block's own paths, so a second federated block with its own `redirects.callbackPath` and `signOutPath` gets a working client too.
+- **Availability.** A provider that can't sign in here (managed login under `npm run dev`) is left out of `providers` at runtime.
+- **Web.** A browser receives the plain descriptor. A web frontend uses the `signIn:<id>` actions of `createApi()`, or `createAuthClient()` on another origin ([above](#frontend-on-a-different-origin)).
+
 ## Planning to use Amplify client libraries?
 
 `Auth` signs users in on your backend: the browser talks to your API, and the session lives in an `HttpOnly` cookie. The Amplify client libraries (JavaScript, Swift, Android, Flutter) do the opposite: the app signs in directly against Amazon Cognito and holds the tokens itself. Both can share one user pool, so you can start with `Auth` and add an Amplify frontend later. A few choices decide whether that stays possible, and some of them are permanent:

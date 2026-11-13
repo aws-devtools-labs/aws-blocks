@@ -239,6 +239,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
     confirmSignUp(username: string, code: string, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O, [context?: BlocksContext]>): Promise<ConfirmSignUpResult>;
     confirmUserAttribute(context: BlocksContext, name: AttrOf<O>, code: string): Promise<void>;
     createApi(): AuthStateApiOf<O>;
+    createOidcApi(): OidcClientApiOf<O>;
     deletePasskey(context: BlocksContext, credentialId: string, ...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>): Promise<void>;
     deleteUser(context: BlocksContext): Promise<void>;
     forgetDevice(context: BlocksContext, deviceKey: string, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>): Promise<void>;
@@ -377,6 +378,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
     confirmSignUp(username: string, code: string, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O, [context?: BlocksContext]>): Promise<ConfirmSignUpResult>;
     confirmUserAttribute(context: BlocksContext, name: AttrOf<O>, code: string): Promise<void>;
     createApi(): AuthStateApiOf<O>;
+    createOidcApi(): OidcClientApiOf<O>;
     deletePasskey(context: BlocksContext, credentialId: string, ...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>): Promise<void>;
     deleteUser(context: BlocksContext): Promise<void>;
     forgetDevice(context: BlocksContext, deviceKey: string, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>): Promise<void>;
@@ -870,6 +872,36 @@ export interface OAuthCredentials {
 }
 
 // @public
+export interface OidcClientApiOf<O extends AuthOptions> {
+    getClient(): Promise<OidcClientHandle<ProviderIdOf<O>>>;
+}
+
+// @public
+export interface OidcClientDescriptor<P extends string = string> {
+    __blocks: 'oidc/client';
+    authorizeParamsBasePath: string;
+    callbackPath: string;
+    exchangePath: string;
+    providerConfigs: Record<string, OidcProviderConfig>;
+    providers: P[];
+    signInBasePath: string;
+    signOutPath: string;
+}
+
+// @public
+export interface OidcClientHandle<P extends string = string> {
+    readonly authorizeParamsBasePath: string;
+    readonly callbackPath: string;
+    readonly exchangePath: string;
+    readonly providerConfigs: Record<string, OidcProviderConfig>;
+    readonly providers: P[];
+    readonly signInBasePath: string;
+    readonly signOutPath: string;
+    // @internal
+    toJSON(): OidcClientDescriptor<P>;
+}
+
+// @public
 export interface OidcProviderBase extends ProviderCommon {
     clientId: string;
     endpoints?: {
@@ -881,6 +913,14 @@ export interface OidcProviderBase extends ProviderCommon {
     // @deprecated (undocumented)
     federateVia?: ERROR_federateVia_replaced_by_store;
     issuer: string;
+}
+
+// @public
+export interface OidcProviderConfig {
+    authorizeUrl: string;
+    clientId: string;
+    kind: string;
+    scopes: string[];
 }
 
 // @public

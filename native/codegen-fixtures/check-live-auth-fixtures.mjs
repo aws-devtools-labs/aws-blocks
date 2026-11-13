@@ -201,6 +201,33 @@ for (const fixture of FIXTURES) {
 	}
 }
 
+// Fixture 37 is the typed OIDC client the native SDKs generate from
+// `createOidcApi().getClient()`: an `oidc/client` transferable whose one type
+// argument is a string enum of provider ids. The live block must still emit
+// that shape (its provider ids are native-bindings' own, so only the shape is
+// compared). Without it, the provider-typed native clients are generated from
+// a fixture no block emits.
+{
+	const fixture37 = JSON.parse(readFileSync(join(FIXTURES_DIR, '37-oidc-provider-enum', 'spec.json'), 'utf8'));
+	const typed = fixture37.methods.find((m) => m.name === 'auth.getClient')?.result.schema;
+	const liveClient = liveMethods.get('oidcAuthApi.getClient')?.result.schema;
+	const shape = (s) => ({
+		...s,
+		'x-blocks-type-args': (s?.['x-blocks-type-args'] ?? []).map((a) => ({ ...a, enum: Array.isArray(a.enum) ? [] : a.enum })),
+	});
+	if (!liveClient) {
+		drifted++;
+		console.error('✗ live spec has no oidcAuthApi.getClient (native-bindings must export auth.createOidcApi())');
+	} else if (!same(shape(liveClient), shape(typed))) {
+		drifted++;
+		console.error(
+			`✗ oidcAuthApi.getClient no longer has fixture 37's typed oidc/client shape:\n    live:    ${JSON.stringify(liveClient)}\n    fixture: ${JSON.stringify(typed)}`,
+		);
+	} else {
+		console.log(`✓ oidcAuthApi.getClient is fixture 37's typed oidc/client (${JSON.stringify(liveClient['x-blocks-type-args'][0].enum)})`);
+	}
+}
+
 if (drifted > 0) {
 	console.error(
 		`\n${drifted} auth fixture(s) drifted from the live Auth block. If the change is intended, run\n` +

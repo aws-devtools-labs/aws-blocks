@@ -2010,6 +2010,79 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
  */
 export type AuthStateApiOf<O extends AuthOptions> = AuthStateApi<AuthActionInputOf<O>, AuthStateUser<O>>;
 
+/** One provider's public authorize parameters, as `<base>/authorize-params/<id>` returns them. */
+export interface OidcProviderConfig {
+	/** The IdP's (or managed login's) authorization endpoint. */
+	authorizeUrl: string;
+	/** The client id the native client sends to the authorization endpoint. */
+	clientId: string;
+	/** The scopes to request. */
+	scopes: string[];
+	/** The provider kind on the wire: `'oidc-custom'`, `'oauth2-custom'`, `'stub'` or the managed-login kind. */
+	kind: string;
+}
+
+/**
+ * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
+ * routes and the providers a native client can sign in with. The Swift,
+ * Kotlin and Dart SDKs hydrate it into their `OidcClient`, typed by `P`.
+ */
+export interface OidcClientDescriptor<P extends string = string> {
+	/** The transferable tag the native SDKs hydrate. */
+	__blocks: 'oidc/client';
+	/** The providers a native client can sign in with here, in declaration order. */
+	providers: P[];
+	/** Each listed provider's authorize parameters, keyed by provider id. */
+	providerConfigs: Record<string, OidcProviderConfig>;
+	/** `redirects.callbackPath`: the IdP returns here, and a relay sign-in's `redirect_uri`. */
+	callbackPath: string;
+	/** `<base>/exchange`: code to session cookie. */
+	exchangePath: string;
+	/** `redirects.signOutPath`. */
+	signOutPath: string;
+	/** `<base>/signin`: the server-initiated sign-in routes (`<base>/signin/<id>`). */
+	signInBasePath: string;
+	/** `<base>/authorize-params`: the relay sign-in's parameters (`<base>/authorize-params/<id>`). */
+	authorizeParamsBasePath: string;
+}
+
+/**
+ * What `getClient()` returns. On the server it serializes to its
+ * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
+ * client whose `signIn` takes only `P`. A browser receives the plain
+ * descriptor: for a web frontend use `createAuthClient()` from
+ * `@aws-blocks/bb-auth/browser-client` instead.
+ */
+export interface OidcClientHandle<P extends string = string> {
+	/** See {@link OidcClientDescriptor.providers}. */
+	readonly providers: P[];
+	/** See {@link OidcClientDescriptor.providerConfigs}. */
+	readonly providerConfigs: Record<string, OidcProviderConfig>;
+	/** See {@link OidcClientDescriptor.callbackPath}. */
+	readonly callbackPath: string;
+	/** See {@link OidcClientDescriptor.exchangePath}. */
+	readonly exchangePath: string;
+	/** See {@link OidcClientDescriptor.signOutPath}. */
+	readonly signOutPath: string;
+	/** See {@link OidcClientDescriptor.signInBasePath}. */
+	readonly signInBasePath: string;
+	/** See {@link OidcClientDescriptor.authorizeParamsBasePath}. */
+	readonly authorizeParamsBasePath: string;
+	/** @internal Transferable serialization. */
+	toJSON(): OidcClientDescriptor<P>;
+}
+
+/**
+ * The `createOidcApi()` surface of an `Auth` with options `O`: one method,
+ * `getClient()`, typed by the block's provider ids. Generic in `O` itself (not
+ * in the provider ids) so `Auth` stays a supertype of every configured
+ * instance, as the options-literal projections above require.
+ */
+export interface OidcClientApiOf<O extends AuthOptions> {
+	/** This block's OIDC client for the native SDKs, typed by its provider ids. */
+	getClient(): Promise<OidcClientHandle<ProviderIdOf<O>>>;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Users and sessions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3168,6 +3241,13 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 * `setAuthState` takes only the actions these options allow ({@link AuthActionInputOf}).
 	 */
 	createApi(): AuthStateApiOf<O>;
+
+	/**
+	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
+	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
+	 * into an `OidcClient` typed by this block's provider ids.
+	 */
+	createOidcApi(): OidcClientApiOf<O>;
 
 	/**
 	 * Define an API namespace that is deny by default: its `methods` run only
