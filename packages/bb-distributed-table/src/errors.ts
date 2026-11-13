@@ -41,7 +41,7 @@ const mergeCoercedOverRaw = createDefu((obj, key, value) => {
  * } catch (e: unknown) {
  *   if (isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)) {
  *     // an order with this userId + orderId already exists: report it under the API's own error name
- *     throw new ApiError('Order already exists', 409, { name: 'OrderExists' });
+ *     throw new ApiError('Order already exists', 409, { name: 'OrderExists', cause: e });
  *   }
  *   throw e;
  * }
