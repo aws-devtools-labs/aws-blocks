@@ -2,6 +2,10 @@
 
 The next release is 0.2.0, because of the breaking changes marked below.
 
+- Add `OidcClient.authState`, the current sign-in state: the state most
+  recently added to `authStateChanges`, or `OidcLoading` before the first one.
+  An app can read it once, such as on launch after `restore()`, without
+  subscribing to the stream. This matches Kotlin's `authState.value`.
 - `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
   in its envelope before it reads an IdP `error`. A redirect to the app's
   scheme that didn't come from this sign-in now fails the state check
