@@ -42,6 +42,35 @@ final class OpenUnionTests: XCTestCase {
         XCTAssertEqual(api.components(separatedBy: "case unknown(JSONValue)").count - 1, 1)
     }
 
+    func testAResultUnionNamedLikeAnEmbeddedUnionIsStillOpen() throws {
+        // `Event`'s `step` arm embeds a union named `StepChallenge`; a component of that name is a direct result.
+        let challenge = { (tag: String) in
+            #"{ "type": "object", "properties": { "challenge": { "type": "string", "enum": ["\#(tag)"] } }, "required": ["challenge"] }"#
+        }
+        let spec = """
+        { "openrpc": "1.3.2", "info": { "title": "t", "version": "1" },
+          "methods": [
+            { "name": "api.getEvent", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Event" } } },
+            { "name": "api.getChallenge", "params": [],
+              "result": { "name": "R", "schema": { "$ref": "#/components/schemas/StepChallenge" } } }
+          ],
+          "components": { "schemas": {
+            "Event": { "oneOf": [
+              { "type": "object", "properties": { "kind": { "type": "string", "enum": ["step"] }, "id": { "type": "string" } },
+                "required": ["kind", "id"], "oneOf": [\(challenge("a")), \(challenge("b"))] },
+              { "type": "object", "properties": { "kind": { "type": "string", "enum": ["done"] } }, "required": ["kind"] }
+            ] },
+            "StepChallenge": { "oneOf": [\(challenge("x")), \(challenge("y"))] }
+          } } }
+        """
+        let output = try SwiftCodeGenerator().generate(
+            from: CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(spec.utf8)))
+        )
+        let all = output.models + output.api
+        // `Event` and the component `StepChallenge` are open; the union embedded in `step` is not.
+        XCTAssertEqual(all.components(separatedBy: "case unknown(JSONValue)").count - 1, 2, all)
+    }
+
     #if os(macOS)
     func testUnknownArmDecodesAndRoundTrips() throws {
         let output = try generate(fixture: "45-open-enums")
