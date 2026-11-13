@@ -5,10 +5,10 @@
  * `defaults.appIdentity` across every Building Block.
  *
  * Synthesizes this app (which instantiates every BB) with `defaults.appIdentity`
- * (`strict: true`) and a permissions boundary set, then checks:
- * - synth passes under `strict: true`, and the IAM report names the app and
+ * (enforcing: no `reportOnly`) and a permissions boundary set, then checks:
+ * - synth passes, failing on any violation, and the IAM report names the app and
  *   lists no violations — no Building Block's own grants or roles count as
- *   reaching outside the app, so a platform can run with `strict: true`;
+ *   reaching outside the app, so a platform can run without `reportOnly`;
  * - every `AWS::IAM::Role` in every template carries the `app` tag (so a
  *   boundary keyed on `aws:PrincipalTag/app` reads it on every role) and the
  *   permissions boundary, and is named under the app's prefix.
@@ -85,7 +85,7 @@ describe('defaults.appIdentity: every Building Block stays inside the app', () =
         .map(([id, r]) => ({ where: `${file}: ${id}`, props: r.Properties ?? {} })),
     );
 
-  test('synth passes with defaults.appIdentity.strict: true', () => {
+  test('synth passes with defaults.appIdentity enforcing (no reportOnly)', () => {
     assert.strictEqual(synthError, undefined, `strict synth failed:\n${synthError}`);
   });
 

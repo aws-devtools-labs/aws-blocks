@@ -3,7 +3,7 @@
 
 /**
  * `defaults.appIdentity` — an app's identity on a shared app platform (see the field doc
- * on `BlocksDefaults.app`). This module validates the identity, stamps the `app`
+ * on `BlocksDefaults.appIdentity`). This module validates the identity, stamps the `app`
  * tag on everything AWS Blocks creates, and collects the app-isolation
  * violations the IAM report lists (rules in `app-isolation-rules.ts`).
  *
