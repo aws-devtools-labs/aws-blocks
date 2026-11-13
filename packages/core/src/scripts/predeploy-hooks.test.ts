@@ -4,8 +4,8 @@
 /**
  * Pre-deploy hooks against a fake project: a block declares a hook in its
  * package.json, the runner finds it through the app's dependencies or the
- * umbrella's, runs it with the stage, synthesizes at most once, and turns
- * stops into a thrown error.
+ * umbrella's, runs it with the stage and the stacks of the deploy's assembly,
+ * and turns stops into a thrown error.
  */
 import assert from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -65,14 +65,23 @@ export async function predeploy(context) {
 
 const predeploy = { predeploy: './dist/predeploy.js' };
 
-const fakeSynth = (stackName: string) => {
-	let calls = 0;
-	const synthesize = () => {
-		calls++;
-		return [{ stackName, template: {} }];
-	};
-	return { synthesize, calls: () => calls };
-};
+/** Write a cloud assembly with one stack at `<root>/cdk.out`, as `cdk synth --output cdk.out` does. */
+function assembly(root: string, stackName: string): void {
+	mkdirSync(join(root, 'cdk.out'));
+	writeFileSync(
+		join(root, 'cdk.out', 'manifest.json'),
+		JSON.stringify({
+			artifacts: {
+				tree: { type: 'cdk:tree' },
+				[stackName]: { type: 'aws:cloudformation:stack', properties: { templateFile: 'stack.template.json' } },
+			},
+		}),
+	);
+	writeFileSync(join(root, 'cdk.out', 'stack.template.json'), JSON.stringify({ Resources: {} }));
+}
+
+const run = (projectRoot: string, stage: 'sandbox' | 'production', log: (line: string) => void = () => {}) =>
+	runPredeployHooks({ stage, projectRoot, assemblyDir: 'cdk.out', log });
 
 describe('pre-deploy hooks', () => {
 	test('discovery reads the manifest field, through the app and through the umbrella', () => {
@@ -97,52 +106,44 @@ describe('pre-deploy hooks', () => {
 		assert.ok(hooks[0].module.endsWith(join('bb-direct', 'dist', 'predeploy.js')));
 	});
 
-	test('runs every hook with the stage, synthesizes once, prints notes', async () => {
+	test('runs every hook with the stage and the stacks of the assembly, prints notes', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*', '@aws-blocks/bb-b': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
 			{ name: '@aws-blocks/bb-b', hooks: predeploy, hook: guardHook },
 		]);
-		const synth = fakeSynth('App');
+		assembly(root, 'App');
 		const lines: string[] = [];
-		await runPredeployHooks({
-			stage: 'sandbox',
-			projectRoot: root,
-			synthesize: synth.synthesize,
-			log: (l) => lines.push(l),
-		});
+		await run(root, 'sandbox', (l) => lines.push(l));
 		assert.deepStrictEqual(lines.sort(), [
 			'[@aws-blocks/bb-a] checked App on sandbox',
 			'[@aws-blocks/bb-b] checked App on sandbox',
 		]);
-		assert.strictEqual(synth.calls(), 1, 'one synth, shared by both hooks');
 	});
 
 	test('a stop aborts the deploy with the hook named; a project with no hooks does nothing', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
 		]);
-		const synth = fakeSynth('BadStack');
-		await assert.rejects(
-			runPredeployHooks({ stage: 'production', projectRoot: root, synthesize: synth.synthesize, log: () => {} }),
-			/^Error: \[@aws-blocks\/bb-a\] Deploy stopped: BadStack$/,
-		);
+		assembly(root, 'BadStack');
+		await assert.rejects(run(root, 'production'), /^Error: \[@aws-blocks\/bb-a\] Deploy stopped: BadStack$/);
+		// No hook is declared, so the assembly (absent here) is not read.
 		const empty = project({ '@aws-blocks/bb-plain': '*' }, [{ name: '@aws-blocks/bb-plain' }]);
-		await runPredeployHooks({ stage: 'production', projectRoot: empty, synthesize: synth.synthesize });
-		assert.strictEqual(synth.calls(), 1, 'no synth when no hook is declared');
+		await run(empty, 'production');
 	});
 
-	test('a declared hook that is missing or malformed fails the deploy instead of passing silently', async () => {
+	test('a hook that cannot run fails the deploy instead of passing silently', async () => {
 		const missing = project({ '@aws-blocks/bb-a': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: { predeploy: './dist/nope.js' } },
 		]);
-		await assert.rejects(runPredeployHooks({ stage: 'production', projectRoot: missing }), /does not exist/);
+		await assert.rejects(run(missing, 'production'), /does not exist/);
 		const malformed = project({ '@aws-blocks/bb-a': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: 'export const nothing = 1;\n' },
 		]);
-		await assert.rejects(
-			runPredeployHooks({ stage: 'production', projectRoot: malformed }),
-			/does not export a predeploy\(\)/,
-		);
+		await assert.rejects(run(malformed, 'production'), /does not export a predeploy\(\)/);
+		const noAssembly = project({ '@aws-blocks/bb-a': '*' }, [
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
+		]);
+		await assert.rejects(run(noAssembly, 'production'), /No cloud assembly at .*cdk\.out/);
 	});
 
 	test('hooks that is not an object, an unknown hook name, or a hook that is not a module path fails the deploy', async () => {
@@ -150,21 +151,21 @@ describe('pre-deploy hooks', () => {
 			{ name: '@aws-blocks/bb-a', hooks: ['./dist/predeploy.js'], hook: guardHook },
 		]);
 		await assert.rejects(
-			runPredeployHooks({ stage: 'production', projectRoot: notAnObject }),
+			run(notAnObject, 'production'),
 			/@aws-blocks\/bb-a declares "aws-blocks"\."hooks" in its package\.json, which is not an object/,
 		);
 		const misspelled = project({ '@aws-blocks/bb-a': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: { predploy: './dist/predeploy.js' }, hook: guardHook },
 		]);
 		await assert.rejects(
-			runPredeployHooks({ stage: 'production', projectRoot: misspelled }),
+			run(misspelled, 'production'),
 			/@aws-blocks\/bb-a declares a hook this version of @aws-blocks\/core does not run: predploy\./,
 		);
 		const notAPath = project({ '@aws-blocks/bb-a': '*' }, [
 			{ name: '@aws-blocks/bb-a', hooks: { predeploy: { module: './dist/predeploy.js' } }, hook: guardHook },
 		]);
 		await assert.rejects(
-			runPredeployHooks({ stage: 'production', projectRoot: notAPath }),
+			run(notAPath, 'production'),
 			/@aws-blocks\/bb-a declares a pre-deploy hook that is not a module path/,
 		);
 	});

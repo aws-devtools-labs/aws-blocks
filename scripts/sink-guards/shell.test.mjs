@@ -46,7 +46,7 @@ const ALLOWLIST = [
 	{ at: 'packages/core/src/hosting.ts:1182', reason: `Hosting buildCommand. ${APP_COMMAND}` },
 	{ at: 'packages/hosting/src/build/runner.ts:61', reason: `Hosting buildCommand. ${APP_COMMAND}` },
 	{ at: 'packages/core/src/scripts/dev-server.ts:894', reason: `Frontend dev command. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/sandbox.ts:621', reason: `Sandbox dev-server command. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/scripts/sandbox.ts:638', reason: `Sandbox dev-server command. ${APP_COMMAND}` },
 	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-blocks/* name: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:632', reason: `npm run build -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:637', reason: `npm test -w <validated name>: ${WINDOWS_NPM}` },

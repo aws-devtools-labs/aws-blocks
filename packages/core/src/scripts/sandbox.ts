@@ -443,14 +443,6 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   await applyExternalMigrations({ stage: 'sandbox' });
 
-  // Pre-deploy hooks the installed blocks declare in their package.json
-  // (`aws-blocks.hooks.predeploy`). A stop aborts here.
-  await runPredeployHooks({
-    stage: 'sandbox',
-    projectRoot: process.cwd(),
-    app: `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
-  });
-
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the
   // deploy, as `deploy()` does. The same worker populates the Scope BB registry
@@ -502,13 +494,49 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
+  const deployFailed = (error: unknown): unknown => {
+    registerFrameworkFromSink(frameworkSink);
+    history.fail(error);
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
+    });
+    cdkOutput.printRetained();
+    console.error("\n❌ Deployment failed.");
+    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
+    return error;
+  };
+
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
     await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
+  } catch (error) {
+    throw deployFailed(error);
+  }
 
+  // Pre-deploy hooks the installed blocks declare in their package.json
+  // (`aws-blocks.hooks.predeploy`), on the assembly just synthesized. Before any
+  // stack changes, so a stop leaves nothing to recover: no failure banner and no
+  // destroy hint. Changes that `cdk watch` deploys later are not checked.
+  try {
+    await runPredeployHooks({ stage: 'sandbox', projectRoot: process.cwd(), assemblyDir });
+  } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
+    throw error;
+  }
+
+  try {
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
     // deployed has one and already exists — or can't be inspected (fail closed).
@@ -528,18 +556,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
       { env: cdkEnv },
     );
   } catch (error) {
-    registerFrameworkFromSink(frameworkSink);
-    history.fail(error);
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
-    });
-    cdkOutput.printRetained();
-    console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
-    throw error;
+    throw deployFailed(error);
   }
 
   registerFrameworkFromSink(frameworkSink);

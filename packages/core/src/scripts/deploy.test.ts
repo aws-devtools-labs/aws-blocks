@@ -259,6 +259,9 @@ await replace(moduleUrl('deploy-stream'), {
   // Writes where deploy() told the CDK CLI to write, not to a path of its own,
   // so this fixture fails if production stops naming its own document.
   runStreaming: async (_cmd, args) => {
+    // deploy() synthesizes the assembly first; no hooks are declared in this
+    // fixture, so only the 'cdk deploy' call carries --outputs-file.
+    if (args.includes('synth')) return;
     const file = args[args.indexOf('--outputs-file') + 1];
     assert.equal(file, outputsFile);
     mkdirSync(dirname(file), { recursive: true });
@@ -302,3 +305,4 @@ assert.deepEqual(events, [
     }
   });
 });
+

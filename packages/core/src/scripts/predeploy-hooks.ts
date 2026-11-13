@@ -17,18 +17,16 @@
  * their notes, and abort the deploy when any hook returns a stop. A hook runs
  * on both stages; one that applies to a single stage reads `context.stage` and
  * returns early. A hook that needs the synthesized templates calls
- * `context.synth()`; the app is synthesized at most once per deploy, however
- * many hooks ask.
+ * `context.synth()`, which returns the stacks of the assembly the deploy is
+ * about to deploy: the scripts synthesize the app once, run the hooks on that
+ * assembly, then deploy it.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { log } from './log.js';
 import { isPlainObject } from './native-catalogs.js';
-import { runSync } from './run-command.js';
 
 export type DeployStage = 'sandbox' | 'production';
 
@@ -43,7 +41,10 @@ export interface PredeployContext {
 	stage: DeployStage;
 	/** The app's root: where `package.json` and `cdk.json` live. */
 	projectRoot: string;
-	/** Synthesize the app and return every stack's template. Cached across hooks. */
+	/**
+	 * Every stack's template, from the assembly the deploy synthesized and is
+	 * about to deploy. Read once and cached across hooks.
+	 */
 	synth(): Promise<SynthesizedStack[]>;
 }
 
@@ -160,54 +161,38 @@ export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] 
 	return hooks;
 }
 
-export interface SynthesizeOptions {
-	projectRoot: string;
-	stage: DeployStage;
-	/** The `cdk --app` command when the deploy passes one explicitly (the sandbox does). */
-	app?: string;
-}
-
 /**
- * Synthesize the app into a temporary directory with the same context the
- * deploy will use, and return every stack's template. The directory is removed
- * before this returns.
+ * The stacks of the synthesized cloud assembly at `assemblyDir`, each with its
+ * template. Throws when the assembly cannot be read: a hook must not pass on
+ * an empty list.
  */
-export function synthesizeApp(options: SynthesizeOptions): SynthesizedStack[] {
-	const out = mkdtempSync(join(tmpdir(), 'blocks-synth-'));
-	try {
-		const args = ['cdk', 'synth', '--quiet', '--output', out, '--context', `projectRoot=${options.projectRoot}`];
-		if (options.stage === 'sandbox') args.push('--context', 'sandboxMode=true');
-		if (options.app) args.push('--app', options.app);
-		try {
-			runSync('npx', args, {
-				cwd: options.projectRoot,
-				stdio: ['ignore', 'ignore', 'inherit'],
-				env: { ...process.env, NODE_OPTIONS: '--conditions=cdk', ...getCdkTelemetryEnv(options.stage) },
-			});
-		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			throw new Error(`cdk synth failed (${reason}); the pre-deploy hooks could not run.`);
-		}
-		const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf-8')) as {
-			artifacts?: Record<string, { type: string; properties?: { templateFile?: string; stackName?: string } }>;
-		};
-		const stacks: SynthesizedStack[] = [];
-		for (const [id, artifact] of Object.entries(manifest.artifacts ?? {})) {
-			if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
-			stacks.push({
-				stackName: artifact.properties.stackName ?? id,
-				template: JSON.parse(readFileSync(join(out, artifact.properties.templateFile), 'utf-8')),
-			});
-		}
-		return stacks;
-	} finally {
-		rmSync(out, { recursive: true, force: true });
+export function readSynthesizedStacks(assemblyDir: string): SynthesizedStack[] {
+	if (!existsSync(join(assemblyDir, 'manifest.json'))) {
+		throw new Error(`No cloud assembly at ${assemblyDir}; the pre-deploy hooks could not run.`);
 	}
+	const manifest = JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as {
+		artifacts?: Record<string, { type: string; properties?: { templateFile?: string; stackName?: string } }>;
+	};
+	const stacks: SynthesizedStack[] = [];
+	for (const [id, artifact] of Object.entries(manifest.artifacts ?? {})) {
+		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
+		stacks.push({
+			stackName: artifact.properties.stackName ?? id,
+			template: JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8')),
+		});
+	}
+	return stacks;
 }
 
-export interface RunPredeployHooksOptions extends SynthesizeOptions {
-	/** Replaces `synthesizeApp` (tests). */
-	synthesize?: (options: SynthesizeOptions) => SynthesizedStack[];
+export interface RunPredeployHooksOptions {
+	stage: DeployStage;
+	/** The app's root: where `package.json` and `cdk.json` live. */
+	projectRoot: string;
+	/**
+	 * The cloud assembly the deploy synthesized (`cdk synth --output`) and is
+	 * about to deploy, relative to `projectRoot` unless absolute.
+	 */
+	assemblyDir: string;
 	/** Where notes go. @default the scripts' logger (`log.progress`) */
 	log?: (line: string) => void;
 }
@@ -224,7 +209,7 @@ export async function runPredeployHooks(options: RunPredeployHooksOptions): Prom
 		stage: options.stage,
 		projectRoot: options.projectRoot,
 		async synth() {
-			stacks ??= (options.synthesize ?? synthesizeApp)(options);
+			stacks ??= readSynthesizedStacks(resolve(options.projectRoot, options.assemblyDir));
 			return stacks;
 		},
 	};

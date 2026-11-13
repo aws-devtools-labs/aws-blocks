@@ -7,10 +7,10 @@ import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { runPredeployHooks } from './predeploy-hooks.js';
-import { resolveDeploymentTarget } from './deployment-target.js';
+import { resolveCdkOutputDir, resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, buildCdkSynthArgs, formatDeploySignal } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { createDeployRecorder } from './deploy-history.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
@@ -298,12 +298,6 @@ async function runDeploy(options: DeployOptions) {
     log.progress('📝 Generating client code...');
     await generateDeployClient(foundationPath, clientPath);
 
-    // Pre-deploy hooks the installed blocks declare in their package.json
-    // (`aws-blocks.hooks.predeploy`), for example a deploy guard. A stop aborts here.
-    // After the client is generated: a hook that synthesizes the app runs the
-    // frontend build, which imports the generated client.
-    await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot });
-
     log.progress('🚀 Deploying to AWS...');
     log.detail('   (This may take a few minutes on first deploy)');
     // Not "Frontend hosting": the app may have none, and that is known only from its outputs.
@@ -313,7 +307,7 @@ async function runDeploy(options: DeployOptions) {
 
     // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and the raw
     // lines are retained, so a failure below can still print them.
-    const cdkOutput = createCdkOutput({ label: 'cdk deploy', verb: 'deploy' });
+    const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy' });
 
     // Captured from the CDK progress stream the moment CloudFront's URL appears
     // — well before CREATE_COMPLETE and the post-run outputs read. Printing
@@ -321,10 +315,48 @@ async function runDeploy(options: DeployOptions) {
     // caller's timeout, has already surfaced where the frontend lives.
     let earlyHostingUrl: string | undefined;
 
+    // Synthesize once into the app's CDK output directory, run the pre-deploy
+    // hooks on it, then deploy that assembly (as the sandbox does): a hook sees
+    // what is about to be deployed before any stack changes, and the app is built only once.
+    const assemblyDir = await resolveCdkOutputDir({ projectRoot: options.projectRoot });
+
     // Framework resolves in the cdk synth child (where Hosting is built); it writes the
     // value to this file so the parent can attach it to telemetry. Created immediately
     // before the spawn, so a failure earlier in the command leaves nothing behind.
     const frameworkSink = createFrameworkSink();
+
+    const cdkEnv = { ...process.env, NODE_OPTIONS: '--conditions=cdk', ...getCdkTelemetryEnv('production') };
+
+    // Terminal verdict on stdout: a caller that only captures stdout (the case
+    // that produced phantom failures) must still be able to tell a failed
+    // deploy from a killed process. This banner deliberately moved off stderr,
+    // so grepping stderr for this exact string no longer matches — the failure
+    // *reason* is still there. The CDK CLI keeps error-level output on stderr
+    // even under `--ci`, and the entrypoint prints the error itself with
+    // `console.error(error)`.
+    const deploymentFailed = (error: unknown): unknown => {
+      cdkOutput.printRetained();
+      console.log('\n❌ Deployment failed.');
+      return error;
+    };
+
+    try {
+      await runStreaming('npx', buildCdkSynthArgs({ projectRoot: options.projectRoot, assemblyDir }), {
+        label: 'cdk synth',
+        cwd: options.projectRoot,
+        env: { ...cdkEnv, ...getFrameworkSinkEnv(frameworkSink) },
+        curated: cdkOutput.streams,
+      });
+    } catch (error) {
+      throw deploymentFailed(error);
+    } finally {
+      registerFrameworkFromSink(frameworkSink);
+    }
+
+    // Pre-deploy hooks the installed blocks declare in their package.json
+    // (`aws-blocks.hooks.predeploy`), for example a deploy guard. They run on the
+    // assembly just synthesized, before any stack changes; a stop aborts here.
+    await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot, assemblyDir });
 
     try {
       await runStreaming(
@@ -332,16 +364,12 @@ async function runDeploy(options: DeployOptions) {
         buildCdkDeployArgs({
           projectRoot: options.projectRoot,
           outputsFile: OUTPUTS_FILE.production,
+          assemblyDir,
         }),
         {
           label: 'cdk deploy',
           cwd: options.projectRoot,
-          env: {
-            ...process.env,
-            NODE_OPTIONS: '--conditions=cdk',
-            ...getCdkTelemetryEnv('production'),
-            ...getFrameworkSinkEnv(frameworkSink),
-          },
+          env: cdkEnv,
           curated: cdkOutput.streams,
           onHostingUrl: (url) => {
             earlyHostingUrl = url;
@@ -356,20 +384,8 @@ async function runDeploy(options: DeployOptions) {
         }
       );
     } catch (error) {
-      // Terminal verdict on stdout: a caller that only captures stdout (the case
-      // that produced phantom failures) must still be able to tell a failed
-      // deploy from a killed process. This banner deliberately moved off stderr,
-      // so grepping stderr for this exact string no longer matches — the failure
-      // *reason* is still there. The CDK CLI keeps error-level output on stderr
-      // even under `--ci`, and the entrypoint prints the error itself with
-      // `console.error(error)`.
-      cdkOutput.printRetained();
-      console.log('\n❌ Deployment failed.');
-      registerFrameworkFromSink(frameworkSink);
-      throw error;
+      throw deploymentFailed(error);
     }
-    
-    registerFrameworkFromSink(frameworkSink);
 
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, OUTPUTS_FILE.production), 'utf-8'));
     // `--all` can write more than one stack's outputs (e.g. the us-east-1
