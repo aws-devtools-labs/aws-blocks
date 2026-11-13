@@ -16,6 +16,7 @@ import { markAddedChildrenBlocksOwned, resolveDynamoDbProtection, scopeProviderW
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { BB_NAME } from './version.js';
+import { assertIndexesShape } from './errors.js';
 
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PartitionKeyCondition, SortKeyCondition, KeyCondition, GetOptions, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
@@ -51,6 +52,9 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
+		// An array (or other non-object) `indexes` would otherwise provision GSIs
+		// named '0', '1', …; reject it at synth with the same error as the runtime.
+		assertIndexesShape(config?.indexes);
 
 		if (config?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

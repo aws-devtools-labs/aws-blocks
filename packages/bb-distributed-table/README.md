@@ -20,7 +20,7 @@ const table = new DistributedTable(scope, id, options)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. Pass `{ consistentRead: true }` for a strongly consistent read. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. The key is an object with every key field (`get({ userId, orderId })`, not `get(userId)`). Pass `{ consistentRead: true }` for a strongly consistent read. |
 | `put(item, options?)` | `Promise<void>` | Store an item. Overwrites unless conditions are set. |
 | `delete(key, options?)` | `Promise<void>` | Remove an item by primary key. |
 | `query(options)` | `AsyncIterable<T>` | Query items by index or primary key. |
@@ -40,7 +40,7 @@ const table = new DistributedTable(scope, id, options)
 |--------|------|----------|-------------|
 | `schema` | `StandardSchemaV1` | Yes | Runtime validation schema (Zod, Valibot, ArkType, etc.). Type `T` is inferred from the schema. |
 | `key` | `TableKeyConfig<T>` | Yes | Primary key configuration: `{ partitionKey, sortKey? }`. Field names must exist in the schema. |
-| `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions. |
+| `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions, as an object keyed by index name (`{ byStatus: { partitionKey: 'status' } }`), not an array. |
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | No | Point-in-Time Recovery (continuous backups). `true` = on with the default 35-day window; `false` = off; `{ retentionDays: n }` = on with an `n`-day window (**1–35**). Defaults to the stack `defaults.pointInTimeRecovery` (on under `BlocksPresets.production`, off under `sandbox`). Bills for backup storage per GB-month; a shorter window trims cost. |
 | `protection` | `'disposable' \| 'retained' \| 'locked'` | No | How hard the table is to destroy (spans removal policy + deletion protection). `'disposable'` = deleted with the stack; `'retained'` = orphaned on stack delete but a direct delete still works; `'locked'` = orphaned **and** deletion-protected. When omitted, removal policy + deletion protection follow the stack `defaults` (`BlocksPresets.production` ≈ `'locked'`, `sandbox` ≈ `'disposable'`). |
@@ -128,7 +128,7 @@ for await (const order of orders.query({
 | `index` | `keyof Indexes` | No | GSI to query. Omit to query the primary key. |
 | `where` | `KeyCondition<T, K>` | Yes | Key conditions. Partition key requires `{ equals }`. Sort key supports `equals`, `greaterThan`, `lessThan`, `between`, `beginsWith`, etc. |
 | `limit` | `number` | No | Maximum number of items to return. |
-| `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`. |
+| `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`; any other value throws `InvalidQuery`. |
 
 **Paging:** `query()` has no cursor or offset option. To page through results, sort on a unique, stable sort key (add a tie-breaker to a timestamp), pass the last key you returned as the bound in `where` (`{ greaterThan: cursor }` ascending, `{ lessThan: cursor }` with `order: 'desc'`), and request `limit: pageSize + 1` to learn whether another page exists.
 
@@ -201,7 +201,7 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 |----------|--------------|-------------|
 | `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable only for `ifFieldEquals` optimistic-lock conflicts (not `ifNotExists` / `ifExists`). |
 | `DistributedTableErrors.ValidationFailed` | `ValidationFailedException` | An item failed the configured `schema` validation on `put()` / `putBatch()`. |
-| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The query/condition shape is wrong: missing `where`, partition key not given as `{ equals }`, unknown index, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug. |
+| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The call's input shape is wrong: a key that isn't an object with every key field (`get('alice')`, or a composite key without its sort key), an item without its key fields, `indexes` not given as an object, missing `where`, partition key not given as `{ equals }`, unknown index (the message lists the declared ones), an `order` other than `'asc'` / `'desc'`, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug; the mock and the AWS runtime both throw it before calling DynamoDB. |
 | `DistributedTableErrors.ItemTooLarge` | `ItemTooLargeException` | A `put`/`putBatch` item exceeds DynamoDB's 400 KB per-item size limit. |
 | `DistributedTableErrors.BatchIncomplete` | `BatchIncompleteException` | A batch op left entries unprocessed after the retry budget (sustained throttling). AWS runtime only. |
 
