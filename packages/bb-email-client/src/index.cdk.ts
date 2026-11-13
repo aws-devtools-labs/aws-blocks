@@ -3,9 +3,10 @@
 
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
+import { Annotations, Stack } from 'aws-cdk-lib';
+import { BuildingBlockScope, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { IConstruct } from 'constructs';
 
 // Re-export public types and errors (no runtime dependencies)
 export { EmailErrors } from './errors.js';
@@ -13,13 +14,58 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions } from './types.js';
 import { BB_NAME } from './version.js';
-import { resolveMaxBatchSize } from './validation.js';
+import { reservedDomainOf, resolveMaxBatchSize } from './validation.js';
+
+/**
+ * Synth warning id for a `fromAddress` on a reserved domain (RFC 2606 / RFC 6761),
+ * such as `example.com` or anything under `.invalid`. Such a domain can never be
+ * verified as an SES identity, so every send fails with `DomainNotVerifiedException`.
+ * Acknowledge it with `Annotations.of(scope).acknowledgeWarning(id)` when the
+ * sender is deliberate (for example a stack that never sends).
+ */
+const UNVERIFIABLE_SENDER_WARNING_ID = '@aws-blocks/bb-email-client:UnverifiableSender';
+/**
+ * Synth warning id for a `replyTo` address on a reserved domain: replies to it
+ * can never be delivered. Acknowledge it the same way.
+ */
+const UNDELIVERABLE_REPLY_TO_WARNING_ID = '@aws-blocks/bb-email-client:UndeliverableReplyTo';
+
+/**
+ * Flag a sender or reply-to address on a reserved domain. A warning, not an
+ * error, on every stage: the app still synthesizes and the local mock still
+ * works, but the message says that sends will fail once deployed.
+ */
+function warnOnReservedDomains(scope: IConstruct, options: EmailOptions): void {
+	const stage = isSandboxContext(scope) ? 'this sandbox' : 'production';
+	const senderDomain = reservedDomainOf(options.fromAddress);
+	if (senderDomain) {
+		Annotations.of(scope).addWarningV2(
+			UNVERIFIABLE_SENDER_WARNING_ID,
+			`EmailClient fromAddress ${JSON.stringify(options.fromAddress)} is on the reserved domain "${senderDomain}", ` +
+				'which can never be verified as an SES identity, so every send from it fails in ' +
+				`${stage} with DomainNotVerifiedException. Set fromAddress to an address on a domain you have ` +
+				'verified in SES (https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html), or ' +
+				'acknowledge this warning if the stack never sends email.',
+		);
+	}
+	const reservedReplyTo = (options.replyTo ?? []).filter((address) => reservedDomainOf(address));
+	if (reservedReplyTo.length > 0) {
+		Annotations.of(scope).addWarningV2(
+			UNDELIVERABLE_REPLY_TO_WARNING_ID,
+			`EmailClient replyTo ${reservedReplyTo.map((a) => JSON.stringify(a)).join(', ')} is on a reserved ` +
+				'domain, so replies to it can never be delivered. Use a reply-to address on a real domain, or ' +
+				'acknowledge this warning if that is intended.',
+		);
+	}
+}
 
 export class EmailClient extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
 		// Fail at synth on a bad maxBatchSize rather than at the first sendBatch() call.
 		resolveMaxBatchSize(options.maxBatchSize);
+
+		warnOnReservedDomains(this, options);
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
