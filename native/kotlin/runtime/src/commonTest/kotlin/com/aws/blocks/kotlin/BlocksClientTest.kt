@@ -181,7 +181,7 @@ class BlocksClientTest {
                 .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
         }
         e.statusCode shouldBe 200
-        e.message shouldBe "Missing result field in JSON-RPC response"
+        e.message shouldBe "Response was not a JSON-RPC envelope"
     }
 
     @Test

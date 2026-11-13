@@ -112,7 +112,14 @@ class BlocksClient internal constructor(
             throw TransportException(message, response.status.value)
         }
 
-        return responseJson?.get("result")
+        if (responseJson == null) {
+            throw TransportException(
+                "Response was not a JSON-RPC envelope",
+                response.status.value,
+            )
+        }
+
+        return responseJson["result"]
             ?: throw TransportException(
                 "Missing result field in JSON-RPC response",
                 response.status.value,

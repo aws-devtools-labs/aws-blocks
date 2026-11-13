@@ -4,7 +4,6 @@ import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.CLOSED_MESSAGE
 import com.aws.blocks.kotlin.InternalBlocksApi
-import com.aws.blocks.kotlin.exceptions.BlocksException
 import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
@@ -92,7 +91,7 @@ class OidcClient<P : OidcProvider> internal constructor(
      * @throws OidcCallbackException if the identity provider reported an error, or the
      *   callback's state or CSRF value did not match what was sent.
      * @throws OidcExchangeException if the backend rejected the authorization code.
-     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
     suspend fun signIn(
         provider: P,
