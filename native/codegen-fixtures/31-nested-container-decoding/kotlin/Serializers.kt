@@ -3,7 +3,9 @@ package com.example.app
 import com.aws.blocks.kotlin.filebucket.FileDownloadHandle
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.realtime.RealtimeChannel
+import java.lang.UnsupportedOperationException
 import kotlin.String
+import kotlin.Unit
 import kotlin.collections.List
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -11,7 +13,6 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
-import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public object RealtimeChannelNoteSerializer : KSerializer<RealtimeChannel<Note>> {
@@ -23,9 +24,7 @@ public object RealtimeChannelNoteSerializer : KSerializer<RealtimeChannel<Note>>
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Note>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Note>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Note>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelListStringSerializer : KSerializer<RealtimeChannel<List<String>>> {
@@ -37,9 +36,7 @@ public object RealtimeChannelListStringSerializer : KSerializer<RealtimeChannel<
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<List<String>>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<String>>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<String>>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object FileDownloadHandleSerializer : KSerializer<FileDownloadHandle> {
@@ -51,7 +48,5 @@ public object FileDownloadHandleSerializer : KSerializer<FileDownloadHandle> {
     return FileDownloadHandle.fromJson(element)
   }
 
-  override fun serialize(encoder: Encoder, `value`: FileDownloadHandle) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: FileDownloadHandle): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }

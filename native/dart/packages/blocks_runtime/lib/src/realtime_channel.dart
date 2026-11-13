@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'transferable_descriptor.dart';
 import 'web_socket_pool.dart';
 
 /// A live WebSocket subscription that produces a typed [Stream] of messages.
@@ -14,9 +13,6 @@ class RealtimeChannel<T> {
   final String? connectToken;
   final String token;
   final T Function(Object? payload) _decode;
-
-  /// The descriptor this channel was hydrated from, as [toJson] returns it.
-  final Map<String, dynamic> _descriptor;
   bool _closed = false;
   bool _subscribed = false;
   StreamController<T>? _controller;
@@ -27,9 +23,7 @@ class RealtimeChannel<T> {
     this.connectToken,
     required this.token,
     required T Function(Object? payload) decode,
-    required Map<String, dynamic> descriptor,
-  }) : _decode = decode,
-       _descriptor = descriptor;
+  }) : _decode = decode;
 
   /// Hydrates a RealtimeChannel from a JSON descriptor.
   ///
@@ -66,23 +60,8 @@ class RealtimeChannel<T> {
       connectToken: descriptor['connectToken'] as String?,
       token: descriptor['token'] as String,
       decode: decode,
-      descriptor: descriptor,
     );
   }
-
-  /// This channel's descriptor, as the server's `toJSON()` sent it and
-  /// [fromJson] read it: `{"__blocks": "realtime/channel", "channel",
-  /// "wsUrl", "connectToken"?, "token"}`, with any other key it held. A
-  /// generated client sends a channel parameter, or a channel inside a model
-  /// it sends, this way; `jsonEncode` calls it too.
-  ///
-  /// ```dart
-  /// final body = jsonEncode({'feed': channel.toJson()});
-  /// ```
-  ///
-  /// Returns a copy, so changing it doesn't change this channel.
-  Map<String, dynamic> toJson() =>
-      transferableDescriptor('realtime/channel', _descriptor);
 
   /// Builds the WebSocket URL, appending connectToken as query param for AWS.
   String get _connectionUrl {

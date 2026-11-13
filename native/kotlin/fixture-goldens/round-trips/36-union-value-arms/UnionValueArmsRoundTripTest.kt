@@ -109,16 +109,15 @@ class UnionValueArmsRoundTripTest : FunSpec({
         rejects(serializer, "\"yesterday\"", "true")
     }
 
-    test("a transferable arm decodes by its __blocks tag and encodes as its descriptor") {
+    test("a transferable arm decodes by its __blocks tag, and is read-only") {
         val serializer = GetFile.Result.serializer()
         val handle = BlocksJson.decodeFromJsonElement(
             serializer,
             json("""{"__blocks":"file-bucket/download","url":"https://example.com/f"}"""),
         ).shouldBeInstanceOf<GetFile.Result.Variant1>()
         handle.value.url shouldBe "https://example.com/f"
-        // A transferable arm encodes as its descriptor (through its toJson), with its tag.
-        BlocksJson.encodeToJsonElement(serializer, handle) shouldBe
-            json("""{"__blocks":"file-bucket/download","url":"https://example.com/f"}""")
+        // Transferables only come back from the server, so encoding one throws.
+        shouldThrow<UnsupportedOperationException> { BlocksJson.encodeToJsonElement(serializer, handle) }
         roundTrip(serializer, """{"reason":"gone"}""", GetFile.Result.Variant2("gone"))
         rejects(serializer, """{"__blocks":"file-bucket/upload","url":"u"}""")
     }

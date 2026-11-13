@@ -6,11 +6,11 @@
   an arm named like another type already does.
 - **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
-  `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
-  list-typed `BlocksClient.call`), and each generated library's header now
-  names the minimum runtime. Release note: raise the `blocks_runtime`
-  constraint in this package's `pubspec.yaml` to `^0.1.5` in the same change
-  that publishes `blocks_runtime` 0.1.5.
+  `RealtimeChannel.fromJsonValue`, a list-typed `BlocksClient.call`), and
+  each generated library's header now names the minimum runtime. Release
+  note: raise the `blocks_runtime` constraint in this package's
+  `pubspec.yaml` to `^0.1.5` in the same change that publishes
+  `blocks_runtime` 0.1.5.
 - Fix two results that each hold a realtime channel with a different message
   type (`{channel: RealtimeChannel<{text}>}` and
   `{channel: RealtimeChannel<{count}>}`) being merged into one model, so the
@@ -302,15 +302,6 @@
     `Servers`, `override`, `identical`) shadowed it in the whole library. It
     is now `String$` and so on. A namespace class that a schema already has
     the name of (`TodosApi`) is now `TodosApi$`.
-- Fix generated clients that threw `JsonUnsupportedObjectError` when a call
-  sent a realtime channel, a file handle or an OIDC client back to the server:
-  as a parameter, or inside a model, list, map, tuple or union variant the
-  call sends. Each one is now sent as its `{"__blocks": …}` descriptor, the
-  JSON the server sent it as, through the runtime type's new `toJson()`. A
-  model's `toJson()` encodes them the same way, so `X.fromJson(x.toJson())`
-  round-trips a model that holds one. A transferable with no runtime binding
-  is typed `dynamic`, holds its descriptor already, and is sent as is.
-  Requires `blocks_runtime` with `toJson()` on those types.
 - Fix generated clients that named an undeclared type, or the wrong type,
   for a `$ref` to a component schema the generator renamed. A `$ref` now
   follows every rename:

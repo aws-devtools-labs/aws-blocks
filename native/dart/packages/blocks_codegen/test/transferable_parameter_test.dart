@@ -5,12 +5,12 @@ import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
 import 'package:test/test.dart';
 
-// A transferable (a realtime channel, a file handle, an OIDC client) passed
-// back to the server as a parameter, or inside a model the client sends,
-// used to be put in the request as the runtime object itself
-// (`'feed': feed`). The runtime classes had no `toJson()`, so `jsonEncode`
-// threw. It is now sent as its `{"__blocks": …}` descriptor, the shape the
-// server sent it in, at any depth, as Kotlin and Swift send it.
+// Transferables are read-only: the server hands out a realtime channel, a
+// file handle or an OIDC client, and nothing sends one back (the server never
+// re-hydrates a `{"__blocks": …}` parameter). The generated client passes one
+// through as the runtime object, at any depth, and the runtime classes have
+// no `toJson()`, so `jsonEncode` refuses it (see blocks_runtime's
+// transferable_read_only_test.dart). Models around them still encode.
 
 Map<String, dynamic> _xfer(String tag, [List<Object>? typeArgs]) => {
   'x-blocks-transferable': tag,
@@ -170,32 +170,32 @@ void main() {
       expect(
         section('Future<String> relay('),
         contains(
-          '      feed.toJson(),\n'
-          '      maybe?.toJson(),\n'
-          '      orNull?.toJson(),\n'
-          '      feeds.map((e) => e.toJson()).toList(),\n'
-          '      byRoom.map((k, v) => MapEntry(k, v.toJson())),\n',
+          '      feed,\n'
+          '      maybe,\n'
+          '      orNull,\n'
+          '      feeds,\n'
+          '      byRoom,\n',
         ),
       );
     });
 
-    test('file handles, and a model holding transferables', () {
+    test('file handles pass through; a model around them encodes', () {
       expect(
         section('Future<String> share('),
         contains(
-          '      download.toJson(),\n'
-          '      upload.toJson(),\n'
+          '      download,\n'
+          '      upload,\n'
           '      bundle.toJson(),\n',
         ),
       );
     });
 
-    test('an OIDC client, direct, in a list, and in a model', () {
+    test('an OIDC client, direct and in a list', () {
       expect(
         section('Future<String> useOidc('),
         contains(
-          '      client.toJson(),\n'
-          '      clients?.map((e) => e.toJson()).toList(),\n'
+          '      client,\n'
+          '      clients,\n'
           '      holder.toJson(),\n',
         ),
       );
@@ -205,59 +205,36 @@ void main() {
       expect(
         section('Future<String> misc('),
         contains(
-          '      [pair.\$1.toJson(), pair.\$2],\n'
-          '      maybeMap?.map((k, v) => MapEntry(k, v?.toJson())),\n'
-          '      nested.map((e) => e.map((e1) => e1.toJson()).toList()).toList(),\n'
-          '      pick.toJson(),\n',
-        ),
-      );
-    });
-
-    test('a transferable with no runtime binding is sent as is', () {
-      // Typed `dynamic`: it holds the descriptor JSON the server sent.
-      expect(
-        section('Future<String> misc('),
-        contains('required dynamic other'),
-      );
-      expect(section('Future<String> misc('), contains('      other,\n'));
-    });
-  });
-
-  group("a model's toJson", () {
-    test('encodes a channel, a list of handles and an optional handle', () {
-      expect(
-        section('class Bundle {'),
-        contains(
-          "      'feed': feed.toJson(),\n"
-          "      'files': files.map((e) => e.toJson()).toList(),\n"
-          "      if (upload != null) 'upload': upload?.toJson(),\n",
-        ),
-      );
-    });
-
-    test('encodes an OIDC client, a nullable handle and a map of handles', () {
-      expect(
-        section('class Holder {'),
-        contains(
-          "      'client': client.toJson(),\n"
-          "      'maybe': maybe?.toJson(),\n"
-          "      'byName': byName.map((k, v) => MapEntry(k, v.toJson())),\n",
-        ),
-      );
-    });
-
-    test('encodes a handle in a union variant', () {
-      expect(
-        section('class FilePick extends Pick {'),
-        contains(
-          "      'kind': 'file',\n"
-          "      'file': file.toJson(),\n",
+          '      [pair.\$1, pair.\$2],\n'
+          '      maybeMap,\n'
+          '      nested,\n'
+          '      pick.toJson(),\n'
+          '      other,\n',
         ),
       );
     });
   });
 
-  test('no transferable is put in a request or a model as the object', () {
+  test("a model's toJson keeps a transferable field as the object", () {
+    expect(
+      section('class Bundle {'),
+      contains(
+        "      'feed': feed,\n"
+        "      'files': files,\n"
+        "      if (upload != null) 'upload': upload,\n",
+      ),
+    );
+    expect(
+      section('class Holder {'),
+      contains(
+        "      'client': client,\n"
+        "      'maybe': maybe,\n"
+        "      'byName': byName,\n",
+      ),
+    );
+  });
+
+  test('nothing calls toJson() on a transferable', () {
     for (final name in [
       'feed',
       'maybe',
@@ -273,8 +250,8 @@ void main() {
       'file',
       'nested',
     ]) {
-      expect(output, isNot(contains("'$name': $name,")), reason: name);
-      expect(output, isNot(contains("'$name': $name\n")), reason: name);
+      expect(output, isNot(contains('$name.toJson()')), reason: name);
+      expect(output, isNot(contains('$name?.toJson()')), reason: name);
     }
   });
 }
