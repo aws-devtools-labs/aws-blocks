@@ -115,6 +115,7 @@ try {
 
 The logger handles edge cases gracefully:
 - **Circular references** → replaced with `"[Circular]"`
+- **Shared references** (the same object under several keys or array positions, without a cycle) → serialized in full each time, up to 1000 repeats per log entry; later repeats are replaced with `"[Repeated]"` so a large shared graph can't blow up the log line
 - **BigInt values** → converted to string
 - **Functions/Symbols** → replaced with `"[unserializable]"`
 - **Errors in context** → extracted to `{ name, message, stack }`

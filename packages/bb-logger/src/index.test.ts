@@ -10,7 +10,7 @@ import { Scope } from '@aws-blocks/core';
 import { Logger, LoggingErrors } from './index.mock.js';
 import { Logger as AwsLogger } from './index.aws.js';
 import type { LogEntry, ChildLogger } from './types.js';
-import { shouldLog, buildEntry, processValue, safeStringify } from './serializer.js';
+import { shouldLog, buildEntry, processValue, safeStringify, MAX_REPEATED_EXPANSIONS } from './serializer.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -300,6 +300,63 @@ describe('serialization safety', () => {
 		log.info('circular', { data: obj });
 		const entry = getStdoutEntry();
 		assert.strictEqual((entry.data as any).self, '[Circular]');
+	});
+
+	test('shared (non-circular) references serialize fully', () => {
+		const log = new Logger(fakeScope, 'app');
+		const user = { id: 'u1' };
+		log.info('shared', { requester: user, owner: user, list: [user, user] });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.requester, { id: 'u1' });
+		assert.deepStrictEqual(entry.owner, { id: 'u1' });
+		assert.deepStrictEqual(entry.list, [{ id: 'u1' }, { id: 'u1' }]);
+	});
+
+	test('nested circular references deeper in the tree produce [Circular]', () => {
+		const log = new Logger(fakeScope, 'app');
+		const inner: Record<string, unknown> = { name: 'inner' };
+		const outer = { a: { b: inner }, sibling: inner };
+		inner.back = outer.a;
+		log.info('nested', { data: outer });
+		assert.deepStrictEqual(getStdoutEntry().data, {
+			a: { b: { name: 'inner', back: '[Circular]' } },
+			sibling: { name: 'inner', back: { b: '[Circular]' } },
+		});
+	});
+
+	test('re-expansion of repeated references is capped, so a shared DAG stays small', () => {
+		const log = new Logger(fakeScope, 'app');
+		// Each level references the level below twice: 2^20 paths, ~20 MB fully expanded.
+		let node: Record<string, unknown> = { leaf: true };
+		for (let i = 0; i < 20; i++) node = { a: node, b: node };
+		log.info('dag', { data: node });
+		const line = stdoutLines[0];
+		assert.ok(line.length < 100_000, `expected a bounded line, got ${line.length} chars`);
+		assert.ok(line.includes('"[Repeated]"'));
+		assert.strictEqual(getStdoutEntry()._serializationError, undefined);
+	});
+
+	test('re-expansion cap bounds densely linked graphs', () => {
+		const log = new Logger(fakeScope, 'app');
+		// Every node lists every other node: the number of acyclic paths grows factorially.
+		const nodes: { id: number; peers: unknown[] }[] = [];
+		for (let i = 0; i < 10; i++) nodes.push({ id: i, peers: [] });
+		for (const n of nodes) n.peers = nodes.filter((other) => other !== n);
+		log.info('graph', { data: nodes[0] });
+		const line = stdoutLines[0];
+		assert.ok(line.length < 100_000, `expected a bounded line, got ${line.length} chars`);
+		assert.ok(line.includes('"[Repeated]"'));
+		assert.strictEqual(getStdoutEntry()._serializationError, undefined);
+	});
+
+	test('a repeated reference is expanded until the cap, then logged as [Repeated]', () => {
+		const log = new Logger(fakeScope, 'app');
+		const user = { id: 'u1' };
+		// One first expansion plus MAX_REPEATED_EXPANSIONS re-expansions, then one past the cap.
+		log.info('many', { list: Array.from({ length: MAX_REPEATED_EXPANSIONS + 2 }, () => user) });
+		const list = getStdoutEntry().list as unknown[];
+		assert.deepStrictEqual(list.slice(0, -1), Array.from({ length: MAX_REPEATED_EXPANSIONS + 1 }, () => ({ id: 'u1' })));
+		assert.strictEqual(list[list.length - 1], '[Repeated]');
 	});
 
 	test('BigInt values are serialized as strings', () => {

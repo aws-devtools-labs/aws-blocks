@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { redactForLogging, redactToJson, REDACTED } from './redact.js';
+import { redactForLogging, redactToJson, REDACTED, MAX_REPEATED_EXPANSIONS } from './redact.js';
 
 describe('redactForLogging', () => {
   it('redacts a top-level password field', () => {
@@ -189,6 +189,33 @@ describe('redactForLogging', () => {
     assert.equal(out.first.password, REDACTED);
     assert.equal(out.second.password, REDACTED);
     assert.equal(out.second.username, 'u');
+  });
+
+  // Regression: tracking only the ancestor path made expansion unbounded —
+  // exponential on shared DAGs and factorial on densely linked graphs. Repeats
+  // of an already-walked object are capped per call.
+  it('caps re-expansion of repeated references so a shared DAG stays small', () => {
+    let node: Record<string, unknown> = { leaf: true };
+    for (let i = 0; i < 20; i++) node = { a: node, b: node };
+    const json = JSON.stringify(redactForLogging(node));
+    assert.ok(json.length < 100_000, `expected bounded output, got ${json.length} chars`);
+    assert.ok(json.includes('"[Repeated]"'));
+  });
+
+  it('caps re-expansion on densely linked graphs', () => {
+    const nodes: { id: number; peers: unknown[] }[] = [];
+    for (let i = 0; i < 10; i++) nodes.push({ id: i, peers: [] });
+    for (const n of nodes) n.peers = nodes.filter((other) => other !== n);
+    const json = JSON.stringify(redactForLogging(nodes[0]));
+    assert.ok(json.length < 100_000, `expected bounded output, got ${json.length} chars`);
+    assert.ok(json.includes('"[Repeated]"'));
+  });
+
+  it('expands a repeated reference until the cap, then emits [Repeated]', () => {
+    const shared = { id: 'x', token: 't' };
+    const out = redactForLogging(Array.from({ length: MAX_REPEATED_EXPANSIONS + 2 }, () => shared)) as unknown[];
+    assert.deepEqual(out.slice(0, -1), Array.from({ length: MAX_REPEATED_EXPANSIONS + 1 }, () => ({ id: 'x', token: REDACTED })));
+    assert.equal(out[out.length - 1], '[Repeated]');
   });
 
   // Regression: `code` is exact-match only, so substring siblings like
