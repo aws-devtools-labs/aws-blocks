@@ -74,7 +74,6 @@ public struct SwiftCodeGenerator {
             uniquingKeysWith: { first, _ in first }
         )
         generator.openEnums.openTypeNames = generator.openTypeNames(model)
-        generator.openEnums.embeddedUnionNames = generator.embeddedUnionNames(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -325,7 +324,11 @@ public struct SwiftCodeGenerator {
 
         // Emit embedded union as a nested type
         if let embedded = embeddedUnion, case .union(let unionName, let variants, let disc) = embedded {
-            emitNestedUnion(name: unionName, variants: variants, discriminator: disc, children: [], indent: indent + "    ", lines: &lines)
+            // An embedded union shares this arm's JSON object, so it stays closed.
+            emitNestedUnion(
+                name: unionName, variants: variants, discriminator: disc, children: [], embedded: true,
+                indent: indent + "    ", lines: &lines
+            )
             // Emit merged Codable for embedded union support
             lines.append("")
             let embeddedName = embeddedPropertyName(fields)
@@ -408,7 +411,10 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)}")
     }
 
-    private func emitNestedUnion(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
+    private func emitNestedUnion(
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode],
+        embedded: Bool = false, indent: String, lines: inout [String]
+    ) {
         // Emit variant structs before the enum
         for variant in variants {
             guard !variant.fields.isEmpty
@@ -435,7 +441,7 @@ public struct SwiftCodeGenerator {
 
         lines.append("")
         emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
-        let unknownCase = openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+        let unknownCase = embedded ? nil : openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
         lines.append(contentsOf: unionCaseLines(variants, indent: indent, unknownCase: unknownCase))
         if let disc = discriminator {
             emitDiscriminatedCoding(
