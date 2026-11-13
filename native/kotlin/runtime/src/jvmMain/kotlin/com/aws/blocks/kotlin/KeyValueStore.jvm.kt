@@ -130,21 +130,28 @@ internal class EncryptedFileKeyValueStore(
      * were left (the restored-copy case without an OS custody to lose). Both leave the store
      * holding entries only the lost key could read.
      *
-     * Dot-prefixed files are this library's control files (`.key`, and the lock added in a later
-     * change). Entries are base64url-encoded names, which do not start with a dot, so the filter
-     * cleans exactly the entries without touching metadata. The whole sweep is best-effort: a
-     * failure here stops a sign-in from persisting, which is already the problem we are trying to
-     * clear, so it deserves the same temporary treatment the jar gives other write failures.
+     * The whole sweep is best-effort: a failure here stops a sign-in from persisting, which is
+     * already the problem we are trying to clear, so it deserves the same temporary treatment the
+     * jar gives other write failures.
      */
     private fun discardEntriesWrittenUnderAnOlderKey() {
         runCatching {
-            Files.newDirectoryStream(storageDir).use { entries ->
-                entries.forEach {
-                    if (!it.fileName.toString().startsWith(".")) {
-                        runCatching { Files.deleteIfExists(it) }
-                    }
-                }
-            }
+            forEachEntry { runCatching { Files.deleteIfExists(it) } }
+        }
+    }
+
+    /**
+     * Visits the stored entries, and only those.
+     *
+     * An entry's name is the base64url of the key it holds, which never starts with a dot, so the
+     * dot prefix is what separates them from this library's own files — a key file under one of
+     * [KeyFile]'s names, and the lock that serialises key creation. Naming those files to keep
+     * instead would mean every tier that adds one has to be remembered here; asking what an entry
+     * looks like cannot be forgotten in the same way.
+     */
+    private inline fun forEachEntry(action: (Path) -> Unit) {
+        Files.newDirectoryStream(storageDir).use { paths ->
+            paths.forEach { if (!it.fileName.toString().startsWith(".")) action(it) }
         }
     }
 
@@ -176,17 +183,14 @@ internal class EncryptedFileKeyValueStore(
     }
 
     /**
-     * Deletes every entry but keeps the key file. Dropping the key would leave this instance
-     * writing with the key it already memoized while another process installed a different one,
-     * so neither could read the other's entries.
+     * Deletes every entry and leaves this library's own files alone. Dropping the key would leave
+     * this instance writing with the key it already memoized while another process installed a
+     * different one, so neither could read the other's entries. Dropping the lock file would take
+     * it from a process holding it.
      */
     override suspend fun clear() {
         withContext(Dispatchers.IO) {
-            Files.newDirectoryStream(storageDir).use { entries ->
-                entries.forEach {
-                    if (it.fileName.toString() != KeyFile.KEY_FILE) Files.deleteIfExists(it)
-                }
-            }
+            forEachEntry { Files.deleteIfExists(it) }
         }
     }
 
