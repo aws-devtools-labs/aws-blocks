@@ -328,6 +328,8 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 }
 ```
 
+To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `@aws-blocks/blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
+
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 
 #### Monitoring failed RPC calls
