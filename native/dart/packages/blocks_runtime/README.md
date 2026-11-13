@@ -10,6 +10,31 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 
 This package is used by generated client code produced by `blocks_codegen`. You typically don't interact with it directly.
 
+## Configuration
+
+`BlocksConfig` holds the values a client is configured with: the backend URL and the HTTP timeouts. It is immutable and compares by value, so vary one value across environments with `copyWith`:
+
+```dart
+const prod = BlocksConfig(baseUrl: 'https://api.example.com/aws-blocks/api');
+final staging = prod.copyWith(
+  baseUrl: 'https://staging.example.com/aws-blocks/api',
+);
+final slowNetwork = prod.copyWith(idleTimeout: const Duration(minutes: 2));
+
+final blocks = Blocks.fromConfig(staging); // generated client
+final client = BlocksClient.fromConfig(slowNetwork); // runtime client
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `baseUrl` | (required) | The URL calls are sent under, ending in `/aws-blocks/api`. |
+| `connectTimeout` | 30 seconds | How long to wait for a connection before the call fails. |
+| `idleTimeout` | 60 seconds | How long a call may go with nothing arriving (no response headers, or no next chunk of the body) before it fails. There is no cap on a call's total time. |
+
+A call that times out throws a `TimeoutException` (see [Timeouts](#timeouts)). The config's timeouts apply to the RPC calls of the client built from it. An `http.Client` passed to `BlocksClient.fromConfig(config, client: ...)` is used as it is, without them, and file uploads and downloads and `OidcClient` keep the default timeouts. `Blocks(baseUrl: ...)` and `BlocksClient(baseUrl: ...)` still work and use the defaults.
+
+To reach a dev server on the host machine from an Android emulator, rewrite its URL with `rewriteLocalhost(url, host: '10.0.2.2')`. `BlocksConfig.rewriteLocalhost` is deprecated and forwards to it.
+
 ## User-agent attribution
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
