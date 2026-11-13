@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
 import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
@@ -57,7 +57,7 @@ async function waitForServer() {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
 }
@@ -96,7 +96,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -294,15 +294,13 @@ function nextMessage<T>(
   let unsubscribe = () => {};
   let established: Promise<void> = Promise.resolve();
   const received = new Promise<T>((resolve, reject) => {
-    // Use globalThis to avoid the timers/promises setTimeout shadow (the
-    // template imports { setTimeout } from 'node:timers/promises' at the top).
-    const timer = globalThis.setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const timer = setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
     const sub = channel.subscribe((message: T) => {
-      globalThis.clearTimeout(timer);
+      clearTimeout(timer);
       resolve(message);
     });
     established = sub.established;
-    unsubscribe = () => { globalThis.clearTimeout(timer); sub.unsubscribe(); };
+    unsubscribe = () => { clearTimeout(timer); sub.unsubscribe(); };
   });
   return { received, established, unsubscribe };
 }
