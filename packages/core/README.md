@@ -188,7 +188,7 @@ The generated client does not hardcode the API URL; it resolves one at first cal
 
 1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
-3. Node only: the file `.blocks-sandbox/config.json`, read from the **process working directory**.
+3. Node.js 22.3 or later only: the file `.blocks-sandbox/config.json`, read from the **process working directory**. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
 4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
 
 Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and `npm run sandbox` sets `BLOCKS_API_URL` on the dev server it spawns. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
