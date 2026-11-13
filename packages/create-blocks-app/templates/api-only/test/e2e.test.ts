@@ -116,6 +116,39 @@ test('health: public liveness check', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
+const healthzUrl = `http://localhost:${serverPort}/healthz`;
+
+// The RawRoute probe a load balancer hits: a plain GET, no RPC envelope, no auth.
+test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  const res = await fetch(healthzUrl);
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /^application\/json/);
+  assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+  const body = await res.json();
+  assert.strictEqual(body.status, 'ok');
+  assert.ok(typeof body.timestamp === 'number');
+});
+
+// Probes often append a cache-buster or a trailing slash; both still reach the route.
+test('healthz: query string and trailing slash still match the route', async () => {
+  for (const url of [`${healthzUrl}?probe=uptime&t=${Date.now()}`, `${healthzUrl}/`]) {
+    const res = await fetch(url);
+    assert.strictEqual(res.status, 200, `${url} should reach /healthz`);
+    assert.strictEqual((await res.json()).status, 'ok');
+  }
+});
+
+// The route is registered for GET only, and nothing else lives under it.
+test('healthz: other methods and sub-paths are not routed', async () => {
+  const post = await fetch(healthzUrl, { method: 'POST', body: '{}' });
+  assert.strictEqual(post.status, 404, 'POST /healthz is not a registered route');
+  await post.body?.cancel();
+  const nested = await fetch(`${healthzUrl}/deep`);
+  assert.strictEqual(nested.status, 404, '/healthz/deep is not a registered route');
+  await nested.body?.cancel();
+});
+
 // A presigned URL is a bearer credential, so only a signed-in caller gets one.
 test('files: signed-out callers cannot mint presigned URLs', async () => {
   await authApi.setAuthState({ action: 'signOut' });

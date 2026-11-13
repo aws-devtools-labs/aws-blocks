@@ -18,7 +18,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, FileBucket, RawRoute } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -73,10 +73,26 @@ const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'applica
 /** FileBucket path under the signed-in user's own prefix (`/` in a user id is encoded). */
 const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(userSub)}/${path}`;
 
+// ─── Health probe ────────────────────────────────────────────────────────────
+// Public — no auth. Load balancers and uptime monitors send a plain `GET` and
+// can't speak JSON-RPC, so the probe is a RawRoute (full HTTP control) rather
+// than an API method. It touches no data. See RawRoute in
+// node_modules/@aws-blocks/blocks/README.md for path parameters and wildcards.
+new RawRoute(scope, 'healthz', {
+  method: 'GET',
+  path: '/healthz',
+  handler: async (context) => {
+    context.response.headers.set('Content-Type', 'application/json');
+    // A cached "ok" would hide an outage from the probe.
+    context.response.headers.set('Cache-Control', 'no-store');
+    context.response.send({ status: 'ok', timestamp: Date.now() });
+  },
+});
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
-  /** Public — no auth. A liveness probe for load balancers and uptime checks. */
+  /** Public — no auth. The liveness check for RPC clients; probes that send a plain GET use `/healthz` above. */
   async health() {
     return { status: 'ok' as const, timestamp: Date.now() };
   },

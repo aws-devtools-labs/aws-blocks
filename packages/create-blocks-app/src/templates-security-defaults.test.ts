@@ -492,6 +492,74 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
 });
 
 /**
+ * Template RawRoutes whose handler does not start with `requireAuth`/`requireRole`,
+ * keyed `<METHOD> <path>`, each with its reason. A RawRoute is a public,
+ * internet-reachable endpoint just like an ApiNamespace method, so listing one
+ * here is the same security decision as listing a method in UNGATED.
+ */
+const PUBLIC_ROUTES: Record<string, Record<string, string>> = {
+  'api-only': { 'GET /healthz': 'public: liveness probe for load balancers, touches no data' },
+};
+
+interface TemplateRoute {
+  /** `<METHOD> <path>` */
+  name: string;
+  body?: ts.Block;
+}
+
+/** Every `new RawRoute(scope, '<id>', { method, path, handler })` in `file`. */
+function rawRoutes(file: string): TemplateRoute[] {
+  const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+  const routes: TemplateRoute[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isNewExpression(node) && node.expression.getText(sourceFile) === 'RawRoute') {
+      const options = node.arguments?.[2];
+      assert.ok(options && ts.isObjectLiteralExpression(options), `${file}: RawRoute options must be an object literal`);
+      const property = (key: string) =>
+        options.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sourceFile) === key);
+      const literal = (key: string) => {
+        const p = property(key);
+        assert.ok(
+          p && ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer),
+          `${file}: RawRoute ${key} must be a string literal`,
+        );
+        return p.initializer.text;
+      };
+      const handler = property('handler');
+      const body =
+        handler && ts.isPropertyAssignment(handler) && ts.isArrowFunction(handler.initializer) && ts.isBlock(handler.initializer.body)
+          ? handler.initializer.body
+          : undefined;
+      routes.push({ name: `${literal('method')} ${literal('path')}`, body });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return routes;
+}
+
+describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
+  for (const name of templateNames) {
+    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    if (!existsSync(backend)) continue;
+
+    it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
+      const allowed = PUBLIC_ROUTES[name] ?? {};
+      const ungated = rawRoutes(backend)
+        .filter((r) => !r.body || !gatesFirst(r.body))
+        .map((r) => r.name);
+      assert.deepStrictEqual(
+        ungated.filter((r) => !(r in allowed)),
+        [],
+        `${name}: start these handlers with \`await auth.requireAuth(context)\`, or list them in PUBLIC_ROUTES with the reason they are safe to call signed out`,
+      );
+      const stale = Object.keys(allowed).filter((r) => !ungated.includes(r));
+      assert.deepStrictEqual(stale, [], `${name}: remove these from PUBLIC_ROUTES (gated or no longer present)`);
+    });
+  }
+});
+
+/**
  * FileBucket methods that sign a URL. Whoever holds the URL (or the handle
  * built on it) can read or write that key until it expires, with no further
  * auth check, so only a gated method may hand one out.
