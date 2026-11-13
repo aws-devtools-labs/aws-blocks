@@ -348,7 +348,7 @@ public data class Ticket(
           when (element["type"]) {
             JsonPrimitive("text") -> return input.json.decodeFromJsonElement(Text.serializer(), fields)
             JsonPrimitive("count") -> return input.json.decodeFromJsonElement(Count.serializer(), fields)
-            else -> return Unknown(element)
+            else -> if ((element["type"] as? JsonPrimitive)?.isString == true) return Unknown(element)
           }
         }
         throw SerializationException("No variant of Payload matches this JSON value; expected an object with \"type\": \"text\"; or an object with \"type\": \"count\"")
@@ -362,10 +362,11 @@ public data class Ticket(
       public val json: JsonObject,
     ) : Payload() {
       /**
-       * The discriminator value that names no known arm.
+       * The discriminator value that names no known arm. Decoding only makes this arm
+       * for an object whose discriminator is a string.
        */
-      public val discriminator: String?
-        get() = (json["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+      public val discriminator: String
+        get() = (json.getValue("type") as JsonPrimitive).content
     }
 
     @Serializable
@@ -414,7 +415,7 @@ public data class Ticket(
           when (element["format"]) {
             JsonPrimitive("plain") -> return input.json.decodeFromJsonElement(Plain.serializer(), fields)
             JsonPrimitive("rich") -> return input.json.decodeFromJsonElement(Rich.serializer(), fields)
-            else -> return Unknown(element)
+            else -> if ((element["format"] as? JsonPrimitive)?.isString == true) return Unknown(element)
           }
         }
         throw SerializationException("No variant of Payloads matches this JSON value; expected an object with \"format\": \"plain\"; or an object with \"format\": \"rich\"")
@@ -428,10 +429,11 @@ public data class Ticket(
       public val json: JsonObject,
     ) : Payloads() {
       /**
-       * The discriminator value that names no known arm.
+       * The discriminator value that names no known arm. Decoding only makes this arm
+       * for an object whose discriminator is a string.
        */
-      public val discriminator: String?
-        get() = (json["format"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+      public val discriminator: String
+        get() = (json.getValue("format") as JsonPrimitive).content
     }
 
     @Serializable

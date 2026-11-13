@@ -82,7 +82,7 @@ public class Api(
             when (element["status"]) {
               JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               JsonPrimitive("signedIn") -> return input.json.decodeFromJsonElement(SignedIn.serializer(), fields)
-              else -> return Unknown(element)
+              else -> if ((element["status"] as? JsonPrimitive)?.isString == true) return Unknown(element)
             }
           }
           throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"continueSignIn\"; or an object with \"status\": \"signedIn\"")
@@ -96,10 +96,11 @@ public class Api(
         public val json: JsonObject,
       ) : Result() {
         /**
-         * The discriminator value that names no known arm.
+         * The discriminator value that names no known arm. Decoding only makes this arm
+         * for an object whose discriminator is a string.
          */
-        public val discriminator: String?
-          get() = (json["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        public val discriminator: String
+          get() = (json.getValue("status") as JsonPrimitive).content
       }
 
       @Serializable
@@ -204,7 +205,7 @@ public class Api(
                   JsonPrimitive("CONFIRM_SIGN_IN_WITH_WEB_AUTHN") -> return input.json.decodeFromJsonElement(ConfirmSignInWithWebAuthn.serializer(), fields)
                   JsonPrimitive("RESET_PASSWORD") -> return ResetPassword
                   JsonPrimitive("CONFIRM_SIGN_UP") -> return input.json.decodeFromJsonElement(ConfirmSignUp.serializer(), fields)
-                  else -> return Unknown(element)
+                  else -> if ((element["name"] as? JsonPrimitive)?.isString == true) return Unknown(element)
                 }
               }
               throw SerializationException("No variant of NextStep matches this JSON value; expected an object with \"name\": \"CONFIRM_SIGN_IN_WITH_SMS_CODE\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_TOTP_CODE\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_EMAIL_CODE\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_MFA_SELECTION\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_TOTP_SETUP\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_EMAIL_SETUP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_PASSWORD\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_WEB_AUTHN\"; an object with \"name\": \"RESET_PASSWORD\"; or an object with \"name\": \"CONFIRM_SIGN_UP\"")
@@ -218,10 +219,11 @@ public class Api(
             public val json: JsonObject,
           ) : NextStep() {
             /**
-             * The discriminator value that names no known arm.
+             * The discriminator value that names no known arm. Decoding only makes this arm
+             * for an object whose discriminator is a string.
              */
-            public val discriminator: String?
-              get() = (json["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            public val discriminator: String
+              get() = (json.getValue("name") as JsonPrimitive).content
           }
 
           @Serializable
@@ -527,7 +529,7 @@ public class Api(
             when (element["status"]) {
               JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               JsonPrimitive("signedIn") -> return input.json.decodeFromJsonElement(SignedIn.serializer(), fields)
-              else -> return Unknown(element)
+              else -> if ((element["status"] as? JsonPrimitive)?.isString == true) return Unknown(element)
             }
           }
           throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"continueSignIn\"; or an object with \"status\": \"signedIn\"")
@@ -541,10 +543,11 @@ public class Api(
         public val json: JsonObject,
       ) : Result() {
         /**
-         * The discriminator value that names no known arm.
+         * The discriminator value that names no known arm. Decoding only makes this arm
+         * for an object whose discriminator is a string.
          */
-        public val discriminator: String?
-          get() = (json["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        public val discriminator: String
+          get() = (json.getValue("status") as JsonPrimitive).content
       }
 
       @Serializable
@@ -649,7 +652,7 @@ public class Api(
                   JsonPrimitive("CONFIRM_SIGN_IN_WITH_WEB_AUTHN") -> return input.json.decodeFromJsonElement(ConfirmSignInWithWebAuthn.serializer(), fields)
                   JsonPrimitive("RESET_PASSWORD") -> return ResetPassword
                   JsonPrimitive("CONFIRM_SIGN_UP") -> return input.json.decodeFromJsonElement(ConfirmSignUp.serializer(), fields)
-                  else -> return Unknown(element)
+                  else -> if ((element["name"] as? JsonPrimitive)?.isString == true) return Unknown(element)
                 }
               }
               throw SerializationException("No variant of NextStep matches this JSON value; expected an object with \"name\": \"CONFIRM_SIGN_IN_WITH_SMS_CODE\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_TOTP_CODE\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_EMAIL_CODE\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_MFA_SELECTION\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_TOTP_SETUP\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_EMAIL_SETUP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED\"; an object with \"name\": \"CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_PASSWORD\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP\"; an object with \"name\": \"CONFIRM_SIGN_IN_WITH_WEB_AUTHN\"; an object with \"name\": \"RESET_PASSWORD\"; or an object with \"name\": \"CONFIRM_SIGN_UP\"")
@@ -663,10 +666,11 @@ public class Api(
             public val json: JsonObject,
           ) : NextStep() {
             /**
-             * The discriminator value that names no known arm.
+             * The discriminator value that names no known arm. Decoding only makes this arm
+             * for an object whose discriminator is a string.
              */
-            public val discriminator: String?
-              get() = (json["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            public val discriminator: String
+              get() = (json.getValue("name") as JsonPrimitive).content
           }
 
           @Serializable
