@@ -550,7 +550,11 @@ jobs:
 
   e2e-templates:
     name: E2E Templates
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge, as in the AWS E2E jobs (see e2e-sandbox):
+    # the only local output it uses is the dist-registry artifact, which Local
+    # Build and Checks uploads, so it doesn't wait for the unit test shards
+    # and Local E2E.
+    needs: [local-build, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -565,17 +569,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # No npm ci: the driver (scripts/ci/templates-e2e.mjs) and the local
+      # registry it serves dist-registry/ from use only Node built-ins, and each
+      # scaffolded app installs its own dependencies from that registry.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
-          cache: npm
 
       # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product
       # usage metrics).
       - uses: ./.github/actions/seed-telemetry-id
-
-      - run: npm ci
 
       - name: Download registry artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -594,7 +598,8 @@ jobs:
   # real Windows deploy smoke stays in windows-e2e.yml (scheduled).
   e2e-templates-windows:
     name: E2E Templates (Windows)
-    needs: [build-and-test-local, detect-changes]
+    # Needs local-build, not build-and-test-local, as e2e-templates does.
+    needs: [local-build, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 60
@@ -609,17 +614,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # No npm ci: the driver (scripts/ci/templates-e2e.mjs) and the local
+      # registry it serves dist-registry/ from use only Node built-ins, and each
+      # scaffolded app installs its own dependencies from that registry.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
-          cache: npm
 
       # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product
       # usage metrics).
       - uses: ./.github/actions/seed-telemetry-id
-
-      - run: npm ci
 
       - name: Download registry artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -640,8 +645,8 @@ jobs:
     # they start as soon as detect-changes finishes.
     # "Build, Unit Tests, E2E Local" is a required check itself, so a red unit
     # job still blocks merge. Trade-off: AWS deploys also run when unit tests
-    # fail. The Templates jobs keep the edge because they download its
-    # dist-registry artifact.
+    # fail. The Templates jobs need local-build instead, for its dist-registry
+    # artifact.
     needs: [detect-changes]
     # Required check: see "Check that Detect Changes succeeded" below. Only
     # that branch uses always(); the run branch keeps success() so a cancelled
