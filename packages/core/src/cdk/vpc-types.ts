@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type * as ec2 from 'aws-cdk-lib/aws-ec2';
+import type { IConstruct } from 'constructs';
 
 /**
  * A subnet role — the kind of subnet a Building Block needs, expressed as an
@@ -65,9 +66,9 @@ export interface BlocksVpcOptions {
 /**
  * VPC requirements declared by a Building Block.
  * Supplied to the `BuildingBlockScope` constructor and collected in the central
- * requirements registry; `finalizeVpc` pulls them to provision endpoints, and the
- * lazy VPC uses `requiresVpc` to decide whether to derive a VPC when none was
- * provided.
+ * requirements registry; `finalizeVpc` pulls them to provision endpoints and wire
+ * their security group, and the lazy VPC uses `requiresVpc` to decide whether to
+ * derive a VPC when none was provided.
  */
 export interface VpcRequirements {
 	/** Gateway VPC endpoints this BB needs (e.g., S3, DynamoDB). */
@@ -114,6 +115,48 @@ export interface VpcRequirements {
 	 * @default false
 	 */
 	requiresEgress?: boolean;
+	/**
+	 * Security groups of compute the BB provisions **itself** (not the shared
+	 * Blocks runtime) that must reach the Blocks-managed interface endpoints —
+	 * e.g. the rotation Lambda a `Database` places in the shared VPC. The endpoint
+	 * security group admits only the Blocks Lambda SG by default (see
+	 * `finalizeVpc`), so without this registration such compute cannot reach the
+	 * endpoints and fails at runtime. Each listed security group gets a 443
+	 * ingress rule on the endpoint security group; when `provisionEndpoints` is
+	 * `false` the framework instead warns, naming the security group the customer
+	 * must admit on their own endpoints.
+	 *
+	 * A group the BB **creates itself** cannot be declared in the
+	 * `BuildingBlockScope` constructor call: that registration runs before the
+	 * BB has built anything, so the group does not exist yet. Declare it in a
+	 * second `registerVpcRequirements(this, { endpointClientSecurityGroups: [sg]
+	 * })` call once it does, importing that function from
+	 * `@aws-blocks/core/cdk/internal` — the framework-internal entry point,
+	 * which carries no backward-compatibility guarantee, unlike this type.
+	 * Registrations accumulate, so the second call adds to the first. A group
+	 * the BB is handed or imports needs no second call: pass it in the
+	 * constructor like any other requirement.
+	 */
+	endpointClientSecurityGroups?: ec2.ISecurityGroup[];
+
+	/**
+	 * Constructs of the BB that must not be created before its registered
+	 * `endpointClientSecurityGroups` can reach the endpoints — e.g. a
+	 * `Database`'s rotation schedule, which rotates as soon as it exists and has
+	 * no route until the endpoint and the ingress rule admitting the rotation
+	 * Lambda are in place. `finalizeVpc` orders each one after the endpoints and
+	 * that rule.
+	 *
+	 * Register the construct itself only if nothing the endpoint security group
+	 * references depends on it; a whole BB would cycle, because the endpoint
+	 * security group references the BB's own client security group.
+	 *
+	 * Declared the same way, and for the same reason, as
+	 * {@link VpcRequirements.endpointClientSecurityGroups}: a construct the BB
+	 * creates itself goes in a second `registerVpcRequirements` call from
+	 * `@aws-blocks/core/cdk/internal`.
+	 */
+	endpointClientDependents?: IConstruct[];
 }
 
 /**

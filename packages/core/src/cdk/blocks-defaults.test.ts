@@ -14,16 +14,20 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BlocksPresets } from './blocks-defaults.js';
 
 describe('BlocksPresets', () => {
-	test('sandbox is disposable: DESTROY + deletion protection off + no PITR', () => {
+	test('sandbox is disposable: DESTROY + deletion protection off + no PITR or rotation', () => {
 		assert.strictEqual(BlocksPresets.sandbox.removalPolicy, RemovalPolicy.DESTROY);
 		assert.strictEqual(BlocksPresets.sandbox.deletionProtection, false);
 		assert.strictEqual(BlocksPresets.sandbox.pointInTimeRecovery, false);
+		// Rotation's VPC-attached Lambda would hold a teardown on its network
+		// interfaces and add an endpoint a throwaway stack never benefits from.
+		assert.strictEqual(BlocksPresets.sandbox.secretRotation, false);
 	});
 
-	test('production is durable: RETAIN + deletion protection on + PITR on', () => {
+	test('production is durable: RETAIN + deletion protection on + PITR and rotation on', () => {
 		assert.strictEqual(BlocksPresets.production.removalPolicy, RemovalPolicy.RETAIN);
 		assert.strictEqual(BlocksPresets.production.deletionProtection, true);
 		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
+		assert.strictEqual(BlocksPresets.production.secretRotation, true);
 	});
 
 	test('sandbox keeps logs briefly', () => {

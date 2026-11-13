@@ -32,7 +32,7 @@
 
 import { existsSync, watch as fsWatch } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import fg from 'fast-glob';
 import type * as TS from 'typescript';
 import type { ValueKind } from './secret.js';
@@ -218,11 +218,12 @@ function collectFromSourceFile(
 	configKeys: Set<string>,
 	schemaKeys: { secret: Set<string>; config: Set<string> },
 	dynamicCallSites: DynamicCallSite[],
-): void {
+): boolean {
 	const bindings = buildMarkerBindings(ts, sourceFile, allowed);
 	// No marker is imported into this file → nothing here can be a marker call. Skip.
-	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return;
+	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return false;
 	const kindOfCall = makeKindOfCall(ts, bindings);
+	let hasSchema = false;
 
 	const visit = (node: TS.Node): void => {
 		if (ts.isCallExpression(node)) {
@@ -231,7 +232,10 @@ function collectFromSourceFile(
 				const arg = node.arguments[0];
 				if (arg && ts.isStringLiteralLike(arg)) {
 					(fn === 'secret' ? secretKeys : configKeys).add(arg.text);
-					if (schemaArgOf(ts, node)) schemaKeys[fn].add(arg.text);
+					if (schemaArgOf(ts, node)) {
+						schemaKeys[fn].add(arg.text);
+						hasSchema = true;
+					}
 				} else if (arg) {
 					const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
 					dynamicCallSites.push({ file: filePath, line: line + 1, fn });
@@ -241,6 +245,7 @@ function collectFromSourceFile(
 		ts.forEachChild(node, visit);
 	};
 	visit(sourceFile);
+	return hasSchema;
 }
 
 /** Infer the TypeScript output type of a Standard Schema expression via the checker. */
@@ -269,28 +274,90 @@ function inferSchemaOutput(
 }
 
 /**
+ * The tsconfig that compiles `file`, found the way an editor finds it: the nearest
+ * `tsconfig.json`, or, when that one does not list the file, the project it references
+ * that does. A root that only lists project references (create-vite apps, the AWS
+ * Blocks Vite templates) lists no file itself, so its own options are TypeScript's
+ * defaults, not the app's.
+ */
+function configFor(
+	ts: typeof import('typescript'),
+	file: string,
+	parsedConfigs: Map<string, TS.ParsedCommandLine | undefined>,
+): { path: string; parsed: TS.ParsedCommandLine } | undefined {
+	const parse = (path: string): TS.ParsedCommandLine | undefined => {
+		if (!parsedConfigs.has(path)) {
+			const parsed = ts.getParsedCommandLineOfConfigFile(path, {}, {
+				...ts.sys,
+				onUnRecoverableConfigFileDiagnostic: () => {},
+			} as TS.ParseConfigFileHost);
+			parsedConfigs.set(path, parsed);
+		}
+		return parsedConfigs.get(path);
+	};
+	const lists = (parsed: TS.ParsedCommandLine): boolean =>
+		parsed.fileNames.some((name) => resolve(name) === resolve(file));
+	const nearest = ts.findConfigFile(dirname(file), ts.sys.fileExists, 'tsconfig.json');
+	const root = nearest && parse(nearest);
+	if (!nearest || !root) return undefined;
+	if (lists(root)) return { path: nearest, parsed: root };
+	for (const reference of root.projectReferences ?? []) {
+		const path = ts.resolveProjectReferencePath(reference);
+		const parsed = parse(path);
+		if (parsed && lists(parsed)) return { path, parsed };
+	}
+	// Intended fallback: no project lists the file, so use the nearest config's options.
+	// resolveSchemaTypes still applies `strict: true` under them.
+	return { path: nearest, parsed: root };
+}
+
+/**
  * Resolve the inferred output type for every `{ schema }`-carrying marker call, using
  * a full TypeScript `Program` (needed to resolve the schema library's types). Only
- * built when at least one schema is present, so the common no-schema path stays fast.
+ * built for the files that carry a schema, so the common no-schema path stays fast.
+ * Each file is checked with the options of the tsconfig that compiles it (see
+ * {@link configFor}), merged over `strict: true`: without `strictNullChecks`, a
+ * `.nullable()` or `.optional()` schema loses `null` and `undefined`.
  */
 function resolveSchemaTypes(
 	ts: typeof import('typescript'),
-	cwd: string,
 	files: string[],
 	allowed: Set<string>,
 ): { secret: Record<string, string>; config: Record<string, string> } {
 	const out = { secret: {} as Record<string, string>, config: {} as Record<string, string> };
-	const configPath = ts.findConfigFile(cwd, ts.sys.fileExists, 'tsconfig.json');
-	let options: import('typescript').CompilerOptions = { strict: true, skipLibCheck: true };
-	if (configPath) {
-		const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
-			...ts.sys,
-			onUnRecoverableConfigFileDiagnostic: () => {},
-		} as import('typescript').ParseConfigFileHost);
-		if (parsed) options = { ...parsed.options };
+	const parsedConfigs = new Map<string, TS.ParsedCommandLine | undefined>();
+	const byConfig = new Map<string, { options: TS.CompilerOptions; files: string[] }>();
+	for (const file of files) {
+		const config = configFor(ts, file, parsedConfigs);
+		const key = config?.path ?? '';
+		const group = byConfig.get(key) ?? {
+			options: config
+				? { strict: true, ...config.parsed.options }
+				: {
+						strict: true,
+						target: ts.ScriptTarget.ESNext,
+						module: ts.ModuleKind.ESNext,
+						moduleResolution: ts.ModuleResolutionKind.Bundler,
+						esModuleInterop: true,
+					},
+			files: [],
+		};
+		group.files.push(file);
+		byConfig.set(key, group);
 	}
-	options.noEmit = true;
-	options.skipLibCheck = true;
+	for (const group of byConfig.values()) resolveSchemaTypesIn(ts, group.files, group.options, allowed, out);
+	return out;
+}
+
+/** {@link resolveSchemaTypes} for the files that one tsconfig compiles. */
+function resolveSchemaTypesIn(
+	ts: typeof import('typescript'),
+	files: string[],
+	compilerOptions: TS.CompilerOptions,
+	allowed: Set<string>,
+	out: { secret: Record<string, string>; config: Record<string, string> },
+): void {
+	const options: TS.CompilerOptions = { ...compilerOptions, noEmit: true, skipLibCheck: true };
 	const program = ts.createProgram(files, options);
 	const checker = program.getTypeChecker();
 
@@ -317,7 +384,6 @@ function resolveSchemaTypes(
 		};
 		visit(sf);
 	}
-	return out;
 }
 
 /**
@@ -344,17 +410,19 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	const schemaKeys = { secret: new Set<string>(), config: new Set<string>() };
 	const dynamicCallSites: DynamicCallSite[] = [];
 
+	const schemaFiles: string[] = [];
 	for (const file of files) {
 		const text = await readFile(file, 'utf-8');
 		const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /* setParentNodes */ true);
-		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites);
+		if (
+			collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites)
+		) {
+			schemaFiles.push(file);
+		}
 	}
 
 	// Only pay for a full Program (type resolution) when at least one schema exists.
-	const valueTypes =
-		schemaKeys.secret.size || schemaKeys.config.size
-			? resolveSchemaTypes(ts, cwd, files, allowed)
-			: { secret: {}, config: {} };
+	const valueTypes = schemaFiles.length ? resolveSchemaTypes(ts, schemaFiles, allowed) : { secret: {}, config: {} };
 
 	return {
 		secretKeys: [...secretKeys].sort(),

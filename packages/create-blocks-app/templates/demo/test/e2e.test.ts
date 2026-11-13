@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
 import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
@@ -25,25 +26,8 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 // the local auth block just issued for `name` (it finds the block's .bb-data/
 // files itself). On AWS, Cognito emails it instead.
 
-test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
-    server = spawn('npm', ['run', 'dev:server'], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWin,
-      shell: isWin,
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-    server.unref();
-    await setTimeout(2000);
-  }
-
-  app = await import('aws-blocks');
-  api = app.api;
-  authApi = app.authApi;
-  hello = app.hello;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
       const response = await fetch(readinessUrl);
@@ -54,6 +38,29 @@ test.before(async () => {
     await setTimeout(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
+test.before(async () => {
+  if (!await isServerRunning(serverPort)) {
+    server = spawn('npm', ['run', 'dev:server'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWin,
+      shell: isWin,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    server.unref();
+  }
+
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
+  hello = app.hello;
 });
 
 // The installed cookie jar carries the session cookie across calls, so after
@@ -332,15 +339,39 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 });
 
 // ─── EmailClient ────────────────────────────────────────────────────────────
-// Transactional email (no SES in local dev). This is a send-succeeds smoke
-// check: it asserts send() resolves with a message id. It does not assert the
-// mock recorded the mail — EmailClient's public API is send/sendBatch only (no
-// read-back method, matching the AWS runtime), so asserting capture would mean
-// reaching into mock-internal storage and breaking mock/AWS parity.
-test('EmailClient - send returns a message id', async () => {
+// Transactional email (no SES in local dev). EmailClient's public API is
+// send/sendBatch only (no read-back method, matching the AWS runtime), so the
+// mail is checked through the local outbox the mock documents for inspection:
+// `.bb-data/{fullId}/emails.json`, where fullId is `<scope id>-<block id>`.
+const outboxPath = join('.bb-data', 'my-app-mailer', 'emails.json');
+
+test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
   await signUp(`email-${uniqueSuffix()}`);
-  const { messageId } = await api.sendWelcome('user@example.com');
+  // A unique recipient picks out this run's mail in an outbox that persists across runs.
+  const to = `welcome-${uniqueSuffix()}@example.com`;
+  const { messageId } = await api.sendWelcome(to);
   assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
+
+  const outbox: { to: string | string[]; from: string; subject: string; body: string; messageId: string }[] =
+    JSON.parse(readFileSync(outboxPath, 'utf-8'));
+  const sent = outbox.find((mail) => mail.messageId === messageId);
+  assert.ok(sent, `expected ${messageId} in ${outboxPath}`);
+  assert.deepStrictEqual(sent.to, to);
+  assert.strictEqual(sent.from, 'noreply@example.com');
+  assert.strictEqual(sent.subject, 'Welcome');
+  assert.strictEqual(sent.body, 'Thanks for trying the demo app.');
+});
+
+// The mock runs the same address checks as the deployed client, so a bad
+// address fails here exactly as it would against SES.
+test('EmailClient - an invalid recipient is rejected by name', async () => {
+  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  await signUp(`email-bad-${uniqueSuffix()}`);
+  await assert.rejects(
+    api.sendWelcome('not-an-email-address'),
+    // EmailErrors.InvalidInput (the error constants are server-side exports).
+    (e: unknown) => isBlocksError(e, 'InvalidInputException'),
+  );
 });
 
 // ─── DistributedDatabase (SQL) ───────────────────────────────────────────

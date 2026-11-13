@@ -1,5 +1,4 @@
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, KVStore, Scope } from '@aws-blocks/blocks';
 import { CognitoVerifier } from './cognito-verifier.js';
 
 const scope = new Scope('my-app');

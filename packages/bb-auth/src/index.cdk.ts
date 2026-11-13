@@ -26,7 +26,7 @@
  * `TypeError`.
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import type { ScopeParent } from '@aws-blocks/core';
 import {
@@ -119,7 +119,10 @@ export type * from './types.js';
  * - One IdP registration per provider (`idp-<id>` custom resource, or `saml-<id>`).
  *
  * Always creates:
- * - `AppSetting(this, 'session-secret', { secret: true })` — the session HMAC key.
+ * - `frameworkKey(this, 'session-secret')`: the session HMAC key. A Secrets
+ *   Manager secret under `defaults.secretsStore: 'secrets-manager'` (the
+ *   production preset); the `AppSetting(this, 'session-secret', { secret: true })`
+ *   SSM SecureString under `'ssm'` (the sandbox preset).
  * - `KVStore(this, 'sessions', { ttl: true })` — the server-side session store.
  *
  * Grants the shared execution role the client-facing `cognito-idp:*` actions on
@@ -405,10 +408,13 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			registerConfig(this, stubIdpConfigKeys(this.fullId).API_URL, apiUrl);
 		}
 
-		// ── 4. Session HMAC secret — SSM SecureString via AppSetting ─────────
+		// ── 4. Session HMAC secret via frameworkKey ──────────────────────────
 		// Needed in every configuration: directly federated sessions are signed
-		// with it too. AppSetting grants `ssm:GetParameter` + `kms:Decrypt`.
-		new AppSetting(this, 'session-secret', { secret: true });
+		// with it too. The store follows `defaults.secretsStore`: a Secrets
+		// Manager secret (read-only grant, ARN also on every compute's
+		// environment) or the SSM SecureString AppSetting (`ssm:GetParameter` +
+		// `kms:Decrypt`).
+		frameworkKey(this, 'session-secret');
 
 		// ── 5. Session store ─────────────────────────────────────────────────
 		// Durability options propagate; unset, KVStore follows the stack defaults.

@@ -90,11 +90,18 @@ export interface SynthesizedAuth extends CdkSynthResult {
  * Synth `construct` (an expression building the block with id `auth` on `stack`;
  * `Auth` and `AppSetting` are in scope, plus anything `extraImports` brings in)
  * and extract its identity.
+ *
+ * `secretsStore` defaults to `'ssm'`: the identity this harness extracts is
+ * compared with `AuthCognito`'s frozen fixtures, and `'ssm'` is the
+ * configuration under which an `AuthCognito` app keeps its `session-secret`
+ * parameter (and so its signed-in users) when it switches to `Auth`. Pass
+ * `'secrets-manager'` to synthesize the production preset's own store.
  */
 export function synthIdentity(
 	construct: string,
 	preset?: 'sandbox' | 'production',
 	extraImports: readonly string[] = [],
+	secretsStore: 'ssm' | 'secrets-manager' = 'ssm',
 ): SynthesizedAuth {
 	const result = synthUnderCdkConditions({
 		imports: [
@@ -105,6 +112,7 @@ export function synthIdentity(
 		].join('\n'),
 		build: `const auth = ${construct};\nreport.fullId = auth.fullId;`,
 		preset,
+		secretsStore,
 	});
 	const fullId = String(result.report.fullId);
 	const pools = Object.values(result.template.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');

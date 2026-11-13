@@ -1417,3 +1417,44 @@ is known, so the candidates are built exactly and compared for equality.
 - `packages/core/src/cdk/config-registry.ts` for why env vars are read-only here
 - D-026 for the guided empty states this page reuses for an undeployed stage, and
   the record-write route for the unlock gate this write shares
+
+## D-028: The Vite templates typecheck the backend as a TypeScript project reference
+
+**Date**: 2026-11-06
+**Authors:** belaboe, svidgen
+
+### Context
+A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it (`import { api } from 'aws-blocks'`, with `aws-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `aws-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
+
+### Decision
+- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `aws-blocks/tsconfig.json` (every backend file plus `.blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
+- `typecheck` is `tsc -b --force`, and `build` is `tsc -b --force && vite build`.
+- `nextjs` keeps one `tsconfig.json` with global Node types: `next build` ignores project references when it type-checks. The backend-only templates also keep one, because all their code runs on Node.
+- Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
+- AGENTS.md's "no client generation step" stays true: editors read the backend source through the reference, and the declarations are written by the typecheck itself, not by a separate AWS Blocks step.
+
+### Rationale
+- Project references are TypeScript's own mechanism for one codebase running in two environments, and create-vite already ships this layout. No AWS Blocks code has to keep declarations fresh.
+- A skipped build fails loudly (`TS6305`) instead of silently falling back to the backend source.
+- The project's `tsconfig` belongs to the customer. During preview, asking existing apps to make a small manual change is acceptable, and printing the change is less risky than writing into a config we do not own.
+- `--force`: TypeScript 5.x `tsc -b` does not track changed dependency declarations, so after a breaking `npm install` it reported the backend up to date and passed with real type errors. `--force` cost under a second on `default` (2.5 s to 3.4 s). Revisit when the templates move to TypeScript 7, which tracks them.
+- Next.js users already work with global Node types, so looser checks there are the existing norm, without errors.
+
+### Consequences
+- In a new Vite scaffold, a Node global in browser code (`src/`) is a type error.
+- A backend API signature that uses a Node type (for example, returning `Buffer`) reads as `any` in the frontend, hidden by `skipLibCheck`. Backend APIs should return JSON-serializable values.
+- `composite` turns on declaration emit, so an inferred type that names a non-hoisted package fails with `TS2742` (pnpm's default layout). `packages/blocks/TROUBLESHOOTING.md` lists the fixes.
+- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `aws-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
+- Code shared by browser and backend belongs in its own project without Node types, referenced by both. Adding it to the backend project would let Node globals into browser code.
+
+### Alternatives Considered
+- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `aws-blocks/`. Kept for Next.js only.
+- **B. `/// <reference types="node" />` in `@aws-blocks/blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
+- **D. Generated declarations** (`aws-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
+- **E. Generate an explicit API type or schema** (for example, from `blocks.spec.json`). A much larger change, and TypeScript inference is the source of truth today.
+
+### References
+- #1111: implementation and review
+- vercel/next.js#67372: `next build` does not build referenced projects
+- `docs/guides/upgrading-older-apps.md` ("Keep Node types out of the frontend")
+- `packages/blocks/TROUBLESHOOTING.md`

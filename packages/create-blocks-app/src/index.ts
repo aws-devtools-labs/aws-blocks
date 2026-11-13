@@ -2,7 +2,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -62,10 +62,99 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
   return collected;
 }
 
+// --- @aws-blocks/* version stamping ----------------------------------------
+//
+// Templates (and the add-to-existing paths below) write `*` for every
+// `@aws-blocks/*` package as a placeholder. Inside the monorepo the placeholder
+// becomes a `file:` path to the sibling package. From the published CLI it
+// becomes the caret range listed in create-blocks-app's own devDependencies,
+// which `changeset version` moves to each new release line. A scaffolded app
+// therefore starts on the line this CLI release was tested against, takes later
+// releases on that line on reinstall, and never moves to a new (pre-1.0:
+// breaking) line until its owner edits the range. The CLI and
+// `@aws-blocks/blocks` form a changesets `fixed` group (.changeset/config.json),
+// so every blocks release, including one forced by a new line of a package
+// blocks depends on, also publishes the CLI with the moved ranges.
+
+/**
+ * Reads the range to stamp for each `@aws-blocks/*` package from
+ * create-blocks-app's own manifest. The packages the CLI writes into a
+ * scaffolded app are listed there as devDependencies (never installed by
+ * customers), so `changeset version` keeps each range on the package's
+ * current release line.
+ *
+ * @param cliPkg - create-blocks-app's parsed package.json.
+ * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.9.0' }`.
+ * @throws When no `@aws-blocks/*` devDependency is listed, or one is `*` or
+ *   empty. Either is a packaging bug, so the CLI fails before it writes
+ *   anything.
+ *
+ * @example
+ * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.9.0' } });
+ * // -> { '@aws-blocks/blocks': '^0.9.0' }
+ */
+export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string, string> }): Record<string, string> {
+  const versions: Record<string, string> = {};
+  for (const [name, range] of Object.entries(cliPkg.devDependencies ?? {})) {
+    if (!name.startsWith('@aws-blocks/')) continue;
+    if (typeof range !== 'string' || range === '' || range === '*') {
+      throw new Error(
+        `Internal error: create-blocks-app lists ${name} with the range "${range}", which pins nothing. ` +
+        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+      );
+    }
+    versions[name] = range;
+  }
+  if (Object.keys(versions).length === 0) {
+    throw new Error(
+      'Internal error: create-blocks-app lists no @aws-blocks/* devDependencies, so it cannot pin the versions it scaffolds. ' +
+      'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+    );
+  }
+  return versions;
+}
+
+/**
+ * Replaces each `*` placeholder for an `@aws-blocks/*` package in `deps` with
+ * its range from `versions`, in place. Concrete ranges, `file:` paths and
+ * non-`@aws-blocks` entries are left as they are.
+ *
+ * @param deps - A dependency map to stamp (may be undefined).
+ * @param versions - The ranges from {@link resolveStampedVersions}.
+ * @throws When a placeholder names a package `versions` has no range for (a
+ *   template wrote a package create-blocks-app does not list).
+ */
+export function stampBlocksVersions(deps: Record<string, string> | undefined, versions: Record<string, string>): void {
+  if (!deps) return;
+  for (const [name, range] of Object.entries(deps)) {
+    if (!name.startsWith('@aws-blocks/') || range !== '*') continue;
+    const stamp = versions[name];
+    if (!stamp) {
+      throw new Error(
+        `Internal error: create-blocks-app has no version to pin ${name} to. ` +
+        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+      );
+    }
+    deps[name] = stamp;
+  }
+}
+
+/** The stamp ranges from the installed create-blocks-app's own package.json. */
+async function loadStampedVersions(): Promise<Record<string, string>> {
+  return resolveStampedVersions(JSON.parse(await readFile(join(__dirname, '../package.json'), 'utf-8')));
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true, () => false);
+}
+
+// The CLI runs from the monorepo when a sibling `core` package sits next to it.
+const MONOREPO_PACKAGES_DIR = join(__dirname, '../..');
+
+async function isLocalMonorepo(): Promise<boolean> {
+  return exists(join(MONOREPO_PACKAGES_DIR, 'core', 'package.json'));
 }
 
 async function confirm(message: string): Promise<boolean> {
@@ -250,6 +339,9 @@ function mayIgnore(pattern: string, name: string): boolean {
  * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
  * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES}
  * - Monorepo detection and file: path rewriting
+ * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
+ *   (published CLI only; a range the project already lists in `dependencies`
+ *   is kept)
  * - Running npm install
  */
 async function addBlocksWorkspace(targetDir: string, options: {
@@ -263,7 +355,18 @@ async function addBlocksWorkspace(targetDir: string, options: {
   /** The npm workspace root the project is a workspace of, from {@link enclosingWorkspaceRoot}; it installs there. */
   workspaceRoot?: string;
 }): Promise<void> {
-  const { devDeps, deps, scripts, blocksConfig, gitignoreEntries, skipInstall, workspaceRoot } = options;
+  const { scripts, blocksConfig, gitignoreEntries, skipInstall, workspaceRoot } = options;
+  const deps = { ...options.deps };
+  const devDeps = { ...options.devDeps };
+
+  // From the published CLI, resolve `@aws-blocks/*` placeholders before any
+  // file is touched, so a packaging bug fails without a half-written project.
+  const localMonorepo = await isLocalMonorepo();
+  if (!localMonorepo) {
+    const versions = await loadStampedVersions();
+    stampBlocksVersions(deps, versions);
+    stampBlocksVersions(devDeps, versions);
+  }
 
   // Modify package.json
   const pkgPath = join(targetDir, 'package.json');
@@ -291,9 +394,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 
   // Monorepo detection for local dev
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-  if (isLocalMonorepo) {
+  if (localMonorepo) {
+    const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d: string) =>
       d.startsWith('@aws-blocks/'),
     );
@@ -517,8 +619,19 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-+/g, '-')
     .replace(/-$/, '') || 'blocks-app';
   
+  // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
+  // is written (see the version stamping section above). Stamping a copy of
+  // the template's manifest here makes a placeholder with no range throw now,
+  // not after the template has been copied.
+  const localMonorepo = await isLocalMonorepo();
+  const stampedVersions = localMonorepo ? null : await loadStampedVersions();
+  if (stampedVersions) {
+    stampBlocksVersions({ ...templatePkg.dependencies }, stampedVersions);
+    stampBlocksVersions({ ...templatePkg.devDependencies }, stampedVersions);
+  }
+
   console.log(`Creating Blocks app in ${targetDir}...`);
-  
+
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
@@ -542,11 +655,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // When running from the local monorepo, rewrite @aws-blocks/* deps
   // to file: paths so they resolve to sibling packages. When running from
   // the published registry (via npx), the sibling packages won't exist on
-  // disk — leave deps as-is so they resolve from the registry instead.
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-
-  if (isLocalMonorepo) {
+  // disk, so the `*` placeholders are stamped with the caret ranges this CLI
+  // release ships and resolve from the registry instead.
+  if (localMonorepo) {
+    const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d) =>
       d.startsWith('@aws-blocks/'),
     );
@@ -555,6 +667,9 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else if (stampedVersions) {
+    stampBlocksVersions(pkg.dependencies, stampedVersions);
+    stampBlocksVersions(pkg.devDependencies, stampedVersions);
   }
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
@@ -617,11 +732,41 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   console.log('\n📦 Scaffolding Blocks...\n');
 
-  // 1. Copy aws-blocks/ template
+  // 1. Copy aws-blocks/ template. Its package.json declares its own
+  // `@aws-blocks/*` placeholders, which the published CLI stamps too; they are
+  // stamped in memory before the copy, so a placeholder with no range throws
+  // before anything is written (see the version stamping section above).
   const templateDir = join(__dirname, '../templates/amplify');
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
+  const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
+  let workspacePkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
+  if (stampedVersions) {
+    workspacePkg = JSON.parse(await readFile(join(awsBlocksSrc, 'package.json'), 'utf-8'));
+    // A package the project root already lists keeps the root's range here too,
+    // so the workspace and the root resolve to one copy of it. Only packages the
+    // CLI stamps are overridden (a missing stamp still fails here, before any
+    // write), devDependencies win as they do in npm's resolution of the root,
+    // and only semver ranges are copied: `*`, blanks, dist-tags and path or
+    // protocol specs (`./x`, `file:`, `link:`, ...) get the CLI's stamp instead,
+    // since a path would resolve from a different directory here.
+    const rootPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+    const rootRanges: Record<string, unknown> = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
+    const workspaceVersions = { ...stampedVersions };
+    for (const [name, range] of Object.entries(rootRanges)) {
+      if (name in stampedVersions && typeof range === 'string' && /^\s*(?:[\^~]\s*v?\d|[<>=]|v?\d)/.test(range)) {
+        workspaceVersions[name] = range;
+      }
+    }
+    stampBlocksVersions(workspacePkg?.dependencies, workspaceVersions);
+    stampBlocksVersions(workspacePkg?.devDependencies, workspaceVersions);
+  }
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  if (workspacePkg) {
+    await writeFile(join(awsBlocksDest, 'package.json'), `${JSON.stringify(workspacePkg, null, 2)}\n`);
+  }
+  const amplifyPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  await writeBackendTsconfig(awsBlocksDest, amplifyPkg);
   console.log('  ✓ Created aws-blocks/');
 
   // 2. Copy amplify/blocks.ts
@@ -672,6 +817,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
+    // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     deps: { '@aws-blocks/blocks': '*' },
     devDeps: {
       'tsx': '^4.7.0',
@@ -705,6 +851,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  npm run blocks:dev            # Run Blocks local dev server\n');
   console.log('Your Blocks API is available at the /api endpoint alongside your Amplify backend.');
   console.log('');
+  printTypeScriptSteps(amplifyPkg);
   printMigrationInstructions();
 }
 
@@ -822,6 +969,11 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
+  // From the published CLI, check the `@aws-blocks/*` placeholder below has a
+  // range before anything is written (addBlocksWorkspace stamps it later).
+  const blocksDeps = { '@aws-blocks/blocks': '*' };
+  if (!(await isLocalMonorepo())) stampBlocksVersions({ ...blocksDeps }, await loadStampedVersions());
+
   // 1. Copy aws-blocks/ from the requested template. `cdk-blocks dev` detects the
   // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
   // so only the template's backend settings are copied below.
@@ -835,9 +987,10 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   }
 
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  await writeBackendTsconfig(awsBlocksDest, existingPkg);
 
   // Generate blocks/config.json with a unique stackId
-  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
   const baseName = (existingPkg.name || basename(resolve(targetDir)));
   const stackId = generateStackId(baseName);
   const blocksConfigDir = join(targetDir, '.blocks');
@@ -860,8 +1013,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
   await addBlocksWorkspace(targetDir, {
+    // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     // The copied aws-blocks/ backend validates its API input with zod, at the template's version.
-    deps: { '@aws-blocks/blocks': '*', ...(templatePkg.dependencies?.zod && { zod: templatePkg.dependencies.zod }) },
+    deps: { ...blocksDeps, ...(templatePkg.dependencies?.zod && { zod: templatePkg.dependencies.zod }) },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',
@@ -892,6 +1046,61 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('');
   console.log('Import your API in frontend code:');
   console.log('  import { api } from \'aws-blocks\'');
+  console.log('');
+  printTypeScriptSteps(existingPkg);
+}
+
+/** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
+const TYPESCRIPT_STEPS_URL =
+  'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend';
+
+/** The dependencies of a project's package.json. */
+interface PackageDeps {
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+}
+
+/** Whether the project builds with Next.js, whose `next build` ignores project references when it type-checks. */
+function usesNext(pkg: PackageDeps): boolean {
+  return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
+}
+
+/**
+ * Gives the copied backend its own TypeScript project, `aws-blocks/tsconfig.json`,
+ * with Node types (see printTypeScriptSteps): the template's, or the default
+ * template's when the template ships none (the backend-only templates, the Amplify
+ * overlay). Not in a Next.js project, which typechecks aws-blocks/ as part of the
+ * app: nothing there would build the project, and editors and the deploy bundling
+ * (esbuild) would read it for backend files instead of the app's tsconfig.json,
+ * without the app's "paths".
+ */
+async function writeBackendTsconfig(awsBlocksDest: string, pkg: PackageDeps): Promise<void> {
+  const backendTsconfig = join(awsBlocksDest, 'tsconfig.json');
+  if (usesNext(pkg)) {
+    await rm(backendTsconfig, { force: true });
+  } else if (!(await exists(backendTsconfig))) {
+    await cp(join(__dirname, '../templates/default/aws-blocks/tsconfig.json'), backendTsconfig);
+  }
+}
+
+/**
+ * Prints how to make an existing project's TypeScript build read the backend through
+ * the project in `aws-blocks/tsconfig.json`, which typechecks it with Node types.
+ * Printed, never applied: the project's tsconfig and scripts are its own. A Next.js
+ * project gets no steps: `next build` ignores project references when it
+ * type-checks, so it keeps checking `aws-blocks/` as part of the app.
+ */
+function printTypeScriptSteps(pkg: PackageDeps): void {
+  if (usesNext(pkg)) {
+    console.log('TypeScript: leave your Next.js tsconfig.json as it is. `next build` typechecks aws-blocks/');
+    console.log('as part of your app, with the Node types your tsconfig.json has when it sets no "types".');
+  } else {
+    console.log('TypeScript: aws-blocks/tsconfig.json typechecks the backend with Node types. To keep them out');
+    console.log('of your frontend, add "references": [{ "path": "./aws-blocks" }] to the tsconfig that compiles');
+    console.log('the code importing \'aws-blocks\', and typecheck with `tsc -b --force` instead of `tsc`');
+    console.log('(if the script used --noEmit, set "noEmit": true in that tsconfig instead).');
+  }
+  console.log(`Details: ${TYPESCRIPT_STEPS_URL}`);
   console.log('');
 }
 

@@ -29,7 +29,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { ApiError, ApiNamespace, DEFAULT_API_ERROR_NAME, isBlocksError, Scope } from '@aws-blocks/core';
-import { buildAdminSurface } from './auth-admin.js';
+import { buildAdminSurface, markServerOnly } from './auth-admin.js';
 import { bearerTokenOf, poolBearerIdentity } from './bearer.js';
 import { bearerAuthEnabled, requiresUserPool } from './cdk/contract.js';
 import {
@@ -1491,24 +1491,27 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		const admin = this.config.admin;
 		if (this.config.store === 'builtin') throw new Error("admin not available: auth.admin needs store: 'cognito'");
 		if (!admin) throw new Error('admin not enabled: construct Auth with { admin: {} }');
-		this.adminSurface ??= buildAdminSurface<O>({
-			actions: admin.actions,
-			native: () => {
-				if (!this.native) throw userPoolNotProvisioned(this.fullId, this.log);
-				return this.native;
-			},
-			mapError: (e) => this.mapError(e),
-			prefixAttributes: (attrs) => this.prefixCustomAttributes(attrs),
-			narrowGroups: (groups) => this.narrowGroups(groups),
-			readAttributes: (attrs) => this.readAttributes(attrs),
-			deleteSessionsOf: (username) =>
-				this.sessions.deleteByUsername(
-					username,
-					resolveSignInMode(this.config.users?.signInWith),
-					this.config.users?.caseSensitive !== false,
-				),
-			validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
-		});
+		this.adminSurface ??= markServerOnly(
+			this,
+			buildAdminSurface<O>({
+				actions: admin.actions,
+				native: () => {
+					if (!this.native) throw userPoolNotProvisioned(this.fullId, this.log);
+					return this.native;
+				},
+				mapError: (e) => this.mapError(e),
+				prefixAttributes: (attrs) => this.prefixCustomAttributes(attrs),
+				narrowGroups: (groups) => this.narrowGroups(groups),
+				readAttributes: (attrs) => this.readAttributes(attrs),
+				deleteSessionsOf: (username) =>
+					this.sessions.deleteByUsername(
+						username,
+						resolveSignInMode(this.config.users?.signInWith),
+						this.config.users?.caseSensitive !== false,
+					),
+				validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
+			}),
+		);
 		const surface = this.adminSurface;
 		if (!this.adminEnabled(surface)) throw new Error('admin not enabled: construct Auth with { admin: {} }');
 		return surface;

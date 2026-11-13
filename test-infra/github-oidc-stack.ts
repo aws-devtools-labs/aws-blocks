@@ -276,6 +276,24 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
     }),
   );
 
+  // scripts/ci/sweep-cognito-pools.mjs deletes a user pool no live stack owns
+  // any more, once its name, age and tags mark it as CI's. ListUserPools takes
+  // only '*'; the rest are scoped to user pools in this account and region.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupCognitoPoolsList',
+      actions: ['cognito-idp:ListUserPools'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupCognitoPools',
+      actions: ['cognito-idp:DeleteUserPool', 'cognito-idp:DeleteUserPoolDomain', 'cognito-idp:DescribeUserPool'],
+      resources: [`arn:aws:cognito-idp:${region}:${account}:userpool/*`],
+    }),
+  );
+
   // Test harness calls against the deployed test apps.
   role.addToPolicy(
     new iam.PolicyStatement({

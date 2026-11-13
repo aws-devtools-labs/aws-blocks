@@ -12,7 +12,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { Scope, BlocksPresets, DEFAULT_NODE_RUNTIME, type BlocksDefaults } from '@aws-blocks/core/cdk';
-import { getOrCreateVpc, initializeVpc } from '@aws-blocks/core/cdk/internal';
+import { finalizeVpc, getOrCreateVpc, initializeVpc } from '@aws-blocks/core/cdk/internal';
 import { materialize } from './infra.js';
 import { Database } from './index.cdk.js';
 
@@ -266,11 +266,106 @@ test('Database: fromExisting() with provisioning-only options warns they are ign
     },
     storageEncryptionKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56',
     pointInTimeRecovery: { retentionDays: 7 },
+    secretRotation: { intervalDays: 7 },
   });
   Annotations.fromStack(stack).hasWarning(
     '*',
-    Match.stringLikeRegexp('fromExisting\\(\\)'),
+    Match.stringLikeRegexp('Ignoring pointInTimeRecovery, storageEncryptionKeyArn, secretRotation because'),
   );
+});
+
+test('Database: an absent defaults.secretRotation means off', () => {
+  // The hand-written `BlocksDefaults` literal case: a cost-bearing feature stays
+  // off unless a preset or a per-block value turns it on, as for every other
+  // optional field on that type.
+  const { stack, parent } = setupDatabaseStack({
+    ...BlocksPresets.production,
+    secretRotation: undefined,
+  });
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
+  template.resourceCountIs('AWS::Serverless::Application', 0);
+});
+
+test('Database: the sandbox preset emits no rotation resources at all', () => {
+  // A sandbox teardown would otherwise wait on the rotation Lambda's network
+  // interfaces, and the stack would pay for an endpoint it never benefits from.
+  const { stack, parent } = setupDatabaseStack(BlocksPresets.sandbox);
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
+  template.resourceCountIs('AWS::Serverless::Application', 0);
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 0);
+});
+
+test('Database: secretRotation: true turns rotation on under sandbox (explicit beats the default)', () => {
+  const { stack, parent } = setupDatabaseStack(BlocksPresets.sandbox);
+  new Database(parent, 'main', { secretRotation: true });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(30 days)' },
+  });
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 1);
+});
+
+test('Database: secretRotation with an interval turns rotation on under sandbox', () => {
+  const { stack, parent } = setupDatabaseStack(BlocksPresets.sandbox);
+  new Database(parent, 'main', { secretRotation: { intervalDays: 7 } });
+  Template.fromStack(stack).hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(7 days)' },
+  });
+});
+
+test('Database: fromExisting() warns on an explicit false too, not only on a value', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'ext', {
+    connection: {
+      host: 'arn:aws:rds:us-east-1:111122223333:cluster:ext-cluster',
+      database: 'extdb',
+      secretArn: 'arn:aws:secretsmanager:us-east-1:111122223333:secret:ext-secret-aB1cD2',
+    },
+    // A `false` is a dropped instruction too, not an absence: on a provisioned
+    // cluster each one would have suppressed something. Every block that has
+    // this warning triggers it on a value being passed at all, including
+    // bb-kv-store's `deletionProtection`, which has the same shape.
+    pointInTimeRecovery: false,
+    secretRotation: false,
+  });
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('Ignoring pointInTimeRecovery, secretRotation because'),
+  );
+});
+
+test('Database: rotates the credentials secret every 30 days under the production preset', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 1);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(30 days)' },
+  });
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 1);
+  template.hasResourceProperties('AWS::EC2::VPCEndpoint', {
+    ServiceName: { 'Fn::Join': ['', ['com.amazonaws.', { Ref: 'AWS::Region' }, '.secretsmanager']] },
+  });
+});
+
+test('Database: secretRotation: false emits no rotation schedule', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { secretRotation: false });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
+});
+
+test('Database: secretRotation { intervalDays: 14 } sets the rotation schedule to 14 days', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { secretRotation: { intervalDays: 14 } });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(14 days)' },
+  });
 });
 
 test('Database: pointInTimeRecovery { retentionDays: 30 } sets BackupRetentionPeriod to 30', () => {
@@ -381,13 +476,45 @@ test('Database: joins a customer-PROVIDED shared VPC (does not build its own)', 
   const { stack, parent } = setupDatabaseStack();
   const customerVpc = new ec2.Vpc(stack, 'CustomerVpc', { maxAzs: 2 });
   // Customer path: default source is 'provided'.
-  initializeVpc(stack, { network: customerVpc });
+  const vpcOptions = { network: customerVpc };
+  initializeVpc(stack, vpcOptions);
   new Database(parent, 'main', {});
+  // What BlocksStack does after every block is constructed.
+  finalizeVpc(stack, vpcOptions);
   const template = Template.fromStack(stack);
   // Only the customer VPC exists — the Database did NOT stand up its own.
   template.resourceCountIs('AWS::EC2::VPC', 1);
   // The cluster's subnet group is built from the customer VPC's subnets.
   template.resourceCountIs('AWS::RDS::DBSubnetGroup', 1);
+  // The rotation Lambda shares the core-managed Secrets Manager endpoint: the
+  // Database added no endpoint of its own, and core's endpoint SG admits the
+  // rotation SG on 443 (registered via endpointClientSecurityGroups).
+  template.resourcePropertiesCountIs(
+    'AWS::EC2::VPCEndpoint',
+    { ServiceName: { 'Fn::Join': ['', ['com.amazonaws.', { Ref: 'AWS::Region' }, '.secretsmanager']] } },
+    1,
+  );
+  template.resourcePropertiesCountIs(
+    'AWS::EC2::SecurityGroup',
+    { GroupDescription: Match.stringLikeRegexp('^Secrets Manager endpoint for ') },
+    0,
+  );
+  // The admit rule is its own resource, not inline on core's endpoint group:
+  // the rotation group is closed outbound, so it also needs the matching egress
+  // rule, and a pair of inline rules would make the two groups reference each
+  // other.
+  template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+    FromPort: 443,
+    Description: 'HTTPS from Building Block compute',
+    SourceSecurityGroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('RotationSg'), 'GroupId'] },
+    GroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('BlocksVpcEndpointSg'), 'GroupId'] },
+  });
+  template.hasResourceProperties('AWS::EC2::SecurityGroupEgress', {
+    FromPort: 443,
+    GroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('RotationSg'), 'GroupId'] },
+    DestinationSecurityGroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('BlocksVpcEndpointSg'), 'GroupId'] },
+    CidrIp: Match.absent(),
+  });
 });
 
 test('Database: IGNORES a Blocks-DERIVED shared VPC and builds its own (data-loss guard)', () => {
