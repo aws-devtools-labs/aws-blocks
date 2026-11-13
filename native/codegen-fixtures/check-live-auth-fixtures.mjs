@@ -42,14 +42,20 @@ const DEFAULT_SPEC = join(BACKEND_DIR, 'aws-blocks', 'blocks.spec.json');
 /**
  * Each fixture: the method names it carries → the live method it must equal.
  * Fixture 18 *is* the `Auth` sign-in state machine (`createApi()`'s
- * `setAuthState`, which is identical for every `Auth` configuration: the TS
- * client narrows it per block, but the spec describes the wide union —
- * `@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
+ * `getAuthState` and `setAuthState`, which are identical for every `Auth`
+ * configuration: the TS client narrows them per block, but the spec describes
+ * the wide union (`@blocksCodegenDefaultTypeArgs` on `AuthStateApi`);
  * fixture 23 is `Auth.signIn` / `confirmSignIn`'s nested result unions, as
  * native-bindings' `api.cognitoSignIn` / `api.cognitoConfirmSignIn` return them.
  */
 const FIXTURES = [
-	{ dir: '18-hybrid-arm', methods: { 'authApi.setAuthState': 'authBasicApi.setAuthState' } },
+	{
+		dir: '18-hybrid-arm',
+		methods: {
+			'authApi.getAuthState': 'authBasicApi.getAuthState',
+			'authApi.setAuthState': 'authBasicApi.setAuthState',
+		},
+	},
 	{
 		dir: '23-cognito-nested-unions',
 		methods: {
@@ -153,7 +159,8 @@ for (const fixture of FIXTURES) {
 	);
 
 	for (const [i, expected] of expectedMethods.entries()) {
-		if (!same(actualMethods[i], expected)) problems.push(`method ${expected.name} differs`);
+		if (actualMethods[i] === null) problems.push(`method ${expected.name} is missing`);
+		else if (!same(actualMethods[i], expected)) problems.push(`method ${expected.name} differs`);
 	}
 	for (const name of new Set([...expectedClosure, ...actualClosure])) {
 		if (!expectedClosure.has(name)) problems.push(`schema ${name} is no longer reachable from the live methods`);
@@ -174,30 +181,38 @@ for (const fixture of FIXTURES) {
 
 	// Rewrite: replace the fixture's methods with the live ones, drop schemas only
 	// the old methods reached, and set every live-reachable schema (existing keys
-	// keep their position). Components outside both closures are kept.
+	// keep their position; one that differs only in order is left as it is).
+	// Components outside both closures are kept.
 	spec.methods = spec.methods.map((m) => expectedMethods.find((e) => e.name === m.name) ?? m);
+	// A method the fixture doesn't carry yet is added, after the ones it does.
+	for (const e of expectedMethods) if (!spec.methods.some((m) => m.name === e.name)) spec.methods.push(e);
 	const schemas = { ...fixtureSchemas };
 	for (const name of actualClosure) if (!expectedClosure.has(name)) delete schemas[name];
-	for (const name of expectedClosure) schemas[name] = liveSchemas[name];
+	for (const name of expectedClosure) if (!same(schemas[name], liveSchemas[name])) schemas[name] = liveSchemas[name];
 	spec.components = { ...spec.components, schemas };
 	writeFileSync(fixturePath, json(spec) + (raw.endsWith('\n') ? '\n' : ''));
 	console.log(`✎ ${fixture.dir}: rewrote spec.json (${problems.length} change(s))`);
 }
 
-// Every `Auth` namespace's `setAuthState` is fixture 18's, however its block is
-// configured: native-bindings' three blocks differ in emailPassword, mfa and
-// providers, and must still generate one shared native input type.
+// Every `Auth` namespace's `getAuthState` and `setAuthState` are fixture 18's,
+// however its block is configured: native-bindings' blocks differ in
+// emailPassword, mfa and providers, and must still generate one shared native
+// state type and input type.
 {
 	const fixture18 = JSON.parse(readFileSync(join(FIXTURES_DIR, '18-hybrid-arm', 'spec.json'), 'utf8'));
-	const wide = fixture18.methods.find((m) => m.name === 'authApi.setAuthState');
 	const strip = ({ name: _name, ...rest }) => rest;
-	const authStateApis = live.methods.filter((m) => m.name.endsWith('.setAuthState') && liveMethods.has(m.name.replace(/setAuthState$/, 'getAuthState')));
-	const narrowed = authStateApis.filter((m) => !same(strip(m), strip(wide)));
-	if (narrowed.length > 0) {
-		drifted++;
-		console.error(`✗ setAuthState is not the full action union in: ${narrowed.map((m) => m.name).join(', ')}`);
-	} else {
-		console.log(`✓ every Auth namespace's setAuthState (${authStateApis.length}) is fixture 18's`);
+	const namespaces = live.methods
+		.filter((m) => m.name.endsWith('.setAuthState') && liveMethods.has(m.name.replace(/setAuthState$/, 'getAuthState')))
+		.map((m) => m.name.slice(0, -'.setAuthState'.length));
+	for (const method of ['getAuthState', 'setAuthState']) {
+		const wide = fixture18.methods.find((m) => m.name === `authApi.${method}`);
+		const narrowed = namespaces.filter((ns) => !wide || !same(strip(liveMethods.get(`${ns}.${method}`)), strip(wide)));
+		if (narrowed.length > 0) {
+			drifted++;
+			console.error(`✗ ${method} is not fixture 18's in: ${narrowed.map((ns) => `${ns}.${method}`).join(', ')}`);
+		} else {
+			console.log(`✓ every Auth namespace's ${method} (${namespaces.length}) is fixture 18's`);
+		}
 	}
 }
 

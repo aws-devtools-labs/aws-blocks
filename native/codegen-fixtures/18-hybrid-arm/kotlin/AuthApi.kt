@@ -37,6 +37,12 @@ public class AuthApi(
     return BlocksJson.decodeFromJsonElement(result)
   }
 
+  public suspend fun getAuthState(): AuthState {
+    val request = BlocksRequest(method = "authApi.getAuthState", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    return BlocksJson.decodeFromJsonElement(result)
+  }
+
   public object SetAuthState {
     @Serializable
     @JsonClassDiscriminator("action")

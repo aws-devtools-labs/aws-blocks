@@ -1127,6 +1127,68 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 		);
 	});
 
+	test("a sign-out path on another block's sign-in route (its session) collides, in either order", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+				}),
+			/Auth '[^']*staff': its sign-out route \(\/aws-blocks\/auth\/session\) is already mounted by Auth '[^']*sso'/,
+		);
+		const reversed = newStack();
+		new Auth(reversed, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+		});
+		assert.throws(
+			() => new Auth(reversed, 'sso', { store: 'builtin', providers: { okta } }),
+			/Auth '[^']*sso': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*staff'/,
+		);
+	});
+
+	test("bearer refresh routes are claimed: a sign-out path on another block's refresh route collides", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, allowBearerAuth: true });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+				}),
+			/its sign-out route \(\/aws-blocks\/auth\/refresh\) is already mounted by Auth '[^']*sso'/,
+		);
+		// Without bearer the refresh routes are not mounted, so the same path is free.
+		const plain = newStack();
+		new Auth(plain, 'sso', { store: 'builtin', providers: { okta } });
+		new Auth(plain, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+		});
+	});
+
+	test('one block whose signOutPath lands on one of its own sign-in routes fails synth', () => {
+		for (const route of ['exchange', 'session', 'callback']) {
+			assert.throws(
+				() =>
+					new Auth(newStack(), 'auth', {
+						store: 'builtin',
+						providers: { okta },
+						redirects: { signOutPath: `${AUTH_ROUTE_PREFIX}/${route}` },
+					}),
+				new RegExp(
+					`Auth '[^']*auth': it would mount (GET|POST) /aws-blocks/auth/${route} twice\\. Its redirects\\.callbackPath`,
+				),
+			);
+		}
+	});
+
 	test('own redirects on each block, and the same paths on another backend, synthesize', () => {
 		const stack = newStack();
 		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });

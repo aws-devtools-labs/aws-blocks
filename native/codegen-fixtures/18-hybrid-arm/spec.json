@@ -554,6 +554,16 @@
           "$ref": "#/components/schemas/AuthState"
         }
       }
+    },
+    {
+      "name": "authApi.getAuthState",
+      "params": [],
+      "result": {
+        "name": "GetAuthStateResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthState"
+        }
+      }
     }
   ],
   "components": {
