@@ -1,5 +1,95 @@
 # @aws-blocks/bb-email-client
 
+## 0.3.0
+
+### Minor Changes
+
+- 64f7247: `EmailClient.sendBatch()` now takes at most 100 messages per call by default. A larger batch throws `InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is sent, locally and when deployed. Before, a single call could send any number of messages, so one request to an exposed method could fan out into an unbounded number of SES sends.
+
+  **Behavior change:** a `sendBatch()` call with more than 100 messages that worked before now throws. Split the messages across calls, or set the new `maxBatchSize` option (a positive integer) to raise the cap for a trusted server-side job. An invalid `maxBatchSize` throws `InvalidInputException` from the constructor, and fails at synth.
+
+  The SES send permission granted to the app's execution role is now scoped to the stack's own region and partition, instead of every region. The runtime only ever calls SES in the Lambda's own region, so this does not change what an app can send.
+
+  The README has a new security section: an `ApiNamespace` method that passes caller input to `send()` or `sendBatch()` without a gate is an open relay. It shows gating with `auth.requireAuth(context)` and building the message on the server. The umbrella `@aws-blocks/blocks` gets a minor bump because it re-exports `EmailClient`, so the `sendBatch()` behavior change reaches umbrella users too, and because the `bb-email-client` README/DESIGN docs it bundles have changed.
+
+### Patch Changes
+
+- 8e96367: fix: stop sending raw backend error text to clients
+
+  Several Building Blocks passed the raw text of an unexpected error (an AWS SDK, database, storage or hook error, which can name account ids, role and resource ARNs, and request details) to the client. They now follow the same rule as the RPC serializer: the message of an `ApiError` or a branded Building Block error (`blocksError()` / `brandBlocksError()`) still reaches the client unchanged, and any other error is logged server-side and reported as `Internal error`.
+
+  - **bb-agent:** when a turn fails, the `error` chunk, the persisted `metadata.error`, and the `StreamFailed` error from `complete()` carry `Internal error` unless the failure is a branded Building Block error. A malformed or invalid canned-responses dictionary (the local `canned` provider) now fails with a branded `InvalidModelConfigException` on the server, so its fixed message, e.g. `InvalidModelConfigException: Malformed canned responses JSON in 'responses.json'.`, reaches the client; it names the file by basename only and never quotes its contents, and the parser's detail is logged server-side. `complete()` still rejects with `StreamFailed` for it. Conversations persisted before this change keep the `metadata.error` text they were saved with, and `getConversation()` still returns it.
+  - **bb-email-client:** `send()` errors have stable messages per `EmailErrors` code, and a failed `sendBatch()` entry reports the error code or SES entry status instead of the raw SES text. The SES error is logged and kept on the error's non-enumerable `cause`.
+
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6297d5a]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes

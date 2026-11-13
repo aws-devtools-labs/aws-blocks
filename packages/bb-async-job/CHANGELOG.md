@@ -1,5 +1,106 @@
 # @aws-blocks/bb-async-job
 
+## 0.3.1
+
+### Patch Changes
+
+- 6423964: Clarify in the README that `maxRetries` counts total deliveries including the first (`3` = one attempt plus two retries), matching the queue's `maxReceiveCount`.
+- 3ae8592: fix(bb-container-compute): deploys no longer reset an autoscaled container's task count
+
+  A container `Compute` with autoscaling no longer declares a task count in its
+  CloudFormation template. Before, every deploy that changed the app's code reset
+  the running task count to `minInstances`, stopping tasks that were running jobs.
+
+  Running jobs also get longer to finish when a task is stopped by a deploy or by
+  scale-in: the container now waits up to 120 seconds (the AWS Fargate maximum),
+  up from 25 seconds. A job still running after that is stopped and retried.
+
+  The `bb-compute`, `bb-async-job` and `bb-cron-job` READMEs now say that a deploy
+  restarts a job still running after that window, and that the restart counts as
+  one of the job's attempts.
+
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6236bf9]
+- Updated dependencies [6297d5a]
+- Updated dependencies [a5a5dd3]
+- Updated dependencies [b2eb306]
+- Updated dependencies [94d5900]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [2b250f8]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [be8864c]
+- Updated dependencies [99638ca]
+- Updated dependencies [2d7ce4a]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [8a5726c]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-container-compute@0.3.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

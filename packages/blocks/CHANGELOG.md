@@ -1,5 +1,1392 @@
 # @aws-blocks/blocks
 
+## 0.10.0
+
+### Minor Changes
+
+- be8864c: fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller
+
+  `stream()` and `resume()` accepted any `conversationId` alongside a `userId` and never checked that the conversation belonged to that user. A caller who knew another user's conversation ID could add turns to it, or approve (and `trust`) that user's pending tool call, which then ran with the agent's IAM role. The same ID also let a caller read the conversation's history, and listen to or push chunks onto its live Realtime channel (the default `channelId` is the conversation ID).
+
+  - **`stream()` and `resume()`** now throw `AgentErrors.ConversationNotFound` unless `options.conversationId` was created by `createConversationId(userId)` for the same `options.userId`. The check runs before anything is persisted or dispatched, and reads the conversation record with a strongly consistent read, so a `stream()` right after `createConversationId()` is not rejected on AWS.
+  - **A turn without a `conversationId`** no longer runs in a conversation's session on AWS. Its AgentCore session id was the caller-chosen `channelId`, and the AgentCore entry used that as the conversation, so `stream({ channelId: <another user's conversation id> })` skipped the ownership check. It now gets its own session and, as in the local mock, no persisted conversation. **Breaking (AWS only):** a deployed agent that relied on reusing a `channelId` without a `conversationId` to keep memory across turns loses it; pass a `conversationId` instead (`createConversationId()` for persistence agents, a server-chosen key for `inferenceOnly` agents).
+  - **`getPendingInterrupts(conversationId, { userId })`** now requires an options object with the caller's `userId` and returns `[]` for a conversation that user doesn't own. **Breaking:** `getPendingInterrupts(id)` becomes `getPendingInterrupts(id, { userId })`.
+  - **`getConversation(id, { userId, limit? })`** now requires the caller's `userId` in its existing options object and returns `[]` for a conversation that user doesn't own. **Breaking:** `getConversation(id)` / `getConversation(id, { limit })` become `getConversation(id, { userId })` / `getConversation(id, { userId, limit })`.
+  - **`getChannel(channelId, { userId })`** now requires an options object with the caller's `userId`. With persistence enabled, a turn's chunks are published on a channel scoped to the user who started it, so a caller can't listen to, or push chunks onto, another user's channel, whatever `channelId` they pass. **Breaking:** `getChannel(channelId)` becomes `getChannel(channelId, { userId })`, with the same `userId` you pass to `stream()`/`resume()`. `inferenceOnly` agents ignore the value but still take `{ userId }`: pass the session's `userId` as for persistence agents, not a placeholder, so the call stays correct if persistence is turned on later; their channels are not user-scoped.
+  - There is no backward-compatible form: the old calls carry no `userId`, so they could only keep returning another user's data or change behaviour. With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` naming the new signature when the options object or its `userId` is missing, instead of returning data. Build the options from the session's `userId`; don't spread a caller-supplied object into them.
+
+  Agents with `inferenceOnly: true` keep no conversation records, so these checks don't apply to them: a `conversationId` passed to one is a shared session key, so don't let callers choose it.
+
+  The channel key changes with persistence enabled, so reload chat sessions that were open across the upgrade (including turns that were running while the deploy rolled out); a subscription made before it no longer receives chunks.
+
+  If you pass a `conversationId` that was never created with `createConversationId()`, `stream()` now rejects it; create the conversation first. Pass a `userId` taken from the authenticated session, never from a request parameter. The README's Authorization section and End-to-End example (which now includes the `getPendingInterrupts` and `resume` handlers) show this.
+
+- 4457ea4: feat(bb-agent): add `sessionScope: 'user'` to isolate `inferenceOnly` sessions per user
+
+  An `inferenceOnly` agent keeps no conversation records, so it can't check that a `conversationId` belongs to the caller: by default the id is a shared session key, and anyone who passes it continues that session and receives its channel. The new `sessionScope` option lets such an agent isolate sessions per user instead:
+
+  - `sessionScope: 'user'` keys the session by the `userId` together with the `conversationId`, and scopes the Realtime channel to the `userId`. A caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. On AWS, the two users also run in different AgentCore runtime sessions.
+  - With `'user'`, `stream()`, `resume()` and `getChannel()` require a non-empty string `options.userId` (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without one. A runtime invocation that arrives without a `userId` is refused rather than run as `'anonymous'`.
+  - The default stays `'shared'`, so existing agents behave as before. Switching an existing agent to `'user'` starts new sessions: sessions stored under the bare `conversationId` are not resumed.
+  - The option is ignored when persistence is enabled; those agents already check conversation ownership.
+
+- 5f55dac: A web frontend served from another origin than its API can sign in with a federated provider. `createAuthClient()` from the new `@aws-blocks/bb-auth/browser-client` entry (also exported from `@aws-blocks/blocks/ui`) replaces `AuthOIDC`'s `getClient()` browser client:
+
+  ```typescript
+  import { createAuthClient } from "@aws-blocks/bb-auth/browser-client";
+
+  const auth = createAuthClient({
+    baseUrl: "https://api.example.com",
+    redirectUri: "https://app.example.com/return",
+  });
+  await auth.signInWithRedirect({ provider: "okta" }); // on the sign-in button
+  const result = await auth.handleSignInRedirect(); // on the return page
+  const session = await auth.fetchAuthSession(); // { signedIn, user? }
+  await auth.signOut();
+  ```
+
+  It signs in through the block's existing routes with PKCE and a signed, CSRF-bound `state`. The provider returns to the block's own callback, which sends the one-time code only to a return page on an origin in `redirects.allowedRelayOrigins` (loopback `http://127.0.0.1` is always allowed, for local development). The session stays in the block's `HttpOnly` cookie: no token is stored in JavaScript or put in a URL. The method names follow Amplify JS v6; the user and the error names are the block's own.
+
+  Two of the block's routes back it:
+
+  - `GET /aws-blocks/auth/session` returns the signed-in user (the same fields `getAuthState()` sends) or `401 NotAuthenticatedException`.
+  - `POST <signOutPath>?format=json` answers `200 { logoutUrl? }`. Without the parameter it answers `204`, as the native SDKs expect.
+
+  `handleSignInRedirect()` asks the exchange for no bearer tokens (`tokens: false` in the body, honoured with `allowBearerAuth`), so a refresh token never reaches a JavaScript-readable response. It also confirms the session cookie comes back to the API: when it does not (a frontend on another registrable domain without `session.crossDomain: true` or the CORS allowlist, or a browser blocking third-party cookies), it rejects with `InternalErrorException` and a message naming those settings, instead of reporting a user that the next `fetchAuthSession()` calls signed out.
+
+  See the README section "Frontend on a different origin" for the backend settings: `allowedRelayOrigins`, the stack's CORS allowlist, and `session.crossDomain` for different registrable domains.
+
+- 5f55dac: `Auth` can share its user pool with a frontend that signs in directly against Cognito, such as one built with the Amplify client libraries. All three options are opt-in.
+
+  - **`users.caseSensitive`.** Set `false` to match usernames, and the email or phone a user signs in with, ignoring case (Cognito's `UsernameConfiguration.CaseSensitive`, the setting Amplify Gen 2 pools use). Cognito fixes it when the pool is created, so the block refuses a later change at synth and again at deploy. Unset keeps Cognito's default, case-sensitive. The local user pool in `npm run dev` matches names the same way.
+  - **`allowBearerAuth: { clientIds }`.** Besides `true`, `allowBearerAuth` takes an object whose `clientIds` lists other app clients of the same pool. The guards then accept the access tokens those clients issue, fully verified (signature, issuer, `token_use: access`, expiry, client). The client id given to `Auth.fromExisting(userPoolId, clientId)` is accepted the same way once `allowBearerAuth` is on. An id can be a literal or a CDK token, such as the app client Amplify Gen 2 creates in the same CDK app: the block forwards the list through its deployed config, so a token resolves at deploy time. The frontend sends the access token, never the ID token (with Amplify JS, `(await fetchAuthSession()).tokens?.accessToken`).
+  - **`user.federatedIdentity`.** A federated user carries `{ providerId, sub }`: the provider's key in your options and the provider's own subject for the user. It is the same whether the provider is verified by your backend (`store: 'builtin'`) or federated through Cognito (the default store), so data keyed on it survives moving a provider between the two. It is server-side only and never sent to the browser.
+
+  The README has a section, "Planning to use Amplify client libraries?", covering the pool shape, which store an OIDC provider belongs on, `userSub` (Amplify's `userId`), adding an app client for the Amplify app, and the sign-in hooks. `phase: 'signIn'`, `onSignIn` and `onSignOut` run only for sign-ins that go through the block, and their docs say so.
+
+- 5f55dac: Add `AuthErrors`, the shared vocabulary of auth error names, with the `AuthErrorName` type and the `isAuthError()` / `isAuthErrorName()` guards. Match an auth failure by name with `isAuthError(e, AuthErrors.NotAuthenticated)` — it works the same on the server and in the browser, and an unknown or misspelled name is a compile error. `Auth` throws these names, as `AuthCognito` and `AuthOIDC` did. A sign-in provider that cannot sign anyone in (a configuration that is unusable at runtime, an unreachable provider, or a Cognito-federated provider under `npm run dev`) fails with `ProviderUnavailableException` (`AuthErrors.ProviderUnavailable`); the name reaches native clients as is.
+
+  The `BlocksAuth` `requireAuth` documentation now states the 401 error name correctly: `NotAuthenticatedException` (the removed `AuthBasic` threw `SessionExpiredException`).
+
+- 5f55dac: **Breaking: `AuthBasic`, `AuthCognito` and `AuthOIDC` are removed. Use `Auth`.** The `@aws-blocks/bb-auth-basic`, `@aws-blocks/bb-auth-cognito` and `@aws-blocks/bb-auth-oidc` packages are no longer part of AWS Blocks and receive no further releases. `Auth` (`@aws-blocks/bb-auth`, also exported from `@aws-blocks/blocks`) replaces all three.
+
+  `@aws-blocks/blocks` no longer exports `AuthBasic`, `AuthBasicErrors`, `AuthCognito`, `AuthCognitoErrors`, `AuthOIDC`, `AuthOIDCErrors`, `cognitoFederated`, `customOidc`, `google`, or the types `AuthBasicOptions`, `AuthBasicUser`, `AuthCognitoOptions`, `AuthFlowType`, `CognitoUser`, `MFAPreference`, `AuthOIDCErrorName` and `OIDCUser`. `getSdkIdentifiers()` no longer has overloads for `AuthCognito` and `AuthOIDC`; `getSdkIdentifiers(auth)` returns `{ userPoolId, clientId, region, hostedUiDomain, hostedUiClientId }`, every field optional: an `Auth` without a user pool (a `store: 'builtin'` block) registers none of them, and `hostedUiDomain` / `hostedUiClientId` are set only when a provider federates through Cognito.
+
+  **How to migrate.** From your app's root, run the codemod, then follow `MIGRATION.md` in `@aws-blocks/bb-auth`:
+
+  ```bash
+  npx @aws-blocks/bb-auth migrate --dry-run   # preview the changes
+  npx @aws-blocks/bb-auth migrate             # rewrite the files
+  ```
+
+  It rewrites imports, class names, options, renamed methods and error names, never changes a block's id, and leaves a `TODO(aws-blocks-auth-migrate)` comment wherever you have to decide something. Keep every block's id exactly as it is: the id names the deployed resources, and changing it replaces the user pool and deletes its users.
+
+  - **`AuthCognito`:** switching to `Auth` with the same id keeps your user pool, its users and their signed-in sessions.
+  - **`AuthOIDC`:** directly federated providers keep working and users keep their `userId`, but everyone signs in once more. A `cognitoFederated()` provider's user pool is replaced, so those users get a new `userId`; `MIGRATION.md` shows how to re-key their data.
+  - **`AuthBasic`:** there is no upgrade path for its users. Amazon Cognito can't import its password hashes, so every user signs up again. An existing `AuthBasic` session cookie is signed out and cleared on the next request, never an error.
+
+  **`BlocksAuth.requireRole(context, role)` is now required** (`@aws-blocks/auth-common`). It was optional only because `AuthBasic` and `AuthOIDC` had no roles. If you implement `BlocksAuth` yourself, add `requireRole`: throw 401 `NotAuthenticatedException` when there is no session and 403 `NotAuthorizedException` when the user isn't in `role`.
+
+  Telemetry: `@aws-blocks/core` no longer counts `AuthBasic`, `AuthCognito` and `AuthOidc` as official Building Blocks; `Auth` is.
+
+- 5f55dac: feat(bb-auth): show local social and SAML sign-in as unavailable
+
+  In `npm run dev`, Cognito managed login does not exist, so the providers of a block on the default (Cognito) store — social, SAML and `type: 'oidc'` — cannot sign anyone in. `getAuthState()` marks their `signIn:<id>` actions with a new optional `AuthAction.unavailable` reason — for example "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally." — and the `Authenticator` renders those buttons disabled, with the reason as a hint. A browser that navigates to the sign-in route anyway gets an explanatory HTML page instead of raw JSON, unless the URL asks for `?format=json`, as the sign-out route already allows. API clients get a `501` JSON error named `ProviderUnavailableException`, whose message says the configuration is fine and the provider works after deploy.
+
+- 5f55dac: The local user pool can check authenticator-app (TOTP) codes as Cognito does. With the new local-only option `totpVerification: 'rfc6238'`, `verifyTotpSetup`, the sign-in TOTP challenge and the mid-sign-in TOTP setup accept only the RFC 6238 code of the user's shared secret (HMAC-SHA-1, 6 digits, 30-second steps, one step of clock skew), so a wrong secret or `otpauth://` URI fails locally instead of only on a deployed pool. The default, `'any'`, accepts any six digits; the AWS runtime ignores the option. An unknown value is an error at construction. As on Cognito, a new `setUpTotp` secret replaces an enrolled authenticator only once `verifyTotpSetup` accepts it, so an abandoned replacement keeps the working one.
+
+  `totpCodeFor(sharedSecret, time?)` from `@aws-blocks/blocks/utils` (also `@aws-blocks/bb-auth/testing`) computes the code an authenticator app would show, so tests answer TOTP setup and challenges without a phone (Node.js only, `node:crypto`, no new dependency). Like the rest of `@aws-blocks/blocks/utils` it has no browser build: Node test suites that run with the browser condition (`tsx -C browser`) still get it, and the browser entries never import it.
+
+- 5f55dac: feat(bb-auth): `Auth` options: a block-level `store` and one `providers` map
+
+  `Auth` options start with where your users live. A block-level `store` picks it, and every sign-in provider goes in one `providers` map, keyed by provider id and tagged with its `type`:
+
+  ```ts
+  // The default store (omit `store`): users live in a Cognito user pool.
+  const auth = new Auth(scope, "auth", {
+    providers: {
+      google: {
+        type: "google",
+        clientId: "your-google-client-id",
+        clientSecret: googleSecret,
+      },
+      entra: {
+        type: "oidc",
+        issuer: "https://login.microsoftonline.com/<tenant>/v2.0",
+        clientId: "entra-client-id",
+        clientSecret: entraSecret,
+      },
+      corp: {
+        type: "saml",
+        metadataUrl: "https://idp.example.com/saml/metadata",
+      },
+    },
+  });
+
+  // store: 'builtin': no user pool; your backend verifies each provider itself.
+  const sso = new Auth(scope, "sso", {
+    store: "builtin",
+    providers: {
+      okta: {
+        type: "oidc",
+        issuer: "https://dev-12345.okta.com",
+        clientId: "0oa-your-client-id",
+      },
+      github: github({ clientId: "Iv1.abc", clientSecret: githubSecret }),
+    },
+    // Both blocks have providers, so this one gets its own sign-in routes.
+    redirects: {
+      callbackPath: "/aws-blocks/auth/sso/callback",
+      signOutPath: "/aws-blocks/auth/sso/signout",
+    },
+  });
+  ```
+
+  - **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` needs no options): email + password, `mfa`, `passkeys`, `admin`, `userPool`, `email`, and `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. A `type: 'oidc'` entry federates through Cognito and requires `clientSecret`. A social entry is keyed by its type (`google: { type: 'google', … }`).
+  - **`store: 'builtin'`**: no user pool. Users live at their identity provider, and the block keeps only its session table. `providers` of `type: 'oidc'` (`clientSecret` optional, so public PKCE-only clients work), `github()` / `customOauth2()` (`type: 'oauth2'`) and `stubIdp()` (`type: 'stub'`). `users` takes only `groups`, `allowBearerAuth: true` accepts the provider's access token, and `validateUser` runs at sign-in only. `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool` and `codeDelivery` don't apply, and the signed-in user's `signInProvider` is one of the block's provider ids (never `'password'`).
+  - **One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. Use two `Auth` blocks, each with its own session cookie and `createApi()`, and let the frontend pick one per sign-in. When both have `providers`, give the second its own `redirects.callbackPath` / `signOutPath`, as `sso` above does.
+  - **Checked at compile time, and again at runtime.** A wrong combination is a compile error. Most name the fix in their type, such as `ERROR_needs_store_cognito<'emailPassword'>` under `store: 'builtin'`. `stubIdp()`, `github()` or `customOauth2()` on the default store is a compile error too (`'"stub"' is not assignable to '"oidc"'`): add `store: 'builtin'`. The constructor rejects the same combinations with a readable message in `npm run dev`, at synth and in Lambda. It also rejects what the compiler can't see, such as options built from JSON, a `providers` value that isn't an object of provider entries, or a social entry keyed differently from its type. A default-store block with `emailPassword: false` and no provider fails in `npm run dev`, at synth and in Lambda.
+  - **Editor help on a `'builtin'` block.** The options it refuses (`mfa`, `admin`, `userPool`, `users.signInWith`, …) are marked `@deprecated`, so completions list them last and struck through; `emailPassword` stays unmarked, since `false` is allowed. `allowBearerAuth: { clientIds }` there names the fix (`ERROR_needs_store_cognito<'allowBearerAuth (object form)'>`). A `providers` map picked per environment (`isProd ? { okta: … } : { local: stubIdp() }`) keeps both provider ids narrow for `getSignInUrl()` and `requireRole()`.
+  - **Checked at synth.** On both stores, synth checks `redirects` (`callbackPath` / `signOutPath` must be explicit paths under `/aws-blocks/auth/`, not the bare prefix) and `postSignInPath` / `postSignOutPath`, and rejects a provider id containing `/`. Two blocks of one backend that would mount the same sign-in or sign-out routes (both with `providers` on the default `redirects`), or two `stubIdp()` providers under the same key, fail synth naming both blocks, and at runtime the stub case names the fix rather than a bare `DuplicateRouteException`. A plain string as a `'builtin'` provider's `clientSecret` is refused at construction. On the default store, a `type: 'oidc'` entry with an empty or falsy `clientSecret` (`''`, `0`, `false`), or an `attributesRequestMethod` other than `'GET'` / `'POST'`, is refused at construction in `npm run dev`, at synth and in Lambda.
+  - **Docs and messages.** `allowBearerAuth` and `validateUser` say that a bearer token is verified per request and does not run `validateUser`, so gate per request when you rely on it. An option error never echoes a string value longer than 8 characters, including a `store` or a provider `type` (a misplaced token prints as `a string (40 characters)`). A provider whose id names an `Object.prototype` member (such as `constructor`) gets the default label "Sign in with Constructor".
+  - **`bb-auth migrate`** rewrites `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks to this shape. A block constructed from a class the app re-exports through its own module (`export { AuthBasic } from '@aws-blocks/bb-auth-basic'`, `export *` of an old package) gets the same option mapping, kept defaults and TODOs as a direct import. `AuthBasic` blocks keep their password policy: each character class it left unset is written as `false` (`Auth` requires all four by default). A local `export { AuthCognitoErrors }` of a renamed import becomes `export { AuthErrors as AuthCognitoErrors }`. An `AuthOIDC` `providers` array with a spread is kept as is, with a TODO. Each moved `stubIdp()` gets a TODO that `Auth` refuses it on a production deployment, and `stubIdp({ name: 'dev' })` becomes `stubIdp()`. A provider factory called outside the block, a `require()` of an old package, and an `AuthBasicUser` import in a project that never reads `createdAt` get accurate TODOs (none, for the last). `migrate <path>` with a path that doesn't exist exits 2.
+  - **Stable identifiers.** Construct ids, user-id formats (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users), the session format, and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`) depend on the provider keys and block ids, not on how the options are written. An `AuthCognito` app keeps its construct ids, so nothing deployed is replaced.
+
+  Also updated: the umbrella README's sign-in method guide (`@aws-blocks/blocks`), the `Auth` snippet and RLS notes in the generated `MIGRATION_GUIDE.md` from `db pull` (`@aws-blocks/bb-data`), the `Secret` README's provider-secret note (`@aws-blocks/bb-secret`), the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`), and the `AuthAction.unavailable` example (`@aws-blocks/auth-common`), whose hint reads "…or use stubIdp() in a store: 'builtin' block locally."
+
+- 5f55dac: feat(bb-auth): accept a `Secret` as a provider client secret
+
+  A provider's `clientSecret` (and Sign in with Apple's `privateKey`) accepts a string-valued `Secret` (AWS Secrets Manager) as well as an `AppSetting` created with `secret: true`, so a value set with `npm run secret` reaches the provider:
+
+  ```ts
+  const googleSecret = new Secret(scope, "google-client-secret", {
+    name: "my-app/GOOGLE_CLIENT_SECRET",
+    generate: true, // a placeholder value, so the first deploy can register the provider
+  });
+  new Auth(scope, "auth", {
+    providers: {
+      google: {
+        type: "google",
+        clientId: "your-client-id.apps.googleusercontent.com",
+        clientSecret: googleSecret,
+      },
+    },
+  });
+  ```
+
+  After the first deploy, set the real value with `npm run secret -- set GOOGLE_CLIENT_SECRET --prefix my-app` and deploy again. For a provider that federates through Cognito (social, or `type: 'oidc'` on the default store), the deploy-time provider registration reads the secret from Secrets Manager, with a grant scoped to that secret's ARN (plus `kms:Decrypt` via Secrets Manager). As with any `Secret`, the app's execution role can read it too. A provider of a `store: 'builtin'` block reads it at request time through the `Secret`, and locally from the `Secret`'s local value. A `Secret` with a `schema` is refused by the type. Synth warns (using a new internal flag on the `Secret` CDK construct) when a hosted-UI provider's secret is a stack-managed `Secret` created with no value (no `generate: true`), which would fail the first deploy, and says how to recover. The `SecretRef` and `ProviderSecretRef` types name the accepted references. The `Secret` README describes using a `Secret` as an `Auth` provider secret and setting a named secret with `npm run secret`.
+
+- 5f55dac: `Auth` can send its user pool's email through your own Amazon SES identity, with the `email` option: `email: { fromAddress: 'no-reply@example.com', fromName?, replyTo?, sesRegion?, sesVerifiedDomain?, configurationSetName? }`. Cognito's default sender is capped at 50 emails a day, so set this before real users sign up.
+
+  - **Prerequisites:**
+    - `fromAddress` (or `sesVerifiedDomain`) must be a verified SES identity. It defaults to the pool's Region; set `sesRegion` otherwise.
+    - New SES accounts start in the sandbox, so request production access before launch.
+    - Cognito creates its email service-linked role on the first deploy, so the deploying role needs `iam:CreateServiceLinkedRole`.
+  - **It also allows the email factors on a pool `Auth` creates:** email MFA (`mfa.types` including `'EMAIL'`) and `users.preferredChallenge: 'EMAIL_OTP'`. Cognito sends those codes only through SES, so synth refuses them without `email`.
+  - **Safe to add to a deployed pool:** the pool is updated in place, and its users, sessions and tokens are unaffected.
+  - **Refused at synth with the reason:**
+    - on a pool wrapped with `Auth.fromExisting`, whose email configuration belongs to its owner;
+    - on a configuration that creates no user pool;
+    - for a malformed address or Region;
+    - for a `sesVerifiedDomain` that isn't the domain of `fromAddress`.
+  - **Local development** (`npm run dev`) delivers codes locally, without SES.
+
+  The migration codemod recommends `email: { fromAddress }` for `preferredChallenge: 'EMAIL_OTP'`, rather than wrapping the pool.
+
+- 5f55dac: Add auth test helpers to `@aws-blocks/blocks/utils`. Both are Node-only and are not reachable from any browser entry.
+
+  - `getLastAuthCode(username, { block?, purpose?, cwd? })` returns the verification code the local pool sent to a user, for e2e tests of sign-up, password-reset, MFA and attribute-verification flows. It finds the block's data under `.bb-data/` itself, so renaming the scope or the block doesn't break the test. It reads the codes the pool still holds, so a user's code is still found after another user's code was sent. When there is nothing to read, it throws an error that names what each local block last sent. It is also exported from `@aws-blocks/bb-auth/testing`.
+  - `createTestClient(clients)` returns the app's typed clients (for example `createTestClient(await import('aws-blocks'))`) with a cookie jar of their own. A test can now act as two users at once, such as an owner and an intruder, without signing out between steps. The shared jar from `installCookieJar()` is never involved.
+
+  To support this, the generated API client (`ApiNamespaceClient`) now sends a call with the `fetch` that the call's async context supplies, when there is one. Nothing changes for an app that doesn't use `createTestClient`.
+
+  `installCookieJar()` now keeps request headers passed as a `Headers` instance or an entry list; it used to send only its `cookie` header for those.
+
+- 5f55dac: A signed-in user can enrol an authenticator app (TOTP) through `auth.createApi()`, with no backend code: `setAuthState` takes `setUpTotp`, `verifyTotpSetup`, `getMfaPreference` and `updateMfaPreference` actions. `setUpTotp` returns a state whose `verifyTotpSetup` action carries the shared secret (`sharedSecret`) and an `otpauth://` URI (`otpauthUri`, the QR code's content) as hidden fields; the other actions return the user's MFA settings, one `updateMfaPreference` action per change they can make. A wrong code is `retriable`; a caller who is not signed in gets the `NotAuthenticatedException` state. Replacing an enrolled authenticator and setting a factor `'DISABLED'` need a recent sign-in (`session.freshAgeSeconds`); a stale session gets the `ReauthenticationRequiredException` state, so a stolen session cookie cannot swap the authenticator or turn MFA off. The actions follow the block's options, in the frontend too: `setUpTotp` / `verifyTotpSetup` need `mfa` on with `'TOTP'` in `mfa.types` (`TotpEnabled<O>`), the preference actions need `mfa` on and take only the factors in `mfa.types`; untyped callers get `MfaNotEnabledException` or `InvalidParameterException`. The new `mfa.totpIssuer` option sets the issuer authenticator apps show (default: the root `Scope` id).
+
+  `MfaSettings(authApi, options?)` (from `@aws-blocks/blocks/ui`, `@aws-blocks/bb-auth/ui` or `@aws-blocks/auth-common/ui`) is the enrolment panel for an account page: the setup key, an `otpauth://` link and, with `renderQrCode`, a QR code from the library of your choice, then the code form and the preference buttons, each a `<form>` with stable `mfa-settings-*` test hooks. It leaves the shared auth-state store alone, so a mounted `Authenticator` is unaffected; the `Authenticator`'s signed-in card does not change.
+
+  Native clients: the `setAuthState` input union gains the four actions (additive). Code that matches exhaustively over that input needs the new cases: an exhaustive Swift `switch` over the `Input` enum, a Kotlin `when` over the sealed input class used as an expression, and a Dart `switch` over the sealed input class.
+
+  Dev-server logs redact `otpauth` fields (`otpauthUri` embeds the TOTP secret).
+
+- 5f55dac: feat(auth-common): `subscribeAuthState`, `getAuthStateSnapshot` and a shared auth-state store behind `submitAuthAction`; sign-in/out reaches every component and tab exactly once
+
+  Custom sign-in forms now stay in sync with the rest of the page. Calling `authApi.setAuthState(...)` directly changes the session but notifies nothing on the client, so `onAuthChange`, `AuthenticatedContent` and `AccountMenuBar` kept showing the old state until a reload — most visibly after a custom sign-out.
+
+  - `submitAuthAction(authApi, input)` (new in this release, see its own entry) now also writes the shared store and notifies everything that renders auth: a sign-in or sign-out reaches every `onAuthChange` subscriber in this tab and in other tabs, exactly once. It resolves to the same `AuthState` `setAuthState` returns; a `retriable` result (wrong password, bad code) changes nothing, so you can keep the current form and show the error. Outside a browser it is just the RPC. Use it for sign-in and sign-out alike.
+  - `subscribeAuthState(authApi, listener)` and `getAuthStateSnapshot(authApi)` expose the shared auth state as a store, including mid-flow steps such as a confirm-code challenge, ready for React's `useSyncExternalStore`:
+
+    ```ts
+    useSyncExternalStore(
+      (cb) => subscribeAuthState(authApi, cb),
+      () => getAuthStateSnapshot(authApi),
+      () => null,
+    );
+    ```
+
+  - The `Authenticator` and `AccountMenuBar` now submit through `submitAuthAction`. Mid-flow challenge steps no longer broadcast a spurious signed-out `null` to `onAuthChange` subscribers, and a sign-in or sign-out in another tab triggers one `getAuthState()` refetch however many `Authenticator`s are mounted. A failed automatic sign-in after sign-up confirmation now shows its error instead of leaving the Continue step on screen, and two mounted `Authenticator`s no longer both redeem it.
+  - `AccountMenuBar`'s Sign Out follows a `signOut` action that carries a `url` (a federated session that must also end at the identity provider) as a form submit, as the `Authenticator` already does.
+
+  `subscribeAuthState` and `getAuthStateSnapshot` are exported, alongside `submitAuthAction`, from `@aws-blocks/blocks/ui` and `@aws-blocks/auth-common/ui`. `data-testid` hooks and action and field names are unchanged.
+
+  The cross-tab broadcast gains one optional field, so two auth APIs on a page no longer wake each other's subscribers. `broadcastAuthChange(user, api?)` takes an optional second argument; with it, the message carries `api` (the RPC namespace of that API) and only that API's `onAuthChange` subscribers receive it. A message without `api`, from an older bundle or a call without the argument, still reaches every API, and older readers ignore the extra field. `submitAuthAction` tags its broadcasts this way when the API client reports its namespace, which the `@aws-blocks/core` API clients of this release do. `AuthStateApi` and `AuthState` also take optional type parameters (`AuthStateApi<I, U>`, `AuthState<U>`, defaulting to today's types, so existing code compiles unchanged), with `AuthUserOf<A>` naming an API's user type, and `AuthUser` has an optional `displayName`; their own entries describe them. The custom-UI guide (`CUSTOMIZING-AUTH-UI.md`) now ships with `@aws-blocks/bb-auth` instead of `@aws-blocks/auth-common`.
+
+- 5f55dac: Add `Auth` (`@aws-blocks/bb-auth`), the single authentication Building Block, exported from `@aws-blocks/blocks`. One options object configures email + password (backed by a Cognito user pool, with MFA, passkeys, groups and `requireRole`), social and SAML sign-in federated through Cognito, and OIDC / OAuth 2.0 providers verified by your backend (`store: 'builtin'`) — no user pool needed. Methods your configuration doesn't support don't compile. Everything runs locally with no AWS account, and `stubIdp()` gives you an offline identity provider for development.
+
+  ```ts
+  import { Auth, Scope } from "@aws-blocks/blocks";
+
+  const scope = new Scope("app");
+  const auth = new Auth(scope, "auth"); // email + password
+  export const authApi = auth.createApi();
+  ```
+
+  `Auth` replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`. An `AuthCognito` app that switches to `Auth` with the same block id keeps its user pool, its users and their sessions. See `MIGRATION.md` in `@aws-blocks/bb-auth` for the per-block steps and the `npx @aws-blocks/bb-auth migrate` codemod.
+
+  `@aws-blocks/blocks` now also exports `AuthErrors`, `isAuthError`, the provider helpers `github()`, `customOauth2()`, `stubIdp()` and `relayOrigin()`, and every `Auth` type, and `@aws-blocks/blocks/ui` adds `Auth`'s typed UI helpers (`authOverrides`, `AuthActionName`, …). `getSdkIdentifiers(auth)` returns the user pool's `{ userPoolId, clientId }` (optional fields: an `Auth` with no user pool registers none).
+
+  **Breaking:** these names exported from `@aws-blocks/blocks` now refer to `Auth`'s versions instead of the old blocks': `stubIdp`, `github`, `customOauth2`, `relayOrigin`, `RelayOrigin`, `MappedClaims` (were `AuthOIDC`'s), `PasswordPolicy` (was `AuthBasic`'s), and `AdminAction`, `AdminActionGate`, `AdminCreateInit`, `AdminDisabled`, `AdminGetterOf`, `AdminGrants`, `AdminOptions`, `AdminSurface`, `AdminUser`, `AdminUserFilter`, `CodeDeliveryDetails`, `CodeDeliveryFn`, `ConfirmSignInOptions`, `DeviceRecord`, `ExternalUserPoolRef`, `GroupAdmin`, `LifecycleAdmin`, `ResetPasswordResult`, `SetPasswordOptions`, `SignInNextStep`, `SignInOptions`, `SignInResult`, `SignUpOptions`, `SignUpResult`, `UpdateAttributeOutcome`, `UserAttribute` (were `AuthCognito`'s). Move to `Auth`'s versions: the old blocks and their packages are removed in this release (see `MIGRATION.md`).
+
+- 49b68af: feat(bb-data): load Postgres extensions (PostGIS, pgvector) in local dev
+
+  Adds an `extensions` option to `DatabaseOptions` so a Database Block can declare
+  the Postgres extensions it uses (e.g. `['postgis']`, `['pgvector']`) and have them
+  load in the **local PGlite engine**, restoring local/production parity for spatial
+  and vector workloads. Previously `CREATE EXTENSION postgis` worked once deployed to
+  Aurora but failed in local dev, forcing a sandbox deploy for every spatial/vector
+  iteration.
+
+  - **Local-only, mirroring `postgresVersion`.** The option is read only by the local
+    PGlite implementation and is a no-op on AWS, where Aurora PostgreSQL supports
+    these extensions natively. Application code is unchanged across environments, and
+    PGlite never leaks into app code.
+  - **Opt-in install.** Each supported extension ships as its own package, declared as
+    an **optional peer dependency** and loaded by dynamic import, so only projects
+    that declare an extension install it: `postgis` → `@electric-sql/pglite-postgis`,
+    `pgvector` → `@electric-sql/pglite-pgvector`. A declared extension whose package is
+    missing (or an unknown name) fails on the first database interaction with an
+    actionable error — the exact `npm install` command, or the list of supported names.
+  - You still run `CREATE EXTENSION <name>` in a migration — the option only makes the
+    extension available for `CREATE EXTENSION` to succeed locally.
+
+  Both extension packages are experimental upstream; the opt-in install keeps that
+  risk with the consuming app rather than every `bb-data` consumer. No change to the
+  AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behaves
+  exactly as before.
+
+  The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
+  `0.2.11`, `@electric-sql/pglite-pgvector` `0.0.12`) to match the exact-pinned
+  `@electric-sql/pglite` `0.5.11` they peer-depend on. A caret range let a newer extension
+  release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.
+
+- 6297d5a: `Database` now rotates its auto-generated `postgres` credentials secret every 30 days under the `production` preset, using AWS's PostgreSQL single-user rotation function (a Serverless Application Repository app: an AWS-maintained Lambda placed in the cluster's VPC): it generates a new password, sets it on the cluster and makes it the secret's current version. The secret keeps its ARN and the app never reads the password itself (the RDS Data API reads the secret for it), so a rotation needs no redeploy.
+
+  Rotation is off under the `sandbox` preset, where a teardown would wait on the rotation Lambda's network interfaces and the stack would pay for an interface endpoint it never benefits from. Set `secretRotation: true` to opt in.
+
+  - A `secretRotation` option turns rotation on (`true`), sets the interval (`{ intervalDays: n }`, 1–1000 days) or turns it off (`false`), and always wins over the stack-wide `defaults.secretRotation`. It is ignored, with a synth warning, for `fromExisting()` databases.
+  - In the Database's own VPC (isolated subnets, no NAT) a Secrets Manager interface endpoint is added so the rotation Lambda can reach the Secrets Manager API (billed hourly in each of its two AZs, about $7.20 per AZ per month in us-east-1). A dedicated security group admits only the rotation Lambda on 443, and the cluster security group admits only the rotation Lambda on the Postgres port.
+  - In a shared VPC (`defaults.vpc`) the rotation Lambda reuses the endpoint Blocks already provisions. With `provisionEndpoints: false` your own Secrets Manager endpoint's security group must admit the rotation Lambda's security group on 443; synth warns (`blocks:vpc:endpoint-client-unadmitted`) with the group to admit.
+  - With a `storageEncryptionKeyArn`, the rotation Lambda is granted `kms:Decrypt`, `kms:DescribeKey` and `kms:GenerateDataKey` on the key; the imported key's policy must allow the account's IAM principals to use it, which the default key policy does. If the key policy enumerates principals instead of delegating to the account root, the rotation Lambda's role must be among them; its ARN is only known after the first deploy.
+
+  `BlocksDefaults` gains an optional `secretRotation`, so no existing literal needs changing: both presets set it, and an absent value means off.
+
+  Two deploy-time requirements come with it, because the rotation function is an AWS Serverless Application Repository app: the CloudFormation execution role needs `serverlessrepo:GetApplication` and `serverlessrepo:CreateCloudFormationTemplate`, and rotation only deploys in the `aws`, `aws-cn` and `aws-us-gov` partitions (a concrete region outside them fails at synth). An app on the `production` preset gets rotation by upgrading, so a least-privilege bootstrap role or another partition needs `secretRotation: false`.
+
+  Existing stacks upgrade in place: rotation only adds resources; the cluster, its writer and the secret synthesize identically before and after this change, so there is no cluster replacement. The stack gains the `AWS::Serverless-2016-10-31` transform, and the first rotation runs during the deploy, after the writer is available and migrations have run; the deploy waits (up to five minutes) for it to finish.
+
+  Every rotation, scheduled ones included, has a window in which the cluster already accepts the new password while the secret still holds the old one, usually 1-3 seconds and occasionally up to about 18; a query in that window is refused, so the Data API engine now classifies that refusal as a connection failure and retries the statement for up to nine seconds (it is refused before it runs, so a retry cannot apply it twice). A statement inside a transaction is not retried, since every attempt would reuse one transaction id; the refusal surfaces so the caller can retry the whole transaction.
+
+  CDK also attaches a resource policy to the secret that denies `secretsmanager:DeleteSecret` to the account while rotation is on. `cdk destroy` still deletes the secret; an out-of-band `delete-secret` is refused.
+
+  Also fixed: with a `storageEncryptionKeyArn`, the app runtime and the migration Lambda were never granted `kms:Decrypt` on the key, so every Data API call, the first migration included, failed. The app runtime and the migration Lambda are now granted `kms:Decrypt` on the key, scoped to use through Secrets Manager.
+
+  In `@aws-blocks/core`, `VpcRequirements` gains `endpointClientSecurityGroups`, letting a Building Block register security groups of compute it provisions itself (such as the rotation Lambda) so they are admitted on the Blocks-managed interface-endpoint security group, and `endpointClientDependents`, so a construct that must not be created before that compute can reach the endpoints is ordered after them. When `provisionEndpoints: false` leaves the endpoints to you, Blocks warns for each registered group instead.
+
+- 7c23ab9: feat(bb-file-bucket): signed upload constraints, opt-in download disposition, stricter key validation and 400 for invalid input
+
+  - **Presigned uploads always sign a `Content-Type`.** `putUrl()` and `createUploadHandle()` now sign the `contentType` you pass, or `application/octet-stream` when you pass none, so the upload must send exactly that header (S3 answers `403 SignatureDoesNotMatch` otherwise). `createUploadHandle().upload()` and its hydrated client handle always send it. **Breaking:** an upload to a `putUrl()` URL created without `contentType` must now send `Content-Type: application/octet-stream`; pass the `contentType` the client will send. `createUploadHandle()` without `contentType` now stores `application/octet-stream` instead of the browser's file type; pass `contentType: file.type` to keep it. Browser uploads now always send `Content-Type`, so `corsRules` must allow it in `allowedHeaders`. `put()` without `contentType` now stores `application/octet-stream` on AWS too, matching local dev.
+  - **`contentType` must be a single media type.** `put()`, `putUrl()` and `createUploadHandle()` reject (400 `ValidationFailed`) a `contentType` that is not `type/subtype` with optional `; name=value` parameters — for example a comma-separated list, non-ASCII or control characters, or an empty value.
+  - **`contentType` is signed and stored in canonical form.** Parameters are rendered as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`); a quoted value is written bare when its content is a token (`charset="utf-8"` becomes `charset=utf-8`) and otherwise stays quoted. HTTP clients that re-render a parsed `Content-Type`, such as the native Kotlin client, then send exactly the signed value.
+  - **New `contentLength` option** on `putUrl()` / `createUploadHandle()` signs the exact upload size, so only a body of that size is accepted.
+  - **New bucket options `allowedContentTypes` and `maxUploadBytes`.** `allowedContentTypes` (exact media types or `type/*` wildcards) restricts the content types `put()`, `putUrl()` and `createUploadHandle()` accept. A `type/*` wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, the JavaScript and ECMAScript types (`text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript`, `application/x-javascript`), or any `+xml` subtype; list one exactly to accept it. `maxUploadBytes` caps `put()` bodies and makes presigned uploads require a `contentLength` at or under it. Both are checked identically in local dev and on AWS, and their shape is validated at synth.
+  - **New `attachment` option** on `getUrl()` / `getFileHandle()`: `true` or a filename signs a `Content-Disposition: attachment` into the download URL, so the browser saves the file instead of displaying it. Directional formatting and zero-width characters are removed from the filename, `/` and `\` are replaced with `_`, and a filename that is empty, `.` or `..` is rejected. Default behavior is unchanged.
+  - **Stricter key validation.** Keys are also rejected when they contain a backslash, C1 control characters, U+2028/U+2029, or bidirectional formatting characters, a segment that contains `.` or `..` once `%2e`, `%2f` and `%5c` are decoded, or more than 1,024 bytes in UTF-8. `scan({ prefix })` now validates the prefix with the same rules (an empty prefix and a trailing `/` are allowed).
+  - **`ValidationFailed` is now an `ApiError` with status 400**, so API methods answer invalid keys, prefixes, expiry values and upload constraints with HTTP 400 instead of 500. The name and message format are unchanged, and messages never include the key.
+  - **`VersionNotFound` from `restoreVersion()` now has the fixed message `The requested version does not exist`**, without the key or version id.
+
+  The README adds sections on per-user isolation (derive keys from the authenticated user, never from a client-supplied key or prefix), upload constraints, serving user uploads, and the key rules; its examples now build keys from the caller's identity.
+
+- b2eb306: feat(blocks): add the `cdk-blocks` CLI
+
+  `@aws-blocks/blocks` now installs a `cdk-blocks` command (there is no `blocks` command) for the whole app lifecycle: `cdk-blocks dev`, `cdk-blocks sandbox`, `cdk-blocks deploy`, `cdk-blocks destroy`, `cdk-blocks whoami`, `cdk-blocks secret`, `cdk-blocks config`, `cdk-blocks telemetry`, `cdk-blocks generate client|spec|types`, `cdk-blocks db` and `cdk-blocks vendorize`. Each lifecycle command runs the same code as the matching npm script of a generated app, so `npx --no -- cdk-blocks dev` behaves like `npm run dev`, and the npm-script spellings (`dev:stop`, `sandbox:destroy`, `typegen`, …) work as aliases. Run it as `npx --no -- cdk-blocks <command>`: `--no` uses the installed CLI and never downloads a package, while a bare `npx blocks` would install the unrelated `blocks` package from npm.
+
+  The CLI prints results on stdout and progress on stderr, supports `--output json` and `--query <field>` (for example `API_URL=$(npx --no -- cdk-blocks deploy --query apiUrl)`), and exits 0 on success, 1 on failure, 2 on a usage error and 130 when interrupted. `cdk-blocks destroy` shows the stack it deletes and asks first; in a non-interactive run it requires `--yes`. Local server settings can be set in `package.json` under `"blocks": { "dev": { … } }`; without a `frontendCommand` the frontend is detected from `vite` or `next` and started on `frontendPort` (default 3100). `@aws-blocks/blocks` now depends on `tsx`; the CLI uses the app's own `tsx` first, else that one, for its lifecycle runners and for client generation. `blocks-generate-client` falls back to it the same way, so it no longer needs the app to install `tsx`. CDK synth still runs the app's own `tsx` (the `app` command in `cdk.json`, or `npm exec tsx` for the sandbox commands), so apps keep `tsx` as a devDependency, as the templates do.
+
+  Inside an app, run it as `npx --no -- cdk-blocks <command>` or through the npm scripts. Without installing, run `npx -p @aws-blocks/blocks cdk-blocks <command>`: a plain `npx @aws-blocks/blocks` cannot choose a command, as none has the package's unscoped name.
+
+  `@aws-blocks/blocks/scripts` re-exports `@aws-blocks/core/scripts`, so the lifecycle scripts it exports now honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM`, and it exports `readAwsIdentity()`, `describeDeploymentCredentials()`, `resolveDeploymentTarget()` and `log`.
+
+- 792e269: feat(blocks): add `cdk-blocks migrate`
+
+  `npx --no -- cdk-blocks migrate` moves an app that create-blocks-app scaffolded with `aws-blocks/scripts/*.ts` wrappers to the `cdk-blocks` CLI. It rewrites each `package.json` script whose value is exactly a generated command (for example `"deploy": "tsx aws-blocks/scripts/deploy.ts"` becomes `"deploy": "cdk-blocks deploy"`), moves the port and frontend settings of a generated `server.ts` to `package.json#blocks.dev` (`"frontend": false` for a backend-only one), and deletes the generated wrappers that nothing uses any more. A wrapper that a script or any app file other than Markdown docs still uses is kept: it reads TypeScript and JavaScript sources (including nested and parent-relative imports such as `import '../server.js'`), shell scripts, Dockerfiles, and dot directories such as `.github` and `.vscode`. In a git repository the app files are the tracked files and the untracked files that are not gitignored, in any directory, so gitignored build output and logs do not count, plus the files of a submodule or an untracked git repository inside the app; outside git, or where git does not track the app (a parent repository ignores its directory), they are the files under the app directory other than `node_modules`, `.git`, build output (`build-temp` included) and tool caches. Markdown docs and editor rules (`*.md`, `*.mdx`, `*.mdc`), binary files, files over 1 MiB and symbolic links never count. It does not read outside the app directory, so check the scripts of a parent workspace yourself. It recognises every wrapper version that create-blocks-app has shipped, ignoring whitespace. A wrapper you changed is never deleted, only reported. If you changed `server.ts`, the `sandbox` scripts are kept too, because `sandbox.ts` starts that server, and a `sandbox.ts` that stays keeps its `server.ts`; in the Amplify overlay, `blocks:stop` and `stop.ts` are kept as well, because that `stop.ts` stops the server's own port. If `.blocks/config.json` is missing or has no `stackId`, as in apps scaffolded before create-blocks-app wrote it, the `deploy` and `destroy` scripts and wrappers are kept, because `cdk-blocks deploy` and `cdk-blocks destroy` need it; the report says how to add it. Every other script is left alone.
+
+  Run `npx --no -- cdk-blocks migrate --dry-run` first to see the plan. Unless you pass `--force`, it refuses an app outside git (or where git is not installed), a git working tree with uncommitted changes, an app that git does not track (so git could not undo the changes), and a repository that git fails to read, such as one with "dubious ownership", quoting git's error. `--output json` prints `{changed, removed, kept, scriptsRewritten, devConfig}`, where `devConfig` is the `blocks.dev` config that migrate adds to `package.json` (or, with `--dry-run`, would add), or `null`. It exits 0 when the app is fully migrated and 1 when kept items remain for you to finish by hand; exit 1 is a report, not a crash, and running it again is safe.
+
+  It recognises the wrappers of every public create-blocks-app release up to 0.4.0, including the `sandbox.ts` that runs `npm run sandbox:preview`, whose `"sandbox:preview": "tsx aws-blocks/scripts/sandbox.ts --preview"` becomes `"sandbox:preview": "cdk-blocks sandbox preview"`.
+
+  Fixes from CLI testing:
+
+  - Two `cdk-blocks migrate` runs at the same time no longer crash with `ENOENT` when one deletes a wrapper that the other is reading or planned to delete.
+  - `cdk-blocks migrate --dry-run` no longer says "everything else was migrated" above the items it would keep.
+  - The hint for an app without `stackId` now says that `<stackId>-prod` must equal the production stack name in `aws-blocks/index.cdk.ts`: an app that hard-codes `my-blocks-stack-prod` uses `{"stackId": "my-blocks-stack"}`.
+  - A wrapper that matches no known version is reported as an "unrecognised version (only public create-blocks-app releases are recognised)", not as "customized": it may be an unmodified file from a release that migrate does not know. The README and `cdk-blocks migrate -h` say that only the public releases are recognised.
+  - A generated script that still runs a kept, unrecognised wrapper (for example `dev` and `dev:server` with a changed `server.ts`) is now listed in `kept` with the reason, so `--output json` names every script that still uses `aws-blocks/scripts`.
+  - `cdk-blocks migrate` writes `blocks.dev.frontendCommand` only when it differs from the command `cdk-blocks dev` detects from the `vite` or `next` dependency; the ports still move. A migrated default app gets `{"frontendPort": 3100}`, as new apps do, so `cdk-blocks dev --frontend-port` keeps working.
+  - With `--output json`, a refusal (uncommitted changes, an app git does not track, a git failure) prints `{"error": {"message", "hint"}}` on stdout, so a script can tell it from kept items, which also exit 1. `cdk-blocks migrate -h` and the README list the exit codes: 0 fully migrated, 1 kept items remain or refused, 2 usage error.
+  - `cdk-blocks migrate` keeps a wrapper that a CI workflow, shell script, Dockerfile or script runs from another working directory: a bare `scripts/deploy.ts` or `deploy.ts` there now counts as a use (`working-directory: aws-blocks` with `npx tsx scripts/deploy.ts`, `cd aws-blocks/scripts && npx tsx typegen.ts`). In a monorepo it also reads every `package.json` and every CI, shell, Make and Docker file that git tracks outside the app, at any depth (`.github/workflows/*`, `scripts/deploy-web.sh`, `ci/Makefile`, `tools/release/package.json`; not under `node_modules`, nor over 1 MiB), and, when the app is in a git submodule, those files of the superproject, so it no longer deletes a wrapper that a root workflow, a monorepo script or a sibling workspace still runs.
+  - `cdk-blocks migrate --query <path>` checks the path against the result before anything runs, as the other commands do: `kept.0.reason`, `scriptsRewritten.<script>.to` and `devConfig.frontendPort` are accepted, and a typo exits 2 with the fields it could be.
+  - `cdk-blocks migrate --query <path>` prints a refusal only as the error on stderr, with nothing on stdout, also under `--output json`: `--query` prints one field of the result, and a refusal has no result. The `{"error"}` document is for `--output json` without `--query`.
+  - An app `package.json` that is not valid JSON stops `cdk-blocks migrate` with `cannot read <app>/package.json: <the parse error>`, as the other commands say, instead of only `Unexpected end of JSON input`.
+  - In a monorepo, a file above the app counts as a use of a wrapper only when it names this app: `apps/web/aws-blocks/scripts/deploy.ts` (relative to the repository top or to the file), or a bare `aws-blocks/scripts/deploy.ts`, `scripts/deploy.ts` or `deploy.ts` in a file that changes into the app (`working-directory: apps/web`, `cd apps/web`). Before, `apps/api`'s workflow, with `working-directory: apps/api` or `apps/api/aws-blocks/scripts/typegen.ts`, kept `apps/web`'s wrappers and made its migration exit 1.
+  - An app `package.json` that is valid JSON but not an object (`null`, an array, a string) stops `cdk-blocks migrate` with `<app>/package.json must be a JSON object, not null.` and changes nothing, instead of `Cannot read properties of null (reading 'scripts')`, or `Nothing to migrate` for an array or a string.
+  - A path written with backslashes counts as a use of a wrapper: `npx tsx aws-blocks\scripts\deploy.ts` in a `.cmd`, `.bat` or `.ps1` file (or a `package.json` script) keeps `deploy.ts`, which `cdk-blocks migrate` deleted before.
+  - On Windows, two `cdk-blocks migrate` runs at the same time no longer crash with `EPERM: operation not permitted, rmdir '…\aws-blocks\scripts'`: a directory that the other run holds or is deleting is tried again, then left to it.
+  - Outside git, or where git is not installed, `cdk-blocks migrate` now refuses unless you pass `--force`, as it does for an app that git does not track: git could not undo the rewritten scripts or the deleted wrappers. The hint points to `--dry-run` first, and `--output json` prints the `{"error"}` document.
+  - In a monorepo, a quoted `cd` or `working-directory` into the app now counts when it holds an escaped quote (`cd "apps/we\"b"`) or a command substitution: `cd "$(git rev-parse --show-toplevel)/apps/web" && npx tsx aws-blocks/scripts/deploy.ts`, or `cd "$(dirname "$0")/../apps/web"` from the script's own directory. Before, `cdk-blocks migrate` deleted `deploy.ts` there and exited 0 while the root script still ran it.
+  - A `.blocks/config.json` that is not valid JSON is no longer reported as missing: the kept `deploy` and `destroy` items say `.blocks/config.json is not valid JSON (<the parse error>): fix <path>, then run cdk-blocks migrate again`, as core's deploy and `cdk-blocks whoami` do, instead of telling you to create the file.
+  - A `package.json` edit made while `cdk-blocks migrate` scanned the app is no longer overwritten: migrate now stops with `package.json changed while cdk-blocks migrate ran; nothing was written.` before it writes or deletes anything, also with `--force`, and `--output json` prints the `{"error"}` document. Before, it wrote the scripts it had planned over the edit, and could delete a wrapper that a newly added script ran.
+  - A wrapper that a field of the app's `package.json` other than `scripts` runs is no longer deleted: a `lint-staged`, `simple-git-hooks` or `nodemonConfig` block with `tsx aws-blocks/scripts/typegen.ts` (or a bare `scripts/deploy.ts` after `cd aws-blocks`) keeps that wrapper, reported as `generated, but still used by package.json#lint-staged`. Before, `cdk-blocks migrate` read only the `scripts` of the app's own `package.json`, deleted the wrapper and exited 0.
+
+- 9ebf67a: An API namespace can run on a `container` compute:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+  ```
+
+  The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/aws-blocks/api/render`.
+
+  - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
+  - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+  - The load balancer drops request headers that aren't valid HTTP before they reach a task.
+  - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 35 s) before it shuts down.
+  - A `Scope` with a container `compute` now places its `ApiNamespace`s on that container too, instead of failing synth.
+  - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.
+  - `runContainer()` takes the backend module (`runContainer({ backend })`) and serves its API on port 8080, with readiness on port 8081; called without it, the container answers a health check on port 8080 as before. A container compute passes it only when the compute serves API traffic.
+  - The container compute's dashboard section gains API request, 5xx, latency and task-health widgets.
+
+- 5f55dac: feat(core): opt in to HTTP error statuses for an API namespace
+
+  `ApiNamespace` takes a new `httpErrorStatus` option. With `httpErrorStatus: true`, a call that throws an `ApiError` with a 4xx status — such as `requireAuth()`'s 401 — is answered with that HTTP status instead of 200, so API Gateway and CloudFront metrics, access logs, WAF rate rules and 4xx alarms can see rejected calls:
+
+  ```ts
+  export const api = new ApiNamespace(
+    scope,
+    "api",
+    (context) => ({
+      async getNote() {
+        const user = await auth.requireAuth(context); // signed out → HTTP 401
+        return notes.get(user.userId);
+      },
+    }),
+    { httpErrorStatus: true },
+  );
+  ```
+
+  The JSON-RPC body is unchanged, and the TypeScript client reads it whatever the status, so `isBlocksError()` and `error.status` behave exactly as before. 5xx and other failures stay HTTP 200. It applies in the local dev server and on AWS alike. The default is unchanged: every RPC response stays HTTP 200.
+
+  Two things to check before turning it on, both documented on the option: CloudFront error pages apply to the proxied API too, so on a `Hosting` distribution that maps 403 or 404 to a page, those responses would reach the client as HTML. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` now fails synth for that combination with a `HostingError` named `HttpErrorStatusErrorPagesError`; remove the 4xx error pages or leave `httpErrorStatus` off for those namespaces. The hosting README describes the gap. (During review this was a synth warning, `@aws-blocks/hosting:HttpErrorStatusErrorPages`; it was never released as one.) And the Dart client, with an `authProvider`, refreshes its token and runs the method once more on any HTTP 401, so a method that throws 401 after a side effect can run twice for it: put the guard first (`requireAuth()` as the first statement, or `auth.protect`).
+
+- 2c9005f: fix(core): reject malformed native declarations instead of dropping them
+
+  An `aws-blocks` key that is present but not an object dropped every declaration
+  inside it; it is now `"aws-blocks" must be an object (declared by <block>)`. A
+  `null` key is an error rather than an absence, and an absent key still skips. An
+  unrecognized field on a binding with a usable `id` is rejected rather than
+  silently stripped, both generic-arity errors now name the binding and the
+  declaring block, and a registration, platform entry or package entry carrying a
+  non-enumerable field is rejected too.
+
+  Behavior change (0.x minor = breaking channel): generation now exits 1 where it
+  wrote a spec before, for a `null` or non-object `aws-blocks` key and for an
+  unrecognized binding field. Remove the offending key or field.
+
+- 44c7377: feat(core): `defaults.strictNamespacePlacement` serves each API namespace only on the compute it is placed on
+
+  An `ApiNamespace` given its own `compute` is routed to that compute at `/aws-blocks/api/{namespace}`, but the bare `POST /aws-blocks/api` endpoint is served by the default compute and dispatches on the JSON-RPC body. A raw call such as `{ "method": "reports.build" }` to the bare endpoint therefore runs `reports` on the default compute, outside the VPC, container or sizing its placement was meant to give it.
+
+  - **New `BlocksDefaults.strictNamespacePlacement`** (`false` in both presets). Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the preset you already use, and each compute's dispatcher serves only the namespaces placed on it, on any RPC path. A call to a namespace placed elsewhere gets the same `-32601` "method not found" error as an unknown namespace. Namespaces without a placement keep running on the default compute, on the bare endpoint and on their own path. The typed TypeScript client and the Kotlin, Swift and Dart clients already call each namespace at its own path, so they keep working. A raw HTTP caller, or a native client generated before per-namespace paths, that posts a placed namespace to the bare endpoint is refused once you turn it on. The option applies only to deployed computes: the local dev server keeps serving every namespace on every path.
+  - **Every API compute rolls on a change.** The placement map is set in the environment of every compute that serves an API namespace, the default one included, so turning the option on or moving a namespace to another compute updates each function and task definition and no running compute keeps an old map. Synth fails with a clear error if the encoded map is over 2 KB. A compute whose environment has its compute id but no readable map fails to start (a Lambda function retries on the next request) instead of serving every namespace.
+  - **New synth warning** `blocks:apigateway:bare-endpoint-serves-placed-namespaces` when some namespace runs on its own compute and `strictNamespacePlacement` is off. Turn the option on, or, if raw callers still need the bare endpoint, acknowledge the warning with `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` on the stack or backend returned by `create()`.
+
+  The option keeps a namespace's code on its own compute and network. It doesn't split IAM: every compute still runs under the app's one execution role.
+
+- afad513: `defaults.allowedOrigins`: plain origins such as `https://app.example.com` now match exactly (case-insensitive), so their dots are literal. `http`/`https` plain origins are compared in the form the browser sends (default port dropped, internationalized hosts in punycode), and entries with user info, a path, a query or a fragment are rejected. Entries with regex syntax are still anchored regexes, but must compile on their own and escape `.` (unless followed by a quantifier, as in `.*`); glob-style entries such as `https://*.example.com` and patterns with nested quantifiers such as `(a+)+` are rejected, and brace quantifiers are limited to `{n}`. Invalid entries now fail `cdk synth` from `BlocksStack.create()` / `BlocksBackend.create()` with a message naming the entry, and are ignored (and logged) at runtime. The README examples now use plain origins, and suggest `https://[a-z0-9-]+\\.example\\.com` for subdomains.
+- 5f55dac: New apps now use the unified `Auth` block. Every template that signs users in (`default`, `react`, `demo`, `api-only`, `sql` and the auth template) now uses `Auth` from `@aws-blocks/blocks` instead of `AuthBasic` or `AuthCognito`. The block id stays `'auth'`.
+
+  **Sign-up now needs the emailed code.** A new account confirms its email address with a 6-digit code, then the user is signed in automatically, with no second password entry. With `AuthBasic`, users were signed in as soon as they signed up. When you run locally (`npm run dev`), no email is sent: the code is printed in the terminal, and each template's e2e tests read it from `.bb-data/`. Once deployed, Amazon Cognito emails the code. Its default sender is limited to 50 emails a day.
+
+  **The `auth-cognito` template is now `auth`.** There is one auth block now, so the template is named for what it shows: email sign-up with a code, groups with `requireRole`, profile attributes, password change and sign-out everywhere. `--template auth-cognito` still works and scaffolds `auth`. The template now signs in with email + password instead of a passwordless email code, because Cognito can only send that code through Amazon SES, which a user pool created by the block doesn't have.
+
+  The `amplify` overlay's token verifier now implements the `BlocksAuth` interface and throws the same error names as `Auth` (`NotAuthenticatedException`, `NotAuthorizedException`), and its `requireGroup()` is now `requireRole()`. The `AGENTS.md` scaffolded into every app explains how to configure `Auth`, gate methods with `requireAuth` / `requireRole`, and where the `Auth` docs live.
+
+- 9801a5b: fix(core): give each deploy stage its own CDK outputs file
+
+  `npm run deploy` and `npm run sandbox` both wrote `--outputs-file .blocks-sandbox/outputs.json`, and the CDK CLI replaces that file with the stacks of the one invocation that wrote it rather than merging into it. A production deploy therefore left only its own stack in the document the sandbox reads, and a deploy that failed on its first stack wrote an empty document, blanking the record of a stack that was still standing.
+
+  Each stage now writes its own document:
+
+  - the sandbox keeps `.blocks-sandbox/outputs.json`
+  - production writes `.blocks-sandbox/outputs.production.json`
+
+  Both stay in `.blocks-sandbox/`, which is already ignored, so neither can be committed by a missing ignore entry.
+
+  `cdk-blocks destroy` and `cdk-blocks sandbox destroy` now forget the deleted stack in the document of the stage being destroyed, instead of always in `outputs.json`. A production destroy also clears its stack from a pre-split `outputs.json`, so an app that deployed production before upgrading is not left recording a stack that no longer exists.
+
+  **If you read `.blocks-sandbox/outputs.json` for production** (a script, a CI step, or a launcher), read `.blocks-sandbox/outputs.production.json` instead. `OUTPUTS_FILE` from `@aws-blocks/core/scripts` carries both paths. The next deploy of each stage writes its own document, and `cdk-blocks sandbox console` derives the sandbox stack rather than naming one out of a pre-split `outputs.json`.
+
+  **If you call `openConsole({ outputsFile })` directly** (the Kotlin and Swift example apps, and any app scaffolded before the `cdk-blocks` CLI), it still opens the document's first stack. On an app that deployed production before upgrading, that is production's stack until one `npm run sandbox` refreshes `outputs.json`, so run it once or delete the stale file.
+
+- be8864c: feat(bb-distributed-table): add a `consistentRead` option to `get()`
+
+  `get(key, { consistentRead: true })` reads the item with a strongly consistent DynamoDB `GetItem` (`ConsistentRead: true`), so it sees every write that succeeded before the read. Use it when the next step depends on an item that was just written, such as an existence or ownership check. Without the option `get()` stays eventually consistent, as before. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent and accepts the option.
+
+  The new `GetOptions` type is exported from `@aws-blocks/bb-distributed-table`, and from the umbrella `@aws-blocks/blocks` as `DTGetOptions`.
+
+- 64f7247: `EmailClient.sendBatch()` now takes at most 100 messages per call by default. A larger batch throws `InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is sent, locally and when deployed. Before, a single call could send any number of messages, so one request to an exposed method could fan out into an unbounded number of SES sends.
+
+  **Behavior change:** a `sendBatch()` call with more than 100 messages that worked before now throws. Split the messages across calls, or set the new `maxBatchSize` option (a positive integer) to raise the cap for a trusted server-side job. An invalid `maxBatchSize` throws `InvalidInputException` from the constructor, and fails at synth.
+
+  The SES send permission granted to the app's execution role is now scoped to the stack's own region and partition, instead of every region. The runtime only ever calls SES in the Lambda's own region, so this does not change what an app can send.
+
+  The README has a new security section: an `ApiNamespace` method that passes caller input to `send()` or `sendBatch()` without a gate is an open relay. It shows gating with `auth.requireAuth(context)` and building the message on the server. The umbrella `@aws-blocks/blocks` gets a minor bump because it re-exports `EmailClient`, so the `sendBatch()` behavior change reaches umbrella users too, and because the `bb-email-client` README/DESIGN docs it bundles have changed.
+
+- fb29c06: feat(hosting): lock the CloudFront door's server origin with a random secret, a regional web ACL and opt-in access logs
+
+  The API Gateway REST API that CloudFront reaches the SSR Lambda through now
+  requires a random origin-verify `Referer` value that Secrets Manager generates
+  once per stack. The REST API policy and the CloudFront origin read it through a
+  CloudFormation dynamic reference, so it no longer appears in the template and
+  can't be derived from the stack name. A Nuxt IPX image optimizer gets its own
+  REST API with its own secret.
+
+  With `waf: { enabled: true }`, each server-origin stage also gets a REGIONAL
+  web ACL with the distribution's rules and rate limit. Its CloudWatch Logs keep
+  only the requests a rule blocked or counted, with the `Referer`, `Cookie` and
+  `Authorization` headers redacted, and it keeps no sampled requests.
+
+  Cost: with `waf.enabled`, a second web ACL per stack: its monthly charge, a
+  per-request charge (every uncached SSR request is evaluated by both web ACLs),
+  and the log ingestion of blocked and counted requests. Every CloudFront + SSR
+  stack also gets one Secrets Manager secret (two with Nuxt IPX), each with a
+  small monthly charge.
+
+  New `frontDoor.features.serverOrigin` settings:
+
+  - `accessLogging` (default `false`): JSON stage access logs in CloudWatch Logs.
+    It creates the account-level API Gateway CloudWatch Logs role once per stack.
+  - `logRetention` (default one month): retention of those logs and of the
+    stage web ACL's logs.
+  - `verifySecretRotation`: bump it to rotate the origin-verify secrets.
+  - `acceptLegacyVerifyHeader`: accept the earlier derived value for one deploy
+    while upgrading. Synth warns while it is set.
+
+  Upgrading: the first deploy updates the REST API policy within seconds and the
+  distribution within minutes, so SSR requests can get 403 for those minutes.
+  To avoid this, deploy once with `serverOrigin: { acceptLegacyVerifyHeader: true }`,
+  then deploy again without it. For that deploy the SSR REST API also keeps the
+  IPX image routes it served before, and its stage web ACL is attached only on
+  the next deploy, once every edge sends the marker its rate rule exempts.
+
+- 40d25ec: fix(hosting): keep credentialed and cookie-setting SSR responses out of the shared edge cache
+
+  The hosting construct now installs an SSR cache guard in front of the SSR server it builds, and in front of every other regional compute a route targets (native Lambda handlers, buffered or streaming; Node.js servers on the Lambda Web Adapter or a Lambda Web Function), for every framework. Where the guard cannot be installed (e.g. a Lambda Web Adapter server that is not Node.js), synth emits a `@aws-blocks/hosting:SsrCacheGuardNotInstalled` warning. The guard sends `Cache-Control: private, no-store` in place of the origin's value when:
+
+  - the response sets cookies (`Set-Cookie`) and is not already `private` or `no-store`; or
+  - the request carries `Authorization` (unless `'authorization'` is in `cacheKeyHeaders`) or a cookie whose name is not in the SSR cache key (the Next.js preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`), and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without `private`, a future `Expires`, no caching headers while `ssrDefaultTtl > 0`, or an error status CloudFront caches without caching headers (404, 414, 500-504). Behind the CloudFront-over-ALB door, whose server-route cache key holds every cookie, only `Authorization` and `Set-Cookie` lead to the rewrite.
+
+  Responses already `private`/`no-store`, or `no-cache` without `s-maxage`, are unchanged. The cache-key names are baked into the generated guard module at synth.
+
+  **BREAKING:** SSR responses that the origin marks shared-cacheable are no longer edge-cached for requests that carry `Authorization` or cookies outside the cache key, and responses with `Set-Cookie` are never edge-cached. To keep a credentialed route cacheable, list its session cookie in `cacheKeyCookies` and/or `'authorization'` in `cacheKeyHeaders`, so the cache is keyed per credential. Client-side analytics and consent cookies (`_ga`, `_gid`, `_fbp`, consent cookies) make ISR/SSR pages uncacheable at the edge for every visitor that carries them, unless they are listed in the new `cacheGuardIgnoredCookies` option (`frontDoor.features.cacheGuardIgnoredCookies`), which the guard ignores and keeps out of the cache key; a listed cookie must never affect the rendered output.
+
+  A distribution with a server sets the error caching minimum TTL to 0 for 500, 501, 502, 503 and 504 (CloudFront caches these for 10 s by default, and caches 500 and 502-504 whatever their `Cache-Control` says), keeping any error page configured for them.
+
+  The SSR cache policy's maximum TTL (and the server-route cache policy of the CloudFront-over-ALB front door) is lowered from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
+
+  On a Lambda Web Adapter server the guard is loaded through `NODE_OPTIONS` (`--import`); a `NODE_OPTIONS` set in `compute.environment` keeps the guard loaded first.
+
+- d51b8ee: Add `KnowledgeBase.asAgentTool()`, which returns a search tool for an Agent's `tools` callback. The model supplies only the query; a required `filter` callback derives the metadata filter from the per-call tool context (set from the authenticated session), and the tool is marked `untrustedOutput: true` so retrieved text reaches the model as data. A `filter` result other than `undefined` must narrow the search (`null`, `{}` or a missing `equals` fails the call), and `maxResults` is checked when the tool is defined. The umbrella package re-exports the new `KnowledgeBaseAgentTool`, `KnowledgeBaseAgentToolOptions` and `KnowledgeBaseAgentToolResult` types.
+- 2095f31: fix(core): `ctx.request.url.pathname` no longer includes the API Gateway stage when deployed
+
+  On AWS, a `RawRoute` handler's `ctx.request.url` had the API Gateway stage in front of the path (`/prod/bench/me`), while `npm run dev` gave the route path (`/bench/me`). A handler that sub-routed on `url.pathname` passed every local test and returned its own 404 for every request after deploy. Behind `Hosting`, the stage wasn't part of the browser's URL either.
+
+  `ctx.request.url.pathname` is now the route path in every environment, on Lambda and on a container compute, which took the stage from the front door's `x-blocks-forwarded-stage` header. The origin is unchanged: on AWS it is still the host the backend received, which behind a front door is the API Gateway host. An HTTP API `$default` stage is no longer prepended either, and a request path starting with `//` no longer changes the URL's host.
+
+  This is a `minor` bump because it changes an existing value. If you build an absolute link from `ctx.request.url.pathname` or `href` while clients call the API Gateway URL directly, add the stage yourself, or build the link from your app's configured origin. The likeliest such code resolves a relative path against the request URL: `new URL('next', ctx.request.url)` used to give `/prod/…/next` and now gives `/…/next`. Building Block authors who need the externally reachable base, stage included, can use the new `getRequestBaseUrl(ctx)` from `@aws-blocks/core/bb-utils`; every transport sets it for every request it dispatches.
+
+  `@aws-blocks/bb-auth` now takes the stage for its fallback callback URL (the direct engine's `redirect_uri` when no public origin is configured) and its stub IdP issuer from `getRequestBaseUrl()`, so those URLs are unchanged.
+
+  The `@aws-blocks/bb-container-compute` design notes now say that the stamped stage goes to `getRequestBaseUrl()`, not to the request path.
+
+- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
+
+  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
+
+  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-blocks/bb-realtime` and `@aws-blocks/blocks`.
+  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
+  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
+  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
+  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
+  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
+
+  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
+
+- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
+
+  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
+
+  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
+  - The waiter state machine roles of the `DistributedTable` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
+  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
+  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
+  - The `@aws-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
+
+  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-blocks/core` and `@aws-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
+
+  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
+  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
+
+  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
+
+  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-blocks/core` README.
+
+### Patch Changes
+
+- 3d7479a: fix(bb-agent): report a turn that failed while the chat was disconnected
+
+  If the chat's connection dropped and the turn failed before it reconnected, the `error` chunk was lost. `createChat` and `useChat` then kept loading for about 11 minutes and reported "Timed out waiting for the agent to respond after reconnect." instead of the real error.
+
+  On reconnect, both clients now recognize the row the backend saves for a failed turn, including a turn a `maxLlmCalls` or `maxToolIterations` cap stopped, whose partial text they keep. They end the turn right away and pass the recorded error to `onError`, typed the same way as a live `error` chunk (for example `AgentErrors.ModelUnavailable`). When the previous turn also failed, the saved row could be that turn's, so the client keeps waiting for the turn as before.
+
+- c6a3357: `AppSetting.put()` on AWS now enforces the documented 4 KB limit before writing, the same way the local mock does: a non-secret value whose JSON serialization exceeds 4096 UTF-8 bytes throws `AppSettingErrors.ValidationFailed` and is not sent to SSM. Previously the AWS path sent every value to SSM, so a value the mock rejects with `ValidationFailed` was left to SSM's own limit check on AWS, which fails with an unnamed SDK exception. Both paths now share one check, called after schema validation.
+- 5f55dac: `AppSetting`'s CDK construct now exposes two read-only properties at synth time: `parameterName`, the SSM parameter name the setting resolves to (the explicit `name`, the `AppSetting.fromExisting()` name, or the derived default `/<fullId>`), and `secret`, whether the parameter is a SecureString. Other Building Blocks' CDK layers can now reference the exact parameter instead of assuming the default name, so a secret created with a custom `name` or via `fromExisting()` can be passed where a Building Block needs a secret. The local and Lambda runtime APIs are unchanged.
+- 5f55dac: `admin.scan` checks its filter before it reaches Cognito's `ListUsers`, in the local pool and on AWS alike: the attribute must be one Cognito can search on (`username`, `email`, `phone_number`, `name`, `given_name`, `family_name`, `preferred_username`, `cognito:user_status`, `status` or `sub`), and a value containing a double quote, a backslash or a control character is refused with `InvalidParameterException` (400). Cognito does not honour the `\"` escape its reference documents (against a real user pool, an escaped quote still ends the value and the rest runs as filter syntax), and it documents no escape for a backslash. The filter is checked once, when `scan` is called, and the pages are fetched with that checked copy, so changing the filter object afterwards has no effect. A filter longer than Cognito's 256-character limit is refused the same way, and the local pool filters `status` and `cognito:user_status` on each account's state, as Cognito does.
+- 5f55dac: `Auth` gives the same error for the same invalid sign-up or attribute update under `npm run dev` and on AWS.
+
+  - On a pool with `emailPassword: { selfSignUp: false }`, `signUp` always fails with `401 NotAuthorizedException`, whatever attributes it was sent, and on AWS makes no Amazon Cognito call.
+  - When one write to `signUp`, `updateUserAttributes`, `admin.createUser` or the new-password step of `confirmSignIn` breaks several attribute rules, both runtimes report the same one, whatever order the attributes are in: a value that isn't a string, then a value longer than 2,048 characters (both `400 InvalidParameterException`), then `email_verified` / `phone_number_verified` set through a client call (`401 NotAuthorizedException`), then an attribute your user pool doesn't have, `sub`, or an immutable attribute (`400 InvalidParameterException`). For example, `{ 'custom:undeclared': 'x', email_verified: 'true' }` on `signUp` is `401 NotAuthorizedException` on both.
+
+- 5f55dac: The `Authenticator` renders each action as a `<form>`, so browsers and password managers see the username and password fields together (Chrome no longer warns that the password inputs are not in a form). Enter in any field or a click on the button submits it once, and it never reloads the page; native validation is off, so the server's error is the one shown. Inputs carry `autocomplete` hints by default: `username`, `current-password` (`new-password` on sign-up and for a new password), `one-time-code` for codes, `email` for an email field and `tel` for `phone_number`. A field override's `autocomplete` still wins. Because each action is a form, a `<button>` without a `type` inside a field's `render` override now submits the action (the HTML default, `type="submit"`); give a button that should not submit `type="button"`. The `data-testid` hooks are unchanged; `authenticator-action-<action>` is now the `<form>` element.
+- 5f55dac: On AWS, `Auth` checks user-attribute values itself before it calls Amazon Cognito, so a client that sends a value that isn't a string gets the same `400 InvalidParameterException` it gets under `npm run dev`. A JSON-RPC or native client can send any JSON, and the AWS SDK passes a number, boolean, object, array or `null` to Cognito as-is, which Cognito answers with `500 InternalErrorException`. `signUp`, `updateUserAttributes`, `admin.createUser` and the new-password step of `confirmSignIn` apply these rules first, and a rejected write makes no Cognito call: the value must be a string of at most 2,048 characters (`InvalidParameterException`), `sub` can't be written (`InvalidParameterException`), and `email_verified` / `phone_number_verified` can't be set through `signUp`, `updateUserAttributes` or `confirmSignIn` (`NotAuthorizedException`). `admin.createUser` can set them. Cognito checks attribute names and immutable attributes against your deployed user pool.
+- 5f55dac: When synth refuses a change against the user-pool immutability baseline, the error names the case it cannot tell apart from a deployed change: one that was synthesized but never deployed. The baseline is rewritten on every passing synth, not after a deploy. So if you synthesize a new custom attribute or `users.caseSensitive` setting and then undo it, synth refuses the undo even though no pool ever had the setting.
+
+  - For a change to a user-pool property Cognito cannot change, the error lists what is wrong, then gives the re-baseline command for a change that was never deployed (`If this was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=<fullId> …`), then the revert advice for a deployed pool.
+  - For a change that removes the user pool, the error starts with the danger: if the pool was ever deployed, the next deploy deletes it and every user in it, and nothing at deploy time stops that. It then tells you to check your deployed stack, and only after that gives the re-baseline command for a pool that was never deployed.
+
+- 5f55dac: `Auth` checks the values of its boolean options at construction, in `npm run dev`, at synth and in Lambda alike. A non-boolean `selfSignUp` is rejected at construction, so `emailPassword: { selfSignUp: 0 }` from untyped code can't turn self-service sign-up **on** (only `false` disables it). The same applies to every other boolean option (`autoSignIn`, `revealExistingUsers`, the `passwordPolicy.require*` flags, `deletionProtection`, `session.crossDomain`, `users.deviceTracking`, `users.attributes[].mutable` / `required`, `users.caseSensitive`, and a SAML provider's `signRequest`), and `emailPassword`, `passkeys` and `allowBearerAuth` must be a boolean or an options object. The error names each option and the value it got, for example ``- `emailPassword.selfSignUp` must be `true` or `false`, got the number 0``. TypeScript code that compiles is unaffected.
+- 5f55dac: A federated sign-in callback checks `state` before it shows an error. Error callbacks (`error`, `error_description`) are honoured only when they carry the `state` of the sign-in in progress, so a crafted link to `/aws-blocks/auth/callback` can't make your app answer with an error name, status or message of an attacker's choosing while a user signs in with a social, SAML or OIDC provider. Anything else gets the same `InvalidStateException` as a forged success callback. Genuine provider errors, including `validateUser` rejections on a first federated sign-in, are reported to the user.
+- 5f55dac: The cookie helpers' documentation now names `bb-auth` as their caller and refers to `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` as the removed blocks they replaced.
+- 5f55dac: Auth broadcasts are tagged per API, so `onAuthChange` for one API no longer receives another API's user. With two auth blocks on one page, signing in to one no longer hands its user to the other's listener (typed as the other's user), in this window or in another tab, and the other block's store no longer refetches.
+
+  `submitAuthAction` tags its sign-in and sign-out messages with the RPC namespace of the API it ran on (a generated client now answers `Symbol.for('aws-blocks.apiNamespace')` with it), and `broadcastAuthChange(user, api)` takes an optional `api` to do the same. An untagged message still reaches every API's listeners: `broadcastAuthChange(user)` without an `api`, and a message from a tab running an older `@aws-blocks/auth-common`. An API that is not a generated client (a hand-written `AuthStateApi`) has no namespace: `submitAuthAction` on it sends untagged broadcasts, and its listeners and store receive every message, tagged or untagged. The message format (the `blocks-auth` channel and the `blocks-auth-change` window event, `{ type: 'auth-change', user }`) only gains the optional `api` field, so tabs running an older bundle keep working.
+
+- 5f55dac: Docs: the `AuthFieldOverride` reference documentation no longer names `bb-auth-supabase`, a package AWS Blocks does not ship.
+- 5f55dac: Federated sign-in callbacks compare the returned `state`, and the ID token's `nonce`, in constant time, so response timing reveals nothing about a guessed value. A `state` or `nonce` of the wrong length or encoding is rejected with the usual `InvalidStateException` or `IdpErrorException`.
+- 5f55dac: `auth.createApi()` is typed by the block's options, so the frontend gets the same gates as the server-side methods, and the signed-in user with its own groups and attributes.
+
+  - **Actions.** `setAuthState` takes `AuthActionInputOf<O>`: the password actions (`signIn`, `signUp`, `confirmSignUp`, `resendSignUpCode`, `autoSignIn`, `resetPassword`, `confirmResetPassword`, `confirmSignIn`) need email + password, the passkey actions need `passkeys`, and `confirmSignIn` takes only the challenges the configuration can produce: the MFA challenges follow `mfa.types` (and `mfaType` is one of them), and the first-factor ones need `users.authFlow: 'USER_AUTH'`. On an `emailPassword: false` block, `authApi.setAuthState({ action: 'signIn', username, password })` and `submitAuthAction(authApi, { action: 'signIn', … })` are compile errors. A setting the compiler cannot see (the wide `Auth` type, a `boolean`-typed option, a union `authFlow`, a wrapped pool, `mfa.types` typed `MfaFactor[]`) keeps its actions.
+  - **User.** `AuthState.user` is `AuthStateUser<O>`: the signed-in `AuthenticatedUser` (`groups` typed by `users.groups`, `attributes`, `userSub`, `signInProvider`) without the server-only `claims` and `federatedIdentity`. `onAuthChange`, `AuthenticatedContent`, `subscribeAuthState`, `getAuthStateSnapshot` and `submitAuthAction` pass it on, so `onAuthChange(authApi, (user) => user?.groups)` compiles with no cast and no `api.me()` endpoint. `AuthUserOf<typeof authApi>` names the type.
+  - **`@aws-blocks/auth-common`.** `AuthStateApi` and `AuthState` now take these as optional type parameters (`AuthStateApi<I, U>`, `AuthState<U>`), defaulting to `AuthActionInput` and `AuthUser`, so code that names them, and helpers such as `Authenticator(api)`, accept every narrowed API unchanged; `AuthStateUser` is an `AuthUser`. A custom renderer that builds a wide `AuthActionInput` from runtime `action.fields` takes the API as a plain `AuthStateApi`, as `Authenticator` does. `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange` and `AuthenticatedContent` are now generic over the API you pass (`submitAuthAction<A extends AuthStateApi<never>>(api: A, input: Parameters<A['setAuthState']>[0])`), and type-check on TypeScript 5.0 and later.
+  - **Federated sign-in** is not a `setAuthState` action: it is a browser redirect, the `signIn:<id>` action's `url`. `FederatedActionNameOf<O>` types those names.
+  - **Native clients.** The narrowing is TypeScript-only. The OpenRPC spec describes `setAuthState`'s input and `AuthState` in their wide form, so differently configured blocks generate the same native types; the server enforces each block's configuration.
+
+  New types: `AuthActionInputOf<O>`, `AuthStateApiOf<O>`, `AuthStateUser<O>`, `ConfirmSignInInputOf<O>`, `FederatedActionNameOf<O>` and `AuthUserOf<A>`.
+
+- 2eb62fa: The `hasAuthError` example in the `@aws-blocks/core` README and JSDoc now submits the action with `submitAuthAction` from `@aws-blocks/blocks/ui` and imports `hasAuthError` from `@aws-blocks/blocks/client`. The old example called `authApi.setAuthState()` directly, which signs the user in but never notifies `onAuthChange` or `AuthenticatedContent`, so a custom form built from it stayed on the sign-in screen. The `installCookieJar` documentation from `@aws-blocks/blocks/utils` now shows up in editors, because it is attached to the function instead of an internal variable.
+
+  The `AGENTS.md` that `create-blocks-app` adds to new apps now says that `onAuthChange` fires for sign-ins and sign-outs made through `Authenticator` or `submitAuthAction`, lists `submitAuthAction` for custom auth forms, and warns that a direct `authApi.setAuthState()` call notifies nothing on the page.
+
+- 5f55dac: `Auth` names the option that is off when an untyped caller (plain JavaScript, or a native client generated from the wide spec) sends an action the block does not offer, before the session check or any Cognito call. A passkey action (`signInWithPasskey`, `startPasskeyRegistration`, `completePasskeyRegistration`, `listPasskeys`, `deletePasskey`) or a `confirmSignIn` `webauthn` challenge on a block without `passkeys` answers `PasskeysNotEnabledException` (409). A `confirmSignIn` MFA challenge (`code`, `mfaType`, `totpSetup`, `email`) with MFA off answers `MfaNotEnabledException` (409). A factor outside `mfa.types`, or a `password` / `firstFactor` challenge without `users.authFlow: 'USER_AUTH'`, answers `InvalidParameterException` naming the option. A block that wraps a pool with `userPool: Auth.fromExisting(…)` keeps every challenge.
+
+  The runtime backstops of the MFA methods (`setUpTotp`, `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`) throw `MfaNotEnabledException` with MFA off, and those of the passkey methods throw `PasskeysNotEnabledException` without `passkeys`. `WebAuthnNotEnabledException` is Cognito's answer for a user pool without a WebAuthn configuration.
+
+  `@aws-blocks/auth-common`'s `AuthErrors` gains `PasskeysNotEnabled` and `MfaNotEnabled`.
+
+- 5f55dac: The sign-in UI now shows a signed-in user's email address instead of a generated id. When users sign in with their email or phone number (`users: { signInWith: ['email'] }`), Amazon Cognito gives each user a generated username (a UUID), and the `Authenticator` and `AccountMenuBar` showed that UUID ("Signed in as: 815424a9-…").
+
+  `AuthState.user` now has an optional `displayName`, which `Auth` sets in the signed-in state:
+
+  - a username the user chose stays as it is;
+  - otherwise it is the user's email address, then their phone number (each skipped if the session's ID token marks it unverified, as it does for an email the user changed with `updateUserAttributes` and hasn't confirmed yet), then `preferred_username`, then the username.
+
+  The `Authenticator` and `AccountMenuBar` show `displayName`, and fall back to `username` when it is absent. `displayName` is for display only, so keep keying data on `userId` / `userSub`. Only the signed-in caller's own state carries it, never a signed-out or mid-sign-in state. Users returned by `requireAuth()` and `getCurrentUser()` don't have it; read `user.attributes.email` on the server instead.
+
+  The `auth` template's status line now shows `displayName` directly.
+
+- 5f55dac: `Auth` warns at synth when a block's first baseline records no user pool of its own (a configuration without a pool-backed sign-in method, or `userPool: Auth.fromExisting(…)`). An app moving from `AuthCognito` has no baseline yet, so its first `Auth` synth can't refuse a configuration that drops the pool. If the stack already had a pool for that block, the deploy deletes it and every user in it, unless the pool was already deployed with `removalPolicy: 'retain'`. The warning (`@aws-blocks/bb-auth:FirstBaselineWithoutPool`) says so and points to `MIGRATION.md`.
+
+  `MIGRATION.md` starts its checklist with the safe order. First deploy the codemod's output unchanged and commit the baseline it writes. Change the configuration only after that, because from then on synth refuses a change that would remove the pool. For `preferredChallenge: 'EMAIL_OTP'`, the guide and the codemod's TODO and summary warn against wrapping the block's own pool with `Auth.fromExisting`, which deletes it. `DESIGN.md` explains what the deploy-time guard does not cover, and recommends committing baselines from your deploy workflow.
+
+- 5f55dac: Hardening:
+
+  - `Auth`: when account state is hidden (the default), the answers `Auth` withholds from the client on `resendSignUpCode`, `resetPassword`, `confirmSignUp` and `confirmResetPassword` (for example a malformed username, or an expired code reported as a wrong code) are logged at `warn`, so you can see them with a `warn`-level logger. The username is redacted from the logged Cognito message.
+  - `Auth`: the "already validated" marker that lets the PreSignUp trigger skip a second `validateUser` call is signed with its own key, derived from the session secret, never with the session secret itself.
+
+- 5f55dac: `Auth` doesn't reveal whether an account exists, or whether it is already confirmed, on the steps after the sign-up form. With `emailPassword.revealExistingUsers` off (the default), an unknown user, an unconfirmed user and an already-confirmed user get identical answers from `confirmSignUp` (the wrong-code error, also for an expired code), `resendSignUpCode` (a silent success; a confirmed user is not sent a code), `resetPassword` (the same delivery details) and `confirmResetPassword` (the wrong-code error). This applies through the sign-in UI and when you call these methods directly. (`AuthCognito` passed Cognito's distinct errors through, so confirming or resending a code for an already-confirmed account let anyone check which accounts exist; an app moving to `Auth` gets the masked answers.) Set `revealExistingUsers: true` to get the informative errors.
+
+  The local runtime answers these steps the way Cognito does. Confirming an already-confirmed user fails, and resending a sign-up code to one sends nothing. A password reset for an unconfirmed or disabled user sends no code. A `USER_AUTH` sign-in for an unknown user gets a first-factor challenge that no answer can pass.
+
+- 5f55dac: `requireAuth().attributes` and `getCurrentUser().attributes` hold the ID token's string claims, the same locally and on AWS, so they don't include `updated_at` or `address`. Amazon Cognito's ID token carries `updated_at` as a number and `address` as an object (`{ formatted }`). `AuthCognito`'s mock reported both as strings there, which a deployed app never saw. The local ID token (`getAuthSession`) and the `claims` passed to `validateUser` carry them in Cognito's shapes. To read either as a string, call `auth.getUserAttributes(context)`, which returns them the same way on both.
+
+  The sign-in UI's `displayName` reads whether an email or phone number is verified from the session's ID token, the same way on both, so it skips an unverified email or phone number. That covers an email the user changed with `updateUserAttributes` and hasn't confirmed yet, once the session's tokens are refreshed. It works the same for a user who signs in directly with an OIDC provider that marks their email unverified, whether the provider sends `email_verified` as a boolean or as a string.
+
+- 5f55dac: A failed federated sign-in never shows the identity provider's own error text to the user.
+
+  When a social, SAML or OIDC provider sends your app back to `/aws-blocks/auth/callback` with an error, the provider's `error` and `error_description` are written by the provider (or by Cognito managed login), and they can quote the request, echo the user's login or name an internal endpoint. So the `IdpErrorException` message — the string the `<Authenticator>` renders — is one fixed message, `The identity provider '<id>' refused the sign-in.`, and the provider's text goes to the server log instead: at `info` for an ordinary refusal such as `access_denied`, and at `error` when the provider reports a fault or its text names AWS resources. The error `name` is `IdpErrorException`, so code matching errors with `isAuthError` works as usual.
+
+  The native / CLI relay is the deliberate exception: there the callback is an OAuth redirect handed back to the app that started the sign-in, so `error` and `error_description` are forwarded to it as the OAuth spec defines, and nothing is rendered to a browser. Server log lines that carry an error message redact the user's login in every case, including errors `Auth` reports as an internal error.
+
+- 5f55dac: What `bb-auth migrate` does with imports:
+
+  - `@aws-blocks/bb-auth-cognito/ui` imports move to `@aws-blocks/bb-auth/ui`, and their names are renamed to `Auth`'s (`cognitoOverrides` → `authOverrides`, `CognitoActionName` → `AuthActionName`, `CognitoNextStepName` → `AuthNextStepName`, `CognitoActionFields` → `AuthActionFields`, `CognitoActionOverride` → `AuthTypedActionOverride`, `CognitoAuthenticatorOptions` → `AuthTypedAuthenticatorOptions`) along with every place they're used.
+  - Names imported from `@aws-blocks/bb-auth-oidc/client` or `/middleware` that `@aws-blocks/bb-auth` also exports move there. The rest (`AuthOIDCClient`, `handle401`, …) stay where they are, with a TODO that names them.
+  - `import * as blocks from '@aws-blocks/blocks'` is followed: `new blocks.AuthCognito(…)`, `blocks.AuthCognitoErrors`, `blocks.CognitoUser` and the other old names are rewritten, the options are mapped, and the block id is never changed.
+  - Old imports that end up on the same module are merged into one import.
+  - An import whose name list would end up empty is left as it is, with a TODO, and the summary lists the file under "needs attention" instead of with the rewritten files.
+
+- 5f55dac: fix(bb-auth): the local user pool keeps an email / phone unique, as Cognito does
+
+  The local pool follows Cognito's rules, so code that works under `npm run dev`
+  behaves the same when deployed:
+
+  - With sign-in aliases (`users.signInWith` with `'username'`, the default), an email
+    or phone can be verified on one account only. A second user can still sign up
+    with it, but `confirmSignUp` with the right code answers `AliasExistsException`
+    (400) and leaves that user unconfirmed. `admin.createUser` answers
+    `AliasExistsException` when it marks such an email / phone verified. If a signed-in
+    user changes their email to one another account has verified and confirms it with
+    `confirmUserAttribute`, the email moves to them and is unverified on the other
+    account.
+  - When users sign in with their email / phone instead of a username (`signInWith`
+    without `'username'`), `updateUserAttributes` to an email / phone another user
+    already has answers `AliasExistsException`.
+
+  `AliasExistsException` from `confirmSignUp` is not hidden by
+  `revealExistingUsers: false`: only someone who received the code sent to that email
+  or phone can get it.
+
+- 5f55dac: Under `npm run dev`, `Auth` checks user attributes against your user pool's schema, as Amazon Cognito does on AWS, so an invalid write fails locally instead of only after you deploy. (`AuthCognito`'s mock stored any attribute it was sent.) `signUp`, `updateUserAttributes` and `admin.createUser` fail with `InvalidParameterException` for an attribute that is neither a standard attribute nor declared in `users.attributes`, a value that isn't a string, or a value longer than 2,048 characters. Updating a custom attribute declared `mutable: false` also fails with `InvalidParameterException`. Setting `email_verified` or `phone_number_verified` through `signUp` or `updateUserAttributes` fails with `NotAuthorizedException`; `admin.createUser` can set them. To store a custom attribute, declare it in `users: { attributes: [{ name: 'team' }] }`, then write it as `team` or `custom:team`.
+
+  A local password reset sends its code the way Cognito does: to a verified phone number first, then to a verified email address, but never to the contact the user has chosen as their preferred MFA factor. A user with no verified contact gets no code. Like any account Cognito can't reset, they get the usual masked "code sent" answer (or `InvalidParameterException` when `emailPassword.revealExistingUsers` is on). `AuthCognito`'s mock sent the code to the email address if the user had one, otherwise the phone number, whether or not it was verified.
+
+- 5f55dac: Under `npm run dev`, confirming a sign-up verifies only the contact the confirmation code was sent to, as Amazon Cognito does: the phone number when the pool auto-verifies phone numbers and the user gave one, otherwise the email address. (`AuthCognito`'s mock marked both the email and the phone number verified.) The default pool (`signInWith: ['username', 'email']`) auto-verifies email only, so a user who signs up with an email and a phone number has an unverified phone number, locally and on AWS.
+
+  This shows up in the display name, in which one-time-code sign-in options (`EMAIL_OTP` / `SMS_OTP`) are offered, in SMS and email MFA, and in `getMfaPreference`. To use the other contact, verify it after sign-in with `auth.sendUserAttributeVerificationCode(context, 'phone_number')` and `auth.confirmUserAttribute(context, 'phone_number', code)`, which work the same locally and on AWS.
+
+- 5f55dac: `requireAuth().attributes` and `getCurrentUser().attributes` don't include `email_verified` or `phone_number_verified`, locally or on AWS. Amazon Cognito's ID token carries these flags as booleans rather than string attributes, so a deployed app never sees them there. `AuthCognito`'s mock reported them as `'true'` / `'false'` strings, so code that read them worked only under `npm run dev`. To check whether a user's email or phone number is verified, call `auth.getUserAttributes(context)`, which returns them as `'true'` / `'false'` on both. The local ID token (`getAuthSession`) and the `claims` passed to `validateUser` carry these flags as booleans, as Cognito's do.
+- 5f55dac: `Auth` rejects `emailPassword: false` combined with `mfa` (other than `'off'`), `passkeys` or `users.deviceTracking` when you construct it, in `npm run dev`, at synth and in Lambda alike: these options apply only to email + password users, and federated users get MFA and passkeys from their identity provider. The error names each conflicting option and `emailPassword: false`, for example ``Auth 'auth': `mfa: 'required'` needs email + password sign-in, which `emailPassword: false` disables.`` `passkeys` without `users.authFlow: 'USER_AUTH'` is refused the same way at construction, as well as at synth, so `npm run dev` and Lambda reject a passkey configuration the pool cannot serve. The README quotes the exact compiler error for a gated call, and recommends keeping options in a variable declared `as const satisfies AuthOptions` (plain `satisfies AuthOptions` widens declared `users.groups` to `string[]`).
+- 5f55dac: Only the `Auth` block that owns a user pool's PreSignUp trigger answers it. So when one `Auth` creates a pool with `validateUser` and another wraps that pool with `userPool: Auth.fromExisting(…)` (for example, to use `admin`), the second block can't take over the trigger, and `validateUser` still runs for sign-ups made directly against Cognito.
+
+  Two `Auth` blocks claiming one user pool's PreSignUp trigger fail `cdk synth`, naming the event key and both blocks, like other Building Blocks that would handle the same Lambda event.
+
+- 5f55dac: `Auth` has `protect()`, for an API namespace that is deny by default. `auth.protect(scope, 'notesApi', { public: (context) => ({ ...methods }), methods: (context, user) => ({ ...methods }) })` returns an ordinary `ApiNamespace`. For each call to one of its `methods`, the session is checked first, and only then is the `methods` factory called, once, with the signed-in user, typed by the block's options (`AuthenticatedUser<O>`). So nothing in it runs for a signed-out caller, and a forgotten guard, or one called without `await`, can't leave a method open. A signed-out call to any name that isn't a `public` method gets 401 `NotAuthenticatedException`, whether or not the method exists, so the protected methods can't be listed without a session; a signed-in caller gets "method not found" for an unknown name. `public` methods (optional) run as in a plain `ApiNamespace`. A name defined in both is a compile error. With `{ role: 'admin' }` as the last argument, every protected method also requires that group, as `requireRole` does (401 first, then 403 `NotAuthorizedException`); `compute` and every other `ApiNamespace` option go in the same object and are passed on to the namespace. It works the same locally and on AWS, and the frontend calls every method like any other namespace. Existing `ApiNamespace` code is unchanged.
+
+  The OpenRPC spec (`blocks-generate-spec`) describes every method of a `protect()` namespace, public and protected, and warns, naming the namespace, if it can't list them. It also now describes the parameters of a namespace typed through a mapped type, such as one returned by a factory, by name and type, instead of as a single `args` parameter.
+
+  The `Auth` README has a "Protect every method" recipe. The `ApiNamespace` docs and the scaffolded `AGENTS.md` now recommend `auth.protect` for namespaces with signed-in methods, and say that a guard which isn't awaited protects nothing. The templates don't add a floating-promise lint rule: Biome's `noFloatingPromises` doesn't flag an un-awaited `requireAuth` / `requireRole` call, so `protect` is the safeguard.
+
+- 5f55dac: The `Auth` README has a "Recipes" section of complete, compile-checked snippets: MFA with an authenticator app (config, TOTP enrolment through `setUpTotp` / `verifyTotpSetup`, and the challenge the `Authenticator` handles), roles and an admin-only user list (`users.groups`, `requireRole`, `admin: {}`, `auth.admin.scan()`), the first admin (an `onSignIn` hook that calls `auth.admin.addUserToGroup` for an allowlisted email the pool has verified, read with `auth.admin.getUser`, since `user.attributes.email` alone does not prove ownership), and social sign-in (setting the client secret's SSM value and registering the Cognito callback URL). `@aws-blocks/bb-auth` ships its `API.md`.
+- 5f55dac: `Auth` rejects options it doesn't recognise, so a misspelled or misplaced setting is never silently ignored. TypeScript does no excess-property check on `Auth`'s inferred options type, so `{ emailPasword: false, session: { … } }` or a top-level `preferredChallenge` (it belongs under `users`) would compile and then have no effect. The constructor checks the options at every nesting level, the same way in `npm run dev`, at synth and in Lambda. It throws an error naming each unknown option's path and the likely intended one:
+
+  ```text
+  Auth 'auth': unknown options:
+    - `emailPasword`: did you mean `emailPassword`?
+    - `preferredChallenge`: it is not an option here; did you mean `users.preferredChallenge`?
+  ```
+
+  Provider ids (the keys of `providers`) are yours to choose and are never checked; the settings inside each provider are.
+
+- 5f55dac: `relayOrigin()`'s `RelayConfigError` keeps its name when it crosses the wire, and sign-in failures from an identity provider never carry the provider's raw text.
+
+  `relayOrigin()` rejects a bad `allowedRelayOrigins` entry with a `RelayConfigError`. That error is branded as an intentional Building Block error (as `AuthOIDC`'s was), so `isBlocksError(e, 'RelayConfigError')` matches on the client instead of the error collapsing to a nameless 500. Its message names only your own entry, so forwarding it leaks nothing.
+
+  The engine that verifies a `store: 'builtin'` block's providers keeps a failing provider's response body and a failing client-secret resolver's error off the wire, on a non-enumerable `cause`; tests cover the code exchange, a 5xx token endpoint, a refresh grant and a secret resolver that throws with a role ARN.
+
+- 5f55dac: Fixes made to `AuthCognito`, `AuthOIDC` and `AuthBasic` since their last release (`bb-auth-cognito` 0.2.0, `bb-auth-oidc` 0.3.0, `bb-auth-basic` 0.2.0) ship in `Auth`, which replaces them in this release. If you upgrade an `AuthCognito`, `AuthOIDC` or `AuthBasic` app to `Auth`, this is what changes for you compared with those versions.
+
+  **Security (from `AuthCognito`)**
+
+  - After `autoSignIn`, the auto-sign-in cookie (which holds the encrypted sign-up password) is actually cleared in the browser. Before, writing the session cookie overwrote the clear, so the cookie stayed for up to 15 minutes.
+  - IAM and credential errors from AWS (for example `AccessDeniedException`) no longer send their message, which names your function's role ARN and AWS account ID, to the client. The client gets a generic message with HTTP 500, and the full detail goes to the block's logger. No error message that contains an ARN or account ID reaches the client.
+  - A client can no longer tell whether an account exists. On any user pool, including one adopted with `fromExisting` that doesn't enable `PreventUserExistenceErrors`, an unknown user gets exactly the same sign-in error as a wrong password (`NotAuthorizedException`, 401, "Incorrect username or password"). The same applies to a disabled user. `resendSignUpCode` succeeds for an unknown user. `confirmSignUp` and `confirmResetPassword` answer an unknown user like a wrong code (`CodeMismatchException`). `resetPassword` returns plausible delivery details instead of an empty or placeholder destination. Both the local mock and AWS behave this way. `auth.admin.*` still reports `UserNotFoundException`.
+
+  **Behaviour (from `AuthCognito`)**
+
+  - Refreshed ID tokens are verified the same way as at sign-in. A token that fails verification signs the user out and clears the session cookie.
+  - Errors raised by the block itself keep their status. For example, "Cognito returned no tokens" is a 500, and an SRP challenge is a non-retriable 501 (it was reported as a retriable 400).
+  - `InternalErrorException` from Cognito is a retriable 500 instead of a non-retriable 400.
+  - In the local mock, masked phone numbers keep the leading `+` (`+*******0100`), matching Cognito.
+
+  **Behaviour (from `main`'s synth guards, #824)**
+
+  - Calling a runtime method of `Auth` (for example `auth.requireAuth()` or `auth.admin`) at the top level of a backend module, which runs it during `cdk synth`, throws the actionable `Auth.<method>() cannot be called during CDK synth` error that every Building Block gives, instead of a `TypeError`. `AuthOIDC.signInRoutePath()` has no `Auth` equivalent to make synth-safe: `Auth`'s sign-in routes are fixed (`/aws-blocks/auth/signin/<provider>`).
+
+  **Released in those versions (#840, #903, #887)**
+
+  - `AuthBasic` gained server-side revocation of a signed-out session token (#840) and an opt-in per-username sign-in lockout (#903). Neither ships in `Auth`, which replaces `AuthBasic`: `Auth`'s `signOut()` deletes the session row, so a replayed cookie is already rejected, and Cognito applies its own sign-in throttling to repeated failed password attempts.
+  - `AuthOIDC`'s signed state and session cookies use Node's built-in `base64url` (#887). `Auth` already encodes its state envelope and cookies that way, so nothing changes for you.
+
+  **Released in those versions (#949, #827, #510, #1032, #1042, browser error constants)**
+
+  - `AuthBasic` capped failed guesses against one verification code at 5 (#949). `Auth`'s sign-up and password-reset codes are Amazon Cognito's, which limits repeated failed code attempts itself; the local mock does not cap them.
+  - `AuthOIDC`'s `cdk` and `aws-runtime` entries gained the `OIDCClient` type (#827). `Auth` has no `OIDCClient` (federated sign-in buttons come from `getAuthState()`), and every `Auth` entry exports the same types.
+  - `AuthBasic`'s same-origin session cookie dropped `Secure` behind a plain-HTTP front door such as a TLS-less ALB (#510). So does `Auth`, which reads the front door's scheme from `BLOCKS_PUBLIC_ORIGIN`, never from a request header.
+  - `AuthBasic` and `AuthCognito`'s browser stubs no longer imported `ApiNamespace`, so their error constants could be imported in frontend code. `Auth`'s browser entry never imported it: `import { AuthErrors } from '@aws-blocks/bb-auth'` bundles for the browser.
+  - `AuthOIDC`'s mock cookie secret became random per project (#1032). `Auth`'s local session secret already was. `Auth`'s mock entry also fails closed on deployed compute, like every Building Block's.
+  - `AuthOIDC` limited `stubIdp()` to local development and sandbox deployments (#1042). So does `Auth` (see the `stubIdp()` changeset).
+
+  **Released in those versions (#1050)**
+
+  - `AuthOIDC`'s `cognitoFederated()` app client registered only an `https://localhost` placeholder callback URL, so Cognito answered `redirect_mismatch` for a deployed app (#1050 fixed it and added `additionalCallbackUrls` / `additionalLogoutUrls`). `Auth`'s hosted-UI app client registers the backend's API URL and the public origin `Hosting` registers as its callback and sign-out URLs, so a deployed `Auth` app signs in through Cognito. `Auth` has no `additionalCallbackUrls` / `additionalLogoutUrls` options.
+
+  **Released in those versions (#1120)**
+
+  - `AuthBasic`'s browser entry gained the `AuthActionInput` type, which its server entry and README already had (#1120). `Auth` does not re-export `@aws-blocks/auth-common`'s types from any entry: import `AuthActionInput` from `@aws-blocks/blocks` (the migrate codemod says so). Every `Auth` entry, the browser one included, exports the same types, including the options-narrowed `AuthActionInputOf<O>`.
+
+  **From `main` after those releases (#1085, #1253, #1257, #1296, #1288, #1203)**
+
+  - `AuthBasic` invalidates every outstanding session when a user resets their password (#1085). So does `Auth`, which replaces `AuthBasic`: a completed `confirmResetPassword` signs the user out everywhere, locally and on AWS (see the `bb-auth` changeset on password resets).
+
+  - `AuthBasic` reads its session cookie by exact name (#1253): a cookie whose name only ends with the session cookie's name can no longer supply or shadow it, and the scope id is matched literally. `Auth` already reads every cookie this way (anchored to a cookie boundary, name regex-escaped).
+
+  - `AuthBasic` and `AuthCognito` no longer let a request header decide whether the session cookie is `Secure` (#1257): on a deployed stack, a request that sent `Origin: http://localhost` got a cookie without `Secure` (and, with `crossDomain: true`, without `Partitioned`). `Auth` decides it the same way, from deploy configuration, for every cookie it sets (see the `bb-auth` changeset on the `Secure` cookie flag).
+
+  - `AuthBasic` can emit sign-in metrics you can alarm on (#1296): with a `Metrics` instance as its `metrics` option, every `signIn` emits a `SignInSuccess`, `SignInFailure` or `SignInLocked` count with an `AuthBlock` dimension. This is not yet in `Auth`, which replaces `AuthBasic`: `Auth` has no `metrics` option, and emits no sign-in metrics. `Auth`'s sign-in can take more than one step (an MFA or passkey challenge, `autoSignIn`, a federated callback), and lockout is Amazon Cognito's rather than the block's, so what each metric counts is still to be decided.
+
+  - `AuthCognito`'s `DESIGN.md` gave its session cookie as `SameSite=None; Partitioned` (#1288); it is `SameSite=Lax` by default, and `SameSite=None; Partitioned` only with `crossDomain: true`. `Auth`'s `DESIGN.md` already describes its cookie that way (D-007), with the opt-in at `session: { crossDomain: true }`.
+
+  - `AuthOIDC`'s docs name the `cdk-blocks secret` CLI (#1203) when they say it does not manage the SSM SecureString behind a `secret: true` `AppSetting`. `Auth`'s README already says how to set each kind of provider secret: `npm run secret` (an alias of `cdk-blocks secret`) for a `Secret`, and `aws ssm put-parameter` for an `AppSetting`.
+
+  **From `main` after those releases (#1314, #1312, #1337, #1362, #885, #1401, #1414)**
+
+  - `AuthCognito` makes its session refresh writes conditional on the record each request read (#1314). So does `Auth` (see the `bb-auth` changeset on session refresh): a refresh that finishes after sign-out no longer restores the session, and overlapping refreshes no longer delete or overwrite each other. `Auth` already kept a session through a transient refresh failure (throttling, a Cognito 5xx, a network error) and ended it only when Cognito rejected the refresh token or the user.
+
+  - `AuthOIDC` reports `SignOutIncompleteException` (503) when sign-out cannot delete the session row (#1312). So does `Auth`, for every session it issues: `AuthErrors.SignOutIncomplete`, on `signOut()`, on `setAuthState({ action: 'signOut' })` and on the sign-out route (see the `bb-auth` changeset on sign-out).
+
+  - `AuthBasic`'s docs now describe local development correctly (#1337): its users, codes and secret live in `.bb-data/` and survive a dev server restart. `Auth`'s README already says its local user pool lives in `.bb-data/<fullId>/state.json`, so its users survive a restart.
+
+  - `AuthBasic`'s lockout window test was stabilized (#1362). `Auth` has no per-username lockout (Amazon Cognito throttles repeated failed sign-ins itself), so there is no such test.
+
+  - `AuthBasic`, `AuthCognito` and `AuthOIDC` stopped sending the raw text of an unexpected error to the client (#885). `Auth` already reported such an error as `InternalErrorException` with a fixed message (and withholds an `ApiError` message that names AWS resources), in `setAuthState()`, the RPC methods and the sign-in routes, including an error thrown by a `codeDelivery` or `onSignIn` hook; an `ApiError` thrown by a hook keeps its status, name and message.
+
+  - `defaults.permissionsBoundary` coverage gained a synth test for `AuthOIDC` (#1401). `Auth` has the same test, on both stores: every IAM role a `store: 'builtin'` block or a Cognito-store block with a federated provider creates carries the boundary and is listed in the stack's IAM report.
+
+  - `AuthOIDC` loads its stub IdP engine only in sandbox deployments (#1414). `Auth` already did: its AWS entry imports the stub engine dynamically, only for a `stubIdp()` provider on a sandbox deployment, and serves no stub routes on any other deployment; a new test checks that the AWS entry has no static import path to the engine. `Auth` has no `getClient()`, so the rest of that change does not apply.
+
+  **Docs (from `AuthOIDC`)**
+
+  - Federating a provider through Cognito does not add MFA, adaptive authentication or brute-force protection to its sign-in: for federated users, Amazon Cognito delegates authentication to the identity provider and offers no extra authentication factors, device tracking or threat protection. The `Auth` README says so and tells you to enforce MFA at the IdP (for example Google 2-Step Verification, or your Okta / Microsoft Entra ID MFA policy). `AuthOIDC`'s docs had claimed otherwise.
+  - `@aws-blocks/auth-common`: the error-name mapping table in `DESIGN.md` lists the AWS credential and IAM error names that `Auth` (like `AuthCognito`) can report.
+
+  **Internal**
+
+  - The tests that pinned what `AuthCognito` deploys — the CloudFormation identity of its user pool, app client, groups, session table and session secret, its config keys and its session cookie name, plus `AuthOIDC`'s deployed resources — and the offline tests of the Cognito runtime against a stubbed client (sign-in, sign-up, sign-out, refresh, cookie verification, error mapping, live group checks) now run against `Auth`, with `AuthCognito`'s side frozen from its final source. No runtime or infrastructure change.
+
+- 5f55dac: A password reset signs the user out everywhere. Once `confirmResetPassword` (or the `confirmResetPassword` action of `createApi()`) succeeds, every session the user had is rejected from the next request on with 401 `NotAuthenticatedException` and its cookie is cleared, locally and on AWS. A session stolen before the reset doesn't authenticate after it. The user signs in again with the new password.
+
+  - On AWS the reset also revokes the user's Cognito refresh tokens (`AdminUserGlobalSignOut`), so an Amplify or native client calling the API with bearer tokens can't refresh. An access token it already holds stays valid until it expires.
+  - The block's role has `cognito-idp:AdminGetUser` and `cognito-idp:AdminUserGlobalSignOut` on its user pool, only when email + password sign-in is on. Neither needs `admin`.
+  - Each request with a password session makes one extra read of the sessions table. Session rows carry an optional `issuedAt` field.
+  - If the password changed but ending the sessions failed, `confirmResetPassword` throws a 5xx (logged at error), never a wrong-code error. Reset again to end them.
+  - `updatePassword` and `auth.admin.setUserPassword` leave other sessions signed in. Call `auth.admin.revokeUserSessions(username)` to end them.
+
+- 5f55dac: feat(bb-auth): same-origin landing paths after sign-in and sign-out, checked against open redirects
+
+  `Auth` sends a user back to your app after federated sign-in (`GET /aws-blocks/auth/signin/<provider>?redirectPath=…`, or `getSignInUrl(…, { redirectPath })`) and after sign-out. Every landing path (`redirectPath`, `redirects.postSignInPath` and `redirects.postSignOutPath`) goes through one check, so a sign-in link on your domain can't send users to another site — including with paths browsers rewrite, such as `/%09/evil.example.com` (a TAB that the browser strips from the `Location` header). A path is accepted only if it starts with a single `/`, contains no control characters (TAB, CR, LF, NUL, DEL) and no backslash, and still resolves to your app's origin after URL parsing, including after dot segments like `/.//` collapse. The redirect always uses that normalised path (path, query and hash), never the raw string. The sign-in route answers an unsafe `redirectPath` with `400` (`InvalidParameter`). An unsafe `postSignInPath` or `postSignOutPath` fails at construction. If a pending sign-in cookie carries an unsafe path, the callback re-checks it and lands on `postSignInPath`. Legitimate paths work, with any query and fragment kept.
+
+  `stubIdp()` providers run in local development and sandbox deployments only: synthesizing any other deployment with one fails (see the `stubIdp()` changeset). Local development (`npm run dev`) always serves the stub. If the same backend module is also deployed to production, select providers with `getDeploymentType()`.
+
+- 5f55dac: `Auth` decides whether its cookies are `Secure` from deploy configuration, never from a request header. It drops `Secure` for a loopback request only when the process itself is local, as reported by `getDeploymentType()`, and behind a plain-HTTP front door (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`). So on a deployed stack, a request that sends `Origin: http://localhost` (or a loopback `Host`) still gets its session, auto-sign-in and pending federated sign-in cookies with `Secure`, and with `crossDomain: true` with `Partitioned`. The local dev server (`npm run dev`) drops `Secure` for its loopback requests. A sandbox (`npm run sandbox`) proxies the API to deployed compute, so its cookies keep `Secure` (and `Partitioned` with `crossDomain: true`) even though the page is on `http://localhost`. The local mock and AWS runtimes share this code path.
+- 1c7e0dd: `@aws-blocks/auth-common/cookies` adds `isLocalDevRequest(ctx)`, the per-request `isLocalhost` input for the session-cookie security policy. It is `true` only when the process itself is local, as reported by `getDeploymentType()` from deploy configuration, and the request comes from a loopback origin. On deployed compute it is always `false`, so a request that sends `Origin: http://localhost` cannot drop `Secure` (or, with `crossDomain: true`, `Partitioned`) from the cookie. `isLoopbackRequest(ctx)` stays exported and unchanged.
+- 5f55dac: `Auth` refreshes a session consistently when requests overlap, and reports a sign-out that could not invalidate the server-side session.
+
+  - **Session refresh.** Several requests can refresh one session at once (parallel calls when its access token expires, possibly on different Lambda instances), and `signOut()` can delete it mid-refresh. Both refresh writes are now conditional on the session row the request read. A refresh that completes after `signOut()` no longer restores the session: nothing is written and the cookie is cleared. A request whose own refresh is rejected, or whose write loses to a concurrent refresh, is served the session that refresh wrote, instead of deleting or overwriting it.
+  - **Sign-out.** `signOut()` clears the session cookie first, so the device is signed out whatever happens next. If the session row can't then be deleted (a transient session-store failure), or the session secret can't be resolved to identify it, it reports the new `AuthErrors.SignOutIncomplete` (`SignOutIncompleteException`, 503) instead of success, because a copy of the cookie keeps authenticating until the session ends on its own: `auth.signOut(ctx)` rejects with it, `setAuthState({ action: 'signOut' })` returns a signed-out state with `errorName: 'SignOutIncompleteException'`, and `POST /aws-blocks/auth/signout` answers `503 { error, name }` to an API client (a browser form still lands on `postSignOutPath`). The browser redirect client's `signOut()` rejects with that `ApiError`. A failed session read no longer stops the delete; it only skips `onSignOut` and the upstream sign-out. The store error is logged server-side, never sent.
+  - `@aws-blocks/auth-common` adds `SignOutIncomplete` to `AuthErrors`.
+
+- 5f55dac: `Auth`'s sign-in results carry only the steps the configuration can produce. `signIn`, `confirmSignIn` and `autoSignIn` return `SignInResult<O>`, whose `nextStep` is `SignInNextStep<O>`: the MFA steps need `mfa` on, and each factor's steps need that factor in `mfa.types`; `CONFIRM_SIGN_IN_WITH_WEB_AUTHN` needs `passkeys`; the first-factor steps need `users.authFlow: 'USER_AUTH'`. With `mfa: 'off'` and no passkeys, a `switch` on `nextStep.name` handles three steps rather than fifteen. Every step is kept for a pool wrapped with `Auth.fromExisting`, for settings the compiler cannot see, and in the plain `SignInNextStep` type. Native clients get every step whatever the options.
+
+  Two compile errors name their cause: calling an `auth.admin` method without `admin` in the options reports the missing `ERROR_admin_is_not_enabled__construct_Auth_with_admin_options` argument, and passing `updateMfaPreference` a factor that `mfa.types` leaves out reports `ERROR_SMS_is_not_in_mfa_types` (or `TOTP` / `EMAIL`).
+
+- 5f55dac: `signIn`, `confirmSignIn` and `autoSignIn` check each step against the block's options at runtime, as `SignInNextStep<O>` does at compile time. A step the options do not enable means the user pool was configured outside the block (the console, another stack, a deploy half-way): the call fails with `InternalErrorException` naming the step, and the server log lists the step and the configured ones, rather than returning a step the caller's narrowed type says cannot happen. A pool wrapped with `Auth.fromExisting` passes every step.
+
+  In `npm run dev`, the local pool offers only the factors `mfa.types` lists, even to a user who enrolled in one while it was listed, as Cognito does.
+
+  Native clients get every sign-in step, every MFA factor in `getMfaPreference` / `updateMfaPreference`, and each block's own user schema, whatever the options.
+
+- 5f55dac: fix(bb-auth): the stub IdP accepts only its registered client and redirect URIs
+
+  The `stubIdp()` provider's authorize endpoint (`/aws-blocks/auth/idp/<id>/authorize`) checks every sign-in request the way a real identity provider does. It accepts only the stub's own `client_id` and a registered `redirect_uri`: your app's sign-in callback (`redirects.callbackPath`) on your app's origin, or on the API Gateway URL when the stub is deployed. So a crafted link can't send a browser, with a sign-in code, to another site. Its token endpoint redeems an authorization code once, as a real provider does: a second redemption gets `400 invalid_grant` (remembered per process, so exact on the dev server and best-effort across Lambda instances). Any other `client_id` or `redirect_uri` gets a `400` error page and no redirect, before the account picker shows or `onAuthorize` runs. Sign-in through `Auth` and the Kotlin, Swift and Dart SDKs sends the registered callback, so it passes these checks.
+
+  A sandbox stack with a stub provider fails synth with a clear error when the block's compute has no API URL, because the deployed stub builds its issuer from that URL.
+
+- 5f55dac: feat(bb-auth): the stub IdP has an end-session endpoint that redirects only to registered URIs
+
+  The `stubIdp()` provider serves an OIDC end-session endpoint (`/aws-blocks/auth/idp/<id>/logout`), so signing out of a stub session walks the same redirect chain as a real identity provider. Like a real one, it redirects only to a registered `post_logout_redirect_uri`: your app's origin plus `redirects.postSignOutPath` or `redirects.signOutPath`, matched exactly, so a link to it can't send a browser to another site. Any other URI, or an unknown `client_id`, gets a `400` error and no redirect. A request without a `post_logout_redirect_uri` shows a signed-out page. Sign-out through `Auth` always sends a registered URI.
+
+- 5f55dac: feat(bb-auth): a sandbox deployment serves the stub IdP
+
+  `stubIdp()` runs in local development and sandbox deployments only, as `AuthOIDC`'s stub does. `npm run dev` serves it, and so does a sandbox (`npm run sandbox`, CDK context `sandboxMode`): the deployed backend serves the stub IdP under `/aws-blocks/auth/idp/<id>/`, and synth emits a `@aws-blocks/bb-auth:StubIdpDeployed` warning. Synthesizing any other deployment with a `stubIdp()` provider fails, and deployed compute that is not a sandbox (as `getDeploymentType()` reports it from the deployed config) answers its sign-in with an actionable error. To keep the stub for local and sandbox while deploying a real provider elsewhere, select providers by deployment type:
+
+  ```ts
+  import { Auth, getDeploymentType, stubIdp } from "@aws-blocks/blocks";
+
+  const corp =
+    getDeploymentType() === "production"
+      ? ({
+          type: "oidc",
+          issuer: "https://login.example.com",
+          clientId: "my-client-id",
+        } as const)
+      : stubIdp();
+
+  new Auth(app, "auth", { store: "builtin", providers: { corp } });
+  ```
+
+  A sandbox stub signs users in without credentials: anyone who can reach the sandbox can sign in as any of the stub's users, with their claims and groups.
+
+  On AWS the stub's signing keys are derived from the block's session secret, so every Lambda instance publishes the same keys and a token minted by one instance verifies on another. Its issuer is the API Gateway URL (`https://<api-id>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/auth/idp/<id>`), the same issuer `AuthOIDC`'s deployed stub used, so its users keep their `userId`. Like a real identity provider, it checks the PKCE verifier, client id and redirect URI in constant time. A deployment that is not a sandbox never loads the stub's code.
+
+  `bb-auth migrate` moves an `AuthOIDC` `stubIdp(…)` across unchanged: both blocks limit the stub to local development and sandbox deployments. The codemod also maps old error-constant keys in every form it can see — `typeof AuthBasicErrors.InvalidCode`, `AuthBasicErrors['InvalidCode']` and `const { InvalidCode } = AuthBasicErrors`, through a named import or `import * as blocks from '@aws-blocks/blocks'` alike — to their `AuthErrors` keys, with a `TODO(aws-blocks-auth-migrate)` where a name split in two.
+
+  Migration for a sandbox: restart `npm run sandbox` once after upgrading. Its initial full deploy writes `BLOCKS_DEPLOYMENT_TYPE` into the deployed config; a `cdk watch` hotswap alone does not, and the stub IdP's sign-in answers the actionable error until that full deploy runs.
+
+- 5f55dac: `Auth`'s signed-in user (`AuthenticatedUser`) has an optional `claims` field: the provider's verified claims for users of a `store: 'builtin'` block (an OIDC, OAuth 2.0 or stub IdP provider verified by your backend), as `AuthOIDC`'s user carried. With `db.crud()` or `db pull`'s `supabaseCrud()` and Postgres row-level security, RLS therefore sees the identity provider's raw `sub` as `request.jwt.claims.sub` for those users, as it did with `AuthOIDC`, so policies that match the raw `sub` keep returning rows after the move to `Auth`. `claims` is absent for user-pool users, whose RLS subject is their `userId`. `claims` is server-side only: `getAuthState()` and the sign-in routes never send it to the browser.
+
+  `@aws-blocks/bb-data`: newly generated `supabaseCrud()` wiring now passes `claims` to RLS explicitly, and the generated `MIGRATION_GUIDE.md` now says which subject RLS sees for each kind of user.
+
+- 5f55dac: feat(bb-auth): `validateUser` also guards users created outside your app, through a Cognito PreSignUp trigger
+
+  When you set `validateUser` and `Auth` creates the user pool, the pool gets a Cognito PreSignUp trigger that runs your `validateUser` in your backend Lambda. It checks every user Cognito is about to create, including the ones your app never sees: a `SignUp` sent straight to Cognito with the app client id, an `AdminCreateUser` from the console or CLI, and the first sign-in of a social, SAML or Cognito-federated OIDC user (a `providers` entry on the default store).
+
+  - `auth.signUp()` runs `validateUser` first, in your request, and the trigger recognises that sign-up, so the check runs once. `auth.admin.createUser()` runs it too (`phase: 'signUp'`, `provider: 'password'`).
+  - A rejection in the trigger reaches the client with the same `AuthErrors` name and message you threw, masked the same way as in-process. The trigger never confirms or verifies a user.
+  - Without `validateUser`, no trigger is added. Adding or removing the option later updates the pool in place. On a pool wrapped with `userPool: Auth.fromExisting(...)`, no trigger is attached and synth warns.
+  - Cognito waits at most 5 seconds for the trigger, and a cold start of your Lambda counts, so keep `validateUser` fast.
+
+- 5f55dac: `Auth` synthesizes when you vendorize it (`npm run vendorize -- Auth`). A vendorized copy contains only the TypeScript sources, so the handlers of the deploy-time Lambdas `Auth` creates — the user-pool immutability guard (every `Auth` with a user pool) and the identity-provider registration (social, SAML and Cognito-federated OIDC sign-in) — are bundled from the vendorized source at synth, and your edits to them deploy too. Installed (non-vendorized) apps use the pre-built handlers. Bundling uses your app's `esbuild`, which AWS Blocks apps already have as a dev dependency; if it is missing, synth tells you to install it.
+- 5f55dac: Error messages sent to clients never include Amazon Cognito's raw text, as in `AuthCognito` 0.1.11.
+
+  Cognito's error messages can quote the request (a username, a rejected value) or name an endpoint, a role or your AWS account. `Auth` sends a fixed message for each error `name` instead (for example `Invalid parameter` for `InvalidParameterException`), from every method, `auth.admin.*` and the `createApi()` Authenticator state, and the same message under `npm run dev` as on AWS. Cognito's own text is written to the server log, with the user's login redacted. Error `name`, HTTP status and `retriable` are not affected, so code that matches errors with `isAuthError` works as usual. If you show `error.message` to users, they see the short fixed message (for example, `Invalid parameter` rather than the attribute Cognito rejected). A weak password is the one exception: its message is written from the password policy you configured, for example `Password must be at least 8 characters and include an uppercase letter, a lowercase letter, a number and a symbol.`, the same under `npm run dev` as on AWS. A pool you wrap with `Auth.fromExisting` keeps the fixed `Password does not meet the password policy`, because `Auth` doesn't know its policy. Errors you throw yourself as an `ApiError`, for example from `validateUser`, keep your message.
+
+- efe28cb: The `MIGRATION_GUIDE.md` that `bb-data pull` generates for Supabase apps now says which token must carry the non-standard JWT claims your RLS policies read: the one `Auth` verifies, which is the ID token for browser sessions and the access token for `Authorization: Bearer` API callers (it said the access token only).
+- 5f55dac: `getSdkIdentifiers(auth)` for an `Auth` block is typed with optional fields (`userPoolId`, `clientId`, `region`, `hostedUiDomain`, `hostedUiClientId`), matching what `Auth` registers. An `Auth` with `store: 'builtin'` has no user pool and registers none of them, so code that reads `userPoolId` must check that it is defined.
+
+  The sign-in pricing tables (`Auth`'s "Which option and why" and the umbrella's "Choosing a sign-in method") note that Cognito's Plus plan has no free tier for email + password and social users ($0.020 per MAU), confirm that SAML / OIDC federated users cost $0.015 per MAU above 50 on every plan, and cite the Cognito pricing page and the date it was read.
+
+- b2eb306: fix(blocks): `cdk-blocks` help never runs a command, and confirmations name the real credentials
+
+  - Help never runs a command. `-h` or `--help` anywhere after `cdk-blocks secret`, `cdk-blocks config`, `cdk-blocks db` or `cdk-blocks vendorize` shows help instead of running the tool with your arguments, so `cdk-blocks config remove KEY --help` never deletes `KEY`. `cdk-blocks help secret remove KEY` and `cdk-blocks db pull ./out --help` forward only `remove --help` or `pull --help` to the tool, which prints that command's usage; `cdk-blocks help vendorize <package>` and `cdk-blocks vendorize <package> --help` print the CLI's help. `blocks-vendorize --help` prints its usage and exits before it copies or installs anything.
+  - Confirmations name the real credentials. `cdk-blocks destroy`, `cdk-blocks deploy` and the sandbox commands describe the credentials as the deploy does, for example `access keys in AWS_ACCESS_KEY_ID (used instead of AWS_PROFILE)`. When environment access keys override an exported `AWS_PROFILE` or `--profile`, they print a warning, even with `--quiet`.
+  - `--verbose` masks the password of a URL (`postgres://user:***@host`) and the value of `--url` when it echoes a child command line.
+  - `--region` and `AWS_REGION` must be an AWS Region code such as `us-east-1`, `us-gov-west-1` or `cn-north-1`; anything else is a usage error (exit 2). On Windows, the sandbox dev command refuses a path that contains `"` or `%`, which the Windows shell cannot quote safely.
+
+- b2eb306: fix(blocks): `cdk-blocks` output streams, non-interactive runs and usage errors
+
+  - `--no-input` and `CI` reach `cdk-blocks secret`, `cdk-blocks config` and `cdk-blocks db pull`: a value prompt that the run cannot show is a usage error (exit 2) naming `--value-stdin`, even on a terminal. A missing key, an unknown subcommand, a missing flag value, an unknown `db` verb (with a suggestion) and an unconfirmed `secret remove --force` also exit 2. The global `--yes` confirms `secret remove --force`, as `--yes` after the command does.
+  - `--quiet` does not hide the dev server's RPC errors; it sets only `BLOCKS_LOG_LEVEL=quiet`. A `BLOCKS_DEV_QUIET` you set yourself still applies.
+  - Text output: the CLI runs core with `BLOCKS_LOG_STREAM=stderr`, so progress, CDK milestones, raw CDK output and streamed CloudFormation events go to stderr, and stdout keeps the deployment target, `BLOCKS_DEPLOYED` and the final URLs. `cdk-blocks generate spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line.
+  - `cdk-blocks deploy` and `cdk-blocks sandbox deploy` print no JSON or `--query` result after a failed or interrupted run. The result comes from `.blocks-sandbox/last-deploy.json`, which the deploy runner writes: the stack outputs core read when it deployed, so a concurrent deploy of the other stage that rewrites `.blocks-sandbox/outputs.json` cannot change or empty it, and the account and Region the deploy itself used. When the runner recorded no result, the command exits 1 with an error instead of printing null fields.
+  - A closed terminal no longer makes `cdk-blocks deploy` exit 1 while the deploy goes on: the runners other than the dev server run as `node --import` with the `tsx` loader, with no `tsx` process between the CLI and the runner, and the CLI reports the deploy's own exit code and result.
+  - Arguments after `--` are rejected with exit 2 (`unexpected arguments after --`) for commands that do not forward them, instead of being dropped.
+  - `--telemetry-file <path>` (or `--telemetry-file=<path>`) is a global option. The CLI passes it, as an absolute path, to the lifecycle runners, where core's telemetry client reads it, so `npm run dev -- --telemetry-file=/tmp/events.json` captures events as it did with the scripts.
+  - `cdk-blocks sandbox --deploy-only` runs `cdk-blocks sandbox deploy`, as a hidden alias of the old script flag.
+  - `package.json` `"blocks": { "dev": { "frontend": false } }` runs the backend only, as `--no-frontend` does, even when `vite` or `next` is installed. It cannot be combined with `frontendCommand` or `frontendPort`.
+  - A `--host` or `blocks.dev.host` is also exported to the dev server as `BLOCKS_DEV_HOST`, so the local realtime WebSocket (`/realtime`) accepts that host's origins, as it does for a `BLOCKS_DEV_HOST` you set yourself; a `BLOCKS_DEV_HOST` already in the environment is kept.
+  - A `package.json` that starts with a UTF-8 byte order mark is read as npm reads it, so `cdk-blocks dev`, `cdk-blocks dev stop` and the sandbox commands accept it instead of failing with `cannot read …/package.json`.
+  - Global options apply after `secret`, `config`, `db` and `vendorize` too, up to a `--`: `cdk-blocks secret remove KEY --profile prod` deletes in that profile's account, and `cdk-blocks config set KEY value --output json` exits 2, instead of the CLI forwarding the options to the tool, which wrote them into the value or a file name, or ignored them. Global options can also sit between the words of a command (`cdk-blocks generate --debug client`), and before the command they take the same forms as after it (`-qv`, `-C<dir>`). `--version` after any command prints the version and runs nothing.
+  - `--output json` and `--query` exit 2 with `… is not supported for "cdk-blocks <command>"` on a command without a JSON result, after the command name as before it, and without a command. A single-valued global option given twice with different values (`--cwd a -C b`), `-C` naming a file, `-y=false` and `-C=<dir>` are usage errors; `--port -1` takes `-1` as the value; `cdk-blocks --region <bad> help` shows the help.
+  - `--query` checks the whole path against the command's result before the command runs, so `cdk-blocks dev stop --query stopped.0.nope` or `cdk-blocks deploy --query apiUrl.x` exits 2 without stopping a server or deploying. A list element is named by its index (`stopped.0.port`); an element past the end of a list, as in an empty `stopped`, prints an empty line.
+  - The help of a `db`, `secret` or `config` verb (`cdk-blocks secret set --help`, `cdk-blocks help db pull`) works outside an app too, instead of failing with `not inside an AWS Blocks app`.
+  - `cdk-blocks vendorize` without a package, with two packages or with an option other than `--force` is a usage error (exit 2), with one `Error:` line, instead of the tool's usage and `cdk-blocks vendorize failed (exit code 1)`.
+  - Error hints say only what helps: `Run with --verbose for the full tool output` follows a failed lifecycle runner, whose output `--verbose` extends; a failed `db`, `vendorize` or `generate client` says that the tool's own output is above; `--debug` prints the stack trace of an error the CLI raised itself too. A runner prints a failure's message, and its stack trace only with `--debug`. The command line that `--verbose` echoes is quoted for a POSIX shell, so a path with a space or the runner's JSON options can be pasted back.
+  - A Ctrl-C that reaches a command after its tool finished (`cdk-blocks db migrate` applied every migration and exited 0) reports the tool's success, exit 0, instead of `interrupted` and 130. `cdk-blocks dev` and `cdk-blocks sandbox`, which exit 0 when Ctrl-C stops them, still exit 130.
+  - A relative path given to `cdk-blocks db` or to `cdk-blocks generate types --out`/`--include` is resolved from the directory you run the command in (or `-C`), as `cdk-blocks generate client` and `generate spec` already did, instead of from the project root. `cdk-blocks db` drops the `--` that ends the CLI's options instead of forwarding it to bb-data as a directory name.
+  - `cdk-blocks generate types` rejects `--check` with `--watch`, and an empty `--out`, `--include` or `--module`, as usage errors (exit 2), instead of passing them to typegen, which failed with exit 1 or wrote an invalid `declare module ""`.
+  - `cdk-blocks generate client <foundation> <output>` and `cdk-blocks generate spec <backend> [output]` run outside an app, as `blocks-generate-client` and `blocks-generate-spec` did; only their default paths need one.
+  - A typo of a hidden alias suggests the canonical command: `cdk-blocks consol` suggests `sandbox console`, `cdk-blocks typegn` suggests `generate types`.
+  - A relative `--telemetry-file` is resolved from the directory you run the command in for the commands that run core in the CLI process too (`cdk-blocks sandbox console`), instead of from the project root.
+  - `cdk-blocks telemetry enable|disable` outside an app is a usage error that suggests `--global`, instead of writing a `.blocks/config.json` into the current directory; `cdk-blocks -C <dir> telemetry` reads `<dir>`, not the shell's directory.
+  - `cdk-blocks destroy` prints the target with `.env.production` applied, as `cdk-blocks deploy` and `cdk-blocks whoami` do, and core's destroy now uses it too, so all three name the same credentials and Region.
+  - `cdk-blocks destroy` passes the stack it names to core, so destroying a production stack that does not exist (already deleted, or another Region) says there is nothing to delete instead of `✅ Production stack destroyed!`. `cdk-blocks sandbox destroy` on a machine with no `.blocks-sandbox/sandbox-id.txt` says there is no sandbox to delete and exits 0, without creating a sandbox id or running cdk.
+  - An explicit `--profile` wins over access keys in the environment: the CLI empties `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` (and their `AMAZON_` names) for the run, so neither the shell nor a stage env file can make CDK or `cdk-blocks whoami` use another account, and says so on stderr. `cdk-blocks whoami` prints the same warning as `deploy` and `destroy` when exported keys win over an exported `AWS_PROFILE`.
+  - `cdk-blocks deploy` checks the `--wait-live` budget before anything runs: `--wait-live=SECONDS` and `--wait-live-timeout=SECONDS` take a whole number from 1 to 3600, `--wait-live-timeout` needs `--wait-live`, and the budget is given once. Anything else exits 2, instead of deploying with a warning about the default budget, or silently ignoring the flag.
+  - `cdk-blocks sandbox console` opens this machine's sandbox stack, in the Region it was deployed to (from `last-deploy.json`, else the sandbox's configured Region with `.env.local`), instead of the first stack in `.blocks-sandbox/outputs.json`, which is the production stack after a `cdk-blocks deploy`. Without a sandbox id or a recorded deploy of the sandbox it exits 1 and suggests `cdk-blocks sandbox deploy`.
+  - After a successful `cdk-blocks sandbox destroy`, the CLI removes the deleted sandbox from `.blocks-sandbox/last-deploy.json` and `outputs.json`, and removes `config.json` when the sandbox wrote it, so `cdk-blocks sandbox console` and the frontend no longer point at the deleted stack. The sandbox id and the production records stay.
+  - Credential, bootstrap and sandbox recovery guidance names the `cdk-blocks` command that was run, with its `-C`, `--profile` and `--region`, for example `Then re-run \`cdk-blocks deploy --profile prod\`.`, instead of `npm run deploy`, `npm run sandbox`(for`sandbox deploy`too) or`npm run sandbox:destroy`, which an app without those scripts does not have.
+  - `cdk-blocks destroy` refuses, deleting nothing, when the CDK app does not define the `<stackId>-prod` stack it names and asked to delete (for example an older app whose `index.cdk.ts` names its own stack). `cdk-blocks deploy` warns when CDK deployed another stack than `<stackId>-prod`. Without a `stackId`, both say which id to choose and add a `Try:` line that lists the existing production stacks.
+  - `cdk-blocks whoami` tells a malformed `.blocks/config.json` (`(invalid .blocks/config.json)`, with the parse error as a warning) from a missing file or a missing `stackId`; `cdk-blocks deploy` and `destroy` print the parse error.
+  - `cdk-blocks whoami --profile <name>` for a profile that does not exist says the profile is not in your AWS config, instead of "no AWS Region is set".
+  - A SIGTERM or SIGHUP sent to the pid of `cdk-blocks dev` alone (`kill <pid>`, an IDE stop button, a harness) stops the dev server and its frontend at once, as one sent to its process group does, instead of after 10 s. `cdk-blocks sandbox` in watch mode stops at once too.
+  - `cdk-blocks dev` exits 1 with the reason when its dev server fails to start (another dev server owns the port, the bind fails), instead of waiting for a file change forever. Stopping `cdk-blocks dev` while its backend is not running (`cdk-blocks dev stop` after a crash, or a SIGTERM) exits 0 instead of reporting `failed (exit code 143)`.
+  - `--port`, `--frontend-port` and the `blocks.dev` ports accept only decimal port numbers from 1 to 65535: `1e3`, `0x10`, `0b…`, `" 41082 "` and `-1` are usage errors (exit 2) that name the value, instead of binding port 1000 or 16.
+  - `cdk-blocks dev stop --all --port N` and `cdk-blocks cleanup --port N` are usage errors (exit 2), instead of ignoring `--port` and stopping every recorded dev server.
+  - `cdk-blocks dev stop` reads only `blocks.dev.port`, so it stops the server while another `blocks.dev` setting is invalid. `cdk-blocks dev`, `dev stop` and `sandbox` warn about a `blocks.dev` key that nothing reads (a typo such as `prot`), with the nearest setting; `generateClient` is accepted.
+  - `cdk-blocks dev stop` without `--port` stops the only dev server the app recorded when none is recorded on the configured port (a server started with `cdk-blocks dev --port 4000`), and says which port. With several recorded, it lists them and points to `--port` and `--all`.
+  - `cdk-blocks dev` and `cdk-blocks sandbox` warn when a `frontendCommand` you set (`--frontend-command` or `package.json`) does not contain the frontend port the dev server proxies to, as with a hard-coded `npx vite --port 3100` and `--frontend-port 41079`, which answered 502. The README example config no longer sets `frontendCommand`.
+  - Ctrl-C or Ctrl-D at the hidden prompt of `cdk-blocks secret set` or `cdk-blocks config set` exits 130 with `Interrupted; nothing was set.`, instead of exit 13 and Node's "unsettled top-level await" warning.
+  - `cdk-blocks secret set KEY` and `config set KEY` with stdin that is not a terminal say `stdin is not a TTY`, instead of blaming `--no-input or CI` when neither was set.
+  - A bare `cdk-blocks secret` or `cdk-blocks config` exits 2 with `needs a verb: set, list or remove` and its help command, instead of `Unknown subcommand undefined`. An invalid key and an empty value exit 2, with no `--verbose` hint.
+  - `cdk-blocks generate client -q` (and `blocks-generate-client` at `BLOCKS_LOG_LEVEL=quiet`) hides the warnings that loading the backend prints, such as `[Realtime] BLOCKS_RT_WS_URL not set`, which say nothing about the generated client.
+  - `cdk-blocks db --help` shows `cdk-blocks db migrate aws-blocks/migrations` and `cdk-blocks db status aws-blocks/migrations`, the migrations directory of the templates, instead of examples that fail with `Migrations directory not found: ./migrations`. `cdk-blocks db <verb> --help` prints `Usage: cdk-blocks db <verb> …`, not `Usage: bb-data <verb> …`.
+  - A SIGTERM, SIGINT or SIGHUP sent to `cdk-blocks generate client` (or `blocks-generate-client`) alone reaches the client generator, and the command ends after it, instead of leaving the generator running to write `aws-blocks/client.js` after the command reported a failure.
+  - `cdk-blocks generate client` and `cdk-blocks generate spec` report a missing backend the same way, `cannot find the backend entry at <path>.` with exit 1, before anything runs (`generate client` exited 2). A backend that does not load (a syntax error) gives a one-line `❌ Client generation failed: …` with exit 1, as `❌ Spec generation failed: …` does, instead of a raw Node stack trace; both print the stack with `--debug`.
+  - A `db`, `vendorize` or `generate` tool stopped by a signal fails with `<tool> was stopped by SIGTERM.`, without `its output is above`, which it may not have printed. `cdk-blocks generate spec` fails as `cdk-blocks generate client` does: `blocks-generate-spec exited with code 1; its output is above.`
+  - A `cdk-blocks dev` startup refusal (another dev server on the port, a port in use) prints its reason once: the runner's `❌` message, then exit 1, without an `Error:` line repeating it.
+  - `cdk-blocks generate spec <backend>` outside an app runs from the backend's directory, so the backend's local mock storage (`.bb-data/`) is not created in the directory you run it from.
+  - `cdk-blocks generate types --out <dir>` naming a directory is a usage error (exit 2), instead of a raw `EISDIR` error.
+  - `cdk-blocks generate client` in an app whose `package.json` sets `"blocks": { "dev": { "generateClient": false } }` (the Amplify overlay) refuses to replace `aws-blocks/client.js`, with exit 2 and the hint `npm run blocks:generate-client`; `--force` writes it anyway.
+  - A single-valued command option given twice with different values (`cdk-blocks dev stop --port 1 --port 2`) is a usage error, as for global options. `cdk-blocks dev --port N stop -h` shows the help of `cdk-blocks dev stop`, the command the run names. A global value option without a command (`cdk-blocks --profile deploy`, where `deploy` became the profile) exits 2 instead of printing the help with exit 0.
+  - `cdk-blocks deploy --wait-live-timeout=0` without `--wait-live` suggests `--wait-live=SECONDS`, not a value `--wait-live` rejects. The `aws cloudformation describe-stacks` hint for a missing stackId passes the run's `--profile` and `--region`.
+  - A `cdk-blocks deploy --wait-live` whose liveness wait fails still records the deploy in `.blocks-sandbox/last-deploy.json` and, with `--output json` or `--query`, prints its result with `"live": false`; it exits 1 with `cdk-blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live`, not `cdk-blocks deploy failed`. The `cdk-blocks deploy` JSON result has a `live` field: `true` when `--wait-live` confirmed the build, `null` without `--wait-live` or a frontend.
+  - `cdk-blocks sandbox` (watch mode) records the sandbox deploy in `last-deploy.json` after its first deploy, as `cdk-blocks sandbox deploy` does, so `cdk-blocks sandbox console` still opens the running sandbox after a production deploy rewrote `.blocks-sandbox/outputs.json`.
+  - `cdk-blocks dev` exits 1 when its dev server fails on its first start (a backend that throws while it loads, an import that does not resolve, an unreadable file, a malformed `.env.local`), instead of exiting 0: `tsx watch` ignores the runner in `node_modules` and ended by itself. A dev server that dies before anything stopped it (out of memory, `kill -9`) and leaves `tsx watch` with nothing to watch fails too. A failure after a reload still waits for the fix, as before.
+  - Ctrl-C ends a `cdk-blocks dev` whose dev server was killed (`kill -9`, the OOM killer), as a SIGTERM does: `tsx watch` waits forever for a runner that a signal ended, so once no runner is left the CLI SIGKILLs it after 1 s. It exits 130.
+  - A SIGTERM sent to `cdk-blocks` that ends the operation it runs (`cdk-blocks sandbox deploy`, `sandbox destroy`, `deploy`, `destroy`; for example core aborts a deploy on a second SIGTERM) exits 143 with `<command> stopped by SIGTERM.`, instead of exit 1 with `failed (signal SIGTERM)` and a `--verbose` hint. A runner that core aborted on the operator's SIGINT exits 130. A runner killed by a signal that `blocks` did not receive still fails with exit 1.
+  - A `package.json` that is valid JSON but not an object (`null`, `[]`, a string) fails `cdk-blocks dev`, `dev stop`, `sandbox` and `generate client` with `<path>/package.json must be a JSON object, not an array.` (exit 1), instead of `Cannot read properties of null`, a dev server on the default port, or a raw `ERR_INVALID_PACKAGE_CONFIG` stack.
+  - An installed `@aws-blocks/core` that does not match `@aws-blocks/blocks` (an upgrade that kept an older core in the lockfile) fails with `@aws-blocks/blocks <version> cannot load @aws-blocks/core <version>, which does not match it: …` and `Try: reinstall @aws-blocks/core to match @aws-blocks/blocks <version>: npm install '@aws-blocks/core@<range>'`, instead of a raw `ERR_PACKAGE_PATH_NOT_EXPORTED` or `does not provide an export named` stack, also when the CLI itself fails to load. `--version` and `--help` never load core.
+  - After a successful `cdk-blocks destroy`, the CLI removes the deleted production stack from `.blocks-sandbox/last-deploy.json` and `outputs.json`, and removes `config.json` when a production deploy wrote it, as `cdk-blocks sandbox destroy` does for the sandbox, so the local client and `--output json` no longer point at the deleted API. The sandbox records stay.
+  - `cdk-blocks sandbox console` opens a sandbox that no record on this machine names (one that the old npm-script wrappers deployed, after a production deploy rewrote `.blocks-sandbox/outputs.json`) when CloudFormation has its stack, looked up with the sandbox's credentials and Region. It refuses only a stack that does not exist, with `the sandbox stack <stack> does not exist in <Region>.`; when the lookup cannot tell (no credentials, no network), it opens the console.
+  - `Try:` lines and the deploy, sandbox and credential re-run guidance name `cdk-blocks` commands as `npx --no -- cdk-blocks …`, as the app's AGENTS.md does, so they can be copied into the app's shell, where a bare `blocks` is not on `PATH` (exit 127). The `--all --port` refusal suggests `npx --no -- cdk-blocks dev stop --all` instead of the hidden `cdk-blocks cleanup` alias.
+
+- b2eb306: feat(blocks): `cdk-blocks sandbox preview` deploys the preview sandbox
+
+  - `cdk-blocks sandbox preview` deploys the sandbox once with the app hosted in preview shape, prints the preview URL and exits, as `npm run sandbox:preview` does. With `--output json` or `--query url` it prints the deploy result. `cdk-blocks sandbox --preview` and `cdk-blocks sandbox:preview` run it, for the npm-script spellings.
+  - `startSandbox` takes `previewInvocation`, the command that the warning of a plain deploy over a hosted preview names. Default: `npm run sandbox:preview`. The recorded deploy result's `url` is the URL the sandbox prints.
+
+- 184df0b: fix(blocks): run the backend under `cdk-blocks dev`, `sandbox`, `deploy` and `generate client` with `aws-blocks/tsconfig.json` when the app has one
+
+  `tsx` compiles a file with the root `tsconfig.json`. When that root only lists project references, as in the AWS Blocks Vite templates, it applies no options to backend files, so `jsx` or `paths` set in `aws-blocks/tsconfig.json` worked for `tsc -b` and the deploy bundling but not in `cdk-blocks dev` or `generate client` (`React is not defined`, `Cannot find package`). These commands and the `blocks-generate-client` bin now set `TSX_TSCONFIG_PATH` to `aws-blocks/tsconfig.json` (for the bin, the `tsconfig.json` next to the backend entry) when it exists and `TSX_TSCONFIG_PATH` is not set already.
+
+- b2eb306: fix(blocks): `cdk-blocks` on Windows
+
+  - Ctrl-C in `cdk-blocks dev` on Windows no longer prints `ps: unknown option -- A` when Git for Windows' `ps` is on `PATH`: the CLI runs no `ps` there, and on POSIX `ps`'s errors no longer reach the terminal.
+  - On Windows, an installed `@aws-blocks/core` that does not match `@aws-blocks/blocks` fails with the `cannot load @aws-blocks/core …, which does not match it` error and its reinstall hint, as on POSIX, instead of a raw `ERR_PACKAGE_PATH_NOT_EXPORTED`: Node names the package there by a path with backslashes.
+  - `cdk-blocks dev` and the sandbox's dev command tell the dev server that it runs under `tsx watch` (`BLOCKS_DEV_UNDER_WATCH=1`), so that a failed first start can end that `tsx watch` on Windows too, where the dev server cannot read its parent's command line.
+
+- b2eb306: fix(blocks): a SIGTERM to the process group of `cdk-blocks dev` or `cdk-blocks sandbox` stops it cleanly
+
+  A supervisor, `timeout` or CI sends SIGTERM to the whole process group, so the child of `cdk-blocks dev` and `cdk-blocks sandbox` gets it directly. On a SIGTERM or SIGHUP, the CLI now sends `cdk-blocks dev`'s dev server one SIGTERM, which its idempotent cleanup takes without harm, and stops `tsx watch` only once the dev server is gone. Before, its immediate forward was a second SIGTERM to `tsx watch`, which then SIGKILLed the dev server before it stopped the frontend, and `next dev` or Vite kept running. Other commands still forward SIGTERM at once.
+
+- e098c7a: The JSDoc on each Building Block re-export now points at the docs bundled in
+  this package (`docs/<package>/README.md`) instead of a `node_modules` package
+  directory, matching the lookup described in the README. Coding agents that
+  follow these comments now land on the shipped docs instead of a path that may
+  not exist.
+- 94d5900: The production settings of `DistributedTable` and `FileBucket` now live in a `PRODUCTION.md` next to each block's `README.md`, which links to it. `DistributedTable`'s covers scaling and cost, durability, deletion protection and encryption. `FileBucket`'s covers access logging, KMS encryption, Object Lock, scaling and cost. Both files ship in their packages and in `@aws-blocks/blocks` under `docs/<block>/`, and the shorter READMEs can be read in one pass.
+- f133ff8: On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.
+
+  - Each container namespace path (`/aws-blocks/api/<export name>`) gets its own CloudFront behavior, ahead of the `/aws-blocks/api/*` gateway behavior, all on one VPC origin per distribution for the backend's load balancer listener (whose path rules pick the compute) — so a distribution uses one of the account's VPC origins (25 by default) however many containers serve API traffic. Namespaces on Lambda computes, auth routes and `RawRoute`s still go through the gateway.
+  - A viewer-request CloudFront Function stamps the viewer's host on those requests, so `ctx.request.url` in the container is the public URL, including a custom domain.
+  - The load balancer admits CloudFront's origin-facing prefix list on its listener ports; the prefix list is looked up at deploy time, so stacks stay environment-agnostic.
+  - A direct call skips the gateway's throttling and access logs; the distribution's web ACL (`apiWaf`, or Hosting's WAF) covers it, and synth warns when there is none.
+  - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
+  - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
+  - Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+  - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.
+
+- c1fabce: feat(core): honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM` in the lifecycle scripts
+
+  `deploy`, `destroy`, `startSandbox`, `destroySandbox` and `startDevServer` from `@aws-blocks/core/scripts` now read `BLOCKS_LOG_LEVEL`:
+
+  - unset (or any unrecognised value): output is unchanged.
+  - `quiet`: errors and final results only.
+  - `normal`: short progress steps; CDK output is condensed into milestones and a resource count, and failure and rollback lines still print.
+  - `verbose`: the raw CDK output, as today.
+  - `debug`: `verbose` plus stack traces for errors the scripts catch and report as warnings.
+
+  The `BLOCKS_DEPLOYED …` line, the deployment-target summary, the API and frontend URLs and error messages print at every level. At `quiet` and `normal` the last 500 lines of hidden CDK output are kept, and when a deploy, destroy or `cdk watch` deploy fails they are printed to stderr before the error, so the failure never needs a re-run to diagnose. A `cdk watch` deploy that fails during synth, which CDK reports without a `❌` line, counts as failed too.
+
+  The external-database migration step and the dev server's `secret()`/`config()` type generation follow the level as well: at `quiet` the migration's output and warnings (its stdout and stderr) are hidden, and printed to stderr only if the migration fails; type-generation notices are hidden at `quiet` and `normal`.
+
+  `BLOCKS_LOG_STREAM=stderr` moves progress to stderr: progress steps, CDK milestones, raw CDK output, streamed CloudFormation events, migration output and type-generation notices go to stderr, and stdout keeps only the results (the deployment target, `BLOCKS_DEPLOYED` and the final URLs). `blocks-generate-spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line. Without the variable, the streams are unchanged. `@aws-blocks/core/scripts` exports `log`, the logger these scripts print progress with.
+
+- 6151940: Failed RPC calls on Lambda are now visible in CloudWatch. A failed call reaches the client as a JSON-RPC error inside an HTTP 200 response, so Lambda's `Errors` metric never counted it, and an alarm on it never fired. Each failed call (a method that throws, a call to an unknown API namespace or method, or the handler's 504 timeout) now writes one line in CloudWatch embedded metric format: the `AWSBlocks` / `RpcErrors` metric, with the dimensions `FunctionName` and `StatusClass` (`4xx` or `5xx`). The status, API namespace and method are in the same log line for CloudWatch Logs Insights. No SDK call or IAM permission is added, and the error message is never written to the metric line.
+- 2a358ff: `blocks-telemetry --disable` and `--enable` (without `--global`) now write `.blocks/config.json` at the project root, the nearest directory at or above the working directory that holds a `package.json` and an `aws-blocks/` directory. Run from a subdirectory of an app, `--disable` previously wrote the opt-out into that subdirectory, where the telemetry check never read it, so telemetry kept sending while the command reported success. When no project root is found, `--enable` uses the working directory, while `--disable` writes nothing and exits non-zero (for example at a monorepo root whose app is nested below it), pointing at `--global` and `AWS_BLOCKS_DISABLE_TELEMETRY=1`. `--status` reads the same project root as `--enable`. `--disable` reads the status back and prints its success line only after confirming telemetry is off; otherwise it prints a warning and exits non-zero. `--global` is unchanged.
+- 1ec956f: Test temp directories are created with `mkdtempSync`, so two tests that start in the same millisecond no longer share a path.
+- 072c3ff: An unrecognized `encryption` value on `KVStore`, `DistributedTable` or `FileBucket` now fails the synth with an error that lists the valid values (`'aws-managed'`, `'customer-managed'`, or the block's `fromKmsKey(arn)`). Previously such a value (for example a typo like `'kms-managed'` in untyped JavaScript, or a value loaded from JSON or the environment) only emitted an `UnknownEncryption` warning and fell back to the AWS-managed key, so a request for a customer-managed key could be silently downgraded. Apps that pass a valid value, or omit `encryption`, are unaffected; an app that hits the new error was never getting the encryption it asked for and should correct the value.
+- 184df0b: feat(create-blocks-app): typecheck the backend with Node types and the browser code without them
+
+  The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `tsconfig` typechecked the backend source with the frontend's settings. The templates passed because their one `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error, and a frontend `tsconfig` with `"types": ["vite/client"]`, as create-vite's has, failed with `TS2591: Cannot find name 'process'` in `aws-blocks/`.
+
+  - The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) now check the browser and the backend as separate TypeScript projects, the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` without Node types and reads the backend through a project reference to `aws-blocks/tsconfig.json`, which checks every backend file with Node types. `npm run typecheck` is `tsc -b --force`, and `npm run build` is `tsc -b --force && vite build`. A Node global in `src/` is now a type error.
+  - `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types: `next build` ignores project references, and backend-only apps run all their code on Node.
+  - Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (except in a Next.js project) and prints how to reference it. It never edits the project's `tsconfig`.
+  - Apps scaffolded before this change keep working as they are. To move one to the new layout, see [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend). `TROUBLESHOOTING.md` in `@aws-blocks/blocks` lists the TypeScript errors of the layout and their fixes.
+
+  The decision and the alternatives considered are recorded as D-028 in `docs/DECISIONS.md`.
+
+- 05a88e1: When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.
+
+  A credential failure message now names the profile and the deployment Region. When the fix is `aws login` and the profile has no Region or a different one, the message first prints `aws configure set region <region> --profile <name>`, so that the sign-in uses the Region you deploy to, and says to sign in again after a later Region change. If the profile's Region is set in the AWS credentials file, which overrides the config file that `aws configure set` writes, the message asks you to change it there instead. When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region than the deployment, which the AWS CLI would use instead, the `aws login` command includes `--region <region>`.
+
+- 3ae8592: feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
+
+  `CronJob` takes the same `compute` and `timeoutSeconds` options as `AsyncJob`.
+  Assign a container `Compute` to run a scheduled job longer than a serverless
+  compute's 15-minute limit:
+
+  ```ts
+  import { Compute, CronJob } from "@aws-blocks/blocks";
+
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    size: { vcpu: 1, memory: 2048 },
+  });
+
+  new CronJob(scope, "nightly-rebuild", {
+    schedule: "cron(0 3 * * ? *)",
+    compute: worker,
+    timeoutSeconds: 2 * 60 * 60,
+    handler: async () => {
+      // ...
+    },
+  });
+  ```
+
+  On a container compute each tick is delivered like a container `AsyncJob`: the
+  handler runs in its own worker thread, `timeoutSeconds` is enforced, and a
+  failed tick is retried up to 3 attempts in total before moving to a dead-letter
+  queue. A CronJob under a container scope (`new Scope(id, { parent, compute })`)
+  now runs on that container instead of failing synth. Jobs on a serverless
+  compute deploy as before.
+
+- f32185c: Add the `blocks dashboard` command, which starts the Blocks Admin UI against the app it is run from on a free loopback port and opens it with a session token. `blocks dashboard doctor` diagnoses the app and prints a report instead, for when the server will not start. Accepts `--port`, `--profile`, `--region`, `--project`, `--allow-origin` and `--json`, and rejects a flag whose value is another flag rather than silently accepting it.
+
+  The dashboard is opt-in: `@aws-blocks/admin-ui` is resolved from the app and offered for install when missing, so an app that never runs it carries none of its dependencies. The default template gains an `npm run dashboard` script.
+
+- 5f55dac: `db pull`'s generated `MIGRATION_GUIDE.md` and the auth placeholder it adds to your `index.ts` now use `Auth` from `@aws-blocks/bb-auth` instead of the removed `AuthOIDC`. The guide's example signs users in with Google as a `type: 'oidc'` provider of a `store: 'builtin'` block, so their `userId` keeps the same `<issuer>:<sub>` format `AuthOIDC` produced, and the deploy checklist names the callback URL to register (`https://<your domain>/aws-blocks/auth/callback`).
+- f32185c: Record every deploy in `.blocks/deploy-history.jsonl`. A deploy appends one `IN_PROGRESS` record when it starts and one terminal record with the same id when it ends, so a reader merges by id with last-record-wins and a dangling `IN_PROGRESS` record means the process died mid-deploy. The region and stack name are captured at deploy time rather than resolved when the file is read, because ambient `AWS_REGION` and IMDS can point somewhere other than where the deploy actually went.
+
+  Writing is best-effort: a history file that cannot be written never fails the deploy it describes. The sandbox path records the explicit deploy only, since a later `cdk watch` hot-swap has no clean deploy boundary.
+
+- 201e59e: The local dev server now handles API and raw-route requests through the same dispatcher as deployed handlers, so cookie and error responses match. Handlers in local dev can now read the request cookies and client user agent through the request context, API and raw-route responses carry the same no-store cache headers, `ctx.request.url` formats the query string the same way as in a deployment, handlers receive `ctx.request.signal`, `ctx.request.url` takes its host from a loopback `X-Forwarded-Host`, and a request without a `Host` header reads as `http://localhost/...`.
+- 5f55dac: The local dev server no longer exits on an unhandled promise rejection from request handling, which left `npm run dev` down until the next file change. The usual cause is a guard called without `await`, such as `auth.requireRole(context, 'admin')`: the method returns before the guard rejects. The dev server now logs `[unhandled-rejection] <namespace.method>: <error>` with a hint about the missing `await`, whether the response had already been sent, and the stack, and keeps serving. A rejection outside any request still ends the process, as before. Deployed (Lambda) behaviour is unchanged.
+- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
+
+  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
+
+- 5f55dac: Docs and editor hover text now point at `Auth`, the single authentication Building Block, instead of the removed `AuthBasic`, `AuthCognito` and `AuthOIDC`. The `@aws-blocks/blocks` README adds a "Choosing a sign-in method" table comparing email + password, social, OIDC verified by your backend (`store: 'builtin'`), OIDC through Cognito, and SAML by Cognito free tier, offline support and user-pool features. The `hasAuthError` example in `@aws-blocks/core` now matches `AuthErrors.NotAuthorized`.
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
+
+  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
+
+- f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
+- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
+
+  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
+  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
+  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
+
+- 1e4d08d: docs(hosting): explain what a plain-HTTP front door does to session cookies
+
+  The README's front-door section now says that behind a standalone ALB door with no certificate, `Auth` omits `Secure` from its same-origin session cookie (a browser discards a `Secure` cookie from a plain-HTTP origin), so the cookie and the session travel in clear text. It recommends a certificate (an HTTPS listener) for anything beyond testing, and points at the separate `StackedRouterPlainHttp` warning for the stacked door's edge → router hop.
+
+- e6c989d: `frontDoor: 'none'` now always warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`), including for a static site with no backend API. The S3 website endpoint takes no certificate, so the pages and scripts travel unencrypted and can be altered in transit. The warning explains this, points to the CloudFront door for HTTPS, and names how to acknowledge it when `'none'` is intended (`Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`). It stays a warning: synth still succeeds.
+- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
+
+  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
+
+  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
+
+- 8ece10a: fix(core,hosting): require source conditions on KMS key policies that name a service principal
+
+  The synth-time service-principal check now also reads the key policy of every KMS key in the scopes it covers. An `Allow` statement that names an AWS service principal must carry `aws:SourceAccount` or `aws:SourceArn`, or `kms:EncryptionContext:aws:logs:arn` for CloudWatch Logs. `events.amazonaws.com` is exempt for `kms:GenerateDataKey*` and `kms:Decrypt`, because Amazon SNS documents that these conditions stop EventBridge from publishing to an encrypted topic. A key AWS Blocks creates fails synth; a key your app creates gets a warning, which you can acknowledge with the id `@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition`.
+
+  A condition now counts, for key policies and for role trust policies alike, only under a positive string or ARN operator (`StringEquals`, `StringLike`, `ArnLike`, …, or their `ForAnyValue:` forms) and with a value that names an account. `…IfExists`, negated (`StringNotEquals`, `ArnNotLike`, …), `Null` and `ForAllValues:` operators don't count. Neither does `*` alone, a wildcard `aws:SourceAccount`, or an ARN whose account segment is empty or a wildcard. A role or key your app creates that relied on one of these forms now gets the synth warning.
+
+  The `Hosting` alarm topic key (regional and `us-east-1` monitoring stacks) now grants `cloudwatch.amazonaws.com` with `StringEquals aws:SourceAccount` and `ArnLike aws:SourceArn` (`arn:<partition>:cloudwatch:<region>:<account>:alarm:*`) in place of `StringEqualsIfExists aws:SourceAccount`. Alarm notifications are still delivered.
+
+- 287be20: fix(bb-knowledge-base): keep raw ingestion failure text out of client errors
+
+  When the latest ingestion job had failed, `isSynced()` and `waitUntilSynced()` threw `IngestionFailedException` with Bedrock's `failureReasons` in the message. That message is returned to RPC callers, and the reasons are raw service text that can name buckets, object keys or ARNs. The error now has a fixed message. When Bedrock reports reasons, they are written to the server log and kept on the error's non-enumerable `cause`, so `JSON.stringify(err)` and the RPC response leave them out. The new exported type `IngestionFailureCause` describes that `cause`. The error name, `KnowledgeBaseErrors.IngestionFailed` and the method signatures are unchanged. If your server code read the reasons from `err.message`, read `failureReasons` from `err.cause` instead, treating it as optional: `cause` is absent when the job reported no reasons or the lookup failed.
+
+- d8a86ee: Update the `LambdaCompute` README and design doc to describe how the compute reaches an app (as the default compute and through `Compute` with `type: 'serverless'`), its options, and its VPC, CORS, tracing, and dashboard behavior. Add tests for the memory, timeout, and VPC placement settings.
+- c607deb: Behind a Blocks CloudFront front door, a Lambda handler's `ctx.request.url` is now the URL the client called: the distribution's domain, or the custom domain it was called at (`https://d111.cloudfront.net/aws-blocks/api/orders`, not `https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api/orders`). Links and redirects a handler builds from it stay on the public domain, where the app's cookies are scoped. A container namespace behind the same door already reported that URL; the two compute types now agree. `getRequestBaseUrl()` is unchanged: it stays the gateway's origin and stage, for code that must reach the gateway directly.
+
+  - Applies to the `apiFrontDoor: 'cloudfront'` distribution and to `Hosting`'s CloudFront door (on either tier). A viewer-request CloudFront Function on their API behaviors to the gateway stamps the viewer's host as `x-blocks-public-host`; each door registers its hosts under the backend's `BLOCKS_PUBLIC_HOSTS` config.
+  - A handler takes the stamped host only when it is one of the backend's front-door hosts (for a wildcard alias such as `*.example.com`, a subdomain at any depth, not the apex); any other value is ignored.
+  - Requests sent to the `execute-api` URL directly, and requests through `Hosting`'s other doors (ALB, API Gateway, stacked, bring-your-own), keep reporting the gateway's host.
+  - The sandbox dev server's loopback `X-Forwarded-Host` still takes precedence, so redirect-based sign-in in a sandbox keeps working through the CloudFront URL. In both the Lambda handler and the container, it now contributes only its host: a query, fragment or userinfo in it no longer reaches `ctx.request.url`, and a request path starting `//` or `/\` can't change the URL's host.
+  - A container namespace the gateway proxies to behind a Blocks CloudFront door (on the `apigateway` tier, or when CloudFront can't reach its VPC) also reports the public URL now, instead of the gateway's.
+  - `Auth`'s same-origin relay allowance follows: when a sign-in starts, a `relayTo` on the host the client called behind a Blocks CloudFront door counts as same-origin, where the gateway's `execute-api` host did before. When the IdP calls back, the relay re-check accepts a relay to any host the backend serves over HTTPS (each CloudFront door's hosts and the gateway's), so a sign-in that started on one of a door's hosts, or on the `execute-api` URL, still finishes when the callback arrives on another.
+  - Each CloudFront door adds one CloudFront Function to the account.
+
+- 4e92168: On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), every `Logger` line now carries `awsRequestId`, the invocation's request id, so you can correlate everything one request logged (for example `filter awsRequestId = "<id>"` in CloudWatch Logs Insights). Core's `createLambdaHandler` runs each invocation with its `awsRequestId` in scope, and overlapping invocations on one container each see their own id. `awsRequestId` is reserved, so context can't replace it, and your own context fields such as `requestId` are kept as is. Building Block authors can read the same id with `currentRequestId()` from `@aws-blocks/core/bb-utils`. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+- c6a3357: Add a repository check that every Building Block with both a local mock and an AWS runtime entry ships a `parity.test.ts` and calls its shared `validation.ts` from both entries. The contributor docs now describe the rule.
+- 8a5726c: test: check `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob and Dashboard
+
+  Each of these blocks now has a synth test that sets `defaults.permissionsBoundary`
+  and fails if any IAM role in any synthesized template, including custom-resource
+  provider roles, the CronJob scheduler role and the container task execution
+  role, lacks the boundary or is missing from the `<stack>.blocks-iam.json`
+  report. No runtime or synth behavior changes.
+
+- 80ce128: `npm run sandbox` now deploys infrastructure changes made while it watches. Its `cdk watch` ran with CDK's default `--hotswap`, which applies code-only changes but silently ignores any change it can't hotswap. Adding a Building Block that needs new infrastructure, such as a `Database` or `Realtime`, therefore updated the Lambda code that uses it and never created it, with no message. The watch now passes `--hotswap-fallback`: a code-only change still hotswaps in seconds, and any other change runs a full deploy of the stack.
+- 5f55dac: The scaffolded `AGENTS.md` no longer contradicts itself about API namespaces: a method is called as `<exported name>.<method>` (`export const api = new ApiNamespace(…)` → `api.*`), not by the second argument to `new ApiNamespace(…)`.
+- 70ea280: `Secret` schema-validation errors no longer include the secret value. Schema libraries often quote the received value in their issue messages, and a `SecretErrors.ValidationFailed` error's message is returned to the RPC caller, so `get()` and `put()` now throw it with a fixed message, `ValidationFailedException: The secret value did not match the schema`. The message doesn't name the failing field, because a record or map schema reports the value's own keys as the path. The library's original issues and the first failing path stay on the error's non-enumerable `cause` (`cause.issues`, `cause.path`) for server-side logging. The error name is unchanged, so `isBlocksError(e, SecretErrors.ValidationFailed)` checks keep working.
+- e286b16: docs(telemetry): make the first-run telemetry notice describe exactly what is collected
+
+  The notice printed the first time the CLI or `create-blocks-app` collects usage data said the data was anonymous and that no personal data was collected. It now lists what an event can include: random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). It says that events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code, and that, as with any HTTPS request, the collection endpoint also receives your IP address.
+
+  The notice now names the opt-outs that work everywhere: `AWS_BLOCKS_DISABLE_TELEMETRY` set to `1`, `true` or `yes`, or `npx --no -- cdk-blocks telemetry disable --global` or `npx --no -- blocks-telemetry --disable --global` run inside an AWS Blocks app. Without `--global`, these commands opt out the current app only. The `@aws-blocks/blocks` README describes the same in its CLI section.
+
+  What is collected and when has not changed.
+
+- c00ab16: docs(telemetry): state the retention periods in the first-run notice
+
+  The first-run telemetry notice printed by the CLI and `create-blocks-app`, and the `@aws-blocks/blocks` README, now say that the collection endpoint does not store your IP address, except in logs of requests that its firewall blocks, and that events are kept for up to 1 year and logs of all requests, blocked or not, for up to 10 years.
+
+- 5f55dac: Templates: per-user data is keyed on `userSub`, and `updateTodo` can no longer write into another user's list.
+
+  - **`updateTodo` (`demo`, `auth`)** spread the caller's `updates` object over the stored todo. The RPC layer passes through properties the TypeScript signature doesn't declare, so a crafted request could set the todo's key fields and overwrite or create a todo in someone else's list. It now copies only `completed`, `priority` and `title`. If you scaffolded an app from either template, make the same change to its `updateTodo`.
+  - **Keyed on `userSub`** (`default`, `react`, `demo`, `api-only`, `sql`, and the commented example in `bare`): per-user rows used the username as their owner key. They now use `user.userSub`, the id that stays the same for the user's lifetime, as the `auth` template already did. The todo field is renamed from `userId` to `userSub`. This only affects newly scaffolded apps.
+  - Each template's e2e tests now check that a second user can't list, read, update or delete the first user's items.
+
+- 58980c7: fix: `sandbox:destroy` works on Windows
+
+  On Windows, `npm run sandbox:destroy` always failed and left the sandbox stack deployed. The CDK `--app` path was
+  wrapped in single quotes, which `cmd.exe` keeps as part of the path (`Cannot find module '...index.cdk.ts'`). Listing
+  the stacks to empty their buckets also failed with `spawnSync npm ENOENT`, because `npm` is a `.cmd` shim there. The
+  path is now double-quoted on Windows (single-quoted elsewhere), and stack listing for `destroy`
+  uses the same cross-platform spawn as the rest of the CLI. `sandbox` deploy, synth, and watch now quote the path
+  the same way, so they also work when the project path contains a space.
+
+- Updated dependencies [3d7479a]
+- Updated dependencies [be8864c]
+- Updated dependencies [4457ea4]
+- Updated dependencies [d51b8ee]
+- Updated dependencies [e83d152]
+- Updated dependencies [c6a3357]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6423964]
+- Updated dependencies [6eba38b]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [1c7e0dd]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6236bf9]
+- Updated dependencies [b2eb306]
+- Updated dependencies [c1fabce]
+- Updated dependencies [efe28cb]
+- Updated dependencies [49b68af]
+- Updated dependencies [f0c1455]
+- Updated dependencies [6297d5a]
+- Updated dependencies [a5a5dd3]
+- Updated dependencies [e8e3262]
+- Updated dependencies [eacc87e]
+- Updated dependencies [7c23ab9]
+- Updated dependencies [b2eb306]
+- Updated dependencies [bfaddeb]
+- Updated dependencies [5f55dac]
+- Updated dependencies [b2eb306]
+- Updated dependencies [94d5900]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [2b250f8]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [3ae8592]
+- Updated dependencies [777c5a4]
+- Updated dependencies [f32185c]
+- Updated dependencies [5f55dac]
+- Updated dependencies [116b32b]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [be8864c]
+- Updated dependencies [99638ca]
+- Updated dependencies [2d7ce4a]
+- Updated dependencies [9d69412]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4e41c28]
+- Updated dependencies [64f7247]
+- Updated dependencies [e8673cd]
+- Updated dependencies [8fb67ec]
+- Updated dependencies [11877b6]
+- Updated dependencies [77c2c75]
+- Updated dependencies [f643a76]
+- Updated dependencies [1f565bd]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c6a59f4]
+- Updated dependencies [1e4d08d]
+- Updated dependencies [5f55dac]
+- Updated dependencies [e6c989d]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [fb29c06]
+- Updated dependencies [60360c1]
+- Updated dependencies [40d25ec]
+- Updated dependencies [184df0b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [d51b8ee]
+- Updated dependencies [8ece10a]
+- Updated dependencies [287be20]
+- Updated dependencies [c672712]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [8a5726c]
+- Updated dependencies [2095f31]
+- Updated dependencies [42b84b2]
+- Updated dependencies [10eb382]
+- Updated dependencies [6bac1c9]
+- Updated dependencies [8e96367]
+- Updated dependencies [80ce128]
+- Updated dependencies [da7eb93]
+- Updated dependencies [3259d83]
+- Updated dependencies [70ea280]
+- Updated dependencies [fc57730]
+- Updated dependencies [d354055]
+- Updated dependencies [d354055]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-agent@0.8.0
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/bb-async-job@0.3.1
+  - @aws-blocks/bb-auth@0.2.0
+  - @aws-blocks/auth-common@0.4.0
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-data@0.6.0
+  - @aws-blocks/bb-secret@0.4.0
+  - @aws-blocks/bb-distributed-data@0.3.1
+  - @aws-blocks/bb-container-compute@0.3.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-file-bucket@0.5.0
+  - @aws-blocks/bb-realtime@0.6.0
+  - @aws-blocks/bb-compute@0.2.1
+  - @aws-blocks/hosting@0.6.0
+  - @aws-blocks/bb-kv-store@0.5.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-cron-job@0.5.0
+  - @aws-blocks/bb-knowledge-base@0.4.0
+  - @aws-blocks/bb-email-client@0.3.0
+  - @aws-blocks/bb-logger@0.4.0
+  - @aws-blocks/bb-dashboard@0.3.1
+  - @aws-blocks/bb-metrics@0.2.1
+  - @aws-blocks/bb-tracer@0.3.1
+
 ## 0.9.0
 
 ### Minor Changes

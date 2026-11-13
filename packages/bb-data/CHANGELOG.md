@@ -1,5 +1,222 @@
 # @aws-blocks/bb-data
 
+## 0.6.0
+
+### Minor Changes
+
+- 49b68af: feat(bb-data): load Postgres extensions (PostGIS, pgvector) in local dev
+
+  Adds an `extensions` option to `DatabaseOptions` so a Database Block can declare
+  the Postgres extensions it uses (e.g. `['postgis']`, `['pgvector']`) and have them
+  load in the **local PGlite engine**, restoring local/production parity for spatial
+  and vector workloads. Previously `CREATE EXTENSION postgis` worked once deployed to
+  Aurora but failed in local dev, forcing a sandbox deploy for every spatial/vector
+  iteration.
+
+  - **Local-only, mirroring `postgresVersion`.** The option is read only by the local
+    PGlite implementation and is a no-op on AWS, where Aurora PostgreSQL supports
+    these extensions natively. Application code is unchanged across environments, and
+    PGlite never leaks into app code.
+  - **Opt-in install.** Each supported extension ships as its own package, declared as
+    an **optional peer dependency** and loaded by dynamic import, so only projects
+    that declare an extension install it: `postgis` → `@electric-sql/pglite-postgis`,
+    `pgvector` → `@electric-sql/pglite-pgvector`. A declared extension whose package is
+    missing (or an unknown name) fails on the first database interaction with an
+    actionable error — the exact `npm install` command, or the list of supported names.
+  - You still run `CREATE EXTENSION <name>` in a migration — the option only makes the
+    extension available for `CREATE EXTENSION` to succeed locally.
+
+  Both extension packages are experimental upstream; the opt-in install keeps that
+  risk with the consuming app rather than every `bb-data` consumer. No change to the
+  AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behaves
+  exactly as before.
+
+  The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
+  `0.2.11`, `@electric-sql/pglite-pgvector` `0.0.12`) to match the exact-pinned
+  `@electric-sql/pglite` `0.5.11` they peer-depend on. A caret range let a newer extension
+  release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.
+
+- 6297d5a: `Database` now rotates its auto-generated `postgres` credentials secret every 30 days under the `production` preset, using AWS's PostgreSQL single-user rotation function (a Serverless Application Repository app: an AWS-maintained Lambda placed in the cluster's VPC): it generates a new password, sets it on the cluster and makes it the secret's current version. The secret keeps its ARN and the app never reads the password itself (the RDS Data API reads the secret for it), so a rotation needs no redeploy.
+
+  Rotation is off under the `sandbox` preset, where a teardown would wait on the rotation Lambda's network interfaces and the stack would pay for an interface endpoint it never benefits from. Set `secretRotation: true` to opt in.
+
+  - A `secretRotation` option turns rotation on (`true`), sets the interval (`{ intervalDays: n }`, 1–1000 days) or turns it off (`false`), and always wins over the stack-wide `defaults.secretRotation`. It is ignored, with a synth warning, for `fromExisting()` databases.
+  - In the Database's own VPC (isolated subnets, no NAT) a Secrets Manager interface endpoint is added so the rotation Lambda can reach the Secrets Manager API (billed hourly in each of its two AZs, about $7.20 per AZ per month in us-east-1). A dedicated security group admits only the rotation Lambda on 443, and the cluster security group admits only the rotation Lambda on the Postgres port.
+  - In a shared VPC (`defaults.vpc`) the rotation Lambda reuses the endpoint Blocks already provisions. With `provisionEndpoints: false` your own Secrets Manager endpoint's security group must admit the rotation Lambda's security group on 443; synth warns (`blocks:vpc:endpoint-client-unadmitted`) with the group to admit.
+  - With a `storageEncryptionKeyArn`, the rotation Lambda is granted `kms:Decrypt`, `kms:DescribeKey` and `kms:GenerateDataKey` on the key; the imported key's policy must allow the account's IAM principals to use it, which the default key policy does. If the key policy enumerates principals instead of delegating to the account root, the rotation Lambda's role must be among them; its ARN is only known after the first deploy.
+
+  `BlocksDefaults` gains an optional `secretRotation`, so no existing literal needs changing: both presets set it, and an absent value means off.
+
+  Two deploy-time requirements come with it, because the rotation function is an AWS Serverless Application Repository app: the CloudFormation execution role needs `serverlessrepo:GetApplication` and `serverlessrepo:CreateCloudFormationTemplate`, and rotation only deploys in the `aws`, `aws-cn` and `aws-us-gov` partitions (a concrete region outside them fails at synth). An app on the `production` preset gets rotation by upgrading, so a least-privilege bootstrap role or another partition needs `secretRotation: false`.
+
+  Existing stacks upgrade in place: rotation only adds resources; the cluster, its writer and the secret synthesize identically before and after this change, so there is no cluster replacement. The stack gains the `AWS::Serverless-2016-10-31` transform, and the first rotation runs during the deploy, after the writer is available and migrations have run; the deploy waits (up to five minutes) for it to finish.
+
+  Every rotation, scheduled ones included, has a window in which the cluster already accepts the new password while the secret still holds the old one, usually 1-3 seconds and occasionally up to about 18; a query in that window is refused, so the Data API engine now classifies that refusal as a connection failure and retries the statement for up to nine seconds (it is refused before it runs, so a retry cannot apply it twice). A statement inside a transaction is not retried, since every attempt would reuse one transaction id; the refusal surfaces so the caller can retry the whole transaction.
+
+  CDK also attaches a resource policy to the secret that denies `secretsmanager:DeleteSecret` to the account while rotation is on. `cdk destroy` still deletes the secret; an out-of-band `delete-secret` is refused.
+
+  Also fixed: with a `storageEncryptionKeyArn`, the app runtime and the migration Lambda were never granted `kms:Decrypt` on the key, so every Data API call, the first migration included, failed. The app runtime and the migration Lambda are now granted `kms:Decrypt` on the key, scoped to use through Secrets Manager.
+
+  In `@aws-blocks/core`, `VpcRequirements` gains `endpointClientSecurityGroups`, letting a Building Block register security groups of compute it provisions itself (such as the rotation Lambda) so they are admitted on the Blocks-managed interface-endpoint security group, and `endpointClientDependents`, so a construct that must not be created before that compute can reach the endpoints is ordered after them. When `provisionEndpoints: false` leaves the endpoints to you, Blocks warns for each registered group instead.
+
+- 116b32b: **Breaking (behavior):** `db pull` no longer generates CRUD for tables with row-level security (RLS) disabled.
+
+  Generated CRUD relies on row-level security to decide which rows each user can access, and PostgreSQL applies no row filtering to a table without RLS. `db pull` and the `npm run dev` type refresh now skip these tables. The `db pull` eligibility table shows `No — RLS disabled` for them, and both commands print a warning that names each skipped table with the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` statement to run, and a `USING (true)` policy as the way to share a table with every signed-in user on purpose. Tables with RLS enabled but no policies are still generated, but `db pull` now marks them `Action required`: Postgres denies every row until a table has a policy.
+
+  If you re-pull a project that already has CRUD for a table without RLS, that table disappears from `database.types.ts` and `database.meta.ts`, and code that uses it stops compiling. To keep it, enable RLS and add policies for the table in a migration, then re-run `db pull`.
+
+### Patch Changes
+
+- 5f55dac: feat(bb-auth): `Auth` options: a block-level `store` and one `providers` map
+
+  `Auth` options start with where your users live. A block-level `store` picks it, and every sign-in provider goes in one `providers` map, keyed by provider id and tagged with its `type`:
+
+  ```ts
+  // The default store (omit `store`): users live in a Cognito user pool.
+  const auth = new Auth(scope, "auth", {
+    providers: {
+      google: {
+        type: "google",
+        clientId: "your-google-client-id",
+        clientSecret: googleSecret,
+      },
+      entra: {
+        type: "oidc",
+        issuer: "https://login.microsoftonline.com/<tenant>/v2.0",
+        clientId: "entra-client-id",
+        clientSecret: entraSecret,
+      },
+      corp: {
+        type: "saml",
+        metadataUrl: "https://idp.example.com/saml/metadata",
+      },
+    },
+  });
+
+  // store: 'builtin': no user pool; your backend verifies each provider itself.
+  const sso = new Auth(scope, "sso", {
+    store: "builtin",
+    providers: {
+      okta: {
+        type: "oidc",
+        issuer: "https://dev-12345.okta.com",
+        clientId: "0oa-your-client-id",
+      },
+      github: github({ clientId: "Iv1.abc", clientSecret: githubSecret }),
+    },
+    // Both blocks have providers, so this one gets its own sign-in routes.
+    redirects: {
+      callbackPath: "/aws-blocks/auth/sso/callback",
+      signOutPath: "/aws-blocks/auth/sso/signout",
+    },
+  });
+  ```
+
+  - **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` needs no options): email + password, `mfa`, `passkeys`, `admin`, `userPool`, `email`, and `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. A `type: 'oidc'` entry federates through Cognito and requires `clientSecret`. A social entry is keyed by its type (`google: { type: 'google', … }`).
+  - **`store: 'builtin'`**: no user pool. Users live at their identity provider, and the block keeps only its session table. `providers` of `type: 'oidc'` (`clientSecret` optional, so public PKCE-only clients work), `github()` / `customOauth2()` (`type: 'oauth2'`) and `stubIdp()` (`type: 'stub'`). `users` takes only `groups`, `allowBearerAuth: true` accepts the provider's access token, and `validateUser` runs at sign-in only. `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool` and `codeDelivery` don't apply, and the signed-in user's `signInProvider` is one of the block's provider ids (never `'password'`).
+  - **One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. Use two `Auth` blocks, each with its own session cookie and `createApi()`, and let the frontend pick one per sign-in. When both have `providers`, give the second its own `redirects.callbackPath` / `signOutPath`, as `sso` above does.
+  - **Checked at compile time, and again at runtime.** A wrong combination is a compile error. Most name the fix in their type, such as `ERROR_needs_store_cognito<'emailPassword'>` under `store: 'builtin'`. `stubIdp()`, `github()` or `customOauth2()` on the default store is a compile error too (`'"stub"' is not assignable to '"oidc"'`): add `store: 'builtin'`. The constructor rejects the same combinations with a readable message in `npm run dev`, at synth and in Lambda. It also rejects what the compiler can't see, such as options built from JSON, a `providers` value that isn't an object of provider entries, or a social entry keyed differently from its type. A default-store block with `emailPassword: false` and no provider fails in `npm run dev`, at synth and in Lambda.
+  - **Editor help on a `'builtin'` block.** The options it refuses (`mfa`, `admin`, `userPool`, `users.signInWith`, …) are marked `@deprecated`, so completions list them last and struck through; `emailPassword` stays unmarked, since `false` is allowed. `allowBearerAuth: { clientIds }` there names the fix (`ERROR_needs_store_cognito<'allowBearerAuth (object form)'>`). A `providers` map picked per environment (`isProd ? { okta: … } : { local: stubIdp() }`) keeps both provider ids narrow for `getSignInUrl()` and `requireRole()`.
+  - **Checked at synth.** On both stores, synth checks `redirects` (`callbackPath` / `signOutPath` must be explicit paths under `/aws-blocks/auth/`, not the bare prefix) and `postSignInPath` / `postSignOutPath`, and rejects a provider id containing `/`. Two blocks of one backend that would mount the same sign-in or sign-out routes (both with `providers` on the default `redirects`), or two `stubIdp()` providers under the same key, fail synth naming both blocks, and at runtime the stub case names the fix rather than a bare `DuplicateRouteException`. A plain string as a `'builtin'` provider's `clientSecret` is refused at construction. On the default store, a `type: 'oidc'` entry with an empty or falsy `clientSecret` (`''`, `0`, `false`), or an `attributesRequestMethod` other than `'GET'` / `'POST'`, is refused at construction in `npm run dev`, at synth and in Lambda.
+  - **Docs and messages.** `allowBearerAuth` and `validateUser` say that a bearer token is verified per request and does not run `validateUser`, so gate per request when you rely on it. An option error never echoes a string value longer than 8 characters, including a `store` or a provider `type` (a misplaced token prints as `a string (40 characters)`). A provider whose id names an `Object.prototype` member (such as `constructor`) gets the default label "Sign in with Constructor".
+  - **`bb-auth migrate`** rewrites `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks to this shape. A block constructed from a class the app re-exports through its own module (`export { AuthBasic } from '@aws-blocks/bb-auth-basic'`, `export *` of an old package) gets the same option mapping, kept defaults and TODOs as a direct import. `AuthBasic` blocks keep their password policy: each character class it left unset is written as `false` (`Auth` requires all four by default). A local `export { AuthCognitoErrors }` of a renamed import becomes `export { AuthErrors as AuthCognitoErrors }`. An `AuthOIDC` `providers` array with a spread is kept as is, with a TODO. Each moved `stubIdp()` gets a TODO that `Auth` refuses it on a production deployment, and `stubIdp({ name: 'dev' })` becomes `stubIdp()`. A provider factory called outside the block, a `require()` of an old package, and an `AuthBasicUser` import in a project that never reads `createdAt` get accurate TODOs (none, for the last). `migrate <path>` with a path that doesn't exist exits 2.
+  - **Stable identifiers.** Construct ids, user-id formats (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users), the session format, and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`) depend on the provider keys and block ids, not on how the options are written. An `AuthCognito` app keeps its construct ids, so nothing deployed is replaced.
+
+  Also updated: the umbrella README's sign-in method guide (`@aws-blocks/blocks`), the `Auth` snippet and RLS notes in the generated `MIGRATION_GUIDE.md` from `db pull` (`@aws-blocks/bb-data`), the `Secret` README's provider-secret note (`@aws-blocks/bb-secret`), the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`), and the `AuthAction.unavailable` example (`@aws-blocks/auth-common`), whose hint reads "…or use stubIdp() in a store: 'builtin' block locally."
+
+- 5f55dac: `Auth`'s signed-in user (`AuthenticatedUser`) has an optional `claims` field: the provider's verified claims for users of a `store: 'builtin'` block (an OIDC, OAuth 2.0 or stub IdP provider verified by your backend), as `AuthOIDC`'s user carried. With `db.crud()` or `db pull`'s `supabaseCrud()` and Postgres row-level security, RLS therefore sees the identity provider's raw `sub` as `request.jwt.claims.sub` for those users, as it did with `AuthOIDC`, so policies that match the raw `sub` keep returning rows after the move to `Auth`. `claims` is absent for user-pool users, whose RLS subject is their `userId`. `claims` is server-side only: `getAuthState()` and the sign-in routes never send it to the browser.
+
+  `@aws-blocks/bb-data`: newly generated `supabaseCrud()` wiring now passes `claims` to RLS explicitly, and the generated `MIGRATION_GUIDE.md` now says which subject RLS sees for each kind of user.
+
+- b2eb306: fix(bb-data): the verb usage names the command that runs the CLI
+
+  `bb-data <verb> --help` prints `Usage: <command> <verb> …`, where `<command>` is `BB_DATA_COMMAND` when a wrapper sets it, else `bb-data`. `cdk-blocks db <verb> --help` sets it, so its usage reads `Usage: cdk-blocks db migrate …` instead of `Usage: bb-data migrate …`.
+
+- c1fabce: fix(bb-data): `bb-data <command> --help` prints that command's usage
+
+  `bb-data migrate --help`, `status --help`, `generate-types --help` and `pull --help` (or `-h`) now print the usage and options of that command and exit 0. Before, `migrate --help` read `--help` as the migrations directory and exited 1, and `pull --help` failed without a terminal. `--help` is checked first, wherever it appears in the arguments, so a help request never opens, migrates or introspects a database and never prompts. `bb-data --help` prints the overview of every command. Without `--help`, every command behaves as before.
+
+  The `pull` verb help states the exit code it really has without a terminal: 1 for `bb-data pull`, and 2 for `cdk-blocks db pull`, which refuses before bb-data runs (also under `--no-input` or `CI`).
+
+- efe28cb: The `MIGRATION_GUIDE.md` that `bb-data pull` generates for Supabase apps now says which token must carry the non-standard JWT claims your RLS policies read: the one `Auth` verifies, which is the ID token for browser sessions and the access token for `Authorization: Bearer` API callers (it said the access token only).
+- f0c1455: `bb-data pull` no longer shows the connection string as you type or paste it, and a paste that ends in Enter is submitted at once. Ctrl-C at any of its prompts now exits with code 130, and closing stdin (Ctrl-D) before answering exits with code 1 and `stdin closed before an answer was given.` Previously both exited 0 without a message.
+- 5f55dac: `db pull`'s generated `MIGRATION_GUIDE.md` and the auth placeholder it adds to your `index.ts` now use `Auth` from `@aws-blocks/bb-auth` instead of the removed `AuthOIDC`. The guide's example signs users in with Google as a `type: 'oidc'` provider of a `store: 'builtin'` block, so their `userId` keeps the same `<issuer>:<sub>` format `AuthOIDC` produced, and the deploy checklist names the callback URL to register (`https://<your domain>/aws-blocks/auth/callback`).
+- Updated dependencies [e83d152]
+- Updated dependencies [c6a3357]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6297d5a]
+- Updated dependencies [f45b407]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [ee557d4]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/data-common@0.1.8
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.5.0
 
 ### Minor Changes

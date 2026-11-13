@@ -1,5 +1,117 @@
 # @aws-blocks/bb-realtime
 
+## 0.6.0
+
+### Minor Changes
+
+- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
+
+  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
+
+  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-blocks/bb-realtime` and `@aws-blocks/blocks`.
+  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
+  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
+  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
+  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
+  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
+
+  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
+
+- d354055: The connection token key now follows `defaults.secretsStore`. Sandbox stacks keep the SSM SecureString, and their template does not change.
+
+  **Behavior change on upgrade for production stacks:** with `BlocksPresets.production`, the key moves to a new Secrets Manager secret with a new value. Open WebSocket connections keep working. On their next reconnect, clients that pass `refresh` to `subscribe()` get new tokens; clients without it receive `onDisconnect('error')` and must call `getChannel()` again. To keep the existing key, set `secretsStore: 'ssm'` in `defaults` before you deploy this version; synth then emits the `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox` warning. The old SSM parameter is deleted by the deploy.
+
+### Patch Changes
+
+- b2eb306: A specific IPv6 `BLOCKS_DEV_HOST` (for example `fd00::1`) now admits the local realtime WebSocket from its bracketed origin (`http://[fd00::1]:3000`).
+- bfaddeb: In local dev, a second subscriber to a channel that is already subscribed on the same connection now gets its `established` promise resolved. Before, only the first subscriber per channel was confirmed, so `await sub.established` on any later subscriber never settled. Each subscriber now sends its own subscribe request, as on AWS.
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- 10eb382: A server-side subscriber (`getChannel(...).subscribe(handler)` or `realtime.subscribe(...)` in the backend) now runs its handler once per published message on AWS, as it already did locally. When the publish came from the subscriber's own process, the handler used to run twice: once through the in-process emitter and once through the subscriber's own WebSocket.
+- 6bac1c9: The WebSocket handler (deployed and local dev) now checks the channel in `subscribe` and `unsubscribe` messages before using it. It must be a channel path of the form `getChannel()` returns (`<instance>/<namespace>/<channel>`, at most 1024 bytes); otherwise a subscribe gets `{ type: 'error', message: 'Invalid channel' }` and an unsubscribe is ignored. A subscribe also requires a channel token: the connect token only authorizes opening the connection, as documented. A subscribe without a token (or with a token that isn't a string) now gets `{ type: 'error', channel, message: 'Unauthorized: missing token' }` from the deployed handler too, as it already did in local dev. Channel handles returned by `getChannel()` are unaffected.
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6297d5a]
+- Updated dependencies [a5a5dd3]
+- Updated dependencies [b2eb306]
+- Updated dependencies [94d5900]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [be8864c]
+- Updated dependencies [99638ca]
+- Updated dependencies [2d7ce4a]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [da7eb93]
+- Updated dependencies [3259d83]
+- Updated dependencies [70ea280]
+- Updated dependencies [d354055]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-secret@0.4.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.5.0
 
 ### Minor Changes

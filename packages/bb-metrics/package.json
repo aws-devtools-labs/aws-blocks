@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-metrics",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "keywords": [
     "aws-blocks",
     "metrics",
@@ -45,8 +45,8 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/bb-logger": "^0.3.0"
+    "@aws-blocks/core": "^0.9.0",
+    "@aws-blocks/bb-logger": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
