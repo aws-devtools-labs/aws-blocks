@@ -242,19 +242,37 @@ class EncryptedFileKeyValueStoreTest {
         File(storageDir, ".key").exists() shouldBe false
     }
 
-    /** Holds one key, in memory, under any alias. Nothing on this machine resolves to it. */
-    private class InMemoryKeyCustody(private val key: ByteArray) : KeyCustody {
+    /**
+     * Holds one key, in memory, under any alias. Nothing on this machine resolves to it, so the
+     * store is pinned to this custody for the test's lifetime.
+     *
+     * [empty] constructs one with nothing held, as if the OS store had lost the key between
+     * launches. The next [storeIfAbsent] installs its own key, as a real OS tier would.
+     */
+    private class InMemoryKeyCustody(initial: ByteArray?) : KeyCustody {
         override val tier = KeyTier.OS
         var loads = 0
+        private var held: ByteArray? = initial
 
-        override fun load(alias: String): ByteArray {
+        companion object {
+            fun empty() = InMemoryKeyCustody(null)
+        }
+
+        override fun load(alias: String): ByteArray? {
             loads++
+            return held
+        }
+
+        override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray {
+            val current = held
+            if (current != null) return current
+            held = key
             return key
         }
 
-        override fun storeIfAbsent(alias: String, key: ByteArray) = this.key
-
-        override fun delete(alias: String) = Unit
+        override fun delete(alias: String) {
+            held = null
+        }
     }
 
     @Test
@@ -265,4 +283,29 @@ class EncryptedFileKeyValueStoreTest {
         // File presence cannot stand in for this: the DPAPI tier keeps a file too.
         store.keyTier shouldBe KeyTier.FILE
     }
+
+    @Test
+    fun discardsOrphanEntriesWhenItMintsAFreshKey() = runTest {
+        // Simulates a custody that lost its key between launches — a Keychain item deleted, a
+        // Secret Service keyring recreated, a directory restored onto a machine the old key is
+        // not on. Without the recovery, the entries surviving the loss would be undecryptable:
+        // the jar treats a decrypt failure as temporary and declines to replace the entry, so a
+        // sign-in would never persist again until the directory was cleaned by hand.
+        val firstKey = ByteArray(32) { 1 }
+        EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") {
+            InMemoryKeyCustody(firstKey)
+        }.put("jar", "pre-loss")
+
+        // A custody with no key held, as if the OS store had lost it between launches.
+        val lost = InMemoryKeyCustody.empty()
+        val recovered =
+            EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { lost }
+
+        // The orphan entry reads as absent rather than throwing, so the jar loads empty and the
+        // next write persists with the new key.
+        recovered.get("jar").shouldBeNull()
+        recovered.put("jar", "post-loss")
+        recovered.get("jar") shouldBe "post-loss"
+    }
+
 }

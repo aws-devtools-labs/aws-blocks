@@ -6,6 +6,7 @@ import java.io.File
 import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
@@ -72,11 +73,61 @@ internal class EncryptedFileKeyValueStore(
     /** Which custody this store ended up with. For tests: nothing acts on it at runtime. */
     internal val keyTier: KeyTier get() = custody.tier
 
+    /**
+     * Whether this instance was the one to mint the current key. Set during the lazy init below,
+     * read by [get] to decide whether an undecryptable entry is an orphan to discard or genuine
+     * corruption to surface. Read after a volatile write and before any volatile read of the same
+     * field is fine on the JVM memory model: [secretKey]'s lazy sets this before the volatile
+     * write that publishes the instance, so every consumer sees the final value.
+     */
+    @Volatile
+    private var mintedFreshKey: Boolean = false
+
     private val secretKey: SecretKey by lazy {
         val held = custody.load(alias)
         if (held != null) return@lazy SecretKeySpec(held, "AES")
         val fresh = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
-        SecretKeySpec(custody.storeIfAbsent(alias, fresh), "AES")
+        val installed = custody.storeIfAbsent(alias, fresh)
+        if (installed.contentEquals(fresh)) {
+            mintedFreshKey = true
+            discardEntriesWrittenUnderAnOlderKey()
+        }
+        SecretKeySpec(installed, "AES")
+    }
+
+    /**
+     * Removes entries from a previous life of this directory, because this store just minted the
+     * key and anything already there was encrypted with a key nothing on the machine can get back.
+     *
+     * Leaving them would make every [get] throw until the directory is cleaned by hand: the jar
+     * treats a decrypt failure as temporary and declines to replace an entry it cannot read, so a
+     * fresh sign-in would stop reaching storage. The caller signalled we are the one that installed
+     * the key — not a loser of the race whose [storeIfAbsent] handed back someone else's bytes —
+     * by asking whether [installed] equals the bytes it supplied. With a random fresh key, nothing
+     * else can produce those bytes, so the equality is proof we minted.
+     *
+     * Reachable in two ways. On the OS tier, a key is lost between launches — a Keychain item
+     * deleted, a Secret Service keyring recreated after a password change, a directory restored
+     * onto a machine the old key is not on. On the file tier, a `.key` was deleted while entries
+     * were left (the restored-copy case without an OS custody to lose). Both leave the store
+     * holding entries only the lost key could read.
+     *
+     * Dot-prefixed files are this library's control files (`.key`, and the lock added in a later
+     * change). Entries are base64url-encoded names, which do not start with a dot, so the filter
+     * cleans exactly the entries without touching metadata. The whole sweep is best-effort: a
+     * failure here stops a sign-in from persisting, which is already the problem we are trying to
+     * clear, so it deserves the same temporary treatment the jar gives other write failures.
+     */
+    private fun discardEntriesWrittenUnderAnOlderKey() {
+        runCatching {
+            Files.newDirectoryStream(storageDir).use { entries ->
+                entries.forEach {
+                    if (!it.fileName.toString().startsWith(".")) {
+                        runCatching { Files.deleteIfExists(it) }
+                    }
+                }
+            }
+        }
     }
 
     override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
@@ -86,9 +137,24 @@ internal class EncryptedFileKeyValueStore(
     override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         val path = pathFor(key)
         if (!Files.exists(path)) return@withContext null
-        // The entry is there, so a failed decrypt is a read failure and not an absent key.
-        decrypt(Files.readString(path))
-            ?: throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
+        val stored = try {
+            Files.readString(path)
+        } catch (_: NoSuchFileException) {
+            // The orphan sweep in [secretKey]'s lazy init could delete this file between the
+            // [Files.exists] check and this read on a concurrent reader. Treat as absent.
+            return@withContext null
+        }
+        val plaintext = decrypt(stored)
+        if (plaintext != null) return@withContext plaintext
+        // A decrypt failure means one of two things: real corruption with the key we hold, or an
+        // orphan written under a previous key that this instance replaced. If we minted the key
+        // this instance, nothing we hold was written by us — the sweep in [secretKey]'s lazy init
+        // has already removed the file, so later calls see it as absent, but this call read it
+        // just before the sweep. Return null so the caller overwrites rather than failing on an
+        // entry it will never be able to read. If we loaded the key, we are reading with the bytes
+        // that wrote the entry, so a failure is genuine corruption and the caller must know.
+        if (mintedFreshKey) return@withContext null
+        throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
     }
 
     /**
