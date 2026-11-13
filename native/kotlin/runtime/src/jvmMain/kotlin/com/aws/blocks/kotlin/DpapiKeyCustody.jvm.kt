@@ -19,16 +19,57 @@ internal class DpapiKeyCustody(directory: Path) : KeyCustody {
 
     override val tier = KeyTier.OS
 
-    private val file = KeyFile(directory)
+    private companion object {
+        /**
+         * Separate from [KeyFile.KEY_FILE] because what is in it is a wrapped blob, not a raw key.
+         *
+         * Sharing one name with the file tier made an upgrade from a release before OS custody
+         * unrecoverable. That release left a raw key in `.key`; this tier cannot unwrap it, and
+         * because the file was there the install declined, the read found nothing usable, and the
+         * store threw. Nothing ever minted a key, so nothing ever cleaned up, and the user signed
+         * in again on every launch for good. Under its own name the old file is simply not this
+         * tier's, so the first launch mints a key and the session persists from then on.
+         */
+        const val DPAPI_KEY_FILE = ".key.dpapi"
+    }
+
+    private val file = KeyFile(directory, DPAPI_KEY_FILE)
+
+    /** The file a release before OS custody left behind, which this tier can never read. */
+    private val supersededRawKey = KeyFile(directory, KeyFile.KEY_FILE)
 
     override fun load(alias: String): ByteArray? =
         file.read { unwrapOrNull(it, alias)?.size == AES_KEY_SIZE }
             ?.let { unwrapOrNull(it, alias) }
 
     override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray {
-        if (file.installIfAbsent(wrap(key, alias))) return key
+        if (install(key, alias)) return key
+        load(alias)?.let { return it }
+        // The file is there but holds nothing this tier can unwrap — a blob truncated by a stopped
+        // process, or one wrapped for another user account or machine, as a restored backup leaves.
+        // DPAPI is authenticated, so this is not a case of reading the wrong bytes: there are no
+        // usable bytes. Nothing can have been written under a key nobody can unwrap, so replacing
+        // it orphans nothing, and leaving it would stop every call for the life of the directory.
+        file.delete()
+        if (install(key, alias)) return key
+        // Another process installed one between the delete and the install. Its key is the one to use.
         return load(alias)
             ?: throw KeyValueStoreException("Could not read the encryption key another process installed")
+    }
+
+    /**
+     * Installs a wrapped [key], and on success drops the raw key an earlier release left behind.
+     *
+     * Removing it matters for a later launch that cannot reach DPAPI and falls back to the file
+     * tier: it would otherwise find that raw key, read it successfully, and so never mint — leaving
+     * it decrypting entries written under the DPAPI key, which fails for every one of them with no
+     * path out. Once this call has installed a key, anything the raw file could decrypt is about to
+     * be discarded as written under a superseded key, so the file has nothing left to offer.
+     */
+    private fun install(key: ByteArray, alias: String): Boolean {
+        if (!file.installIfAbsent(wrap(key, alias))) return false
+        supersededRawKey.delete()
+        return true
     }
 
     override fun delete(alias: String) = file.delete()

@@ -166,10 +166,10 @@ internal class EncryptedFileKeyValueStore(
      * Visits the stored entries, and only those.
      *
      * An entry's name is the base64url of the key it holds, which never starts with a dot, so the
-     * dot prefix is what separates them from this library's own files — the key file, and the lock
-     * that serialises key creation. Listing the names to keep instead would mean every tier that
-     * adds a file has to be remembered in two places; asking what an entry looks like cannot fall
-     * out of step in the same way.
+     * dot prefix is what separates them from this library's own files — a key file under one of
+     * [KeyFile]'s names, and the lock that serialises key creation. Naming those files to keep
+     * instead would mean every tier that adds one has to be remembered here; asking what an entry
+     * looks like cannot be forgotten in the same way.
      */
     private inline fun forEachEntry(action: (Path) -> Unit) {
         Files.newDirectoryStream(storageDir).use { paths ->
