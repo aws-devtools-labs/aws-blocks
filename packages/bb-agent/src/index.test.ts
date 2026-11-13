@@ -1904,6 +1904,138 @@ describe('runaway protection caps', () => {
 	});
 });
 
+// ── tool-call chunks for approval-gated tools ────────────────────────────────
+
+/**
+ * Run one turn, answering every interrupt with `approved`, and collect the chunks of the
+ * whole turn (the paused segment plus the resumed one) from a single subscription.
+ */
+async function runAnsweringInterrupts(agent: any, message: string, conversationId: string, userId: string, approved: boolean) {
+	const chunks: any[] = [];
+	const result = await agent.stream(message, { conversationId, userId });
+	const channel = await result.channel;
+	const sub = channel.subscribe((chunk: any) => { chunks.push(chunk); });
+	const isTerminal = (c: any) => c.type === 'done' || c.type === 'error' || c.type === 'interrupt';
+	const waitFor = async (from: number) => {
+		for (let i = 0; i < 200; i++) {
+			const hit = chunks.slice(from).find(isTerminal);
+			if (hit) return hit;
+			await new Promise(r => setTimeout(r, 25));
+		}
+		return undefined;
+	};
+	let resumes = 0;
+	let terminal = await waitFor(0);
+	while (terminal?.type === 'interrupt' && resumes < 5) {
+		resumes++;
+		const seen = chunks.length;
+		await agent.resume(result.channelId, terminal.interrupts.map((i: any) => ({ interruptId: i.id, approved })), { conversationId, userId });
+		terminal = await waitFor(seen);
+	}
+	sub.unsubscribe();
+	return { chunks, terminal, resumes };
+}
+
+describe('tool-call chunks for approval-gated tools', () => {
+	const model = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+
+	test('a tool the user denies publishes no tool-call or tool-result chunk', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-deny-chunks');
+		const agent = new Agent(scope, 'denychunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the denied turn should still finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 0, 'a denied tool must not run');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-call'), [], 'a denied tool must not publish a tool-call chunk');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-result'), [], 'a denied tool must not publish a tool-result chunk');
+	});
+
+	test('a denied tool still keeps its paired tool-call/tool-result rows in history', async () => {
+		// The README documents that a denial is kept in history for audit: the tool-result row
+		// records the denial. Only the live chunks change.
+		const scope = new Scope('test-deny-history');
+		const agent = new Agent(scope, 'denyhist', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
+		const toolCalls = history.filter(m => m.role === 'tool-call');
+		const toolResults = history.filter(m => m.role === 'tool-result');
+		assert.strictEqual(toolCalls.length, 1, 'the denied call keeps its tool-call row');
+		assert.strictEqual(toolResults.length, 1, 'the denied call keeps its tool-result row');
+		assert.match(JSON.stringify(toolResults[0].metadata), /User denied permission to run getWeather/);
+	});
+
+	test('a tool the user approves publishes exactly one tool-call then one tool-result', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-approve-chunks');
+		const agent = new Agent(scope, 'approvechunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the approved turn should finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 1, 'an approved tool runs once');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getWeather', 'tool-result:getWeather']);
+		const interruptAt = chunks.findIndex(c => c.type === 'interrupt');
+		const callAt = chunks.findIndex(c => c.type === 'tool-call');
+		assert.ok(interruptAt < callAt, 'the tool-call chunk comes after the approval, not before the interrupt');
+	});
+
+	test('a tool without approval still publishes one tool-call then one tool-result', async () => {
+		const scope = new Scope('test-noapproval-chunks');
+		const agent = new Agent(scope, 'noapprovalchunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'run getStatus', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 0, 'no approval is needed');
+		assert.strictEqual(terminal?.type, 'done');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getStatus', 'tool-result:getStatus']);
+		assert.deepStrictEqual(toolChunks[0].input, {});
+	});
+
+	test('a tool call stopped by maxToolIterations publishes no tool chunks', async () => {
+		// The cap cancels the second call through the same `event.cancel` as a denial.
+		const scope = new Scope('test-cap-chunks');
+		const agent = new Agent(scope, 'capchunks', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model,
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal } = await runAnsweringInterrupts(agent, 'run alpha and bravo', convId, 'test-user', true);
+
+		assert.strictEqual(terminal?.type, 'error');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:alpha', 'tool-result:alpha']);
+	});
+});
+
 // ── tool context ─────────────────────────────────────────────────────────────
 
 describe('untrustedOutput', () => {
