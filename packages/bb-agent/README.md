@@ -6,7 +6,7 @@ AI agent with streaming, tool calling, and conversation persistence. Powered by 
 
 **Requires:** `zod` ^4.0.0 as a peer dependency. Tool parameters use Zod schemas for validation. If you see `ZodType missing properties` errors, check your zod version.
 
-> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+> Design & mock parity details: [DESIGN.md](./DESIGN.md) · Model presets, guardrails and Bedrock access: [MODELS.md](./MODELS.md)
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ const result = await agent.stream('Until when are you open tomorrow?', { convers
 const done = await result.complete();
 console.log(done.text); // "We're open until 6pm tomorrow."
 ```
-Uses [`BedrockModels.BALANCED`](#bedrock-presets) (Claude Sonnet 4.6) by default. See [Model Configuration](#model-configuration) for other presets, [Tools](#tools) for adding capabilities, and [Local Development](#local-development) for running without AWS Bedrock.
+Uses [`BedrockModels.BALANCED`](./MODELS.md#bedrock-presets) (Claude Sonnet 4.6) by default. See [Model Configuration](#model-configuration) for other presets, [Tools](#tools) for adding capabilities, and [Local Development](#local-development) for running without AWS Bedrock.
 
 ## API
 
@@ -64,7 +64,7 @@ await agent.stream(message, { conversationId, userId });
 const channel = await agent.getChannel(conversationId, { userId }); // too late!
 ```
 
-The `useChat` hook (see [Client Hook](#client-hook--usechat-deprecated)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
+`createChat` (see [Client API](#client-api--createchat-recommended)) handles this ordering automatically, as does the deprecated `useChat`. Use it instead of hand-rolling stream logic.
 
 ### Authorization
 
@@ -230,10 +230,10 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `provider` | `'bedrock' \| 'openai-api' \| 'canned'` | Model provider. |
 | `modelId` | `string` | Model ID. Required for bedrock and openai-api. |
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
-| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](#bedrock-via-mantle) endpoint, omit it (an empty string counts as omitted) to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
+| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](./MODELS.md#bedrock-via-mantle) endpoint, omit it (an empty string counts as omitted) to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
 | `cannedResponses` | `Record<string, string> \| string` | Canned-provider response dictionary, or path to a JSON dictionary. Ignored by real model providers. |
-| `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](#bedrock-guardrails). |
+| `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](./MODELS.md#bedrock-guardrails). |
 
 ```typescript
 import { Agent } from '@aws-blocks/bb-agent';
@@ -259,7 +259,7 @@ const agent = new Agent(scope, 'agent', {
 });
 ```
 
-For fallback support, provide an array of candidates. They are tried in order — the first available model wins. Health checks verify each candidate before selecting it (see [Health Checks](#health-checks)):
+For fallback support, provide an array of candidates. They are tried in order — the first available model wins. Health checks verify each candidate before selecting it (see [Health Checks](./MODELS.md#health-checks)):
 
 ```typescript
 model: {
@@ -275,170 +275,12 @@ model: {
 }
 ```
 
-#### Bedrock Presets
+[MODELS.md](./MODELS.md) covers the rest of model setup: [Bedrock Presets](./MODELS.md#bedrock-presets) (`BedrockModels`), [Ollama Presets](./MODELS.md#ollama-presets) (`OllamaModels`), [Bedrock Guardrails](./MODELS.md#bedrock-guardrails), [Health Checks](./MODELS.md#health-checks), [API Key Management](./MODELS.md#api-key-management), [AWS Credentials (Bedrock)](./MODELS.md#aws-credentials-bedrock) and [Bedrock via Mantle](./MODELS.md#bedrock-via-mantle). Before you deploy:
 
-Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
-
-All the presets are **Anthropic** models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription — see [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
-
-```typescript
-import { Agent, BedrockModels} from '@aws-blocks/bb-agent';
-
-const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: BedrockModels.BALANCED,
-  },
-  systemPrompt: '...',
-});
-```
-
-| Preset | Current Model | Notes |
-|--------|---------------|-------|
-| `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Great tool use, balanced cost. Recommended default for most workloads. |
-| `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
-| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
-
-> **Migrating?** `DEFAULT` → `BALANCED` (or `SMART` for highest capability). `BUDGET`/`MICRO` → `FAST`. The old presets are still available but deprecated. Please consider upgrading!
-
-Override inference settings with spread:
-```typescript
-model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
-```
-
-#### Ollama Presets
-
-Convenience shortcuts for local development using [Ollama](https://ollama.com/). Requires Ollama installed and running (`ollama serve`), model pulled (`ollama pull <model-id>`). Uses the default endpoint `http://localhost:11434/v1`.
-
-```typescript
-import { Agent, BedrockModels, OllamaModels} from '@aws-blocks/bb-agent';
-
-const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: BedrockModels.BALANCED, 
-    local: OllamaModels.SMALL,
-  },
-  systemPrompt: '...',
-});
-```
-
-| Preset | Current Model | Size | Recommended VRAM |
-|--------|---------------|------|------------------|
-| `OllamaModels.XSMALL` | `llama3.2:3b` | 2 GB | 4 GB |
-| `OllamaModels.SMALL` | `llama3.1:8b` | 4.7 GB | 8 GB |
-| `OllamaModels.MEDIUM` | `deepseek-r1:14b` | 9 GB | 16 GB |
-| `OllamaModels.LARGE` | `llama3.3:70b` | 43 GB | 48 GB+ |
-| `OllamaModels.XLARGE` | `llama4:16x17b` | 67 GB | 80 GB+ |
-
-Custom endpoint or specific model? Use `openai-api` directly:
-```typescript
-model: { local: { provider: 'openai-api', modelId: 'llama3.1:8b', endpoint: 'http://custom-host:11434/v1', apiKey: 'ollama' } }
-```
-See [Ollama Presets](#ollama-presets) and [Local Development](#local-development) for more options.
-
-#### Bedrock Guardrails
-
-Attach an existing [Amazon Bedrock guardrail](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html) to a Bedrock model with `guardrail`. Bedrock then evaluates every model call, including tool results, against the guardrail's content filters, denied topics and prompt-attack filter. The deployed agent is granted `bedrock:ApplyGuardrail` on that guardrail only.
-
-```typescript
-const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: { ...BedrockModels.BALANCED, guardrail: { identifier: 'abc123xyz', version: '1' } },
-  },
-  systemPrompt: '...',
-});
-```
-
-`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The older `guardrails` field is deprecated: no provider ever applied it, and the agent now logs a warning when it is set.
-
-#### Health Checks
-
-Before selecting a model, the agent verifies its availability:
-
-- **Bedrock:** Verifies model availability via `@aws-sdk/client-bedrock` (free, no inference cost).
-- **OpenAI-compatible:** Pings `GET /v1/models` and checks if the specified model ID is in the response.
-- **Canned:** Always available (no external dependency).
-
-Health checks verify the model *exists* but cannot guarantee invoke access (e.g., EULA not accepted, Anthropic use case details not submitted, AWS Marketplace subscription not activated, model not available for the account, quota limits). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
-
-To see detailed health check logs, pass a logger with `info` level:
-
-```typescript
-import { Logger } from '@aws-blocks/bb-logger';
-
-const agent = new Agent(scope, 'agent', {
-  model: { deployed: BedrockModels.BALANCED },
-  systemPrompt: '...',
-  logger: new Logger(scope, 'agent-log', { level: 'info' }),
-});
-```
-
-#### API Key Management
-
-```typescript
-// Recommended: AppSetting with secret (encrypted via SSM SecureString)
-const openaiKey = new AppSetting(scope, 'openai-key', {
-  name: '/myapp/openai-api-key',
-  secret: true,
-});
-
-const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: {
-      provider: 'openai-api',
-      modelId: 'gpt-4',
-      apiKey: () => openaiKey.get(),
-    },
-  },
-});
-
-// Alternative: environment variable (local dev)
-// Set OPENAI_API_KEY — no apiKey needed in config
-
-// Alternative: plain string (discouraged — leaks in source control)
-// apiKey: 'sk-...'
-```
-
-#### AWS Credentials (Bedrock)
-
-The `bedrock` provider uses your configured AWS credentials. See [Strands quickstart](https://strandsagents.com/docs/user-guide/quickstart/typescript/#configuring-credentials) for setup instructions.
-
-**Bedrock invoke permissions are already granted.** The deployed agent's runtime role grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads), so the agent can call any model your account has access to.
-
-**Most Bedrock models are enabled by default.** Access to most serverless models in Amazon Bedrock is enabled for every account, provided the AWS Marketplace permissions described below are in place for models sold through AWS Marketplace. Two one-time, per-account steps can still stand between a new account and the [Bedrock presets](#bedrock-presets), which are all Anthropic models. See [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
-
-**Anthropic models need a one-time use case details form.** First-time customers submit **use case details** once per AWS account, either from the model catalog in the Amazon Bedrock console or with the [`PutUseCaseForModelAccess`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html) API. Submitting it once from an AWS Organizations management account covers its member accounts. Until it is submitted, the agent's health check still passes (the inference profile exists), but invoking the model fails with *"Model use case details have not been submitted for this account"*. After submission, access can take several minutes to become active and invocation may keep returning `AccessDeniedException` meanwhile; [`GetFoundationModelAvailability`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationModelAvailability.html) reports the current status. Models from other providers (for example Amazon Nova or OpenAI gpt-oss) do not need this form. In opt-in Regions the form must be submitted again.
-
-**Marketplace-sold models need a one-time subscription.** Models sold through AWS Marketplace — including all Anthropic models — are subscribed for an account the first time they are invoked by a principal that has the `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe`, and `aws-marketplace:ViewSubscriptions` permissions. The agent's runtime role has only the Bedrock invoke permissions above, so until the subscription exists, invoking the model fails with *"… not authorized to perform the required AWS Marketplace actions …"*. Activate it once per account by invoking the model (for example, from the Amazon Bedrock console playground) as a principal with those Marketplace permissions; after that, the runtime role can invoke it.
-
-**"Not available for this account" is an entitlement.** Some models (often the newest ones) are not available to every account; invoking one returns *"… is not available for this account"*, sometimes with a suggestion to contact AWS Sales. Choose a different model or preset, or contact AWS to make the model available to your account.
-
-These invoke-time refusals surface as an `error` chunk carrying an actionable message, and `complete()` rejects with `AgentErrors.ModelUnavailable` (`createChat`'s and `useChat`'s `onError` receive the same branded error as their `cause` argument). A model that fails the health check and has no other candidate also throws `AgentErrors.ModelUnavailable`.
-
-A **global** inference profile (`global.…`, used by the [Bedrock presets](#bedrock-presets)) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles** — a model being usable through a regional profile does not guarantee the global one is. If a preset is reported unavailable but you know the model works in your account, confirm the **`global.`** profile specifically, or pass an explicit regional `modelId` your account can invoke:
-
-```typescript
-// Explicit regional profile instead of a global-profile preset
-model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-opus-4-8' } }
-```
-
-#### Bedrock via Mantle
-
-Amazon Bedrock exposes an OpenAI-compatible endpoint via [Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html). Use it with `provider: 'openai-api'` and set the endpoint to `https://bedrock-mantle.<region>.api.aws/v1`.
-
-```typescript
-model: {
-  deployed: { provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
-}
-```
-
-When `apiKey` is omitted (or an empty string) for a Mantle endpoint (an `https://bedrock-mantle.<region>.api.aws` URL), the agent mints short-term Bedrock API keys from the AWS credentials it runs with and refreshes them automatically before they expire, so long sessions keep working:
-
-- **Deployed**, the agent runs as the runtime role, which is granted `bedrock-mantle:CreateInference`, `bedrock-mantle:ListModels` and `bedrock-mantle:GetModel` on the endpoint region's Mantle projects, plus `bedrock-mantle:CallWithBearerToken` limited to short-term keys (`bedrock-mantle:BearerTokenType` = `SHORT_TERM`).
-- **Locally**, it uses your local AWS credentials, which need those same permissions.
-- `OPENAI_API_KEY` is not used for Mantle endpoints.
-- An explicit `apiKey` (for example a long-term Bedrock API key) still takes precedence. The deployed role is then not granted the `bedrock-mantle` permissions, since the key carries its own identity.
-
-Only models that support the Chat Completions API (`/v1/chat/completions`) work with this provider, such as the OpenAI gpt-oss models. Anthropic Claude models on Mantle support only the Messages API; use them with `provider: 'bedrock'` instead. Some model lines are served from `/openai/v1` rather than `/v1` — check the model card for the base path.
+- The Bedrock presets use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
+- All the presets are **Anthropic** models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription — see [AWS Credentials (Bedrock)](./MODELS.md#aws-credentials-bedrock). After submission, access can take several minutes to become active and invocation may keep returning `AccessDeniedException` meanwhile. In opt-in Regions the form must be submitted again. A **global** inference profile (`global.…`, used by the presets) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles** — a model being usable through a regional profile does not guarantee the global one is.
+- Health checks verify the model *exists* but cannot guarantee invoke access (e.g., EULA not accepted, Anthropic use case details not submitted, AWS Marketplace subscription not activated, model not available for the account, quota limits). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
+- [Bedrock via Mantle](./MODELS.md#bedrock-via-mantle) with `apiKey` omitted: **deployed**, the agent runs as the runtime role, which is granted the `bedrock-mantle` permissions it needs; **locally**, it uses your local AWS credentials, which need those same permissions. An explicit `apiKey` (for example a long-term Bedrock API key) still takes precedence. The deployed role is then not granted the `bedrock-mantle` permissions, since the key carries its own identity. Only models that support the Chat Completions API (`/v1/chat/completions`) work with this provider, such as the OpenAI gpt-oss models. Anthropic Claude models on Mantle support only the Messages API; use them with `provider: 'bedrock'` instead.
 
 ### Error Handling
 
@@ -458,7 +300,7 @@ try {
 | Error | When |
 |-------|------|
 | `AgentErrors.PersistenceRequired` | Conversation CRUD called on an inferenceOnly agent. |
-| `AgentErrors.InvalidModelConfig` | Missing modelId, apiKey, unknown provider, or `needsApproval` + `interrupt` both specified. |
+| `AgentErrors.InvalidModelConfig` | Missing modelId, apiKey, unknown provider, `needsApproval` or `trustable` specified with `interrupt` on a tool, or `guardrail` set on a provider other than `bedrock`. |
 | `AgentErrors.ModelUnavailable` | All model candidates failed health checks, or Bedrock refused to invoke the model for account-level reasons (Anthropic use case details not submitted, one-time AWS Marketplace subscription not activated, model not available for the account). The message says what to do; check logs for details. |
 | `AgentErrors.StreamFailed` | Agent encountered an error during execution. The `error` chunk, the persisted `metadata.error`, and this error's message carry a branded Building Block error's message, or `Internal error` for any other failure (e.g. a Bedrock or AWS SDK error); the original error is logged server-side. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
@@ -677,7 +519,7 @@ Anything the knowledge base indexes can end up in the model's context. If a sour
 
 - **Set `untrustedOutput: true`** on tools that return retrieved or external content. The result is wrapped in an `<untrusted-data>` block whose delimiter carries a random per-session id, and the system prompt tells the model that content inside it is data, never instructions. The result is serialized to text inside the block, so a structured result reaches the model as JSON text. If the tool throws, its error message is wrapped the same way. Delimiter-shaped text and the id are detected on an NFKC-normalized copy stripped of invisible characters (zero-width spaces and joiners, bidirectional controls, variation selectors, fillers), so fullwidth or zero-width-split lookalikes can't close the block early. Only a string that contains one is rewritten (normalized, then neutralized), which can fold characters in that string (`x²` → `x2`, `½` → `1⁄2`) and drop zero-width joiners and non-joiners; any other text reaches the model unchanged, except that invisible Unicode tag characters are always removed. A structured result is checked string by string before it is serialized, so it stays valid JSON. The original error of a throwing tool is logged server-side (its name and any AWS status and request id, not its message). This raises the bar; it is not a guarantee.
 - **Set `needsApproval: true`** on tools with side effects, so an injected tool call still needs a human decision. See [Tool Approval](#tool-approval-human-in-the-loop).
-- **Attach a Bedrock guardrail** with a prompt-attack filter. See [Bedrock Guardrails](#bedrock-guardrails).
+- **Attach a Bedrock guardrail** with a prompt-attack filter. See [Bedrock Guardrails](./MODELS.md#bedrock-guardrails).
 - **Scope retrieval from the authenticated caller, never from tool input.** A metadata filter the model can set is not an isolation control. Take the scope from `context` (see [Tool Context](#tool-context--scoping-tools-to-the-caller)):
 
 ```typescript
@@ -1210,81 +1052,34 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 
 ### 2. React: hold the instance once, drive `useState` from the callbacks
 
-`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. The `api` wiring matches the End-to-End example (#1): the backend resolves the user from the session, so the client never sends a `userId`.
+The pattern is the [`createChat` React example](#react-hold-the-instance-once-drive-usestate-from-the-callbacks) with `useChat` in place of `createChat`: hold the single instance in a lazily created `useRef`, pass `setMessages` / `setIsLoading` as `onMessagesChange` / `onLoadingChange`, call `chat.destroy()` in a `useEffect` cleanup, and give `useChat` the `api` adapter and `subscribe` bridge of the End-to-End example (#1) instead of a `transport`. What differs with `useChat`:
 
 ```tsx
-'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
-
-import { useRef, useState, useEffect } from 'react';
-import { useChat, type ChatMessage } from '@aws-blocks/bb-agent/client';
-import { api } from './api'; // your generated aws-blocks API client
-
-export function Chat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [input, setInput] = useState('');
-
-  // Create the instance exactly once. The ref survives every re-render,
-  // so the subscription and conversation state are never torn down.
-  // Type the ref as `| undefined` and initialize with `undefined` — @types/react 19
-  // tightened the useRef overloads, so a bare useRef<T>() no longer compiles.
-  const chatRef = useRef<ReturnType<typeof useChat> | undefined>(undefined);
-  if (!chatRef.current) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- useChat is a factory, not a hook; the use-prefix trips the linter's hook heuristic.
-    chatRef.current = useChat({
-      api: {
-        sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
-        createConversation: () => api.createConversation(),
-        getConversation: (id) => api.getConversation(id),
-      },
-      subscribe: async (channelId, sub) => {
-        const channel = await api.getChannel(channelId);
-        // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect).
-        // Forward it VERBATIM — channel.subscribe branches on `typeof arg === 'function'`
-        // first, so wrapping it in a callable-with-props would silently drop reconnect handling.
-        return channel.subscribe(sub);
-      },
-      // Bridge the mutable instance into React state — these fire on every change.
-      onMessagesChange: setMessages,
-      onLoadingChange: setIsLoading,
-    });
-  }
-  const chat = chatRef.current!; // guaranteed set by the block above
-
-  // Tear down the WebSocket subscription when the component unmounts.
-  useEffect(() => () => chat.destroy(), [chat]);
-
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || isLoading) return;
-    setInput('');
-    await chat.sendMessage(text);
-  }
-
-  return (
-    <div>
-      <ul>
-        {messages.map((m) => (
-          <li key={m.id} data-role={m.role}>
-            <strong>{m.role}:</strong> {m.content}
-          </li>
-        ))}
-      </ul>
-      <form onSubmit={handleSend}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} />
-        <button type="submit" disabled={isLoading}>Send</button>
-      </form>
-    </div>
-  );
+const chatRef = useRef<ReturnType<typeof useChat> | undefined>(undefined);
+if (!chatRef.current) {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- useChat is a factory, not a hook; the use-prefix trips the linter's hook heuristic.
+  chatRef.current = useChat({
+    api: {
+      sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
+      createConversation: () => api.createConversation(),
+      getConversation: (id) => api.getConversation(id),
+    },
+    subscribe: async (channelId, sub) => {
+      const channel = await api.getChannel(channelId);
+      // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect).
+      // Forward it VERBATIM — channel.subscribe branches on `typeof arg === 'function'`
+      // first, so wrapping it in a callable-with-props would silently drop reconnect handling.
+      return channel.subscribe(sub);
+    },
+    // Bridge the mutable instance into React state — these fire on every change.
+    onMessagesChange: setMessages,
+    onLoadingChange: setIsLoading,
+  });
 }
 ```
 
-Key points:
-
 - **One instance, held in a ref.** `useRef` + the lazy `if (!chatRef.current)` guard is the React idiom for "construct once." Because the identifier is `use`-prefixed, `eslint-plugin-react-hooks` (bundled in the default Next.js and CRA configs) flags the guarded call as a conditional hook (`react-hooks/rules-of-hooks`). `useChat` is a factory, not a hook, so this is a false positive — the inline `eslint-disable-next-line` above the call silences it. What you must **not** do is call `useChat(...)` unguarded on every render: that recreates the instance each time and is the footgun the factory note warns about.
 - **Callbacks are your reactivity bridge.** `useChat` mutates its own message list in place; `onMessagesChange` / `onLoadingChange` hand you the new value so you can `setState` and trigger a render. Passing `setMessages` / `setIsLoading` directly is enough.
-- **Clean up on unmount** with `chat.destroy()` in a `useEffect` cleanup, so the Realtime subscription is closed.
 - **Approvals:** wire `resume: (chId, responses, convId) => api.resume(chId, responses, convId)` into the `api` object above (mirroring your backend's resume method — `respondToInterrupt` throws if it is absent), add `onInterrupt: setInterrupts` (with `const [interrupts, setInterrupts] = useState<Array<{ id: string; name: string; reason?: unknown }>>([])` — a bare `useState([])` infers `never[]` and rejects the payload) to render an approval UI, then call `chat.respondToInterrupt([{ interruptId, approved: true }])`.
 
 **Next.js:** this is the same component — just keep the `'use client'` directive at the top of the file. `useChat` opens a browser WebSocket and holds client state, so it must run in a Client Component, never a Server Component. No other changes are needed.
@@ -1371,7 +1166,7 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 
 **"ValidationException"** — Model ID not recognized. Use `aws bedrock list-foundation-models --query "modelSummaries[].modelId"` to see available models.
 
-**Health check passes but invocation fails** — The health check verifies the model exists but cannot check EULA acceptance or account-level access. For Anthropic models (including all presets), submit the one-time use case details form; for *"not authorized to perform the required AWS Marketplace actions"*, invoke the model once as a principal with the AWS Marketplace subscription permissions; for *"not available for this account"*, pick a different model. See [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
+**Health check passes but invocation fails** — The health check verifies the model exists but cannot check EULA acceptance or account-level access. For Anthropic models (including all presets), submit the one-time use case details form; for *"not authorized to perform the required AWS Marketplace actions"*, invoke the model once as a principal with the AWS Marketplace subscription permissions; for *"not available for this account"*, pick a different model. See [AWS Credentials (Bedrock)](./MODELS.md#aws-credentials-bedrock).
 
 ## See Also
 
