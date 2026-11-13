@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Fix two arms of one union whose discriminator values generate the same
+  class name (`Foo` and `foo`) being declared as one class twice, which did not
+  compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
+  an arm named like another type already does.
 - **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a

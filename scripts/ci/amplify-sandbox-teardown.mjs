@@ -20,16 +20,20 @@
 // (npm and every process under it, such as npx and ampx) is stopped. Stopping
 // it doesn't stop CloudFormation, which goes on deleting the stack. The step's
 // timeout-minutes is a backstop only. When the budget runs out the sandbox is
-// left to the scheduled sweep in cleanup-stacks.yml, with a warning: a
-// throttled teardown is infrastructure contention, not a failure of the PR
-// under test.
+// left to the scheduled sweep in cleanup-stacks.yml, with an error annotation
+// and a step-summary entry: a left sandbox holds a Cognito user pool with self
+// sign-up, which the account's security scan reports, so it must be seen. The
+// step still exits 0: a throttled teardown is infrastructure contention, not a
+// failure of the PR under test.
 //
 // Env: AMPLIFY_TEARDOWN_BUDGET_SECONDS (default 600),
 // AMPLIFY_TEARDOWN_BACKOFF_MS (first backoff, default 30000; doubles up to 4x),
 // AMPLIFY_TEARDOWN_JITTER_MS (random extra wait, default 30000),
-// AMPLIFY_TEARDOWN_KILL_GRACE_MS (SIGTERM to SIGKILL at the deadline, default 5000).
+// AMPLIFY_TEARDOWN_KILL_GRACE_MS (SIGTERM to SIGKILL at the deadline, default 5000),
+// GITHUB_STEP_SUMMARY.
 
 import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const [appDir, identifier] = process.argv.slice(2);
@@ -42,10 +46,21 @@ const backoffMs = Number(process.env.AMPLIFY_TEARDOWN_BACKOFF_MS ?? 30_000);
 const jitterMs = Number(process.env.AMPLIFY_TEARDOWN_JITTER_MS ?? 30_000);
 
 const warnLeft = (detail) => {
+	const what = `sandbox "${identifier}" not deleted (${detail})`;
 	console.log(
-		`::warning title=Amplify sandbox teardown::sandbox "${identifier}" not deleted (${detail}); ` +
-			'the scheduled stack sweep (cleanup-stacks.yml) retries it',
+		`::error title=Amplify sandbox teardown::${what}; ` +
+			'its stacks and Cognito user pool are left until the scheduled stack sweep (cleanup-stacks.yml) retries it',
 	);
+	if (process.env.GITHUB_STEP_SUMMARY) {
+		try {
+			appendFileSync(
+				process.env.GITHUB_STEP_SUMMARY,
+				`### Amplify sandbox teardown failed\n\nThe ${what}. Its stacks, Cognito user pool included, are left until cleanup-stacks.yml reclaims them.\n`,
+			);
+		} catch (e) {
+			console.log(`Could not write the step summary: ${e.message}`);
+		}
+	}
 	process.exit(0);
 };
 

@@ -9,13 +9,15 @@ import Foundation
 
 // MARK: - Stage 1: OpenRPC Parser
 //
-// Stateless parser that deserializes JSON into an RPCModel.
+// Parser that deserializes JSON into an RPCModel.
 // Handles: method extraction, $ref resolution, type mapping, constraint
 // extraction, transferable detection, nullability, enum / const detection,
 // and tuple-form arrays.
 
 public struct OpenRPCParser {
     private let optOutNativePackages: Set<String>
+    /// Component schema name -> the Swift type name it's declared and referenced under.
+    private var componentTypeNames: [String: String] = [:]
 
     public init(optOutNativePackages: Set<String> = []) {
         self.optOutNativePackages = optOutNativePackages
@@ -23,6 +25,37 @@ public struct OpenRPCParser {
 
     public func parse(data: Data) throws -> RPCModel {
         let spec = try JSONDecoder().decode(OpenRPCSpec.self, from: data)
+        var parser = self
+        parser.componentTypeNames = Self.componentTypeNames(Array((spec.components?.schemas ?? [:]).keys))
+        return try parser.parse(spec: spec)
+    }
+
+    /// A component schema keeps its name when it's an identifier; otherwise it takes `specTypeName`'s, numbered
+    /// (`_2`, `_3`, …) when another schema already has it. Names are assigned in sorted order, so the result
+    /// doesn't depend on the order of the spec's keys.
+    static func componentTypeNames(_ names: [String]) -> [String: String] {
+        let sorted = names.sorted()
+        var taken = Set(sorted.filter(isValidSwiftIdentifier))
+        var result: [String: String] = [:]
+        for name in sorted {
+            if isValidSwiftIdentifier(name) {
+                result[name] = name
+                continue
+            }
+            let candidate = specTypeName(name)
+            var allocated = candidate
+            var suffix = 2
+            while taken.contains(allocated) {
+                allocated = "\(candidate)_\(suffix)"
+                suffix += 1
+            }
+            taken.insert(allocated)
+            result[name] = allocated
+        }
+        return result
+    }
+
+    private func parse(spec: OpenRPCSpec) throws -> RPCModel {
 
         let declared = try resolveDeclaredTransferableBindings(
             packages: spec.nativePackages,
@@ -34,7 +67,7 @@ public struct OpenRPCParser {
         var componentSchemas: [String: TypeRef] = [:]
         if let schemas = spec.components?.schemas {
             for (name, jsonSchema) in schemas {
-                componentSchemas[name] = mapTypeRef(jsonSchema)
+                componentSchemas[componentTypeNames[name] ?? name] = mapTypeRef(jsonSchema)
             }
         }
 
@@ -198,7 +231,7 @@ public struct OpenRPCParser {
 
         case .ref(let refStr):
             let name = refStr.components(separatedBy: "/").last ?? "Unknown"
-            return .schemaRef(name: name, resolved: nil)
+            return .schemaRef(name: componentTypeNames[name] ?? name, resolved: nil)
 
         case .transferable(let kind, let typeArgs):
             return .transferable(blocksType: kind, typeArgs: typeArgs.map { mapTypeRef($0) })

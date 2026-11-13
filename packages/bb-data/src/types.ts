@@ -96,12 +96,12 @@ export interface DatabaseOptions {
    *
    * **Requirements for the key you pass.** The key is *imported* — Blocks binds
    * to it by ARN and does not (cannot) modify its key policy — so the key's
-   * policy must already permit the principals that use it:
+   * policy must permit the principals below, the rotation Lambda's role included:
    * - The **deploying principal** needs `kms:CreateGrant` and `kms:DescribeKey`
    *   on the key: RDS uses a grant to encrypt the cluster's storage volume with it.
    * - The runtime path reads the credentials secret over the RDS Data API, so
-   *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
-   *   adds the identity-side permission; the key policy must still allow it.
+   *   the principal reading it needs `kms:Decrypt`. Blocks grants it to the app
+   *   runtime and the migration Lambda; the rotation Lambda's template does its own.
    * - The key must be in the **same account and region** as the cluster.
    *
    * **Why this is a flat ARN** (rather than the `encryption:
@@ -135,6 +135,35 @@ export interface DatabaseOptions {
    * always wins. The CDK layer resolves this into the cluster's backup retention.
    */
   pointInTimeRecovery?: boolean | { retentionDays: number };
+  /**
+   * Automatic rotation of the database credentials secret. AWS's PostgreSQL
+   * single-user rotation function (a Serverless Application Repository app
+   * placed in the cluster's VPC) generates a new `postgres` password, sets it on
+   * the cluster and makes it the secret's current version. The secret keeps its
+   * ARN and the app never reads the password itself, so a rotation needs no
+   * redeploy. Every rotation, scheduled ones included, has a window in which a
+   * query is refused, usually 1-3 seconds and occasionally up to about 18;
+   * `Database` retries it for up to nine seconds and a longer one surfaces as a
+   * retriable `ConnectionFailed`, as it also does inside a transaction, where
+   * the caller retries the transaction. The deploy waits for the first rotation.
+   *
+   * - `true` — rotate every 30 days.
+   * - `{ intervalDays: n }` — rotate every `n` days. `n` must be an integer
+   *   **1–1000** (Secrets Manager's limit, not a recommendation); out of range
+   *   fails at synth.
+   * - `false` — turn automatic rotation off.
+   *
+   * When omitted, `defaults.secretRotation` applies; a per-block value wins, so
+   * a sandbox can opt in with `true`.
+   *
+   * Only deployable in the `aws`, `aws-cn` and `aws-us-gov` partitions, and the
+   * stack's execution role needs `serverlessrepo` read permissions; see the
+   * README. With a `storageEncryptionKeyArn`, see that option's key
+   * requirements.
+   *
+   * @default defaults.secretRotation — on (30 days) under `production`, off under `sandbox`
+   */
+  secretRotation?: boolean | { intervalDays: number };
 }
 
 /**

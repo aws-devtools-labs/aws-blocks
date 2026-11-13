@@ -9,6 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct, type IConstruct } from 'constructs';
 import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { validateAllowedOrigins } from '../cors.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
@@ -193,10 +194,24 @@ export const UPGRADE_GUIDE_URL =
  * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
  * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
  *
+ * Also validates `defaults.allowedOrigins` (see `validateAllowedOrigins` in
+ * `../cors.ts`), so an entry the runtime would ignore — a regex that does not
+ * compile on its own, or one with an unescaped `.` — fails the synth instead.
+ * Unresolved CDK tokens are skipped: their value is not known until deploy.
+ *
  * @internal
  */
-export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
-	if (props.defaults) return;
+export function assertBlocksDefaults(
+	props: { defaults?: { allowedOrigins?: readonly unknown[] } },
+	kind: 'BlocksStack' | 'BlocksBackend',
+): void {
+	if (props.defaults) {
+		const origins = props.defaults.allowedOrigins;
+		if (Array.isArray(origins)) {
+			validateAllowedOrigins(origins.filter((o) => !(typeof o === 'string' && cdk.Token.isUnresolved(o))));
+		}
+		return;
+	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
 			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +

@@ -48,6 +48,20 @@ const password = 'TestPass123!';
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await setTimeout(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
   // Use existing dev server if running, otherwise start one
   if (!await isServerRunning(serverPort)) {
@@ -59,24 +73,16 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
   app = await import('aws-blocks');
   api = app.api;
   authApi = app.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -268,7 +274,101 @@ test('todos: another user can neither see nor change them', async () => {
 });
 
 // ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.
+// `subscribeTodos()` returns a channel the client hydrates into a live
+// WebSocket subscription (dev server runs a local WS server — no AWS). We
+// subscribe, mutate over the API, and assert the broadcast arrives. This is
+// the same subscription App.tsx uses to reload the list in every open tab.
+
+type TodoEvent = { action: 'created' | 'updated' | 'deleted'; todoId: string };
+
+/**
+ * Subscribe to `channel` and return a promise for the NEXT message, plus an
+ * `established` promise that resolves once the server confirms the subscription.
+ * Awaiting `established` before triggering a mutation closes the race where a
+ * publish could fire before the subscribe is confirmed. Rejects after
+ * `timeoutMs` so a dropped broadcast fails loudly instead of hanging.
+ */
+function nextMessage<T>(
+  channel: {
+    subscribe(handler: (message: T) => void): { unsubscribe(): void; established: Promise<void> };
+  },
+  timeoutMs = 5000,
+): { received: Promise<T>; established: Promise<void>; unsubscribe(): void } {
+  let unsubscribe = () => {};
+  let established: Promise<void> = Promise.resolve();
+  const received = new Promise<T>((resolve, reject) => {
+    // Use globalThis to avoid the timers/promises setTimeout shadow (the
+    // template imports { setTimeout } from 'node:timers/promises' at the top).
+    const timer = globalThis.setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const sub = channel.subscribe((message: T) => {
+      globalThis.clearTimeout(timer);
+      resolve(message);
+    });
+    established = sub.established;
+    unsubscribe = () => { globalThis.clearTimeout(timer); sub.unsubscribe(); };
+  });
+  return { received, established, unsubscribe };
+}
+
+test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    const todo = await api.createTodo('Realtime create');
+    const message = await received;
+    assert.strictEqual(message.action, 'created');
+    assert.strictEqual(message.todoId, todo.todoId);
+    await api.deleteTodo(todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('realtime: a priority change broadcasts an updated event', async (t) => {
+  const todo = await api.createTodo('Realtime priority', 3);
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.updatePriority(todo.todoId, 1);
+    const message = await received;
+    assert.strictEqual(message.action, 'updated');
+    assert.strictEqual(message.todoId, todo.todoId);
+    const updated = (await api.listTodos()).find(item => item.todoId === todo.todoId);
+    assert.strictEqual(updated?.priority, 1);
+    assert.strictEqual(updated?.version, todo.version + 1);
+  } finally {
+    unsubscribe();
+    await api.deleteTodo(todo.todoId);
+  }
+});
+
+test('realtime: a deleted todo broadcasts a deleted event', async (t) => {
+  const todo = await api.createTodo('Realtime delete');
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.deleteTodo(todo.todoId);
+    const message = await received;
+    assert.strictEqual(message.action, 'deleted');
+    assert.strictEqual(message.todoId, todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});

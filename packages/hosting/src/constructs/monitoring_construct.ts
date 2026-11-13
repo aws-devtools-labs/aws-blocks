@@ -104,11 +104,17 @@ export type MonitoringConstructProps = {
  *
  * `resources: ['*']` is scoped to *this* key — a resource policy can
  * only speak for the resource it is attached to, and this key is
- * single-purpose (the alarm topic is its only user). The
- * `aws:SourceAccount` guard blocks the cross-account confused-deputy
- * case; it is `IfExists` because that key is only populated on direct
- * service-principal calls, and a hard `StringEquals` would
- * reintroduce the exact silent-deny this grant exists to prevent.
+ * single-purpose (the alarm topic is its only user). The grant carries
+ * `aws:SourceAccount` (`StringEquals`, this account) and `aws:SourceArn`
+ * (`ArnLike`, this account's alarms in this Region): the conditions
+ * Amazon SNS documents for an AWS service that publishes to an encrypted
+ * topic ("Enable compatibility between event sources from AWS services
+ * and encrypted topics",
+ * https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services).
+ * CloudWatch sends both keys when an alarm publishes, so the notification
+ * still arrives, and a request on behalf of another account's alarm is
+ * denied. Not the `StringEqualsIfExists` form, which lets a request that
+ * carries no `aws:SourceAccount` through.
  */
 export const createAlarmTopicKey = (scope: Construct): Key => {
   const key = new Key(scope, 'AlarmTopicKey', {
@@ -120,6 +126,7 @@ export const createAlarmTopicKey = (scope: Construct): Key => {
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
+  const stack = Stack.of(scope);
   key.addToResourcePolicy(
     new iam.PolicyStatement({
       sid: 'AllowCloudWatchAlarmsToPublishToEncryptedTopic',
@@ -128,8 +135,9 @@ export const createAlarmTopicKey = (scope: Construct): Key => {
       actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
       resources: ['*'],
       conditions: {
-        StringEqualsIfExists: {
-          'aws:SourceAccount': Stack.of(scope).account,
+        StringEquals: { 'aws:SourceAccount': stack.account },
+        ArnLike: {
+          'aws:SourceArn': `arn:${stack.partition}:cloudwatch:${stack.region}:${stack.account}:alarm:*`,
         },
       },
     }),

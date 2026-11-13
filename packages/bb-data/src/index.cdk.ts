@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { BuildingBlockScope, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { registerVpcRequirements } from '@aws-blocks/core/cdk/internal';
 import type { VpcContext } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
@@ -19,11 +20,11 @@ import { BB_NAME } from './version.js';
  * to the parent scope's Lambda handler.
  *
  * Resources created:
- * - VPC with 2 AZs, isolated subnets, no NAT gateways
+ * - VPC with 2 AZs, isolated subnets, no NAT, and a Secrets Manager endpoint (no shared VPC)
  * - Aurora Serverless v2 cluster (PostgreSQL-compatible, Data API enabled)
- * - Secrets Manager secret with auto-generated credentials
- * - Security group allowing inbound PostgreSQL (5432) from VPC
- * - IAM grants for rds-data:* and secretsmanager:GetSecretValue
+ * - Secrets Manager secret with auto-generated credentials, rotated on a schedule
+ * - Rotation Lambda for that secret, and security groups for it, the endpoint and the cluster
+ * - IAM grants for rds-data:* and secretsmanager:GetSecretValue (and kms:Decrypt with a CMK)
  * - Environment variables (BLOCKS_{id}_CLUSTER_ARN, BLOCKS_{id}_SECRET_ARN, BLOCKS_{id}_DATABASE)
  *
  * @example
@@ -105,17 +106,17 @@ export class Database extends BuildingBlockScope {
 
       // Provisioning-only options don't apply to an external database — we never
       // emit an Aurora cluster to attach them to. Surface that at synth so a
-      // `storageEncryptionKeyArn` or `pointInTimeRecovery` on what looks like a
-      // managed database isn't a silent no-op (mirrors DT's
+      // `storageEncryptionKeyArn`, `pointInTimeRecovery` or `secretRotation` on
+      // what looks like a managed database isn't a silent no-op (mirrors DT's
       // bb-distributed-table:IgnoredOptionsForExistingTable).
-      const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn'] as const).filter(
+      const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn', 'secretRotation'] as const).filter(
         (key) => options[key] !== undefined,
       );
       if (ignoredForExisting.length > 0) {
         cdk.Annotations.of(this).addWarningV2(
           '@aws-blocks/bb-data:IgnoredOptionsForExistingDatabase',
           `Ignoring ${ignoredForExisting.join(', ')} because this database is wrapped via fromExisting() — ` +
-            `the existing database owns its own durability/encryption configuration.`,
+            `the existing database owns its own durability/encryption/credentials configuration.`,
         );
       }
 
@@ -193,6 +194,14 @@ export class Database extends BuildingBlockScope {
       backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
     }
 
+    // Resolved like `pointInTimeRecovery` above, with one addition: an absent
+    // stack-wide default means off, as it does for every other optional field on
+    // `BlocksDefaults`, so a hand-written literal never turns a cost-bearing
+    // feature on by omission. `true` carries no interval, so it reaches
+    // `materialize` as `undefined`, which rotates on the default interval.
+    const rotationSetting = options?.secretRotation ?? this.defaults.secretRotation ?? false;
+    const secretRotation = rotationSetting === true ? undefined : rotationSetting;
+
     // Storage encryption: secure-by-default for NEW projects without forcing a
     // destructive replacement on EXISTING ones. Emit `storageEncrypted: true`
     // only when the project has opted in via the
@@ -225,6 +234,7 @@ export class Database extends BuildingBlockScope {
       );
     }
 
+    const sharedVpc = providedVpcContext(this);
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
       maxCapacity: options?.maxCapacity,
@@ -254,11 +264,27 @@ export class Database extends BuildingBlockScope {
       // provided context, materialize() falls back to its own `${name}Vpc`,
       // exactly as before this shared-VPC work. Bringing a Database into a derived
       // shared VPC is a deliberate, out-of-band migration, never an implicit one.
-      vpcContext: providedVpcContext(this),
+      vpcContext: sharedVpc,
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.
       logRetention: this.defaults.logRetention,
+      secretRotation,
     });
+
+    // In a shared VPC, register the rotation Lambda's SG so core's endpoint SG
+    // admits it (finalizeVpc adds the rule after every block is constructed; see
+    // `VpcRequirements.endpointClientSecurityGroups`). With no shared VPC,
+    // materialize() created its own endpoint + rule.
+    if (infra.rotationSecurityGroup && sharedVpc) {
+      registerVpcRequirements(this, {
+        endpointClientSecurityGroups: [infra.rotationSecurityGroup],
+        // The schedule rotates as soon as it exists, so core orders it after the
+        // endpoints and the rule admitting the rotation Lambda. Only the
+        // schedule, never this block: the endpoint security group references the
+        // rotation security group, so a wider dependency would cycle.
+        ...(infra.rotationSchedule ? { endpointClientDependents: [infra.rotationSchedule] } : {}),
+      });
+    }
 
     // Inject config so DataApiEngine can read them at runtime
     Object.entries(infra.envVars).forEach(([key, value]) => {

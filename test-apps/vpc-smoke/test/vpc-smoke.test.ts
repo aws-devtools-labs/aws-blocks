@@ -4,6 +4,12 @@
 /**
  * VPC Smoke Tests — validates each BB can reach its backing service from
  * within a VPC by calling API methods through direct HTTP/RPC.
+ *
+ * While this suite's scripts only echo (issue #987), the comprehensive app
+ * carries `secretRotation: true` so the rotating path still gets a deploy. Drop
+ * that option from `test-apps/comprehensive/aws-blocks/index.ts` when these
+ * scripts run again: a rotation Lambda's network interfaces hold that lane's
+ * teardown for minutes.
  */
 
 import { test } from 'node:test';
@@ -119,6 +125,57 @@ test('VPC Smoke Tests', async (t) => {
     const result = await rpc('dbQuery') as any[];
     assert.ok(result.length >= 1);
     assert.strictEqual(result[0].ping, 1);
+  });
+
+  // Rotation in a shared VPC: the Database registers its rotation Lambda's
+  // security group and core admits it on the endpoint security group every
+  // Blocks-managed interface endpoint shares. Synth cannot prove the two blocks
+  // met, so read the deployed groups back.
+  await t.test('Database (Aurora): a rotation finished and its security group is admitted on the shared endpoint', () => {
+    const outputs = JSON.parse(readFileSync(outputsPath, 'utf-8')) as Record<string, Record<string, string>>;
+    const stack = Object.keys(outputs)[0];
+    const aws = (...args: string[]) => execFileSync('aws', args, { encoding: 'utf-8' }).trim();
+    // list-stack-resources pages; describe-stack-resources caps at 100 and takes
+    // no pagination token. This stack is over that cap, so a lookup against it
+    // can miss the groups below.
+    const groups = aws(
+      'cloudformation', 'list-stack-resources', '--stack-name', stack,
+      '--query', "StackResourceSummaries[?ResourceType=='AWS::EC2::SecurityGroup'].[LogicalResourceId,PhysicalResourceId]",
+      '--output', 'text',
+    );
+    // Exactly one match, or fail naming what was found: a lookup that returned
+    // `undefined` would leave the comparisons below asserting nothing.
+    const idOf = (needle: string) => {
+      const hits = groups.split('\n').map((l) => l.split('\t')).filter(([logical]) => logical.includes(needle));
+      assert.strictEqual(
+        hits.length,
+        1,
+        `exactly one ${needle} security group in ${stack}, got ${hits.length}:\n${groups}`,
+      );
+      return hits[0][1];
+    };
+    const rotationSg = idOf('RotationSg');
+    const endpointSg = idOf('BlocksVpcEndpointSg');
+
+    const admitted = aws(
+      'ec2', 'describe-security-groups', '--group-ids', endpointSg,
+      '--query', 'SecurityGroups[0].IpPermissions[?FromPort==`443`].UserIdGroupPairs[].GroupId',
+      '--output', 'text',
+    );
+    assert.ok(admitted.includes(rotationSg), `endpoint SG ${endpointSg} admits ${rotationSg} on 443: got ${admitted}`);
+
+    // Rotation evidence comes from the stack's own output, not Secrets Manager: a
+    // schedule existing proves nothing, and the CI role that can describe a stack
+    // cannot describe a secret. bb-data outputs what its deploy-time wait saw.
+    const waited = Object.entries(outputs[stack])
+      .filter(([key]) => /RotationWaited([0-9A-F]{8})?$/.test(key))
+      .map(([, value]) => value);
+    assert.strictEqual(
+      waited.length,
+      1,
+      `exactly one RotationWaited output in ${stack}, got ${waited.length}: ${Object.keys(outputs[stack]).join(', ')}`,
+    );
+    assert.strictEqual(waited[0], 'true', `the deploy's wait saw the rotation finish: ${waited[0]}`);
   });
 
   await t.test('Logger: emit via CloudWatch Logs endpoint', async () => {

@@ -610,6 +610,12 @@ export const realtime = new Realtime(scope, 'collab', {
 // Database - SQL database (Aurora Serverless v2 via Data API)
 const db = new Database(scope, 'db', {
   migrationsPath: './aws-blocks/migrations',
+  // `true` because this app runs on the sandbox preset, which leaves rotation
+  // off; the rotation path needs a deploy to be covered at all. It is covered
+  // here, at the cost of the rotation Lambda's network interfaces slowing this
+  // lane's teardown, because the vpc-smoke lane that also asserts it does not
+  // run yet (issue #987). Move it there once that lane is back on.
+  secretRotation: true,
 });
 
 // DistributedDatabase - Aurora DSQL (serverless, multi-region PostgreSQL)

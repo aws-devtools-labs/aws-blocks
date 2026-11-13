@@ -32,9 +32,10 @@ import {
 } from './cdk/api-front-door.js';
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, forEachBlocksKmsKey, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
@@ -2715,6 +2716,26 @@ describe('Hosting', () => {
       assert.ok(
         [...visited].some((r) => r.includes('CustomCrossRegionExportWriter')),
         'the prepare-time cross-region provider role was visited',
+      );
+    });
+
+    it('checks the key policies of both alarm topic keys (regional and us-east-1) and synthesizes', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeKeyPolicyStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      addServicePrincipalTrustCheck(backend as unknown as Construct);
+      const visited: string[] = [];
+      forEachBlocksKmsKey(backend as unknown as Construct, (key) => visited.push(key.node.path));
+      buildOffRegionEdgeHosting(app, stack, backend);
+      // Synth fails if either key's cloudwatch.amazonaws.com statement lacks a source condition.
+      assert.doesNotThrow(() => app.synth());
+      assert.ok(
+        visited.some((p) => p.startsWith('EdgeKeyPolicyStack/Hosting/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the regional alarm topic key is checked (visited: ${visited.join(', ')})`,
+      );
+      assert.ok(
+        visited.some((p) => !p.startsWith('EdgeKeyPolicyStack/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the us-east-1 monitoring stack's alarm topic key is checked (visited: ${visited.join(', ')})`,
       );
     });
 

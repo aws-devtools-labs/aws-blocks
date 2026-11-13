@@ -25,6 +25,9 @@
  *
  * Each role is visited once per visitor, whichever way it was reached.
  *
+ * The same walk reaches the `AWS::KMS::Key` resources in those scopes, for
+ * checks that read key policies ({@link forEachBlocksKmsKey}).
+ *
  * The covered set also holds roles the app creates itself (in a `BlocksStack`
  * the root's subtree is the whole stack; in either root the app's backend
  * module adds constructs). {@link isAppOwnedRole} tells those apart from the
@@ -41,16 +44,23 @@ import { Construct, type IConstruct } from 'constructs';
 /** A function called once for every IAM role AWS Blocks created for a root. */
 export type BlocksRoleVisitor = (role: cdk.CfnResource) => void;
 
+/** A function called once for every KMS key in the scopes covered for a root. */
+export type BlocksKmsKeyVisitor = (key: cdk.CfnResource) => void;
+
 /** Construct ids of the per-stack providers CDK adds for cross-region references. */
 const CROSS_REGION_PROVIDER = /^Custom::CrossRegionExport(Writer|Reader)CustomResourceProvider$/;
 
 const ROLE_TYPE = 'AWS::IAM::Role';
+const KMS_KEY_TYPE = 'AWS::KMS::Key';
 
 interface RoleCoverage {
 	readonly visitors: BlocksRoleVisitor[];
 	/** Roles reached so far, in visit order; each has been passed to every visitor. */
 	readonly roles: cdk.CfnResource[];
 	readonly seen: WeakSet<cdk.CfnResource>;
+	readonly keyVisitors: BlocksKmsKeyVisitor[];
+	/** `AWS::KMS::Key` resources reached so far by the same walk; each has been passed to every key visitor. */
+	readonly keys: cdk.CfnResource[];
 	/** Scopes already walked by an aspect (avoids stacking duplicate aspects). */
 	readonly scopes: WeakSet<IConstruct>;
 	/** Stacks whose prepare-time cross-region provider roles belong to this root. */
@@ -68,6 +78,8 @@ function coverageOf(root: Construct): RoleCoverage {
 		visitors: [],
 		roles: [],
 		seen: new WeakSet(),
+		keyVisitors: [],
+		keys: [],
 		scopes: new WeakSet(),
 		lateStacks: new Set(),
 		finalized: false,
@@ -78,6 +90,17 @@ function coverageOf(root: Construct): RoleCoverage {
 
 function isRole(node: IConstruct): node is cdk.CfnResource {
 	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === ROLE_TYPE;
+}
+
+function isKmsKey(node: IConstruct): node is cdk.CfnResource {
+	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === KMS_KEY_TYPE;
+}
+
+function visitKmsKey(coverage: RoleCoverage, key: cdk.CfnResource): void {
+	if (coverage.seen.has(key)) return;
+	coverage.seen.add(key);
+	coverage.keys.push(key);
+	for (const visitor of coverage.keyVisitors) visitor(key);
 }
 
 function visitRole(coverage: RoleCoverage, role: cdk.CfnResource): void {
@@ -105,6 +128,7 @@ function coverScope(coverage: RoleCoverage, scope: IConstruct): void {
 		{
 			visit(node) {
 				if (isRole(node)) visitRole(coverage, node);
+				else if (isKmsKey(node)) visitKmsKey(coverage, node);
 			},
 		},
 		{ priority: mutatingPriority(scope) },
@@ -137,6 +161,19 @@ export function forEachBlocksRole(root: Construct, visitor: BlocksRoleVisitor): 
 	coverage.visitors.push(visitor);
 	// Roles already reached (only possible once synthesis has begun) get it too.
 	for (const role of coverage.roles) visitor(role);
+}
+
+/**
+ * Register `visitor` for every `AWS::KMS::Key` in the scopes covered for `root`:
+ * the same walk, and so the same coverage, as {@link forEachBlocksRole} (the
+ * root's subtree, the stack-level additions of an embedded backend, and
+ * `Hosting`'s subtree and helper stacks). Keys are visited at synth, in
+ * registration order. The prepare-time cross-region providers hold no keys.
+ */
+export function forEachBlocksKmsKey(root: Construct, visitor: BlocksKmsKeyVisitor): void {
+	const coverage = coverageOf(root);
+	coverage.keyVisitors.push(visitor);
+	for (const key of coverage.keys) visitor(key);
 }
 
 /**
