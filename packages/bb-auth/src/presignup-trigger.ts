@@ -85,10 +85,11 @@ export interface PreSignUpEvent {
 }
 
 function stringRecord(value: unknown): Record<string, string> {
-	const out: Record<string, string> = {};
-	if (typeof value !== 'object' || value === null) return out;
-	for (const [k, v] of Object.entries(value)) if (typeof v === 'string') out[k] = v;
-	return out;
+	if (typeof value !== 'object' || value === null) return {};
+	// Object.fromEntries defines own properties, so a key named `__proto__` stays a key.
+	return Object.fromEntries(
+		Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+	);
 }
 
 function isTriggerSource(value: unknown): value is PreSignUpTriggerSource {

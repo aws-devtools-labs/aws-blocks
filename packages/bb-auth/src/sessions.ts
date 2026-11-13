@@ -210,14 +210,15 @@ const RESERVED_ID_TOKEN_CLAIMS = new Set([
  * @internal
  */
 export function extractUserAttributes(payload: Record<string, unknown>): Record<string, string> {
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(payload)) {
-		if (typeof v !== 'string') continue;
-		if (RESERVED_ID_TOKEN_CLAIMS.has(k)) continue;
-		if (k.startsWith('cognito:')) continue;
-		out[k] = v;
-	}
-	return out;
+	// Object.fromEntries defines own properties, so a claim named `__proto__` stays a key.
+	return Object.fromEntries(
+		Object.entries(payload).filter(
+			(entry): entry is [string, string] =>
+				typeof entry[1] === 'string' &&
+				!RESERVED_ID_TOKEN_CLAIMS.has(entry[0]) &&
+				!entry[0].startsWith('cognito:'),
+		),
+	);
 }
 
 /**
