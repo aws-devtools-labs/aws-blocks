@@ -61,9 +61,12 @@
   its known values are the constants of the enum `XKnown`, which `X.a` and
   `X.values` still name, and any other value decodes to `XUnknown`, whose
   `value` is the string as sent. `toJson()` writes that string back, so an
-  unknown value round-trips. An exhaustive `switch` over `X` needs an
-  `XUnknown()` case, and `name`, `index` and `values.byName` are on `XKnown`
-  only. An enum that only parameters use stays a closed Dart enum.
+  unknown value round-trips. When another type of the library is already
+  named `XKnown` or `XUnknown`, that class takes a trailing `$` (`XKnown$`,
+  `XUnknown$`). An exhaustive `switch` over `X` needs an `XUnknown()` case.
+  `name` and `index` are on `XKnown` only; `X.values.byName` still works,
+  since `X.values` is `XKnown.values`. An enum that only parameters use stays
+  a closed Dart enum.
 
 ## 0.2.0
 

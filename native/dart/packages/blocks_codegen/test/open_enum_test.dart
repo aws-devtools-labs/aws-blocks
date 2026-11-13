@@ -149,12 +149,10 @@ dependencies:
     path: $runtime
 ''');
     Directory('${work.path}/bin').createSync();
-    File(
-      '${work.path}/bin/tasks.dart',
-    ).writeAsStringSync(_generate('45-open-enums'));
-    File(
-      '${work.path}/bin/auth.dart',
-    ).writeAsStringSync(_generate('18-hybrid-arm'));
+    final tasksFile = File('${work.path}/bin/tasks.dart');
+    tasksFile.writeAsStringSync(_generate('45-open-enums'));
+    final authFile = File('${work.path}/bin/auth.dart');
+    authFile.writeAsStringSync(_generate('18-hybrid-arm'));
     File('${work.path}/bin/collide.dart').writeAsStringSync(
       const DartCodeGenerator().generate(
         CodegenModelBuilder().build(
