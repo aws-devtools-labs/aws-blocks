@@ -1320,6 +1320,34 @@ describe('emailPassword: false with an email + password only option is rejected 
 });
 
 describe('users.attributes: userWritable', () => {
+	test('a provider mapping onto a `userWritable: false` attribute is refused while self sign-up is on', () => {
+		const attributes = [{ name: 'team' }, { name: 'role', userWritable: false }];
+		const google = (attributeMapping: Record<string, string>) => ({
+			google: { type: 'google', clientId: 'g', clientSecret: secret, attributeMapping },
+		});
+		const refused = /provider 'google' maps '(custom:)?role', which is `userWritable: false`, while self sign-up is on/;
+		// Bare and `custom:`-prefixed keys, with self sign-up on by default and when set explicitly.
+		for (const options of [
+			{ providers: google({ role: 'hd' }), users: { attributes } },
+			{ providers: google({ 'custom:role': 'hd' }), users: { attributes } },
+			{ emailPassword: { selfSignUp: true }, providers: google({ role: 'hd' }), users: { attributes } },
+		]) {
+			assert.throws(() => assertKnownAuthOptions('auth', options), refused);
+		}
+		assert.throws(
+			() => new Auth(root(), 'auth', untyped({ providers: google({ role: 'hd' }), users: { attributes } })),
+			refused,
+		);
+		// Allowed: self sign-up off, no self sign-up at all, or a mapping onto a user-writable attribute.
+		for (const options of [
+			{ emailPassword: { selfSignUp: false }, providers: google({ role: 'hd' }), users: { attributes } },
+			{ emailPassword: false, providers: google({ role: 'hd' }), users: { attributes } },
+			{ providers: google({ team: 'hd', email: 'email' }), users: { attributes } },
+		]) {
+			assert.doesNotThrow(() => assertKnownAuthOptions('auth', options), JSON.stringify(options.emailPassword));
+		}
+	});
+
 	test('`userWritable: false` with `required: true` is refused at construction: users could not sign up', () => {
 		const options = { users: { attributes: [{ name: 'role', required: true, userWritable: false }] } };
 		assert.throws(
