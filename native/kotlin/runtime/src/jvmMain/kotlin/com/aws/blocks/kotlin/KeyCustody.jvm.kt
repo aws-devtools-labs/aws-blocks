@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin
 
+import java.nio.file.Files
 import java.nio.file.Path
 import java.security.SecureRandom
 import java.util.UUID
@@ -81,8 +82,37 @@ internal fun selectKeyCustody(
     directory: Path,
     osCandidate: (Path) -> KeyCustody? = ::osKeyCustody,
 ): KeyCustody {
+    if (!osCandidatePassesProbe(osCandidate)) return FileKeyCustody(directory)
     val candidate = runCatching { osCandidate(directory) }.getOrNull() ?: return FileKeyCustody(directory)
-    return if (passesSelfTest(candidate)) candidate else FileKeyCustody(directory)
+    return candidate
+}
+
+/**
+ * Runs the self-test against a candidate built over a scratch directory rather than the real
+ * store's directory, so the probe cannot touch anything the store will later rely on.
+ *
+ * Not every custody keeps the key apart from other aliases: `FileKeyCustody` holds one key per
+ * directory, and `DpapiKeyCustody` wraps its blob into the same `.key`. Probing the real candidate
+ * would run `storeIfAbsent(probeAlias, …)` against a `.key` that already holds the real key, fail
+ * to unwrap it, and then `delete(probeAlias)` would remove the real key. Isolating the probe by
+ * location sidesteps the whole class of cases — the invariant is that whatever the probe candidate
+ * touches lives in the scratch directory, which is cleaned up on exit.
+ *
+ * Every throwable is treated as a failed probe, not only every exception. Reaching an OS store
+ * means loading a native library, and a library that is missing or cannot be loaded is reported as
+ * an [Error] — on the first call rather than at construction, so it arrives here. An application
+ * packaged without the declarations native access needs is the ordinary way to reach that, and the
+ * documented consequence is losing the protection rather than failing to start.
+ */
+private fun osCandidatePassesProbe(osCandidate: (Path) -> KeyCustody?): Boolean {
+    val probeDir = runCatching { Files.createTempDirectory("blocks-key-probe") }.getOrNull()
+        ?: return false
+    return try {
+        val probe = runCatching { osCandidate(probeDir) }.getOrNull() ?: return false
+        passesSelfTest(probe)
+    } finally {
+        runCatching { probeDir.toFile().deleteRecursively() }
+    }
 }
 
 /**
@@ -90,13 +120,9 @@ internal fun selectKeyCustody(
  *
  * The probe alias is random because these stores are machine-wide: with a fixed one, two
  * applications starting at the same moment overwrite each other's probe and both conclude the
- * store is broken. The probe is removed whether or not it succeeded.
- *
- * Every throwable is treated as a failed probe, not only every exception. Reaching an OS store
- * means loading a native library, and a library that is missing or cannot be loaded is reported as
- * an [Error] — on the first call rather than at construction, so it arrives here. An application
- * packaged without the declarations native access needs is the ordinary way to reach that, and the
- * documented consequence is losing the protection rather than failing to start.
+ * store is broken. The probe is removed whether or not it succeeded, as a courtesy to a custody
+ * whose storage outlives the scratch directory (an OS secret store does, a file in that directory
+ * does not).
  */
 private fun passesSelfTest(candidate: KeyCustody): Boolean {
     val alias = "self-test:" + UUID.randomUUID()

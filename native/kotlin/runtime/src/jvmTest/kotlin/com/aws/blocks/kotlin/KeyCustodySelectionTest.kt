@@ -5,6 +5,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.AfterTest
 import kotlin.test.Test
 
@@ -113,5 +114,38 @@ class KeyCustodySelectionTest {
         selectKeyCustody(root.toPath()) { null }
 
         FileKeyCustody(root.toPath()).load("cookies:com.example.app")!!.toList() shouldBe key.toList()
+    }
+
+    @Test
+    fun probesAgainstAScratchDirectoryRatherThanTheRealOne() {
+        // The real fear is a custody whose delete doesn't honour the alias — one shared `.key`,
+        // like DPAPI, or a tier whose delete removes the key file outright. If the probe ran
+        // against the real directory, the self-test's clean-up would wipe the live key and the
+        // session would stop surviving a restart. Pinning with a file-backed OS candidate:
+        // without the scratch directory the probe would create and then delete `.key` here.
+        val key = ByteArray(32) { 42 }
+        FileKeyCustody(root.toPath()).storeIfAbsent("cookies:com.example.app", key)
+
+        selectKeyCustody(root.toPath()) { FileKeyCustody(it) }
+
+        FileKeyCustody(root.toPath()).load("cookies:com.example.app")!!.toList() shouldBe key.toList()
+    }
+
+    @Test
+    fun theProbeRunsBeforeTheRealCandidateIsBuilt() {
+        // The probe is isolated so firmly that the candidate built for the real directory need
+        // not have been constructed yet — if construction cost is non-trivial (a native library
+        // call, a dbus connection), paying that cost is the probe's job.
+        val built = mutableListOf<Path>()
+
+        selectKeyCustody(root.toPath()) { directory ->
+            built.add(directory)
+            RecordingCustody()
+        }
+
+        // One build for the probe over the scratch directory, one for the real store.
+        built.size shouldBe 2
+        built[0] shouldNotBe root.toPath()
+        built[1] shouldBe root.toPath()
     }
 }
