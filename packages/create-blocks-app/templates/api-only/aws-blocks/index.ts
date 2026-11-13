@@ -53,7 +53,9 @@ const itemSchema = z.object({
 
 const items = new DistributedTable(scope, 'items', {
   schema: itemSchema,
-  key: { partitionKey: 'owner', sortKey: 'itemId' },
+  key: { partitionKey: 'owner', sortKey: 'itemId' }, // owner + itemId together identify one item
+  // Another grouping or sort order is an index (an object keyed by name), not a different key:
+  // indexes: { byCreatedAt: { partitionKey: 'owner', sortKey: 'createdAt' } },
 });
 
 // ─── Files ─────────────────────────────────────────────────────────────────
@@ -121,6 +123,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   /** List the caller's items. */
   async listItems() {
     const user = await auth.requireAuth(context);
+    // Sorted by itemId. For newest first, add the byCreatedAt index above and pass
+    // `index: 'byCreatedAt', order: 'desc'` ('asc' | 'desc').
     return await Array.fromAsync(
       items.query({ where: { owner: { equals: user.userSub } } }),
     );
