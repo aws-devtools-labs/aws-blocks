@@ -15,3 +15,36 @@ class OidcCallbackException(message: String) :
 
 class OidcCancelledException(message: String = "Sign-in cancelled") :
     OidcException(message)
+
+/**
+ * The backend could not read the session for [OidcClient.restore].
+ *
+ * It extends [BlocksException] rather than [OidcException], so a `when` over the sealed
+ * [OidcException] subclasses stays exhaustive.
+ *
+ * @property statusCode the HTTP status the backend answered with. 404 means it serves no session
+ *   route: an `Auth` block serves one only when it has federated providers.
+ * @property errorName the error name in the backend's response, if it sent one.
+ */
+class OidcSessionException(
+    message: String,
+    val statusCode: Int,
+    val errorName: String?,
+) : BlocksException(message)
+
+/**
+ * The backend refused a sign-out.
+ *
+ * It extends [BlocksException] rather than [OidcException], so a `when` over the sealed
+ * [OidcException] subclasses stays exhaustive.
+ *
+ * @property statusCode the HTTP status the backend answered with.
+ * @property errorName the error name in the backend's response, if it sent one.
+ *   `SignOutIncompleteException` (with status 503) means the session cookie was cleared but the
+ *   backend could not remove its session.
+ */
+class OidcSignOutException(
+    message: String,
+    val statusCode: Int,
+    val errorName: String?,
+) : BlocksException(message)

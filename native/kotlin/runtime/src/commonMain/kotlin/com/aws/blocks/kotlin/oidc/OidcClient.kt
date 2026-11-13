@@ -7,12 +7,15 @@ import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.exceptions.BlocksException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
+import io.ktor.http.appendEncodedPathSegments
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.io.encoding.Base64
@@ -34,10 +37,13 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.plus
@@ -58,6 +64,12 @@ class OidcClient<P : OidcProvider> internal constructor(
     private val wireDescriptor: JsonObject? = null,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
+
+    /**
+     * Whether this client has a signed-in user. It is [OidcAuthState.Loading] until [restore],
+     * [signIn] or [signOut] first settles it, so call [restore] on launch to pick up a session
+     * from an earlier one.
+     */
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
 
     val providers: List<String> = config.providers
@@ -97,6 +109,8 @@ class OidcClient<P : OidcProvider> internal constructor(
      *   callback's state or CSRF value did not match what was sent.
      * @throws OidcExchangeException if the backend rejected the authorization code.
      * @throws BlocksException if the Blocks instance this client came from has been closed.
+     * @throws IllegalStateException if no relay target is configured and the platform has no
+     *   loopback launcher of its own (every platform but the JVM).
      */
     suspend fun signIn(
         provider: P,
@@ -116,6 +130,11 @@ class OidcClient<P : OidcProvider> internal constructor(
         // own port, which has to happen before the authorize-params request carries it.
         val session = platformLauncher.openSession(config.relayTo, options)
         try {
+            // A loopback launcher binds its own relay target; any other needs the configured one.
+            check(session.relayTo.isNotEmpty()) {
+                "OIDC sign-in needs a relayTo on this platform: pass relayTo to OidcClient.forAuth, " +
+                    "or set oidc { relayTo = \"...\" } in the awsBlocks Gradle block."
+            }
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
             val params = fetchAuthorizeParams(name, csrf, session.relayTo)
 
@@ -131,10 +150,13 @@ class OidcClient<P : OidcProvider> internal constructor(
             // a callback carrying a `code` still fails if the state or CSRF value does not
             // match, or if the exchange is rejected. They report separately, so the browser
             // is told which of the two it was.
-            val callback = reportingFailure(session, resultUri, INVALID_CALLBACK) {
+            // The state whose callback may repeat the provider's error: the issued one, once its
+            // CSRF value is ours.
+            val trustedState = params.state.takeIf { runCatching { verifyCsrf(it, csrf) }.isSuccess }
+            val callback = reportingFailure(session, resultUri, trustedState, INVALID_CALLBACK) {
                 validateCallback(resultUri, params, csrf)
             }
-            val user = reportingFailure(session, resultUri, EXCHANGE_FAILED) {
+            val user = reportingFailure(session, resultUri, trustedState, EXCHANGE_FAILED) {
                 // Step 6: Exchange the code for tokens.
                 exchange(
                     code = callback.code,
@@ -161,8 +183,20 @@ class OidcClient<P : OidcProvider> internal constructor(
         params: AuthorizeParamsResponse,
         csrf: String,
     ): ValidatedCallback {
-        // Step 4: Validate the callback.
+        // Step 4: Validate the callback. The state and its CSRF value are checked before
+        // anything else the callback says, an error included: any page can reach the relay
+        // target, and only a callback carrying the state this attempt was issued came from the
+        // backend.
         val resultParams = Url(resultUri).parameters
+
+        val returnedState = resultParams["state"]
+            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
+        if (returnedState != params.state) {
+            throw OidcCallbackException("State mismatch in callback")
+        }
+
+        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
+        verifyCsrf(returnedState, csrf)
 
         val error = resultParams["error"]
         if (error != null) {
@@ -172,15 +206,6 @@ class OidcClient<P : OidcProvider> internal constructor(
 
         val code = resultParams["code"]
             ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
-        val returnedState = resultParams["state"]
-            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
-
-        if (returnedState != params.state) {
-            throw OidcCallbackException("State mismatch in callback")
-        }
-
-        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
-        verifyCsrf(returnedState, csrf)
 
         return ValidatedCallback(code, resultParams["iss"])
     }
@@ -197,6 +222,7 @@ class OidcClient<P : OidcProvider> internal constructor(
     private suspend fun <T> reportingFailure(
         session: OidcRedirectSession,
         resultUri: String,
+        issuedState: String?,
         code: String,
         block: suspend () -> T,
     ): T = try {
@@ -207,7 +233,7 @@ class OidcClient<P : OidcProvider> internal constructor(
         }
         throw cancellation
     } catch (failure: Throwable) {
-        session.reportOutcome(failureOutcome(failure, resultUri, code))
+        session.reportOutcome(failureOutcome(failure, resultUri, issuedState, code))
         throw failure
     }
 
@@ -223,10 +249,14 @@ class OidcClient<P : OidcProvider> internal constructor(
     private fun failureOutcome(
         failure: Throwable,
         resultUri: String,
+        issuedState: String?,
         code: String,
     ): OidcSignInOutcome.Failed {
         val resultParams = runCatching { Url(resultUri).parameters }.getOrNull()
-        val idpError = resultParams?.get("error")
+        // A callback without the issued state, or one whose state carries another CSRF value,
+        // did not come from this attempt, so what it says the provider reported is not repeated
+        // to the user.
+        val idpError = resultParams?.takeIf { issuedState != null && it["state"] == issuedState }?.get("error")
         return if (idpError != null) {
             OidcSignInOutcome.Failed(idpError, resultParams["error_description"])
         } else {
@@ -257,6 +287,8 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("provider", name)
             put("callbackUrl", callbackUrl)
             if (iss != null) put("iss", iss)
+            // The session cookie authenticates this client, so it asks the backend for no tokens.
+            put("tokens", false)
         }
 
         val exchangeUrl = server.rawRoute(config.exchangePath)
@@ -288,7 +320,11 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("relayTo", relayTo)
         }
 
-        val authorizeUrl = server.rawRoute(config.authorizeParamsBasePath, provider)
+        // The backend mounts each provider at encodeURIComponent(id), which escapes more than a
+        // path segment needs to (`+`, `:`, `@`, `/` and others), so the id is encoded the same way.
+        val authorizeUrl = URLBuilder(server.rawRoute(config.authorizeParamsBasePath))
+            .appendEncodedPathSegments(encodeUriComponent(provider))
+            .buildString()
         val response = httpClient.post(authorizeUrl) {
             contentType(ContentType.Application.Json)
             setBody(body.toString())
@@ -319,20 +355,123 @@ class OidcClient<P : OidcProvider> internal constructor(
     private fun verifyCsrf(state: String, expectedCsrf: String) {
         // State is "state.signature" - get the state part
         val encodedPayloadJson = state.substringBefore('.')
-        val json = base64.decode(encodedPayloadJson).decodeToString()
-        val payload = BlocksJson.decodeFromString<StatePayload>(json)
+        // A state the client cannot read fails closed, as the mismatch it may well be.
+        val payload = try {
+            BlocksJson.decodeFromString<StatePayload>(base64.decode(encodedPayloadJson).decodeToString())
+        } catch (e: IllegalArgumentException) {
+            // Both a bad base64url payload and a SerializationException land here.
+            throw OidcCallbackException("Undecodable state envelope")
+        }
         if (payload.csrf != expectedCsrf) {
             throw OidcCallbackException("CSRF mismatch in state envelope")
         }
     }
 
-    suspend fun signOut() {
+    /**
+     * Reads the session the backend holds for this client's cookie, so an app that launches
+     * signed in reports it before any sign-in of its own. Call it once on launch:
+     *
+     * ```kotlin
+     * val user = oidc.restore() // null when there is no session
+     * ```
+     *
+     * The user is the one the backend reports, including its `userId`.
+     *
+     * A [restore] still waiting on the backend when [signIn] or [signOut] settles [authState]
+     * overwrites it when it answers, so let it finish before either.
+     *
+     * @return the signed-in user, which also becomes the value of [authState], or `null` when the
+     *   backend has no session for this client, which sets [authState] to signed out.
+     * @throws OidcSessionException if the backend answers with a failure status other than 401.
+     *   A 404 means it serves no session route, which an `Auth` block with no federated providers
+     *   does not. [authState] is left as it was, as it is for a request that fails to reach the
+     *   backend.
+     * @throws kotlinx.serialization.SerializationException if the backend answers 200 with a
+     *   body that holds no user. [authState] is left as it was.
+     * @throws IllegalArgumentException if the backend answers 200 with JSON that is not an object
+     *   (`[]` or `null`, say). [authState] is left as it was.
+     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     */
+    suspend fun restore(): OidcUser? {
         ensureOpen()
-        val signOutUrl = server.rawRoute(config.signOutPath)
-        httpClient.post(signOutUrl) {
+        val response = httpClient.get(server.rawRoute(sessionPath))
+        if (response.status == HttpStatusCode.Unauthorized) {
+            _authState.value = OidcAuthState.SignedOut
+            return null
+        }
+        if (!response.status.isSuccess()) {
+            val status = response.status.value
+            if (response.status == HttpStatusCode.NotFound) {
+                throw OidcSessionException(
+                    "The backend serves no session route at $sessionPath. An Auth block serves one only " +
+                        "when it has federated providers; check the block's providers and callbackPath.",
+                    status,
+                    null,
+                )
+            }
+            val name = runCatching {
+                Json.parseToJsonElement(response.bodyAsText()).jsonObject["name"]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+            throw OidcSessionException(
+                "Session read failed: HTTP $status" + (name?.let { " ($it)" } ?: ""),
+                status,
+                name,
+            )
+        }
+        val userElement = Json.parseToJsonElement(response.bodyAsText()).jsonObject["user"]
+            ?: throw SerializationException("Session response missing 'user' field")
+        return BlocksJson.decodeFromJsonElement<OidcUser>(userElement).also {
+            _authState.value = OidcAuthState.SignedIn(it)
+        }
+    }
+
+    /** The backend serves its session read in the directory of the callback, beside `exchange`. */
+    private val sessionPath: String
+        get() = config.callbackPath.substringBeforeLast('/') + "/session"
+
+    /**
+     * Signs the user out of the backend, which ends its session and clears its session cookie.
+     *
+     * ```kotlin
+     * val logoutUrl = oidc.signOut()
+     * // Open logoutUrl, if any, to end the identity provider's session too.
+     * ```
+     *
+     * Only the backend's `Set-Cookie` removes the cookie, so the cookies of any other `Auth` block
+     * sharing the cookie jar are left in place.
+     *
+     * @return the identity provider's logout URL, or `null` when the provider has none. The client
+     *   does not open it; an app that wants the provider's own session ended opens it itself, or
+     *   the provider can sign the user straight back in.
+     * @throws OidcSignOutException if the backend answers with a failure status. For a 503 named
+     *   `SignOutIncompleteException` the cookie was cleared but the backend could not remove its
+     *   session, and [authState] is set to signed out first; for any other status [authState] is
+     *   left as it was, as it is for a request that fails to reach the backend.
+     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     */
+    suspend fun signOut(): String? {
+        ensureOpen()
+        val signOutUrl = URLBuilder(server.rawRoute(config.signOutPath)).apply {
+            parameters.append("format", "json")
+        }.buildString()
+        val response = httpClient.post(signOutUrl) {
             contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        val body = runCatching { Json.parseToJsonElement(response.bodyAsText()).jsonObject }.getOrNull()
+        if (!response.status.isSuccess()) {
+            val name = (body?.get("name") as? JsonPrimitive)?.contentOrNull
+            if (response.status == HttpStatusCode.ServiceUnavailable && name == SIGN_OUT_INCOMPLETE) {
+                _authState.value = OidcAuthState.SignedOut
+            }
+            throw OidcSignOutException(
+                "Sign-out failed: HTTP ${response.status.value}" + (name?.let { " ($it)" } ?: ""),
+                response.status.value,
+                name,
+            )
         }
         _authState.value = OidcAuthState.SignedOut
+        return (body?.get("logoutUrl") as? JsonPrimitive)?.contentOrNull
     }
 
     /**
@@ -352,18 +491,56 @@ class OidcClient<P : OidcProvider> internal constructor(
         private const val EXCHANGE_FAILED = "exchange_failed"
         private const val CANCELLED = "cancelled"
 
+        /** The error name the backend's sign-out answers a 503 with when its session survived. */
+        private const val SIGN_OUT_INCOMPLETE = "SignOutIncompleteException"
+
+        /** The path every `Auth` route must sit under, as the backend enforces. */
+        private const val AUTH_ROUTE_PREFIX = "/aws-blocks/auth/"
+
         /**
-         * Where an AWS Blocks `Auth` block serves its federation routes, unless the backend moves
-         * them with `redirects.callbackPath` (the routes live in that path's directory).
+         * Where an AWS Blocks `Auth` block serves its OIDC callback, unless the backend moves it
+         * with `redirects.callbackPath`. The other federation routes live in that path's directory.
          */
-        const val DEFAULT_AUTH_BASE_PATH: String = "/aws-blocks/auth"
+        const val DEFAULT_CALLBACK_PATH: String = "/aws-blocks/auth/callback"
+
+        /**
+         * Where an AWS Blocks `Auth` block serves sign-out, unless the backend moves it with
+         * `redirects.signOutPath`.
+         */
+        const val DEFAULT_SIGN_OUT_PATH: String = "/aws-blocks/auth/signout"
+
+        /**
+         * The provider id in an `Auth` block's `signIn:<id>` action name, or `null` for any other
+         * action. An action with a `url` that this returns an id for is a federated sign-in, which
+         * the app runs through [signIn] rather than `setAuthState`:
+         *
+         * ```kotlin
+         * val state = blocks.authApi.getAuthState()
+         * for (action in state.actions) {
+         *     val providerId = OidcClient.providerIdOf(action.name) ?: continue
+         *     Button(onClick = { scope.launch { oidc.signIn(providerId); refresh() } }) {
+         *         Text("Sign in with $providerId")
+         *     }
+         * }
+         * ```
+         *
+         * @param actionName the action's `name`, as `getAuthState()` reports it.
+         * @return the text after `signIn:`, or `null` when [actionName] does not start with it or
+         *   names no provider.
+         */
+        fun providerIdOf(actionName: String): String? =
+            actionName.removePrefix(SIGN_IN_ACTION_PREFIX)
+                .takeIf { actionName.startsWith(SIGN_IN_ACTION_PREFIX) && it.isNotEmpty() }
+
+        /** How an `Auth` block names the action that signs in through one provider. */
+        private const val SIGN_IN_ACTION_PREFIX = "signIn:"
 
         /**
          * Creates a client for the federation routes of an AWS Blocks `Auth` block.
          *
-         * `Auth` serves the relay sign-in routes at fixed paths under [basePath]
-         * (`authorize-params/<provider>`, `callback`, `exchange`, `signout`), so the client needs no
-         * server-supplied descriptor:
+         * `Auth` serves the relay sign-in routes at fixed paths in the directory of [callbackPath]
+         * (`authorize-params/<provider>`, `exchange`, `session`), plus [callbackPath] itself and
+         * [signOutPath], so the client needs no server-supplied descriptor:
          *
          * ```kotlin
          * val blocks = Blocks(Servers.local)
@@ -380,8 +557,15 @@ class OidcClient<P : OidcProvider> internal constructor(
          * imported as `com.aws.blocks.kotlin.oidc.signIn`), and rejects an id not in
          * [providers].
          *
-         * Signing in stores the backend's session cookie in the cookie storage every generated API
-         * client shares, so `requireAuth`-gated methods are authenticated afterwards.
+         * Signing in stores the backend's session cookie in the cookie jar of the `Blocks`
+         * instance [blocksClient] belongs to, which every API reached through that instance
+         * shares, so `requireAuth`-gated methods are authenticated afterwards. On the JVM the jar
+         * outlives the process only when the instance's `BlocksConfig` sets an `applicationId`;
+         * without one the session is held in memory.
+         *
+         * Building the client makes no network call. Every route is resolved against the origin
+         * of [blocksClient]'s server: its URL cut at the first `aws-blocks` path segment, so an
+         * API Gateway stage is kept.
          *
          * @param blocksClient the client whose server and HTTP session to use: the
          *   [com.aws.blocks.kotlin.Blocks.client] of the app's `Blocks` instance.
@@ -390,35 +574,52 @@ class OidcClient<P : OidcProvider> internal constructor(
          * @param relayTo the custom-scheme URL the backend relays the sign-in result to. It must be
          *   listed in the backend's `redirects.allowedRelayOrigins` and registered with the platform
          *   (the Gradle plugin's `oidc { relayTo }`). The desktop (JVM) launcher relays to a loopback
-         *   address of its own instead.
-         * @param basePath the directory of the backend's `redirects.callbackPath`. Leave the default
-         *   unless the backend changes `callbackPath`.
+         *   address of its own instead, so a desktop app can leave it empty. On a platform with no
+         *   loopback, [signIn] throws an [IllegalStateException] while it is empty.
+         * @param callbackPath the backend's `redirects.callbackPath`. Leave the default unless the
+         *   backend changes it.
+         * @param signOutPath the backend's `redirects.signOutPath`. Leave the default unless the
+         *   backend changes it.
+         * @throws IllegalArgumentException if [callbackPath] or [signOutPath] is not under
+         *   `/aws-blocks/auth/`, or [callbackPath] names no route there or ends in `/`. The backend
+         *   refuses the same paths.
          */
         fun forAuth(
             blocksClient: BlocksClient,
             providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
+            relayTo: String = "",
+            callbackPath: String = DEFAULT_CALLBACK_PATH,
+            signOutPath: String = DEFAULT_SIGN_OUT_PATH,
         ): OidcClient<AnyProvider> =
-            forAuth(blocksClient.httpClient, blocksClient.server, providers, relayTo, basePath)
+            forAuth(blocksClient.httpClient, blocksClient.server, providers, relayTo, callbackPath, signOutPath)
 
         internal fun forAuth(
             httpClient: HttpClient,
             server: BlocksServer,
             providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
+            relayTo: String = "",
+            callbackPath: String = DEFAULT_CALLBACK_PATH,
+            signOutPath: String = DEFAULT_SIGN_OUT_PATH,
         ): OidcClient<AnyProvider> {
-            require(basePath.startsWith("/")) { "basePath must start with '/': \"$basePath\"" }
-            val base = basePath.trimEnd('/')
+            require(callbackPath.startsWith(AUTH_ROUTE_PREFIX)) {
+                "callbackPath must be a path under '$AUTH_ROUTE_PREFIX': \"$callbackPath\""
+            }
+            require(callbackPath.length > AUTH_ROUTE_PREFIX.length && !callbackPath.endsWith("/")) {
+                "callbackPath must name a route under '$AUTH_ROUTE_PREFIX', with no trailing '/': \"$callbackPath\""
+            }
+            require(signOutPath.startsWith(AUTH_ROUTE_PREFIX)) {
+                "signOutPath must be a path under '$AUTH_ROUTE_PREFIX': \"$signOutPath\""
+            }
+            // The backend serves the other routes in the callback's directory.
+            val base = callbackPath.substringBeforeLast('/')
             val config = OidcClientConfig(
                 providers = providers,
                 providerConfigs = emptyMap(),
                 exchangePath = "$base/exchange",
-                signOutPath = "$base/signout",
+                signOutPath = signOutPath,
                 signInBasePath = "$base/signin",
                 authorizeParamsBasePath = "$base/authorize-params",
-                callbackPath = "$base/callback",
+                callbackPath = callbackPath,
                 relayTo = relayTo,
             )
             return OidcClient(config, httpClient, server)
@@ -537,3 +738,18 @@ suspend fun OidcClient<AnyProvider>.exchange(
     callbackUrl: String,
     iss: String? = null,
 ): OidcUser = exchange(code, verifier, state, nonce, AnyProvider(provider), callbackUrl, iss)
+
+/** [value] percent-encoded as JavaScript's `encodeURIComponent` does: UTF-8, keeping only `A-Za-z0-9-_.!~*'()`. */
+internal fun encodeUriComponent(value: String): String = buildString {
+    for (byte in value.encodeToByteArray()) {
+        val c = byte.toInt() and 0xFF
+        val char = c.toChar()
+        if (char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' || char in "-_.!~*'()") {
+            append(char)
+        } else {
+            append('%')
+            append("0123456789ABCDEF"[c shr 4])
+            append("0123456789ABCDEF"[c and 0xF])
+        }
+    }
+}

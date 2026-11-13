@@ -22,11 +22,14 @@ oidc.signOut()
 
 The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, not names a spec
 declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`,
-hence the `signIn` import (see [Typed providers](#typed-providers)).
+hence the `signIn` import (see [Typed providers](#typed-providers-custom-blocks)).
 
-Sign-in stores the backend's session cookie, which every generated API client sends, so methods the
-backend gates with `requireAuth` work after it. If the backend moves its routes with
-`redirects.callbackPath`, pass that path's directory as `basePath`.
+Sign-in stores the backend's session cookie in the `Blocks` instance's cookie jar, which every API
+reached through that instance sends, so methods the backend gates with `requireAuth` work after it.
+On the JVM the jar survives a restart only when `BlocksConfig` sets an `applicationId`. If the
+backend moves its routes with `redirects.callbackPath` or `redirects.signOutPath`, pass the same
+values as `callbackPath` and `signOutPath`. A desktop (JVM) app can leave `relayTo` out: it relays
+to a loopback address of its own.
 
 `signIn` suspends until the flow finishes. Bringing your window to the front afterwards is the
 app's job; `signIn` returning is the signal.
@@ -110,7 +113,11 @@ in the address bar and in `document.location` while that page is open. Markup yo
 `Html` can therefore read the authorization code; prefer `Redirect` if the page runs anything you
 would not want to see it, such as third-party analytics.
 
-## Typed providers
+## Typed providers (custom blocks)
+
+An `Auth` block needs none of this: build its client with `forAuth`, as above, and drive it from
+`getAuthState()` (see [Using Auth](../README.md#using-auth)). This section is for a custom block
+whose method returns an OIDC client (`oidc/client`) for the app to sign in with.
 
 `OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. A client
 from `forAuth` is an `OidcClient<AnyProvider>`, as above. When a method of the spec returns an OIDC
@@ -162,8 +169,17 @@ an `AnyProvider` was expected rather than a missing import.
 When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
 prints a `kotlin:` warning that names it.
 
+## Restoring a session
+
+`authState` starts out `Loading`. Call `restore()` on launch: it asks the backend for the session
+its cookie holds, returns the user (and sets `authState` to signed in) or `null` (signed out), and
+throws if the backend could not answer, leaving `authState` as it was.
+
 ## Signing out
 
 `client.signOut()` revokes the session server-side and expires the session cookie as part of its
-response, which is what clears it locally. See
-[runtime configuration](runtime-configuration.md#signing-out).
+response, which is what clears it locally. Only that cookie goes: another `Auth` block sharing the
+jar stays signed in. It returns the identity provider's logout URL, or `null`; open it to end the
+provider's own session too. A 503 `SignOutIncompleteException` (`OidcSignOutException.errorName`)
+means the cookie was cleared but the backend kept its session; `authState` is signed out anyway.
+See [runtime configuration](runtime-configuration.md#signing-out).

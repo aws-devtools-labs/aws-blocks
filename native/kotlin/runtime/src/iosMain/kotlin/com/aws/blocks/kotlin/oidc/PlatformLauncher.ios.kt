@@ -29,8 +29,8 @@ internal class IosOidcLauncher : OidcPlatformLauncher {
     ): OidcRedirectSession {
         if (configuredRelayTo.isEmpty()) {
             error(
-                "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
-                    "to enable this method.",
+                "OIDC sign-in needs a relayTo on this platform: pass relayTo to OidcClient.forAuth, " +
+                    "or set oidc { relayTo = \"...\" } in the awsBlocks Gradle block.",
             )
         }
         val scheme = configuredRelayTo.substringBefore("://")

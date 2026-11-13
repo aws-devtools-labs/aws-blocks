@@ -22,10 +22,8 @@ import com.aws.blocks.example.screens.KvStoreScreen
 import com.aws.blocks.example.screens.RealtimeScreen
 import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
-import blocks.testapp.AuthState
 import blocks.testapp.defaultServer
 import blocks.testapp.api
-import blocks.testapp.authApi
 
 /** Provider ids from the backend's `providers` (`aws-blocks/index.ts`). */
 private val providers = listOf("google")
@@ -50,7 +48,6 @@ fun App() {
     DisposableEffect(blocks) {
         onDispose { blocks.close() }
     }
-    val auth = blocks.authApi
     var selectedTab by remember { mutableStateOf(Tab.Auth) }
 
     // The client keeps sign-in state in memory, so it is owned here rather than by the Auth
@@ -58,13 +55,11 @@ fun App() {
     // The `Auth` block serves its sign-in routes at fixed paths, so the client is built locally.
     val oidcClient = remember { OidcClient.forAuth(blocks.client(), providers, RELAY_TO) }
 
-    // A client that has not signed in this launch reports no user, so the starting point comes
-    // from the server, which verifies the session cookie and answers for earlier launches too.
-    var restoredState by remember { mutableStateOf<AuthState?>(null) }
-
+    // The client starts out Loading. restore() asks the server, which verifies the session
+    // cookie and answers for earlier launches too, and settles the client's authState.
     LaunchedEffect(Unit) {
-        // A failure here only means no session to restore, so the screen falls back to sign-in.
-        runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
+        // A failure here leaves the client Loading, so the screen falls back to sign-in.
+        runCatching { oidcClient.restore() }
     }
 
     AppTheme {
@@ -84,7 +79,7 @@ fun App() {
         ) { innerPadding ->
             val modifier = Modifier.padding(innerPadding)
             when (selectedTab) {
-                Tab.Auth -> AuthScreen(oidcClient, restoredState, modifier)
+                Tab.Auth -> AuthScreen(oidcClient, modifier)
                 Tab.Todos -> TodoScreen(api, modifier)
                 Tab.KvStore -> KvStoreScreen(api, modifier)
                 Tab.Realtime -> RealtimeScreen(api, modifier)

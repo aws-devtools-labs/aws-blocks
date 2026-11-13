@@ -39,12 +39,9 @@ import androidx.lifecycle.ViewModel
 import blocks.testapp.Api
 import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
-import blocks.testapp.AuthApi
-import blocks.testapp.AuthState
 import blocks.testapp.Servers
 import blocks.testapp.Todo
 import blocks.testapp.api
-import blocks.testapp.authApi
 import blocks.testapp.invoke
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcAuthState
@@ -79,7 +76,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val auth = viewModel.blocks.authApi
         val api = viewModel.blocks.api
         setContent {
             BlocksKotlinExampleTheme {
@@ -90,7 +86,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        OidcAuth(auth = auth, blocks = viewModel.blocks)
+                        OidcAuth(blocks = viewModel.blocks)
                         Spacer(modifier = Modifier.height(16.dp))
                         CursorTracker(api = api)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -109,20 +105,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun OidcAuth(auth: AuthApi, blocks: Blocks) {
+fun OidcAuth(blocks: Blocks) {
     // The `Auth` block serves its sign-in routes at fixed paths, so the client is built locally.
     // It keeps the signed-in user in memory, so it is remembered for the composition's lifetime.
     val client = remember { OidcClient.forAuth(blocks.client(), providers, RELAY_TO) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // A client that has not signed in this launch reports no user, so the starting point comes
-    // from the server, which verifies the session cookie and answers for earlier launches too.
-    var restoredState by remember { mutableStateOf<AuthState?>(null) }
     val scope = rememberCoroutineScope()
 
+    // The client starts out Loading. restore() asks the server, which verifies the session
+    // cookie and answers for earlier launches too, and settles the client's authState.
     LaunchedEffect(Unit) {
-        // A failure here only means no session to restore, so the screen falls back to sign-in.
-        runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
+        // A failure here leaves the client Loading, so the screen falls back to sign-in.
+        runCatching { client.restore() }
     }
 
     val authState by client.authState.collectAsState()
@@ -130,16 +125,8 @@ fun OidcAuth(auth: AuthApi, blocks: Blocks) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
 
-        // Loading means the client has not signed in or out yet, so it has no opinion and the
-        // restored session stands in. Signing in or out gives it one, and it wins.
-        val username = when (val state = authState) {
-            is OidcAuthState.SignedIn -> state.user.username
-            OidcAuthState.SignedOut -> null
-            OidcAuthState.Loading -> restoredState
-                ?.takeIf { it.state == AuthState.State.SignedIn }
-                ?.user
-                ?.username
-        }
+        // Loading means restore() has not answered yet, so the screen offers sign-in meanwhile.
+        val username = (authState as? OidcAuthState.SignedIn)?.user?.username
 
         if (username != null) {
             Text(text = "Signed in as: $username")
