@@ -50,10 +50,28 @@ export interface AuroraInfraConfig {
   /**
    * Customer-managed KMS key for encrypting the cluster storage at rest. When
    * provided it is also used to encrypt the cluster's auto-generated credentials
-   * secret. Storage encryption is always on: when omitted, the cluster is
-   * encrypted with the account's AWS-managed `aws/rds` key.
+   * secret, and it forces storage encryption on regardless of `storageEncrypted`.
+   * When omitted, storage encryption follows `storageEncrypted` (which uses the
+   * account's AWS-managed `aws/rds` key when enabled).
    */
   storageEncryptionKey?: kms.IKey;
+  /**
+   * Whether to encrypt the cluster storage at rest. Two states, by design:
+   * - `true` → emit `storageEncrypted: true` (opt in).
+   * - `undefined` → leave the property **unset** so an existing, implicitly
+   *   unencrypted cluster is not forced into a destructive replacement by a
+   *   template change.
+   *
+   * The type is `?: true` (not `boolean`) so an explicit `false` is
+   * **unrepresentable** rather than merely discouraged: `StorageEncrypted: false`
+   * would itself be a template change that replaces an existing cluster. The CDK
+   * layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
+   * context flag; a supplied `storageEncryptionKey` forces encryption on.
+   * The CDK layer requires that choice to be explicit: flag `true` → `true`,
+   * flag `false` → `undefined` (plus a synth warning), and an absent flag with no
+   * key fails synth before this function is reached.
+   */
+  storageEncrypted?: true;
   /**
    * Retention period for the cluster's automated backups (which also drives the
    * point-in-time-recovery window). @default `cdk.Duration.days(15)` — matches
@@ -210,6 +228,15 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
   // override via `backupRetention`.
   const backupRetention = options.backupRetention ?? cdk.Duration.days(DEFAULT_BACKUP_RETENTION_DAYS);
 
+  // Resolve storage encryption to `true` or `undefined` — never an explicit
+  // `false`. CloudFormation renders `StorageEncrypted: false` for an explicit
+  // false, itself a template change that forces a cluster replacement on an
+  // existing (implicitly-unencrypted) deployment; leaving the property unset
+  // keeps those clusters untouched. A customer-managed key always forces
+  // encryption on; otherwise honor the caller-resolved opt-in (the CDK layer
+  // gates it behind the `@aws-blocks/bb-data:encryptStorageByDefault` flag).
+  const storageEncrypted = options.storageEncryptionKey || options.storageEncrypted ? true : undefined;
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
       version: engineVersion,
@@ -222,13 +249,16 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
-    // Storage encryption at rest is always on — there is no option to turn it
-    // off. When a customer-managed `storageEncryptionKey` is given the cluster
-    // uses it; otherwise it uses the account's AWS-managed `aws/rds` key. RDS
-    // cannot encrypt an existing unencrypted cluster in place, so a cluster that
-    // was first deployed unencrypted is replaced when this template is deployed
-    // (see the README upgrade note).
-    storageEncrypted: true,
+    // Storage encryption at rest. Resolved to `true` or left unset (never an
+    // explicit `false`): the CDK layer requires an explicit choice via the
+    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag (absent fails
+    // synth) so NEW projects are encrypted while EXISTING, implicitly-unencrypted
+    // clusters are never forced into a destructive replacement by a dependency
+    // bump — they keep the property unset only by setting the flag to `false`. A
+    // customer-managed `storageEncryptionKey` always forces it on. When a key is
+    // given the cluster uses it; otherwise `true` uses the account's AWS-managed
+    // `aws/rds` key.
+    storageEncrypted,
     storageEncryptionKey: options.storageEncryptionKey,
     // When a CMK is supplied, also encrypt the auto-generated credentials secret
     // with it. CDK cannot set an encryption key on the cluster's auto-generated

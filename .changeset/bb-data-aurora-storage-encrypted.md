@@ -3,6 +3,13 @@
 '@aws-blocks/blocks': minor
 ---
 
-Aurora storage encryption is now always enabled for `Database`. The cluster is synthesized with `StorageEncrypted: true` whether or not the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set, using the account's AWS-managed `aws/rds` key by default or the key named by `storageEncryptionKeyArn`. The `@aws-blocks/bb-data:StorageEncryptionOptIn` synth warning is removed, and setting the context flag to `false` now fails synth with an error, since storage encryption can no longer be turned off.
+**BREAKING: synth now fails for a provisioned `Database` unless the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (or `storageEncryptionKeyArn` is passed).** Projects scaffolded by `create-blocks-app` already set the flag to `true` and are unaffected. For other projects, choose in `cdk.json`: `true` for a new database (storage encrypted with the AWS-managed `aws/rds` key), or `false` to keep an existing unencrypted cluster exactly as it is. Setting `true` on an existing unencrypted cluster replaces it with a new, empty one — run `npx cdk diff` first, and follow the bb-data README section "Enabling storage encryption on an existing database" to move the data onto an encrypted cluster.
 
-**Migration:** storage encryption cannot be enabled on an existing Aurora cluster in place. A stack whose cluster was created unencrypted (deployed without the context flag and without `storageEncryptionKeyArn`) will have that cluster **replaced** on its next deploy — the new cluster starts empty and without schema. Before upgrading, snapshot the existing cluster and migrate its data (snapshot → restore with encryption enabled → cut over); see the `bb-data` README note "Enabling encryption on an existing unencrypted cluster". Projects that already set the context flag to `true` or pass `storageEncryptionKeyArn` are unaffected.
+Storage encryption for `Database` is now an explicit choice, so upgrading bb-data never changes the encryption of an existing cluster:
+
+- `true` emits `StorageEncrypted: true`; a `storageEncryptionKeyArn` also turns it on, regardless of the flag.
+- `false` leaves `StorageEncrypted` unset (the existing cluster's template is unchanged) and emits a `@aws-blocks/bb-data:StorageEncryptionDisabled` synth warning. It replaces the previous `@aws-blocks/bb-data:StorageEncryptionOptIn` warning, which fired when the flag was absent.
+- The flag accepts booleans, `1`/`0`, and the strings `"true"`/`"false"`/`"1"`/`"0"` (case-insensitive); any other value fails synth with the list of accepted values.
+- `fromExisting()` connections are unaffected.
+
+The bb-data README now documents the exact snapshot → encrypted restore → `fromExisting()` cut-over steps, including copying the managed credentials secret before switching.

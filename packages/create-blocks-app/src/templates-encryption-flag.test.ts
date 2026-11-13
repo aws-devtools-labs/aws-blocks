@@ -4,10 +4,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 
-// The bb-data storage-encryption opt-in flag. New projects must ship with it set,
-// so Database storage is encrypted by default. A regenerated/edited template that
-// silently drops it should fail CI (CDK templates via cdk.json; the Amplify
-// overlay, which has no cdk.json, via a setContext call in aws-blocks/index.cdk.ts).
+// The bb-data storage-encryption flag. bb-data requires an explicit choice: synth
+// fails for a provisioned Database when the flag is absent (and no
+// storageEncryptionKeyArn is passed). New projects must ship with it set to true,
+// so they synthesize and their Database storage is encrypted. A regenerated/edited
+// template that silently drops it should fail CI here rather than at the user's
+// first synth (CDK templates via cdk.json; the Amplify overlay, which has no
+// cdk.json, via a setContext call in aws-blocks/index.cdk.ts).
 const FLAG = '@aws-blocks/bb-data:encryptStorageByDefault';
 
 // Compiled test runs from dist/; templates live at the package root.

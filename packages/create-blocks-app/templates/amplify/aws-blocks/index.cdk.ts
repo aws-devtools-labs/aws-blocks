@@ -23,10 +23,11 @@ export async function createBlocksBackend(stack: Stack, sandboxMode: boolean) {
   }
 
   // Amplify synthesizes via `ampx` and has no cdk.json, so set the bb-data
-  // storage-encryption opt-in flag here instead — mirroring the
+  // storage-encryption flag here instead — mirroring the
   // `@aws-blocks/bb-data:encryptStorageByDefault` entry in the create-blocks-app
-  // cdk.json templates, so a new Amplify project encrypts Database storage by
-  // default. Set unconditionally (not only in sandbox) so production deploys get it too.
+  // cdk.json templates. bb-data requires this choice: without it, synth fails for
+  // a Database. `true` encrypts Database storage. Set unconditionally (not only in
+  // sandbox) so production deploys get it too.
   stack.node.setContext('@aws-blocks/bb-data:encryptStorageByDefault', true);
 
   const blocks = await BlocksBackend.create(stack, 'blocks', {
