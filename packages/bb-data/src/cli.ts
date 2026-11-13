@@ -18,12 +18,14 @@
  *                            migrate/status/generate-types refuse on a fromExisting() app
  *                            (they would otherwise silently target local PGlite).
  *   --stage <name>           Stage label for external runs (advisory-lock key + logging).
+ *   --block <id>             Local database to use: `.bb-data/<id>` (the Database's fullId).
+ *                            Defaults to the only local database.
  *   -h, --help               Print usage (of the verb, when one is given) and exit 0. Checked
  *                            before anything else, anywhere in the arguments, so
  *                            `bb-data pull --help` never connects, prompts or writes.
  */
 
-import { PGliteEngine } from './engines/pglite-engine.js';
+import { PGliteEngine, hasInitializedPgliteDataDir } from './engines/pglite-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { externalDbSsl } from './external-ssl.js';
 import { generateTypes } from './type-generator.js';
@@ -33,9 +35,8 @@ import { runDbPullCli, regenerateTypesAndMeta } from './db-pull.js';
 import { rlsDisabledWarning } from './db-pull/generate.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Scope } from '@aws-blocks/core';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { SUPABASE } from './db-pull/supabase.js';
+import { detectExternalDb } from './detect-external-db.js';
+import { lockLocalDatabase, requireLocalDatabaseDir, resolveLocalDatabaseDir } from './local-database.js';
 
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0];
@@ -55,26 +56,6 @@ function takeFlag(args: string[], flag: string): string | undefined {
     return isValue ? val : undefined;
   }
   return undefined;
-}
-
-/**
- * Detect whether the current app targets an external (fromExisting) database.
- * Keys off observable artifacts:
- *   - a `*_DB_URL` / `*_CONNECTION_STRING` env var
- *   - the AppSetting value for the db-url (same source the dev server reads)
- * Returns the connection string if found, else null.
- */
-async function detectExternalDb(): Promise<string | null> {
-  for (const [name, value] of Object.entries(process.env)) {
-    if (/_(DB_URL|CONNECTION_STRING)$/.test(name) && value) return value;
-  }
-  try {
-    const scope = new Scope(SUPABASE.scopeName);
-    const dbUrl = new AppSetting(scope, 'db-url', { secret: true });
-    const value = await dbUrl.get();
-    if (typeof value === 'string' && value) return value;
-  } catch { /* no setting seeded yet */ }
-  return null;
 }
 
 function refuseExternalWithoutUrl(cmd: string): never {
@@ -125,41 +106,45 @@ const PULL_NO_TERMINAL =
 /** The verbs, with the usage that `bb-data <verb> --help` prints. */
 const VERB_HELP: Record<string, string> = {
   migrate: `
-Usage: ${COMMAND} migrate [dir] [--url <conn>] [--stage <name>] [--regenerate-types[=<dir>]]
+Usage: ${COMMAND} migrate [dir] [--url <conn>] [--stage <name>] [--block <id>] [--regenerate-types[=<dir>]]
 
 Apply pending SQL migrations from [dir] (default: ./migrations), in file-name order.
-Without --url it applies them to the local PGlite database in .bb-data/; on an app whose
+Without --url it applies them to the local PGlite database in .bb-data/<id>; on an app whose
 database is external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Apply to this external database (Supabase/Neon connection string).
                            Default: the BLOCKS_MIGRATE_URL environment variable, if set.
   --stage <name>           Stage label for an external run (advisory-lock key and logging).
+  --block <id>             Local database to use: .bb-data/<id>, the one \`npm run dev\` uses for
+                           the Database with that fullId. Default: the only local database.
   --regenerate-types[=<dir>]
                            After an external migrate that applied something, refresh
                            database.types.ts and database.meta.ts in <dir> (default: ./aws-blocks).
   -h, --help               Print this help and exit.
 `,
   status: `
-Usage: ${COMMAND} status [dir] [--url <conn>]
+Usage: ${COMMAND} status [dir] [--url <conn>] [--block <id>]
 
 Show applied and pending migrations from [dir] (default: ./migrations). Reads only.
-Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+Without --url it reads the local PGlite database in .bb-data/<id>; on an app whose database is
 external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  --block <id>             Local database to read: .bb-data/<id>. Default: the only local database.
   -h, --help               Print this help and exit.
 `,
   'generate-types': `
-Usage: ${COMMAND} generate-types [output] [--url <conn>]
+Usage: ${COMMAND} generate-types [output] [--url <conn>] [--block <id>]
 
 Introspect the schema and write TypeScript types to [output] (default: ./types/database.ts).
-Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+Without --url it reads the local PGlite database in .bb-data/<id>; on an app whose database is
 external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  --block <id>             Local database to read: .bb-data/<id>. Default: the only local database.
   -h, --help               Print this help and exit.
 `,
   pull: `
@@ -185,20 +170,32 @@ async function main() {
   const args = rawArgs.slice(1);
   const url = takeFlag(args, '--url') ?? process.env.BLOCKS_MIGRATE_URL;
   const stage = takeFlag(args, '--stage');
+  const block = takeFlag(args, '--block');
   // `--regenerate-types[=<dir>]`: after a successful external migrate, refresh
   // database.types.ts + database.meta.ts from the migrated schema (dev loop).
   const regen = takeFlagOrBool(args, '--regenerate-types');
   const regenerateTypesDir = regen.present ? (regen.value ?? './aws-blocks') : undefined;
 
+  // The [dir] / [output] positional: an option-looking token there is a stray flag
+  // (e.g. a global `cdk-blocks` option placed after `cdk-blocks db <verb>`), never a path to
+  // create or read. A usage error exits 2.
+  if (['migrate', 'status', 'generate-types', 'pull'].includes(command) && args[0]?.startsWith('-')) {
+    console.error(
+      `Error: bb-data ${command}: unexpected option "${args[0]}" where a path is expected. ` +
+        'Pass a path, or leave it out for the default. If the option is for `cdk-blocks`, put it before `db`.',
+    );
+    process.exit(2);
+  }
+
   switch (command) {
     case 'migrate':
-      await migrate(args, url, stage, regenerateTypesDir);
+      await migrate(args, url, stage, regenerateTypesDir, block);
       break;
     case 'status':
-      await status(args, url);
+      await status(args, url, block);
       break;
     case 'generate-types':
-      await genTypes(args, url);
+      await genTypes(args, url, block);
       break;
     case 'pull':
       await runDbPullCli();
@@ -208,7 +205,7 @@ async function main() {
   }
 }
 
-async function migrate(args: string[], url: string | undefined, stage: string | undefined, regenerateTypesDir?: string) {
+async function migrate(args: string[], url: string | undefined, stage: string | undefined, regenerateTypesDir?: string, block?: string) {
   const migrationsDir = args[0] || './migrations';
   if (!fs.existsSync(migrationsDir)) {
     console.error(`Migrations directory not found: ${migrationsDir}`);
@@ -251,9 +248,9 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
   }
 
   // Guard: refuse to silently migrate local PGlite for an external app.
-  if (await detectExternalDb()) refuseExternalWithoutUrl('migrate');
+  if (detectExternalDb()) refuseExternalWithoutUrl('migrate');
 
-  const engine = new PGliteEngine('.bb-data');
+  const engine = new PGliteEngine(lockLocalDatabase(requireLocalDatabaseDir(block), 'cli'));
   try {
     const migrations = await loadMigrationsFromDir(migrationsDir);
     const applied = await runMigrations(engine, migrations);
@@ -268,24 +265,27 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
   }
 }
 
-async function status(args: string[], url: string | undefined) {
+async function status(args: string[], url: string | undefined, block?: string) {
   const migrationsDir = args[0] || './migrations';
   if (!fs.existsSync(migrationsDir)) {
     console.error(`Migrations directory not found: ${migrationsDir}`);
     process.exit(1);
   }
 
-  if (!url && await detectExternalDb()) refuseExternalWithoutUrl('status');
+  if (!url && detectExternalDb()) refuseExternalWithoutUrl('status');
 
+  // Status only reads: with no local database yet, every migration is pending and none is created.
+  const dataDir = url ? null : resolveLocalDatabaseDir(block);
   const engine = url
     ? new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 })
-    : new PGliteEngine('.bb-data');
+    : dataDir && hasInitializedPgliteDataDir(dataDir) ? new PGliteEngine(lockLocalDatabase(dataDir, 'cli')) : null;
   try {
     const migrations = await loadMigrationsFromDir(migrationsDir);
     const allFiles = Object.keys(migrations).sort();
 
     try {
-      const applied = await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY id');
+      // No local database yet: nothing is applied.
+      const applied = engine ? await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY id') : [];
       const appliedNames = new Set(applied.map(r => r.name));
       const pending = allFiles.filter(f => !appliedNames.has(f));
 
@@ -301,19 +301,24 @@ async function status(args: string[], url: string | undefined) {
       for (const m of allFiles) console.log(`  ⏳ ${m}`);
     }
   } finally {
-    await engine.destroy();
+    await engine?.destroy();
   }
 }
 
-async function genTypes(args: string[], url: string | undefined) {
+async function genTypes(args: string[], url: string | undefined, block?: string) {
   const outputPath = args[0] || './types/database.ts';
 
-  if (!url && await detectExternalDb()) refuseExternalWithoutUrl('generate-types');
+  if (!url && detectExternalDb()) refuseExternalWithoutUrl('generate-types');
 
-  const engine = url
-    ? (console.log('Connecting to external database...'),
-       new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 }))
-    : (console.log('Connecting to local database (.bb-data)...'), new PGliteEngine('.bb-data'));
+  let engine: PGliteEngine | PgClientEngine;
+  if (url) {
+    console.log('Connecting to external database...');
+    engine = new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 });
+  } else {
+    const dataDir = requireLocalDatabaseDir(block, { mustExist: true });
+    console.log(`Connecting to local database (${dataDir})...`);
+    engine = new PGliteEngine(lockLocalDatabase(dataDir, 'cli'));
+  }
 
   try {
     console.log('Introspecting schema...');
@@ -346,6 +351,9 @@ Flags:
                            Without it, migrate/status/generate-types refuse on a fromExisting()
                            app rather than silently operating on local PGlite.
   --stage <name>           Stage label for external runs (advisory-lock key + logging).
+  --block <id>             Local database for migrate/status/generate-types: .bb-data/<id>,
+                           the one \`npm run dev\` uses for the Database with that fullId
+                           (e.g. my-app-main). Default: the only local database.
   -h, --help               Print help; \`bb-data <command> --help\` prints that command's usage.
   --regenerate-types[=<dir>]
                            After a successful external \`migrate --url\`, refresh
@@ -356,6 +364,7 @@ Examples:
   bb-data pull
   bb-data migrate
   bb-data migrate ./db/migrations
+  bb-data status ./aws-blocks/migrations --block my-app-main
   bb-data migrate --url "$SUPABASE_DB_URL" --stage production
   bb-data status --url "$SUPABASE_DB_URL"
   bb-data generate-types ./src/types/db.ts

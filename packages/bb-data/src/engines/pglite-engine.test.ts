@@ -8,7 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { PGliteEngine, withUnrefTimers } from './pglite-engine.js';
 import { pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors } from '../errors.js';
-import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TEST_DIR = '.bb-data-test-' + process.pid;
@@ -327,6 +327,26 @@ test('constructor recovers a PGlite leaf directory before PG_VERSION is written'
   const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('pre-version-init.corrupt-'));
   assert.strictEqual(corruptDirs.length, 1);
   assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'base')), true);
+});
+
+// The CLI used to open `.bb-data` itself as a cluster. A concurrent run that found
+// another run's half-written PG files there moved the whole `.bb-data` — settings.json
+// and every block's data — to `.bb-data.corrupt-*`. Only a directory that holds
+// nothing but PGlite data may be quarantined.
+test('constructor never quarantines a directory that also holds non-PGlite data', async () => {
+  const root = join(TEST_DIR, 'bb-data-root');
+  mkdirSync(join(root, 'global'), { recursive: true });
+  mkdirSync(join(root, 'pg_wal'));
+  writeFileSync(join(root, 'PG_VERSION'), '16\n');
+  writeFileSync(join(root, 'settings.json'), '{"keep":"me"}');
+  mkdirSync(join(root, 'my-app-auth-users'));
+
+  const fake = { query: async () => ({ rows: [] }), close: async () => {} } as unknown as PGlite;
+  engine = new PGliteEngine(root, () => fake);
+
+  assert.deepStrictEqual(readdirSync(TEST_DIR).filter((entry) => entry.includes('.corrupt-')), []);
+  assert.strictEqual(readFileSync(join(root, 'settings.json'), 'utf8'), '{"keep":"me"}');
+  assert.strictEqual(existsSync(join(root, 'my-app-auth-users')), true);
 });
 
 // --- Regression #188: PGlite WASM `_pg_initdb` `unreachable` init trap ---

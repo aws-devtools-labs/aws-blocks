@@ -143,6 +143,9 @@ test('--help and -h print the verb usage and exit 0 without touching any databas
       assert.match(r.stdout, /--help/, `${args.join(' ')} lists -h, --help`);
     }
     assert.match(runCli(['migrate', '--help'], dir).stdout, /--url <conn>[\s\S]*--stage <name>[\s\S]*--regenerate-types/);
+    for (const verb of ['migrate', 'status', 'generate-types']) {
+      assert.match(runCli([verb, '--help'], dir).stdout, /--block <id>/, `${verb} --help lists --block`);
+    }
     assert.strictEqual(existsSync(join(dir, '.bb-data')), false, 'no local database was opened');
     assert.strictEqual(existsSync(join(dir, 'out.ts')), false);
     assert.strictEqual(existsSync(join(dir, 'out')), false);

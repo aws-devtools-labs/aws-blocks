@@ -23,6 +23,7 @@ const PG_SERIALIZATION_FAILURE = '40001';
 /** PostgreSQL error code class for connection exceptions. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
 const PGLITE_INITIALIZED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global', 'global/pg_control'];
+/** Entries that only a PostgreSQL data directory has; one of them marks a (partial) PGlite data dir. */
 const PGLITE_DATA_DIR_MARKERS = [
   'PG_VERSION',
   'base',
@@ -33,6 +34,26 @@ const PGLITE_DATA_DIR_MARKERS = [
   'postgresql.auto.conf',
   'postmaster.pid',
 ];
+/** Every top-level entry a PGlite (PostgreSQL 16) data directory can hold. */
+const PGLITE_DATA_DIR_ENTRIES = new Set([
+  ...PGLITE_DATA_DIR_MARKERS,
+  'pg_commit_ts',
+  'pg_dynshmem',
+  'pg_hba.conf',
+  'pg_ident.conf',
+  'pg_logical',
+  'pg_multixact',
+  'pg_notify',
+  'pg_replslot',
+  'pg_serial',
+  'pg_snapshots',
+  'pg_stat',
+  'pg_stat_tmp',
+  'pg_subtrans',
+  'pg_tblspc',
+  'pg_twophase',
+  'postmaster.opts',
+]);
 
 /**
  * Translate a PGlite/PostgreSQL error to a standardized DatabaseErrors name.
@@ -74,8 +95,10 @@ function translateError(e: unknown): never {
 /**
  * Remove stale postmaster.pid left by a previous unclean shutdown.
  * PGlite runs PostgreSQL in-process via WASM — there is no external
- * postmaster process — so a leftover pid file is always stale and
- * causes PGlite to crash with `Aborted()`.
+ * postmaster process — so a leftover pid file causes PGlite to crash with
+ * `Aborted()`. It is stale only when no live PGlite has the directory open:
+ * another process is kept out by the local-database lock (`local-database.ts`),
+ * and another engine of this process by `removeStalePid: false`.
  */
 function cleanStaleLock(dataDir: string): void {
   const pidFile = join(dataDir, 'postmaster.pid');
@@ -87,18 +110,24 @@ function cleanStaleLock(dataDir: string): void {
   }
 }
 
-function hasInitializedPgliteDataDir(dataDir: string): boolean {
+/** True when `dataDir` holds a fully initialized PGlite database. */
+export function hasInitializedPgliteDataDir(dataDir: string): boolean {
   // PGlite loadTar writes PG_VERSION before the directory tree. Requiring
   // global/pg_control ensures base/global exist and contain PostgreSQL state.
   return PGLITE_INITIALIZED_DATA_DIR_ENTRIES.every((entry) => existsSync(join(dataDir, entry)));
 }
 
-function hasInitializedPgliteChildDataDir(dataDir: string, entries: string[]): boolean {
-  return entries.some((entry) => hasInitializedPgliteDataDir(join(dataDir, entry)));
-}
-
-function looksLikePgliteDataDir(entries: string[]): boolean {
-  return entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
+/**
+ * True when the entries are those of a partial PGlite data directory and nothing
+ * else. A directory that also holds anything else — `settings.json`, another
+ * block's data directory — is not PGlite's to quarantine: moving it would take
+ * that data with it.
+ */
+function isOnlyPgliteDataDir(entries: string[]): boolean {
+  return (
+    entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry)) &&
+    entries.every((entry) => PGLITE_DATA_DIR_ENTRIES.has(entry))
+  );
 }
 
 function isErrnoException(error: unknown): error is { code?: string } {
@@ -120,7 +149,7 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
   }
   if (entries.length === 0 || hasInitializedPgliteDataDir(dataDir)) return;
 
-  if (!looksLikePgliteDataDir(entries) || hasInitializedPgliteChildDataDir(dataDir, entries)) return;
+  if (!isOnlyPgliteDataDir(entries)) return;
 
   const corruptDataDir = nextCorruptDataDir(dataDir);
   renameSync(dataDir, corruptDataDir);
@@ -154,6 +183,7 @@ export class PGliteEngine implements DatabaseEngine {
   private cancelExitClose?: () => void;
   private readonly dataDir: string;
   private readonly createClient: (dataDir: string) => PGlite;
+  private readonly removeStalePid: boolean;
   private ready?: Promise<PGlite>;
 
   /**
@@ -161,14 +191,22 @@ export class PGliteEngine implements DatabaseEngine {
    * @param createClient - factory for the underlying PGlite instance; defaults
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
+   * @param options.removeStalePid - remove a leftover `postmaster.pid` before
+   *   opening (default true). Pass false when another engine of this process may
+   *   have the directory open: its `postmaster.pid` is live, not stale.
    *
    * To load Postgres extensions (PostGIS, pgvector) use the async
    * {@link PGliteEngine.create} factory instead — extension packages are
    * resolved by dynamic import, which the synchronous constructor cannot do.
    */
-  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = createLocalPglite) {
+  constructor(
+    dataDir: string = '.bb-data',
+    createClient: (dataDir: string) => PGlite = createLocalPglite,
+    options?: { removeStalePid?: boolean },
+  ) {
     this.dataDir = dataDir;
     this.createClient = createClient;
+    this.removeStalePid = options?.removeStalePid ?? true;
     this.db = this.createDb();
   }
 
@@ -181,17 +219,22 @@ export class PGliteEngine implements DatabaseEngine {
    * `createClient` closure, so it is reapplied on every PGlite instance the
    * init-trap retry path recreates — the extensions survive a WASM-trap retry.
    *
-   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir)`.
+   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir, undefined, options)`.
    *
    * @param dataDir - directory PGlite persists to (nested paths are created).
    * @param extensions - extension names from `DatabaseOptions.extensions`.
+   * @param options - passed to the constructor (`removeStalePid`).
    */
-  static async create(dataDir: string = '.bb-data', extensions?: readonly string[]): Promise<PGliteEngine> {
+  static async create(
+    dataDir: string = '.bb-data',
+    extensions?: readonly string[],
+    options?: { removeStalePid?: boolean },
+  ): Promise<PGliteEngine> {
     const resolved = await resolveExtensions(extensions);
     if (Object.keys(resolved).length === 0) {
-      return new PGliteEngine(dataDir);
+      return new PGliteEngine(dataDir, undefined, options);
     }
-    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }));
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }), options);
   }
 
   /**
@@ -213,7 +256,7 @@ export class PGliteEngine implements DatabaseEngine {
     // boot. Create the full path up front (matches DsqlMockEngine).
     mkdirSync(this.dataDir, { recursive: true });
     recoverIncompletePgliteDataDir(this.dataDir);
-    cleanStaleLock(this.dataDir);
+    if (this.removeStalePid) cleanStaleLock(this.dataDir);
     this.cancelExitClose ??= closeOnProcessExit(() => this.closeForExit());
     return this.createClient(this.dataDir);
   }
