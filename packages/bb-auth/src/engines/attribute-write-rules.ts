@@ -67,6 +67,7 @@
  * @internal
  */
 
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthErrors } from '../errors.js';
 import type { UserAttribute } from '../types.js';
 
@@ -98,6 +99,28 @@ export const VERIFIED_FLAGS: ReadonlySet<string> = new Set(['email_verified', 'p
  */
 export function adminOnlyAttributes(attributes: readonly UserAttribute[] | undefined): ReadonlySet<string> {
 	return new Set((attributes ?? []).filter((a) => a.userWritable === false).map((a) => `custom:${a.name}`));
+}
+
+/** The admin-only attribute each refusal of rule 3 was for (see {@link withAdminOnlyRefusalLog}). */
+const ADMIN_ONLY_REFUSALS = new WeakMap<Error, string>();
+
+/**
+ * Run `check` (an end-user write check that calls {@link checkAttributeValues})
+ * and log a refusal of a `userWritable: false` attribute before rethrowing it.
+ * Such an attribute is one the app authorizes on, so an end-user write of it
+ * is worth a server-side line. The log names the attribute, never the value.
+ *
+ * @internal
+ */
+export function withAdminOnlyRefusalLog<T>(log: Pick<ChildLogger, 'warn'>, check: () => T): T {
+	try {
+		return check();
+	} catch (e) {
+		const attribute = e instanceof Error ? ADMIN_ONLY_REFUSALS.get(e) : undefined;
+		if (attribute !== undefined)
+			log.warn('[bb-auth] refused end-user write to admin-only attribute', { attribute });
+		throw e;
+	}
 }
 
 /** `AttributeType.Value`: "Maximum length of 2048". */
@@ -187,7 +210,9 @@ export function checkAttributeValues(
 	if (write !== 'adminCreateUser') {
 		for (const [name] of values) {
 			if (VERIFIED_FLAGS.has(name) || adminOnly.has(name)) {
-				throw rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+				const e = rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+				if (adminOnly.has(name)) ADMIN_ONLY_REFUSALS.set(e, name);
+				throw e;
 			}
 		}
 	}

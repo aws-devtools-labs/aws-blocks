@@ -29,8 +29,13 @@ import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { AuthErrors, type SignInNextStep, type SignInResult } from './index.aws.js';
-import { Browser, cognitoError, makeAwsAuth, signInAs, wireView } from './test-support/aws-harness.js';
+import { Browser, captureLogger, cognitoError, makeAwsAuth, signInAs, wireView } from './test-support/aws-harness.js';
 
+/** The block's log for the current test (`WRITES` passes it as `logger`). */
+let logs = captureLogger();
+beforeEach(() => {
+	logs = captureLogger();
+});
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
@@ -91,13 +96,13 @@ function serializationFailure(): never {
 /** The four writes that carry user attributes, each run from a fresh harness. */
 const WRITES = {
 	async signUp(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		h.on('SignUpCommand', serializationFailure);
 		const result = await outcome(untyped(h.auth, 'signUp', 'bob', PASSWORD, { attributes }));
 		return { result, sent: h.sentNames() };
 	},
 	async updateUserAttributes(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		const browser = new Browser();
 		await signInAs(h, browser, 'alice');
 		h.on('UpdateUserAttributesCommand', serializationFailure);
@@ -113,7 +118,7 @@ const WRITES = {
 		return { result, sent: h.sentNames() };
 	},
 	async newPasswordChallenge(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		const browser = new Browser();
 		h.on('InitiateAuthCommand', () => ({
 			ChallengeName: 'NEW_PASSWORD_REQUIRED',
@@ -190,6 +195,29 @@ describe('AWS: the other schema-independent rules are checked before the SDK cal
 				assert.deepStrictEqual(result, UNAUTHORIZED, name);
 				assert.deepStrictEqual(sent, [], name);
 			}
+		});
+	}
+
+	for (const write of ['signUp', 'updateUserAttributes', 'newPasswordChallenge'] as const) {
+		test(`${write}: a refused \`userWritable: false\` write logs a warning naming the attribute, never the value`, async () => {
+			for (const name of ['role', 'custom:role']) {
+				logs.entries.length = 0;
+				await WRITES[write]({ [name]: 'secret-admin-value' });
+				const warned = logs.entries.filter((e) => e.message.includes('admin-only attribute'));
+				assert.deepStrictEqual(
+					warned.map((e) => [e.level, e.message, e.context?.attribute]),
+					[['warn', '[bb-auth] refused end-user write to admin-only attribute', 'custom:role']],
+					name,
+				);
+				assert.ok(!JSON.stringify(logs.entries).includes('secret-admin-value'), 'the value is never logged');
+			}
+		});
+		test(`${write}: a refused verified flag is not logged as an admin-only write`, async () => {
+			await WRITES[write]({ email_verified: 'true' });
+			assert.deepStrictEqual(
+				logs.entries.filter((e) => e.message.includes('admin-only attribute')),
+				[],
+			);
 		});
 	}
 

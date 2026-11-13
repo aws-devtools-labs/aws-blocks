@@ -67,6 +67,7 @@
  * @internal
  */
 
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthErrors } from '../errors.js';
 import type { UserAttribute } from '../types.js';
 import {
@@ -75,6 +76,7 @@ import {
 	checkAttributeValues,
 	immutableAttributeError,
 	VERIFIED_FLAGS,
+	withAdminOnlyRefusalLog,
 } from './attribute-write-rules.js';
 import { serviceError } from './native-mock-store.js';
 
@@ -111,13 +113,20 @@ export class MockAttributeSchema {
 	private readonly custom: ReadonlyMap<string, { mutable: boolean }>;
 	private readonly externalPool: boolean;
 	private readonly adminOnly: ReadonlySet<string>;
+	private readonly log: Pick<ChildLogger, 'warn'> | undefined;
 
-	constructor(options: { attributes?: readonly UserAttribute[]; externalPool?: boolean }) {
+	constructor(options: {
+		attributes?: readonly UserAttribute[];
+		externalPool?: boolean;
+		/** Logs a refused end-user write of a `userWritable: false` attribute, as the Cognito engine does. */
+		log?: Pick<ChildLogger, 'warn'>;
+	}) {
 		this.custom = new Map(
 			(options.attributes ?? []).map((a) => [`custom:${a.name}`, { mutable: a.mutable ?? true }]),
 		);
 		this.externalPool = options.externalPool === true;
 		this.adminOnly = adminOnlyAttributes(options.attributes);
+		this.log = options.log;
 	}
 
 	/**
@@ -133,7 +142,9 @@ export class MockAttributeSchema {
 		// Non-string, too long, a verified flag or `userWritable: false` attribute
 		// through the app client, `sub`: the rules the Cognito engine checks too
 		// (`attribute-write-rules.ts`).
-		checkAttributeValues(attributes, write, this.adminOnly);
+		const run = () => checkAttributeValues(attributes, write, this.adminOnly);
+		if (this.log) withAdminOnlyRefusalLog(this.log, run);
+		else run();
 		// External pool: the block's app client may write only the declared custom
 		// attributes (`endUserWriteAttributes`), so Cognito refuses another `custom:`
 		// name through it, though the pool may have it.

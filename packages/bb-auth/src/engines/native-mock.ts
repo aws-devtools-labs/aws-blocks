@@ -187,6 +187,7 @@ export class MockNativeEngine implements NativeEngine {
 		this.attributeSchema = new MockAttributeSchema({
 			...(opts.users?.attributes ? { attributes: opts.users.attributes } : {}),
 			externalPool: opts.userPool !== undefined,
+			log: host.log,
 		});
 		const fullId = host.scope.fullId;
 		this.store = new MockStore({
