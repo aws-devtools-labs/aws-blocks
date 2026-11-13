@@ -599,6 +599,25 @@ const secureTable = new DistributedTable(scope, 'secure-items', {
   pointInTimeRecovery: { retentionDays: 7 },
 });
 
+// Items whose optional values sit inside a map and a list, plus an index on an
+// optional attribute: covers how `undefined` is stored (dropped from maps,
+// `null` in lists) and that index queries skip items without the index key.
+const nestedSchema = z.object({
+  pk: z.string(),
+  sk: z.string(),
+  meta: z.object({ note: z.string().optional(), k: z.number() }),
+  tags: z.array(z.number().nullish()),
+  shippedAt: z.number().optional(),
+});
+
+const nestedTable = new DistributedTable(scope, 'nested-items', {
+  schema: nestedSchema,
+  key: { partitionKey: 'pk', sortKey: 'sk' },
+  indexes: {
+    byShipped: { partitionKey: 'pk', sortKey: 'shippedAt' },
+  },
+});
+
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)
 const cursorSchema = z.object({ userId: z.string(), x: z.number(), y: z.number(), color: z.string() });
 export const realtime = new Realtime(scope, 'collab', {
@@ -1406,6 +1425,29 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async secureTableQuery(...args: Parameters<typeof secureTable.query>) {
     const results = [];
     for await (const item of secureTable.query(...args)) results.push(item);
+    return results;
+  },
+
+  // Nested-undefined table. JSON-RPC arguments can't carry `undefined`, so
+  // these build the item in the handler, the way app code does when it copies
+  // an optional input into a nested object or a list.
+  async nestedTablePut(pk: string, sk: string, note?: string, shippedAt?: number) {
+    await nestedTable.put({ pk, sk, meta: { note, k: 1 }, tags: [1, note === undefined ? undefined : 2, 3], shippedAt });
+    return { success: true };
+  },
+
+  async nestedTablePutBatch(pk: string, sks: string[], note?: string) {
+    await nestedTable.putBatch(sks.map((sk) => ({ pk, sk, meta: { note, k: 1 }, tags: [1, note === undefined ? undefined : 2, 3] })));
+    return { success: true };
+  },
+
+  async nestedTableGet(...args: Parameters<typeof nestedTable.get>) {
+    return await nestedTable.get(...args);
+  },
+
+  async nestedTableQuery(...args: Parameters<typeof nestedTable.query>) {
+    const results = [];
+    for await (const item of nestedTable.query(...args)) results.push(item);
     return results;
   },
 

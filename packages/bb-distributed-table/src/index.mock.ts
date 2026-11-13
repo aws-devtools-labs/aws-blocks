@@ -43,7 +43,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, normalizeUndefinedValues, applyReadValidation } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -169,15 +169,29 @@ export class DistributedTable<
 		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
 	}
 
+	/**
+	 * Store an item, overwriting any item with the same key unless `options` sets
+	 * a condition. `undefined` inside the item is normalized before it is stored:
+	 * an `undefined` object property is dropped and an `undefined` array entry is
+	 * stored as `null` (`[1, undefined, 3]` reads back as `[1, null, 3]`). The
+	 * item is schema-validated in that stored form, so declare list entries that
+	 * may be `undefined` as nullable (Zod: `.nullish()`).
+	 *
+	 * @throws {DistributedTableErrors.ValidationFailed} If the normalized item does not match the schema.
+	 */
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
-		await validateSchema(this.schema, item);
+		// Store `undefined` nested in maps/lists the way the disk round-trip (and
+		// the AWS runtime) does: dropped from maps, `null` in lists. Validate that
+		// stored shape, so a write the schema accepts can always be read back.
+		const stored = normalizeUndefinedValues(item);
+		await validateSchema(this.schema, stored);
 
-		const serialized = JSON.stringify(item);
+		const serialized = JSON.stringify(stored);
 		if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 			throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
 		}
 
-		const keyStr = this.serializeKey(item as any);
+		const keyStr = this.serializeKey(stored as any);
 
 		// Existence assertion wins: `ifNotExists` makes a conflict non-retriable
 		// even if combined with an `ifFieldEquals` value check (value presence, so
@@ -191,7 +205,7 @@ export class DistributedTable<
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-		this.data.set(keyStr, item);
+		this.data.set(keyStr, stored);
 		this.flushToDisk();
 	}
 
@@ -268,6 +282,10 @@ export class DistributedTable<
 
 		for (const item of this.data.values()) {
 			if ((item as any)[pkField] !== pkValue) continue;
+			// DynamoDB indexes are sparse: an item without the index's sort-key
+			// attribute (or with it set to `null`) is not in that index, even when no
+			// sort-key condition is given.
+			if (skField && (item as any)[skField] == null) continue;
 
 			if (skField && skCondition) {
 				if (!matchesSortKeyCondition((item as any)[skField], skCondition)) continue;
@@ -321,21 +339,25 @@ export class DistributedTable<
 	}
 
 	/**
-	 * Write multiple items in batches. Each item is schema-validated first.
+	 * Write multiple items in batches. Each item is normalized like {@link put}
+	 * (`undefined` properties dropped, `undefined` array entries stored as `null`)
+	 * and schema-validated in that form before anything is written.
 	 *
 	 * @throws {DistributedTableErrors.BatchIncomplete} (AWS runtime only) If DynamoDB
 	 *   leaves writes unprocessed after the retry budget is exhausted, typically under
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async putBatch(items: T[]): Promise<void> {
-		for (const item of items) {
+		// Normalize, then validate the stored shape, as in `put`.
+		const stored = items.map(item => normalizeUndefinedValues(item));
+		for (const item of stored) {
 			await validateSchema(this.schema, item);
 			const serialized = JSON.stringify(item);
 			if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 				throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
 			}
 		}
-		for (const item of items) {
+		for (const item of stored) {
 			this.data.set(this.serializeKey(item as any), item);
 		}
 		this.flushToDisk();
@@ -376,7 +398,7 @@ export class DistributedTable<
 			throw conditionalCheckFailed(retriable);
 		}
 		for (const [field, value] of entries) {
-			if (!deepEqual((existing as any)[field], value)) {
+			if (!deepEqual((existing as any)[field], normalizeUndefinedValues(value))) {
 				// Compare-and-swap conflict; retriability decided by the caller.
 				throw conditionalCheckFailed(retriable);
 			}

@@ -118,6 +118,12 @@ for await (const order of orders.query({
 | `limit` | `number` | No | Maximum number of items to return. |
 | `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`. |
 
+**Index queries are sparse.** An item is only in an index when it has that index's key attributes. An item with no value (or `null`) for the index's partition or sort key never appears in that index's query results, even when the query has no sort-key condition. This holds locally and on DynamoDB.
+
+### `undefined` values
+
+An item is stored the way JSON stores it: an `undefined` object property is dropped, and an `undefined` array entry is stored as `null`, so list positions are kept (`[1, undefined, 3]` reads back as `[1, null, 3]`). This is the same locally and on AWS. `put` and `putBatch` validate the item in this stored form, so declare list entries that may be `undefined` as nullable: with `z.array(z.number().nullish())` the write succeeds, while `z.array(z.number().optional())` rejects it with `ValidationFailed` (the stored `null` would not match the schema on a later read).
+
 ### Conditional Operations
 
 Both `put` and `delete` accept optional conditions:

@@ -264,3 +264,43 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 	const proto = Object.getPrototypeOf(v);
 	return proto === Object.prototype || proto === null;
 }
+
+/**
+ * @internal Normalize `undefined` inside a value the way the mock's JSON
+ * persistence does, so the mock and the AWS runtime store the same item:
+ * `undefined` properties of plain objects are dropped, and `undefined` (or
+ * missing) array entries become `null` so list positions are preserved.
+ *
+ * lib-dynamodb rejects any `undefined` by default ("Pass
+ * options.removeUndefinedValues=true …"), and that option would drop list
+ * entries outright, shifting later indices. Only plain objects and arrays are
+ * walked; Sets, Maps, binary values, Dates and other class instances are
+ * returned unchanged. The input is never mutated, and a container is returned
+ * as-is when nothing inside it changes.
+ */
+export function normalizeUndefinedValues<V>(value: V): V {
+	let changed = false;
+	if (Array.isArray(value)) {
+		// Array.from visits holes too, so a sparse array's gaps become `null`.
+		const next = Array.from(value, (entry: unknown) => {
+			const normalized = entry === undefined ? null : normalizeUndefinedValues(entry);
+			if (normalized !== entry) changed = true;
+			return normalized;
+		});
+		return (changed ? next : value) as V;
+	}
+	if (isPlainObject(value)) {
+		const kept: [string, unknown][] = [];
+		for (const [key, entry] of Object.entries(value)) {
+			if (entry === undefined) {
+				changed = true;
+				continue;
+			}
+			const normalized = normalizeUndefinedValues(entry);
+			if (normalized !== entry) changed = true;
+			kept.push([key, normalized]);
+		}
+		return (changed ? Object.fromEntries(kept) : value) as V;
+	}
+	return value;
+}

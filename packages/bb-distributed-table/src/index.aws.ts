@@ -49,7 +49,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, normalizeUndefinedValues, remapItemTooLarge, applyReadValidation } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -120,8 +120,12 @@ export class DistributedTable<
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
-		await this.validateItem(item);
-		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: item };
+		// Store `undefined` nested in maps/lists the way the mock does (dropped /
+		// `null`) instead of letting the DocumentClient reject it, and validate that
+		// stored shape, so a write the schema accepts can always be read back.
+		const stored = normalizeUndefinedValues(item);
+		await this.validateItem(stored);
+		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: stored };
 
 		if (options?.ifNotExists) {
 			command.ConditionExpression = 'attribute_not_exists(#pk)';
@@ -273,10 +277,12 @@ export class DistributedTable<
 	}
 
 	async putBatch(items: T[]): Promise<void> {
-		for (const item of items) await this.validateItem(item);
+		// Normalize, then validate the stored shape, as in `put`.
+		const stored = items.map(item => normalizeUndefinedValues(item));
+		for (const item of stored) await this.validateItem(item);
 		const tableName = getSdkIdentifiers(this).tableName;
 
-		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
+		for (const chunk of chunked(stored, BATCH_WRITE_MAX_REQUESTS)) {
 			await this.retryUnprocessed(
 				'putBatch',
 				chunk.map(item => ({ PutRequest: { Item: item as any } })),
@@ -401,7 +407,7 @@ export class DistributedTable<
 		entries.forEach(([field, value], i) => {
 			conditions.push(`#field${i} = :val${i}`);
 			names[`#field${i}`] = field;
-			values[`:val${i}`] = value;
+			values[`:val${i}`] = normalizeUndefinedValues(value);
 		});
 		command.ConditionExpression = conditions.join(' AND ');
 		command.ExpressionAttributeNames = names;
