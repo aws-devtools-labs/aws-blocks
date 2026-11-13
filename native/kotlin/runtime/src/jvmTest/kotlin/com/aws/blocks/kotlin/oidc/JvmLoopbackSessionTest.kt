@@ -17,6 +17,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
@@ -58,6 +59,14 @@ class JvmLoopbackSessionTest {
         OidcSignInPlatformOptions(successPage = successPage, errorPage = errorPage),
     )
 
+    /** A session that answers the browser quickly when no outcome is reported. */
+    private fun shortOutcomeSession() = JvmLoopbackSession(
+        BrowserOpener { },
+        1.minutes,
+        OidcSignInPlatformOptions(),
+        outcomeTimeout = 100.milliseconds,
+    )
+
     /**
      * Drives a full callback: the request arrives, the session hands it to the caller, the
      * caller reports [outcome], and only then is the browser answered. The returned connection
@@ -69,7 +78,7 @@ class JvmLoopbackSessionTest {
         outcome: OidcSignInOutcome = OidcSignInOutcome.Succeeded,
     ): HttpURLConnection = coroutineScope {
         val connection = pending(session, query)
-        val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+        val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
         val sent = async(Dispatchers.IO) { connection.responseCode }
         redirect.await()
         withContext(Dispatchers.IO) { session.reportOutcome(outcome) }
@@ -110,7 +119,7 @@ class JvmLoopbackSessionTest {
         val session = session()
         try {
             val connection = pending(session, "code=abc123&state=xyz")
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             val sent = async(Dispatchers.IO) { connection.responseCode }
             redirect.await() shouldBe "${session.relayTo}?code=abc123&state=xyz"
             withContext(Dispatchers.IO) { session.reportOutcome(OidcSignInOutcome.Succeeded) }
@@ -126,7 +135,7 @@ class JvmLoopbackSessionTest {
         val session = session()
         try {
             val connection = pending(session, "error=access_denied&state=xyz")
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             val sent = async(Dispatchers.IO) { connection.responseCode }
             redirect.await() shouldContain "error=access_denied"
             withContext(Dispatchers.IO) {
@@ -143,7 +152,7 @@ class JvmLoopbackSessionTest {
     fun `awaitRedirect ignores a callback with no state`() = runBlocking<Unit> {
         val session = session()
         try {
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             // A stray local request must not end the wait and strand the real redirect.
             withContext(Dispatchers.IO) { get("${session.relayTo}?code=junk") } shouldBe 404
 
@@ -159,15 +168,101 @@ class JvmLoopbackSessionTest {
     }
 
     @Test
+    fun `a callback with another state gets a 404 and does not end the wait`() = runBlocking<Unit> {
+        val session = shortOutcomeSession()
+        try {
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=abc&state=other") } shouldBe 404
+            withContext(Dispatchers.IO) { get("${session.relayTo}?error=access_denied&state=xy") } shouldBe 404
+            redirect.isCompleted shouldBe false
+
+            val connection = pending(session, "code=abc123&state=xyz")
+            val sent = async(Dispatchers.IO) { connection.responseCode }
+            redirect.await() shouldBe "${session.relayTo}?code=abc123&state=xyz"
+            withContext(Dispatchers.IO) { session.reportOutcome(OidcSignInOutcome.Succeeded) }
+            sent.await() shouldBe 200
+            connection.disconnect()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `a callback with the state but an empty code and no error gets a 404`() = runBlocking<Unit> {
+        val session = shortOutcomeSession()
+        try {
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=&state=xyz") } shouldBe 404
+            withContext(Dispatchers.IO) { get("${session.relayTo}?state=xyz") } shouldBe 404
+            redirect.isCompleted shouldBe false
+            redirect.cancel()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `a callback that is not a GET of the exact callback path gets a 404`() = runBlocking<Unit> {
+        val session = shortOutcomeSession()
+        try {
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
+            val post = withContext(Dispatchers.IO) {
+                withRealConnection("${session.relayTo}?code=abc&state=xyz") {
+                    it.requestMethod = "POST"
+                    it.doOutput = true
+                    it.outputStream.use { body -> body.write(ByteArray(0)) }
+                    it.responseCode
+                }
+            }
+            post shouldBe 404
+            // The server's context matches every path below the callback; only the exact one is it.
+            withContext(Dispatchers.IO) { get("${session.relayTo}/extra?code=abc&state=xyz") } shouldBe 404
+            withContext(Dispatchers.IO) { get("${session.relayTo}x?code=abc&state=xyz") } shouldBe 404
+            redirect.isCompleted shouldBe false
+            redirect.cancel()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `a second matching callback gets a 404`() = runBlocking<Unit> {
+        val session = shortOutcomeSession()
+        try {
+            callback(session, "code=abc123&state=xyz").apply {
+                responseCode shouldBe 200
+                disconnect()
+            }
+
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=replayed&state=xyz") } shouldBe 404
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `a callback before the browser is opened gets a 404`() = runBlocking<Unit> {
+        val session = shortOutcomeSession()
+        try {
+            // No authorize URL has been opened, so no state has been issued to match.
+            withContext(Dispatchers.IO) { get("${session.relayTo}?code=abc&state=xyz") } shouldBe 404
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `awaitRedirect opens the authorize url in the browser`() = runBlocking<Unit> {
         var opened: String? = null
         val session = JvmLoopbackSession(BrowserOpener { opened = it }, 1.minutes)
         try {
             val connection = pending(session, "code=abc&state=xyz")
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize?x=1") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) {
+                session.awaitRedirect("https://idp.example.com/authorize?x=1&state=xyz")
+            }
             val sent = async(Dispatchers.IO) { connection.responseCode }
             redirect.await()
-            opened shouldBe "https://idp.example.com/authorize?x=1"
+            opened shouldBe "https://idp.example.com/authorize?x=1&state=xyz"
             withContext(Dispatchers.IO) { session.reportOutcome(OidcSignInOutcome.Succeeded) }
             sent.await()
             connection.disconnect()
@@ -181,7 +276,7 @@ class JvmLoopbackSessionTest {
         val session = JvmLoopbackSession(BrowserOpener { }, 50.milliseconds)
         try {
             val error = shouldThrow<OidcCancelledException> {
-                session.awaitRedirect("https://idp.example.com/authorize")
+                session.awaitRedirect(AUTHORIZE_URL)
             }
             error.message!! shouldContain "timed out"
             error.message!! shouldContain session.relayTo
@@ -208,7 +303,7 @@ class JvmLoopbackSessionTest {
         val session = session()
         try {
             val connection = pending(session, "code=abc&state=xyz")
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             val sent = async(Dispatchers.IO) { connection.responseCode }
             // Nothing has been written yet, because no outcome has been reported, but the
             // caller already has the callback — so a failure while responding cannot lose it.
@@ -439,7 +534,7 @@ class JvmLoopbackSessionTest {
     fun `a probe gets an empty 404 and does not end the wait`() = runBlocking<Unit> {
         val session = session(successPage = OidcLandingPage.Redirect("https://app.example.com/done"))
         try {
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             withContext(Dispatchers.IO) {
                 val connection = pending(session, "ignored=1").apply { responseCode }
                 try {
@@ -476,7 +571,7 @@ class JvmLoopbackSessionTest {
         )
         try {
             val connection = pending(session, "code=abc&state=xyz")
-            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val redirect = async(start = CoroutineStart.UNDISPATCHED) { session.awaitRedirect(AUTHORIZE_URL) }
             val sent = async(Dispatchers.IO) { connection.responseCode }
             redirect.await()
             // No reportOutcome, as if the caller stopped running: the session gives up waiting
@@ -542,4 +637,9 @@ class JvmLoopbackSessionTest {
                 session.close()
             }
         }
+
+    private companion object {
+        /** An authorize URL carrying the `state` the callbacks in these tests send back. */
+        const val AUTHORIZE_URL = "https://idp.example.com/authorize?state=xyz"
+    }
 }

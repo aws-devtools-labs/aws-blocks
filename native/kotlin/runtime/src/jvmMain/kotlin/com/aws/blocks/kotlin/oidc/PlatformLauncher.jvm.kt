@@ -4,13 +4,16 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.ktor.http.Parameters
 import io.ktor.http.URLBuilder
+import io.ktor.http.Url
 import io.ktor.http.parseQueryString
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
+import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -56,11 +59,22 @@ internal class JvmLoopbackSession(
     private val redirect = CompletableDeferred<String>()
 
     /**
+     * The `state` this attempt was issued, read from the authorize URL [awaitRedirect] opens.
+     * Null until then, so no request can end the wait before the browser is opened. Written on
+     * the caller's thread and read on one of the server's.
+     */
+    @Volatile
+    private var expectedState: String? = null
+
+    /**
      * Filled by [reportOutcome] once the caller knows whether the sign-in actually worked.
      * A [CompletableFuture] rather than a `Deferred`, because the request handler reads it
      * from one of the server's own threads, outside any coroutine.
      */
     private val outcome = CompletableFuture<OidcSignInOutcome>()
+
+    /** Set by the one request that ends the wait, so a second matching request gets a 404. */
+    private val claimed = AtomicBoolean(false)
 
     /** Completed once the browser has its response, so [close] cannot cut it short. */
     private val responded = CompletableDeferred<Unit>()
@@ -79,6 +93,7 @@ internal class JvmLoopbackSession(
     }
 
     override suspend fun awaitRedirect(authorizeUrl: String): String {
+        expectedState = Url(authorizeUrl).parameters["state"]
         browserOpener.open(authorizeUrl)
         return withTimeoutOrNull(timeout) { redirect.await() }
             ?: throw OidcCancelledException(
@@ -104,12 +119,16 @@ internal class JvmLoopbackSession(
         val params = parseQueryString(rawQuery ?: "")
 
         // Browsers request things like /favicon.ico, and any local process can reach this
-        // port. Completing the wait is one-shot, so a request that cannot be the relay
-        // redirect must not end it and strand the real one: the relay always sends `state`
-        // alongside `code` or `error`, and the caller checks its value. A configured landing
-        // page must not apply to such a request either.
-        val isRelayRedirect = "state" in params && ("code" in params || "error" in params)
-        if (!isRelayRedirect) {
+        // port. Completing the wait is one-shot, so a request that is not this attempt's relay
+        // redirect must not end it and strand the real one: the relay is a GET of exactly the
+        // callback path (the context also matches anything below it), and always sends the
+        // issued `state` alongside a `code` or an `error`. Only the first such request is
+        // served. A configured landing page must not apply to any other request either.
+        val isRelayRedirect = exchange.requestMethod == "GET" &&
+            exchange.requestURI.rawPath == CALLBACK_PATH &&
+            isExpectedState(params["state"]) &&
+            (!params["code"].isNullOrEmpty() || "error" in params)
+        if (!isRelayRedirect || !claimed.compareAndSet(false, true)) {
             // No body: nothing legitimate renders it, so there is nothing to style and no
             // reason for an app to override it.
             sendEmpty(exchange, HTTP_NOT_FOUND)
@@ -125,6 +144,12 @@ internal class JvmLoopbackSession(
         } finally {
             responded.complete(Unit)
         }
+    }
+
+    /** Compares [state] with [expectedState] in time that doesn't depend on where they differ. */
+    private fun isExpectedState(state: String?): Boolean {
+        val expected = expectedState ?: return false
+        return state != null && MessageDigest.isEqual(state.encodeToByteArray(), expected.encodeToByteArray())
     }
 
     /**
