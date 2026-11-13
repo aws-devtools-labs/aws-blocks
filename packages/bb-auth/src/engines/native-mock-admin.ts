@@ -78,6 +78,8 @@ export function mockAdminEngine(
 		attributes: Record<string, string>,
 		existsMessage: string,
 	) => { username: string; userSub: string; attributes: Record<string, string> },
+	/** Refuse what `AdminUpdateUserAttributes` would: the pool's schema, and an alias another user holds. */
+	checkUpdate: (username: string, user: MockUserRecord, attributes: Record<string, string>) => void,
 ): NativeAdminEngine {
 	/** The stored username a caller's `Username` names, or `UserNotFoundException`. */
 	const usernameOf = (login: string): string => store.requireResolved(login).username;
@@ -134,6 +136,20 @@ export function mockAdminEngine(
 			};
 			store.addUser(username, record);
 			return toAdminUser(username, record);
+		},
+		async updateUserAttributes(login, attributes) {
+			const { username, user } = store.requireResolved(login);
+			checkUpdate(username, user, attributes);
+			for (const [name, value] of Object.entries(attributes)) {
+				// As Cognito: a changed email / phone is unverified unless this write
+				// marks it verified. (No verification code is sent locally.)
+				const contact = name === 'email' || name === 'phone_number';
+				if (contact && user.attributes[name] !== value && attributes[`${name}_verified`] === undefined) {
+					user.attributes[`${name}_verified`] = 'false';
+				}
+				user.attributes[name] = value;
+			}
+			store.flush();
 		},
 		async deleteUser(login) {
 			store.deleteUser(usernameOf(login));

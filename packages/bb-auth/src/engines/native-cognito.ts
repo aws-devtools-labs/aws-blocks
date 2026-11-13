@@ -107,7 +107,12 @@ import type {
 	SignInNextStep,
 	UpdateAttributeOutcome,
 } from '../types.js';
-import { checkAttributeValues, signUpNotPermitted } from './attribute-write-rules.js';
+import {
+	adminOnlyAttributes,
+	checkAttributeValues,
+	signUpNotPermitted,
+	withAdminOnlyRefusalLog,
+} from './attribute-write-rules.js';
 import { cognitoAdminEngine } from './native-cognito-admin.js';
 import {
 	buildChallengeResponses,
@@ -327,6 +332,11 @@ export class NativeCognitoEngine implements NativeEngine {
 		return { idToken: result.IdToken, accessToken: result.AccessToken, refreshToken: result.RefreshToken ?? '' };
 	}
 
+	/** The declared attributes end users may not write (`userWritable: false`), as stored names. */
+	private adminOnly(): ReadonlySet<string> {
+		return adminOnlyAttributes(this.host.options.users?.attributes);
+	}
+
 	private warn(message: string): void {
 		this.host.log.warn(message);
 	}
@@ -341,7 +351,9 @@ export class NativeCognitoEngine implements NativeEngine {
 		const { clientId } = this.ids();
 		// The schema-independent rules, before the SDK serializes a wrong-typed
 		// value as-is: the same 400 as the local engine, and no call.
-		checkAttributeValues(input.attributes, 'signUp');
+		withAdminOnlyRefusalLog(this.host.log, () =>
+			checkAttributeValues(input.attributes, 'signUp', this.adminOnly()),
+		);
 		const resp = await this.client.send(
 			new SignUpCommand({
 				ClientId: clientId,
@@ -526,7 +538,15 @@ export class NativeCognitoEngine implements NativeEngine {
 
 		const challengeResponses = envelope.awaitingPassword
 			? { USERNAME: envelope.username, ANSWER: 'PASSWORD', PASSWORD: response }
-			: buildChallengeResponses(envelope.name, envelope.username, response, options?.userAttributes);
+			: withAdminOnlyRefusalLog(this.host.log, () =>
+					buildChallengeResponses(
+						envelope.name,
+						envelope.username,
+						response,
+						options?.userAttributes,
+						this.adminOnly(),
+					),
+				);
 		const { clientId } = this.ids();
 		const resp = await this.client.send(
 			new RespondToAuthChallengeCommand({
@@ -849,7 +869,7 @@ export class NativeCognitoEngine implements NativeEngine {
 	): Promise<Record<string, UpdateAttributeOutcome>> {
 		this.ids();
 		// As in `signUp`: a rejected write sends nothing.
-		checkAttributeValues(attributes, 'update');
+		withAdminOnlyRefusalLog(this.host.log, () => checkAttributeValues(attributes, 'update', this.adminOnly()));
 		const resp = await this.client.send(
 			new UpdateUserAttributesCommand({ AccessToken: accessToken, UserAttributes: attrsToList(attributes) }),
 		);

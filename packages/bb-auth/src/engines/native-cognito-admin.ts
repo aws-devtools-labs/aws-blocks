@@ -34,6 +34,7 @@ import {
 	AdminRemoveUserFromGroupCommand,
 	AdminResetUserPasswordCommand,
 	AdminSetUserPasswordCommand,
+	AdminUpdateUserAttributesCommand,
 	AdminUserGlobalSignOutCommand,
 	type CognitoIdentityProviderClient,
 	ListUsersCommand,
@@ -110,8 +111,8 @@ export function cognitoAdminEngine(deps: CognitoAdminDeps): NativeAdminEngine {
 		// ── lifecycle ────────────────────────────────────────────────────────
 		async createUser(username, init) {
 			// The schema-independent rules, before the SDK call; an
-			// administrator may write the verified flags.
-			checkAttributeValues(init.attributes, 'adminCreateUser');
+			// administrator may write the verified flags and the admin-only attributes.
+			checkAttributeValues(init.attributes, 'adminCreateUser', new Set());
 			const attributes = Object.entries(init.attributes).map(([Name, Value]) => ({ Name, Value }));
 			const resp = await deps.client().send(
 				new AdminCreateUserCommand({
@@ -129,6 +130,18 @@ export function cognitoAdminEngine(deps: CognitoAdminDeps): NativeAdminEngine {
 				? fromUserType(resp.User)
 				: { username, userSub: '', enabled: true, attributes: {} };
 			return { ...created, groups: [] };
+		},
+		async updateUserAttributes(username, attributes) {
+			// The schema-independent rules, before the SDK call; IAM-authorized, so the
+			// verified flags and the admin-only attributes may be written. Cognito
+			// checks the deployed schema (an unknown name, an immutable attribute).
+			checkAttributeValues(attributes, 'adminUpdate', new Set());
+			await deps.client().send(
+				new AdminUpdateUserAttributesCommand({
+					...pool(username),
+					UserAttributes: Object.entries(attributes).map(([Name, Value]) => ({ Name, Value })),
+				}),
+			);
 		},
 		async deleteUser(username) {
 			await deps.client().send(new AdminDeleteUserCommand(pool(username)));

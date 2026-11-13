@@ -22,10 +22,13 @@
  * - **Non-string value** → `InvalidParameterException`.
  * - **Value over 2,048 characters** → `InvalidParameterException`
  *   (`AttributeType.Value`: "Maximum length of 2048").
- * - **`email_verified` / `phone_number_verified` through the app client**
- *   (`signUp`, `update`) → `NotAuthorizedException`: the client sets no
- *   `WriteAttributes`, and the verified flags are not in the default write
- *   set. `AdminCreateUser` is IAM-authorized and may write them.
+ * - **Not in the app client's write attributes** (`signUp`, `update`) →
+ *   `NotAuthorizedException`: `email_verified` / `phone_number_verified`, and
+ *   a declared custom attribute marked `userWritable: false`. The CDK layer
+ *   sets the client's `WriteAttributes` to everything else
+ *   (`endUserWriteAttributes` in `cdk/mappers.ts`); checking here too covers
+ *   an external pool and the local engine. `AdminCreateUser` and
+ *   `AdminUpdateUserAttributes` are IAM-authorized and may write them.
  * - **`sub`** → `InvalidParameterException`: Cognito-assigned and immutable,
  *   so no call writes it.
  *
@@ -41,8 +44,9 @@
  *
  * 1. every value is a string (`InvalidParameterException`);
  * 2. every value is within 2,048 characters (`InvalidParameterException`);
- * 3. the app client may write every name: no verified flag on `signUp` /
- *    `update` (`NotAuthorizedException`);
+ * 3. the app client may write every name: no verified flag and no
+ *    `userWritable: false` attribute on `signUp` / `update`
+ *    (`NotAuthorizedException`);
  * 4. the pool schema: `sub` here, then the caller's schema rules (unknown
  *    name, undeclared `custom:`, immutable after creation), all
  *    `InvalidParameterException`.
@@ -58,12 +62,14 @@
  * 400 locally and 401 on AWS. Before any attribute rule, `signUp` checks that
  * the pool allows self-service sign-up at all ({@link signUpNotPermitted}).
  *
- * Pure: imports only `../errors.js`, so it is safe in the AWS import graph.
+ * Pure: imports only `../errors.js` (and a type), so it is safe in the AWS import graph.
  *
  * @internal
  */
 
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthErrors } from '../errors.js';
+import type { UserAttribute } from '../types.js';
 
 /**
  * Which call writes the attributes:
@@ -72,10 +78,17 @@ import { AuthErrors } from '../errors.js';
  * - `adminCreateUser` — `AdminCreateUser`: a new user, IAM-authorized.
  * - `update` — `UpdateUserAttributes`, or a challenge answer's
  *   `userAttributes`: an existing user, through the app client.
+ * - `adminUpdate` — `AdminUpdateUserAttributes`: an existing user,
+ *   IAM-authorized.
  *
  * @internal
  */
-export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update';
+export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update' | 'adminUpdate';
+
+/** Whether `write` is IAM-authorized (the admin API), so the app client's write attributes do not apply. */
+export function isAdminWrite(write: AttributeWrite): boolean {
+	return write === 'adminCreateUser' || write === 'adminUpdate';
+}
 
 /**
  * In the schema, but outside an app client's default write permissions.
@@ -83,6 +96,39 @@ export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update';
  * @internal
  */
 export const VERIFIED_FLAGS: ReadonlySet<string> = new Set(['email_verified', 'phone_number_verified']);
+
+/**
+ * The stored names (`custom:<name>`) of the declared attributes marked
+ * `userWritable: false`: left out of the app client's write attributes, so
+ * only the admin API may write them.
+ *
+ * @internal
+ */
+export function adminOnlyAttributes(attributes: readonly UserAttribute[] | undefined): ReadonlySet<string> {
+	return new Set((attributes ?? []).filter((a) => a.userWritable === false).map((a) => `custom:${a.name}`));
+}
+
+/** The admin-only attribute each refusal of rule 3 was for (see {@link withAdminOnlyRefusalLog}). */
+const ADMIN_ONLY_REFUSALS = new WeakMap<Error, string>();
+
+/**
+ * Run `check` (an end-user write check that calls {@link checkAttributeValues})
+ * and log a refusal of a `userWritable: false` attribute before rethrowing it.
+ * Such an attribute is one the app authorizes on, so an end-user write of it
+ * is worth a server-side line. The log names the attribute, never the value.
+ *
+ * @internal
+ */
+export function withAdminOnlyRefusalLog<T>(log: Pick<ChildLogger, 'warn'>, check: () => T): T {
+	try {
+		return check();
+	} catch (e) {
+		const attribute = e instanceof Error ? ADMIN_ONLY_REFUSALS.get(e) : undefined;
+		if (attribute !== undefined)
+			log.warn('[bb-auth] refused end-user write to admin-only attribute', { attribute });
+		throw e;
+	}
+}
 
 /** `AttributeType.Value`: "Maximum length of 2048". */
 const MAX_VALUE_LENGTH = 2048;
@@ -130,16 +176,22 @@ export function immutableAttributeError(name: string): Error {
  *
  * The rules apply in the module's precedence order, each over every
  * attribute before the next: a non-string value anywhere wins over a
- * value over 2,048 characters, which wins over a verified flag through the
- * app client (`signUp`, `update`; `adminCreateUser` may write them), which
- * wins over `sub`. Within one rule, the first attribute in input order is
+ * value over 2,048 characters, which wins over a verified flag or an
+ * `adminOnly` attribute through the app client (`signUp`, `update`;
+ * `adminCreateUser` may write them), which wins over `sub`. `adminOnly` holds
+ * stored names ({@link adminOnlyAttributes}); `AuthBase` has already prefixed
+ * a declared attribute written by its bare name. Within one rule, the first attribute in input order is
  * reported. The Cognito engine calls this before it sends the write: a
  * rejected write sends nothing. The local engine calls it first too, then
  * applies its schema rules (`MockAttributeSchema`).
  *
  * @internal
  */
-export function checkAttributeValues(attributes: Readonly<Record<string, unknown>>, write: AttributeWrite): void {
+export function checkAttributeValues(
+	attributes: Readonly<Record<string, unknown>>,
+	write: AttributeWrite,
+	adminOnly: ReadonlySet<string>,
+): void {
 	const values: [name: string, value: string][] = [];
 	// 1. The wire shape: every value a string.
 	for (const [name, value] of Object.entries(attributes)) {
@@ -162,10 +214,12 @@ export function checkAttributeValues(attributes: Readonly<Record<string, unknown
 		}
 	}
 	// 3. The app client's write permissions (the admin API is IAM-authorized).
-	if (write !== 'adminCreateUser') {
+	if (!isAdminWrite(write)) {
 		for (const [name] of values) {
-			if (VERIFIED_FLAGS.has(name)) {
-				throw rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+			if (VERIFIED_FLAGS.has(name) || adminOnly.has(name)) {
+				const e = rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+				if (adminOnly.has(name)) ADMIN_ONLY_REFUSALS.set(e, name);
+				throw e;
 			}
 		}
 	}

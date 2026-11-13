@@ -359,6 +359,7 @@ const USER_ATTRIBUTE = {
 	type: 'value',
 	mutable: 'boolean',
 	required: 'boolean',
+	userWritable: 'boolean',
 } as const satisfies ShapeOf<UserAttribute>;
 
 const USER_GROUP = {
@@ -1011,5 +1012,39 @@ function assertConsistentOptions(id: string, options: unknown): void {
 		throw new Error(
 			`Auth '${id}': passkeys requires \`users.authFlow: 'USER_AUTH'\`. Passkeys ride on the USER_AUTH choice-based flow.`,
 		);
+	}
+	// `required` has no effect on a custom attribute (Cognito cannot make one required), and the pair contradicts itself.
+	const attributes = field(field(options, 'users'), 'attributes');
+	for (const attr of Array.isArray(attributes) ? attributes : []) {
+		if (field(attr, 'required') === true && field(attr, 'userWritable') === false) {
+			throw new Error(
+				`Auth '${id}': users.attributes '${String(field(attr, 'name'))}' can't be both \`required: true\` and \`userWritable: false\`: ` +
+					'`required` has no effect on a custom attribute, and the pair contradicts itself. Drop `required`, and set the attribute server-side with `admin.createUser`.',
+			);
+		}
+	}
+	// A provider's mapping would write its claim into a `userWritable: false` attribute on every
+	// federated sign-in, through the hosted-UI app client. Refused whatever that client's write
+	// attributes say: if it may write the attribute, its public client id also lets a sign-up set
+	// it; if it may not, the mapping does not take effect (Cognito documents both dropping the
+	// value and failing the update).
+	const adminOnly = new Set(
+		(Array.isArray(attributes) ? attributes : [])
+			.filter((attr) => field(attr, 'userWritable') === false)
+			.map((attr) => String(field(attr, 'name'))),
+	);
+	const providers = field(options, 'providers');
+	if (adminOnly.size === 0 || !isPlainObject(providers)) return;
+	for (const [providerId, provider] of Object.entries(providers)) {
+		const mapping = field(provider, 'attributeMapping');
+		for (const key of isPlainObject(mapping) ? Object.keys(mapping) : []) {
+			const name = key.startsWith('custom:') ? key.slice('custom:'.length) : key;
+			if (!adminOnly.has(name)) continue;
+			throw new Error(
+				`Auth '${id}': users.attributes '${name}' is \`userWritable: false\`, but provider '${providerId}' maps '${key}', ` +
+					"which would write the provider's claim on every federated sign-in. Remove the mapping, or drop `userWritable: false` " +
+					'and set the attribute from the provider only.',
+			);
+		}
 	}
 }
