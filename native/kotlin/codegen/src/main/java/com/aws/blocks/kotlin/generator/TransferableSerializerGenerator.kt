@@ -105,24 +105,16 @@ class TransferableSerializerGenerator {
         return funBuilder.build()
     }
 
-    /**
-     * Encodes a bound transferable as its `{ "__blocks": … }` descriptor (the runtime's `toJson()`),
-     * so a model holding one can be sent as a parameter, as Swift's `encode(to:)` does. An unknown
-     * tag's serializer can't decode one either, and still throws.
-     */
     private fun generateSerialize(entry: TransferableEntry): FunSpec {
-        val funBuilder = FunSpec.builder("serialize")
+        return FunSpec.builder("serialize")
             .addModifiers(KModifier.OVERRIDE)
             .addParameter("encoder", ClassNames.encoder)
             .addParameter("value", entry.returnType)
-        return when (entry.transferableName) {
-            "realtime/channel", "file-bucket/download", "file-bucket/upload" ->
-                funBuilder.addStatement("(encoder as %T).encodeJsonElement(value.toJson())", ClassNames.jsonEncoder)
-            else -> funBuilder.addStatement(
+            .addStatement(
                 "throw %T(%S)",
                 UnsupportedOperationException::class,
                 "Transferables are read-only"
             )
-        }.build()
+            .build()
     }
 }
