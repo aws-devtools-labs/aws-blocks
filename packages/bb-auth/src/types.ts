@@ -1283,9 +1283,9 @@ export interface UserAttribute {
 	 * grant `cognito-idp:AdminUpdateUserAttributes`. Can't be combined with
 	 * `required: true`, which has no effect on a custom attribute.
 	 *
-	 * A provider's `attributeMapping` onto it writes the provider's claim on
-	 * every federated sign-in, replacing a value set server-side, so map one
-	 * only from a provider you control. Refused while self sign-up is on.
+	 * A provider's `attributeMapping` can't map onto it (refused at
+	 * construction): the mapping would write the provider's claim on every
+	 * federated sign-in, replacing a value set server-side.
 	 */
 	userWritable?: boolean;
 }

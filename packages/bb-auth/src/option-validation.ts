@@ -1023,28 +1023,27 @@ function assertConsistentOptions(id: string, options: unknown): void {
 			);
 		}
 	}
-	// A provider federated through the user pool writes its mapped attributes through the
-	// hosted-UI app client, so that client must be allowed to write them. With self sign-up on,
-	// that client also accepts a sign-up, so a mapped `userWritable: false` attribute would be
-	// end-user writable after all.
-	const ep = field(options, 'emailPassword');
-	const selfSignUp = field(options, 'store') !== 'builtin' && ep !== false && field(ep, 'selfSignUp') !== false;
+	// A provider's mapping would write its claim into a `userWritable: false` attribute on every
+	// federated sign-in, through the hosted-UI app client. Refused whatever that client's write
+	// attributes say: if it may write the attribute, its public client id also lets a sign-up set
+	// it; if it may not, the mapping does not take effect (Cognito documents both dropping the
+	// value and failing the update).
 	const adminOnly = new Set(
 		(Array.isArray(attributes) ? attributes : [])
 			.filter((attr) => field(attr, 'userWritable') === false)
 			.map((attr) => String(field(attr, 'name'))),
 	);
 	const providers = field(options, 'providers');
-	if (!selfSignUp || adminOnly.size === 0 || !isPlainObject(providers)) return;
+	if (adminOnly.size === 0 || !isPlainObject(providers)) return;
 	for (const [providerId, provider] of Object.entries(providers)) {
 		const mapping = field(provider, 'attributeMapping');
 		for (const key of isPlainObject(mapping) ? Object.keys(mapping) : []) {
 			const name = key.startsWith('custom:') ? key.slice('custom:'.length) : key;
 			if (!adminOnly.has(name)) continue;
 			throw new Error(
-				`Auth '${id}': provider '${providerId}' maps '${key}', which is \`userWritable: false\`, while self sign-up is on. ` +
-					'A mapped attribute must be writable by the hosted-UI app client, and with self sign-up on that client accepts sign-ups, ' +
-					'so end users could set it. Remove the mapping, set `emailPassword: { selfSignUp: false }`, or drop `userWritable: false`.',
+				`Auth '${id}': users.attributes '${name}' is \`userWritable: false\`, but provider '${providerId}' maps '${key}', ` +
+					"which would write the provider's claim on every federated sign-in. Remove the mapping, or drop `userWritable: false` " +
+					'and set the attribute from the provider only.',
 			);
 		}
 	}

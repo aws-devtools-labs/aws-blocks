@@ -1214,18 +1214,29 @@ describe('Auth federation — both app clients write only what end users may set
 		assert.deepStrictEqual(writeAttributes(template, 'hosted-ui-client'), expected);
 	});
 
-	test('the hosted-UI client adds every mapped attribute; the native client does not', () => {
-		// Self sign-up off: the option validation only then allows a mapping onto `role`.
+	// Pins what a mapped verified flag does to the lists (self sign-up on, the default): the
+	// hosted-UI client lists it so the mapping takes effect; the native client never does.
+	test('a provider mapping `email_verified`: the hosted-UI client lists it, the native client does not', () => {
 		const google =
 			"google: { type: 'google', clientId: 'g-client', clientSecret: googleSecret, " +
-			"attributeMapping: { role: 'hd', email_verified: 'email_verified' } }";
-		const { template } = synth(
-			`new Auth(stack, 'auth', { emailPassword: { selfSignUp: false }, providers: { ${google} }, users: { ${ATTRIBUTES} } })`,
-		);
+			"attributeMapping: { email_verified: 'email_verified', team: 'hd' } }";
+		const { template } = synth(`new Auth(stack, 'auth', { providers: { ${google} }, users: { ${ATTRIBUTES} } })`);
 		assert.deepStrictEqual(writeAttributes(template, 'client'), [...STANDARD, 'custom:team'].sort());
 		assert.deepStrictEqual(
 			writeAttributes(template, 'hosted-ui-client'),
-			[...STANDARD, 'custom:role', 'custom:team', 'email_verified'].sort(),
+			[...STANDARD, 'custom:team', 'email_verified'].sort(),
+		);
+	});
+
+	test('a provider mapping onto a `userWritable: false` attribute fails synth', () => {
+		const google =
+			"google: { type: 'google', clientId: 'g-client', clientSecret: googleSecret, attributeMapping: { role: 'hd' } }";
+		assert.throws(
+			() =>
+				synth(
+					`new Auth(stack, 'auth', { emailPassword: { selfSignUp: false }, providers: { ${google} }, users: { ${ATTRIBUTES} } })`,
+				),
+			/'role' is `userWritable: false`, but provider 'google' maps 'role'/,
 		);
 	});
 });
