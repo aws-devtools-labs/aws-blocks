@@ -60,6 +60,7 @@ final class BlocksClientTests: XCTestCase {
             } catch let error as RPCError {
                 XCTAssertEqual(error.code, 401, "HTTP \(status)")
                 XCTAssertEqual(error.name, "NotAuthenticatedException", "HTTP \(status)")
+                XCTAssertEqual(error.data, ["name": .string("NotAuthenticatedException")], "HTTP \(status)")
             }
         }
     }
@@ -195,6 +196,8 @@ final class BlocksClientTests: XCTestCase {
             XCTAssertEqual(error.message, "Error occured with code: -32600 message: Invalid request")
             XCTAssertEqual(error.code, -32_600)
             XCTAssertNil(error.name)
+            XCTAssertFalse(error.retriable, "the server sent no `data`")
+            XCTAssertNil(error.data)
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }
@@ -223,9 +226,107 @@ final class BlocksClientTests: XCTestCase {
             XCTAssertEqual(error.name, "NotAuthenticatedException")
             XCTAssertEqual(error.code, 401)
             XCTAssertEqual(error.message, "Error occured with code: 401 message: Not signed in")
+            XCTAssertFalse(error.retriable, "the server sent no `retriable`")
+            XCTAssertEqual(error.data, ["name": .string("NotAuthenticatedException")])
+            XCTAssertTrue(error.isBlocksError(name: "NotAuthenticatedException"))
+            XCTAssertFalse(error.isBlocksError(name: "CodeMismatchException"))
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }
+    }
+
+    /// The server sends `error.data.retriable: true` for a failure the caller can retry in place
+    /// (a wrong MFA code on a sign-in challenge); it is omitted otherwise.
+    func testExecuteExposesServerErrorRetriableAndData() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"code":400,"message":"Wrong MFA code","data":{"name":"CodeMismatchException","retriable":true}},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "authApi.setAuthState", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.name, "CodeMismatchException")
+            XCTAssertEqual(error.code, 400)
+            XCTAssertTrue(error.retriable)
+            XCTAssertEqual(error.data, ["name": .string("CodeMismatchException"), "retriable": .bool(true)])
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testExecuteReadsRetriableOnlyWhenTrue() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"code":400,"message":"Code expired","data":{"name":"ExpiredCodeException","retriable":false}},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "authApi.setAuthState", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.name, "ExpiredCodeException")
+            XCTAssertFalse(error.retriable)
+            XCTAssertEqual(error.data, ["name": .string("ExpiredCodeException"), "retriable": .bool(false)])
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testExecuteIgnoresNonObjectErrorData() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"code":500,"message":"Internal error","data":["not","an","object"]},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.code, 500)
+            XCTAssertNil(error.name)
+            XCTAssertFalse(error.retriable)
+            XCTAssertNil(error.data)
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testIsBlocksErrorIsFalseForOtherErrors() {
+        XCTAssertFalse(RPCError(message: "Invalid JSON response").isBlocksError(name: "NotAuthenticatedException"))
+        XCTAssertFalse(ClientClosedError().isBlocksError(name: "NotAuthenticatedException"))
+        XCTAssertFalse(URLError(.notConnectedToInternet).isBlocksError(name: "NotAuthenticatedException"))
     }
 
     func testExecuteThrowsOnHTTPError() async {
@@ -249,6 +350,59 @@ final class BlocksClientTests: XCTestCase {
             XCTFail("Expected error")
         } catch let error as RPCError {
             XCTAssertTrue(error.message.contains("500"))
+            XCTAssertEqual(error.code, 500)
+            XCTAssertNil(error.name)
+            XCTAssertNil(error.data)
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testExecuteKeepsTheHTTPStatusWhenTheBodyIsNotJSON() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 502, httpVersion: nil, headerFields: nil)!
+            return (response, Data("<html>Bad Gateway</html>".utf8))
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.message, "HTTP Error: 502")
+            XCTAssertEqual(error.code, 502)
+            XCTAssertNil(error.name)
+            XCTAssertNil(error.data)
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testExecuteThrowsOnInvalidJSONWithASuccessStatus() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("not json".utf8))
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.message, "Invalid JSON response")
+            XCTAssertNil(error.code)
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }

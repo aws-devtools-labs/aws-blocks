@@ -152,25 +152,37 @@ public final class BlocksClient: Sendable {
         }
 
         // Parse response to check for errors (minimal parsing)
-        guard let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw RPCError(message: "Invalid JSON response")
-        }
+        let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        // Check for JSON-RPC "error" field
-        if let errorObj = responseJson["error"] as? [String: Any] {
+        // A 4xx from an `httpErrorStatus: true` server namespace carries the same JSON-RPC error body
+        // as a 200, so decode it before checking the status.
+        if let errorObj = responseJson?["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            let name = (errorObj["data"] as? [String: Any])?["name"] as? String
+            var errorData: [String: JSONValue]?
+            if let rawData = errorObj["data"] as? [String: Any],
+               case .dictionary(let entries)? = JSONValue(serialized: rawData) {
+                errorData = entries
+            }
+            var name: String?
+            if case .string(let value)? = errorData?["name"] { name = value }
             throw RPCError(
                 message: "Error occured with code: \(code) message: \(message)",
                 code: code,
-                name: name
+                name: name,
+                retriable: errorData?["retriable"] == .bool(true),
+                data: errorData
             )
         }
 
-        // Check HTTP status
+        // Not a JSON-RPC error (a gateway or route error, or no JSON at all): a transport failure
+        // that keeps the HTTP status as its `code`.
         if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
-            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)")
+            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)", code: httpResponse.statusCode)
+        }
+
+        guard let responseJson else {
+            throw RPCError(message: "Invalid JSON response")
         }
 
         // Check for null result
@@ -344,7 +356,8 @@ public struct RPCError: BlocksError {
     public let underlyingError: Error?
 
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
-    /// HTTP status (e.g. `401`). `nil` for transport and decoding failures.
+    /// HTTP status (e.g. `401`). For a non-2xx response that carries no JSON-RPC error
+    /// (a gateway or route error), the HTTP status. `nil` for other transport and decoding failures.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
@@ -352,11 +365,36 @@ public struct RPCError: BlocksError {
     /// `nil` when the server sent none, and for transport and decoding failures.
     public let name: String?
 
-    public init(message: String, code: Int? = nil, name: String? = nil, underlyingError: Error? = nil) {
+    /// Whether the caller can retry the same action without restarting the broader flow
+    /// (`error.data.retriable`, e.g. a wrong MFA code on a sign-in challenge). `false` when
+    /// the server sent none, and for transport and decoding failures.
+    public let retriable: Bool
+
+    /// The server's raw `error.data` object. `nil` when the server sent none, and for
+    /// transport and decoding failures.
+    public let data: [String: JSONValue]?
+
+    public init(
+        message: String,
+        code: Int? = nil,
+        name: String? = nil,
+        retriable: Bool = false,
+        data: [String: JSONValue]? = nil,
+        underlyingError: Error? = nil
+    ) {
         self.message = message
         self.code = code
         self.name = name
+        self.retriable = retriable
+        self.data = data
         self.underlyingError = underlyingError
+    }
+}
+
+public extension Error {
+    /// Whether this is an `RPCError` whose server error name is `name` (e.g. `"NotAuthenticatedException"`).
+    func isBlocksError(name: String) -> Bool {
+        (self as? RPCError)?.name == name
     }
 }
 
