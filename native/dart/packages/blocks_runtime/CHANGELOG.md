@@ -14,12 +14,12 @@
   client decodes, and file uploads and downloads, always use the runtime's
   own client with the default timeouts. Requires `http` 1.5.0 or later.
 - Add streaming file transfers, so a file no longer has to fit in memory.
-  `FileUploadHandle.uploadFrom(Stream<List<int>> source, {int? contentLength})`
-  streams a body (chunked when `contentLength` is left out), and fails before
-  the request completes if `source` yields a different number of bytes than
-  `contentLength`, the size a handle created with a `contentLength` option
-  signs. `FileDownloadHandle.downloadTo(StreamSink<List<int>> sink)` streams
-  the body into a sink it does not close. `uploadFromFile(path)` and
+  `FileUploadHandle.uploadFrom(Stream<List<int>> source, {required int contentLength})`
+  streams a body with that `Content-Length`, and fails before the request
+  completes if `source` yields a different number of bytes, which also
+  covers the size a handle created with a `contentLength` option signs.
+  `FileDownloadHandle.downloadTo(StreamConsumer<List<int>> sink)` streams
+  the body into a consumer it does not close. `uploadFromFile(path)` and
   `downloadToFile(path)` work from a file path; `downloadToFile` writes a new
   file and renames it into place, so a failed download leaves the path
   unchanged. The file-path methods throw `UnsupportedError` on the web.

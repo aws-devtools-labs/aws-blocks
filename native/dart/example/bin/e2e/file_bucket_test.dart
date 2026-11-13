@@ -72,12 +72,13 @@ void main() async {
   final up4 = await blocks.api.fileCreateUploadHandle(
     path: '$prefix/stream.bin',
   );
-  // A chunked body: no contentLength, so no Content-Length header.
+  // Several chunks, sent as they come.
   await up4.uploadFrom(
     Stream.fromIterable([
       for (var i = 0; i < streamData.length; i += 64 * 1024)
         streamData.sublist(i, i + 64 * 1024),
     ]),
+    contentLength: streamData.length,
   );
   final down4 = await blocks.api.fileGetHandle(path: '$prefix/stream.bin');
   final streamed = BytesBuilder(copy: false);

@@ -60,13 +60,17 @@ class FileUploadHandle {
   /// Streams [source] to the presigned upload URL, so the file does not have
   /// to fit in memory.
   ///
-  /// When [contentLength] is `null` the body is sent without a
-  /// `Content-Length` header (chunked). If the handle was created on the
-  /// server with a `contentLength` option, that size is signed into the URL
-  /// and the upload is rejected unless it sends exactly that `Content-Length`:
-  /// pass the same value here, and make [source] yield exactly that many
-  /// bytes. A [source] that yields more or fewer bytes than [contentLength]
-  /// fails the upload before the request completes, so nothing is stored.
+  /// [contentLength] is the body size in bytes, sent as the `Content-Length`
+  /// header. It is required because a presigned upload URL does not accept a
+  /// chunked body. If the handle was created on the server with a
+  /// `contentLength` option, that size is signed into the URL and the upload
+  /// is rejected unless it sends exactly that `Content-Length`, so pass the
+  /// same value here. A [source] that yields more or fewer bytes than
+  /// [contentLength] fails the upload before the request completes, so
+  /// nothing is stored.
+  ///
+  /// A [source] that yields nothing for the idle timeout (60 seconds) fails
+  /// the upload with a `TimeoutException`.
   ///
   /// On the web, package:http's browser client reads the whole body into
   /// memory before it sends the request.
@@ -75,15 +79,13 @@ class FileUploadHandle {
   /// and rethrows an error from [source] or the network.
   Future<void> uploadFrom(
     Stream<List<int>> source, {
-    int? contentLength,
+    required int contentLength,
   }) async {
-    if (contentLength != null) {
-      RangeError.checkNotNegative(contentLength, 'contentLength');
-    }
+    RangeError.checkNotNegative(contentLength, 'contentLength');
     final request = _StreamingRequest(
       'PUT',
       Uri.parse(url),
-      contentLength == null ? source : _exactly(source, contentLength),
+      _exactly(source, contentLength),
     );
     if (contentType != null) request.headers['Content-Type'] = contentType!;
     request.contentLength = contentLength;
@@ -110,15 +112,17 @@ class FileUploadHandle {
   }
 
   /// Passes [source] through, failing it if it yields more or fewer than
-  /// [expected] bytes. It fails before the first byte past [expected] is
-  /// sent, or at the end of a short source, so the server never sees a
-  /// complete request of the wrong size.
+  /// [expected] bytes. The chunk that reaches [expected] is held back until
+  /// [source] ends, so an extra byte fails the stream before the server has
+  /// a complete request, and a short source fails it at its end.
   static Stream<List<int>> _exactly(
     Stream<List<int>> source,
     int expected,
   ) async* {
     var sent = 0;
+    List<int>? last;
     await for (final chunk in source) {
+      if (chunk.isEmpty) continue;
       sent += chunk.length;
       if (sent > expected) {
         // TODO(error-taxonomy): use the shared file-transfer error type.
@@ -127,7 +131,11 @@ class FileUploadHandle {
           'given as contentLength',
         );
       }
-      yield chunk;
+      if (sent == expected) {
+        last = chunk;
+      } else {
+        yield chunk;
+      }
     }
     if (sent < expected) {
       // TODO(error-taxonomy): use the shared file-transfer error type.
@@ -136,6 +144,7 @@ class FileUploadHandle {
         'given as contentLength',
       );
     }
+    if (last != null) yield last;
   }
 }
 

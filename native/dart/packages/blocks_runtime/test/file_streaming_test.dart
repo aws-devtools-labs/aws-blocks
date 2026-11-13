@@ -47,7 +47,7 @@ String _url(HttpServer server, String path) =>
 
 void main() {
   group('FileUploadHandle.uploadFrom', () {
-    test('streams a large chunked source, chunked when no length', () async {
+    test('streams a large chunked source with its Content-Length', () async {
       final data = _payload(5 * 1024 * 1024 + 123);
       final received = BytesBuilder(copy: false);
       String? transferEncoding;
@@ -65,11 +65,11 @@ void main() {
       await FileUploadHandle.fromJson({
         'url': _url(server, '/put'),
         'contentType': 'application/octet-stream',
-      }).uploadFrom(_chunked(data, 64 * 1024));
+      }).uploadFrom(_chunked(data, 64 * 1024), contentLength: data.length);
 
       expect(received.takeBytes(), data);
-      expect(transferEncoding, 'chunked');
-      expect(contentLength, -1);
+      expect(transferEncoding, isNull);
+      expect(contentLength, data.length);
       expect(contentType, 'application/octet-stream');
     });
 
@@ -89,11 +89,11 @@ void main() {
       });
 
       final source = StreamController<List<int>>();
-      final upload = FileUploadHandle.fromJson({
-        'url': _url(server, '/put'),
-      }).uploadFrom(source.stream);
       // Larger than dart:io's write buffer, so it is not held back.
       final first = _payload(64 * 1024);
+      final upload = FileUploadHandle.fromJson({
+        'url': _url(server, '/put'),
+      }).uploadFrom(source.stream, contentLength: first.length + 2);
       source.add(first);
       await firstChunkArrived.future.timeout(const Duration(seconds: 5));
       source.add([4, 5]);
@@ -163,6 +163,36 @@ void main() {
         ),
       );
     });
+
+    test(
+      'stores nothing when the extra byte comes after a full chunk',
+      () async {
+        // The first chunk alone is exactly contentLength. If it were sent at
+        // once, the server would see a complete request and store it before
+        // the extra byte arrived.
+        const length = 64 * 1024 + 1;
+        var stored = false;
+        final server = await _serve((req) async {
+          final body = BytesBuilder(copy: false);
+          await req.forEach(body.add);
+          if (body.length == req.headers.contentLength) stored = true;
+          req.response.statusCode = 200;
+          await req.response.close();
+        });
+
+        final source = StreamController<List<int>>();
+        final upload = FileUploadHandle.fromJson({
+          'url': _url(server, '/put'),
+        }).uploadFrom(source.stream, contentLength: length);
+        source.add(_payload(length));
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        source.add([0]);
+        await source.close();
+
+        await expectLater(upload, throwsA(isA<Exception>()));
+        expect(stored, isFalse);
+      },
+    );
 
     test('rejects a negative contentLength', () {
       expect(
@@ -357,6 +387,22 @@ void main() {
 
       expect(await file.readAsString(), 'old contents');
       expect(dir.listSync().map((e) => e.path), [file.path]);
+    });
+
+    test('throws when the directory does not exist', () async {
+      final server = await _serve((req) async {
+        req.response.statusCode = 200;
+        req.response.add([1, 2, 3]);
+        await req.response.close();
+      });
+
+      await expectLater(
+        FileDownloadHandle.fromJson({
+          'url': _url(server, '/get'),
+        }).downloadToFile('${dir.path}/missing/download.bin'),
+        throwsA(isA<PathNotFoundException>()),
+      );
+      expect(dir.listSync(), isEmpty);
     });
 
     test('leaves no file when the body is cut off', () async {

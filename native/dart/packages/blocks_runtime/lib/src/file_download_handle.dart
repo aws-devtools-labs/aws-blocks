@@ -48,7 +48,8 @@ class FileDownloadHandle {
   }
 
   /// Streams the file into [sink] as it arrives, so it does not have to fit
-  /// in memory.
+  /// in memory. [sink] can be an `IOSink`, a `StreamController` or its
+  /// `sink`, or any other [StreamConsumer].
   ///
   /// [sink] is not closed; the caller owns it. Bytes already written stay in
   /// [sink] if the download fails partway, so a caller that needs all or
@@ -56,7 +57,7 @@ class FileDownloadHandle {
   ///
   /// Throws an [Exception] on an HTTP error status (before anything is
   /// written), and rethrows a network error.
-  Future<void> downloadTo(StreamSink<List<int>> sink) async {
+  Future<void> downloadTo(StreamConsumer<List<int>> sink) async {
     final client = UserAgentClient(newBlocksHttpClient());
     try {
       final response = await client.send(http.Request('GET', Uri.parse(url)));
@@ -89,7 +90,15 @@ class FileDownloadHandle {
   /// file. (This matches Swift's `downloadTo(fileURL:)`; [downloadTo] and
   /// Kotlin's `downloadTo(sink)` leave durability to the caller.)
   ///
-  /// Throws [UnsupportedError] on the web, which has no file paths.
+  /// The new file is named `<path>.<random hex>.part`. It is not flushed to
+  /// disk (no fsync) before the rename, and a process killed mid-download
+  /// leaves it behind. On Windows the rename fails, keeping the old file, if
+  /// another process has [path] open.
+  ///
+  /// Throws a `FileSystemException` if the new file cannot be created (for
+  /// example, when the directory does not exist), before anything is
+  /// downloaded. Throws [UnsupportedError] on the web, which has no file
+  /// paths.
   Future<void> downloadToFile(String path) =>
       writeLocalFileAtomically(path, downloadTo);
 }

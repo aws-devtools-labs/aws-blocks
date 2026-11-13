@@ -14,6 +14,9 @@ Future<void> writeLocalFileAtomically(
   // Same directory as [path], so the rename stays on one file system.
   final suffix = Random.secure().nextInt(1 << 32).toRadixString(16);
   final partial = File('$path.$suffix.part');
+  // openWrite opens the file lazily and reports a failure to open both to
+  // close() and as an uncaught error, so create the file first.
+  await partial.create(exclusive: true);
   final sink = partial.openWrite();
   try {
     await write(sink);
