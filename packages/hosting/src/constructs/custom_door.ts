@@ -30,12 +30,17 @@
  * Known limit: the check sees only what the helpers recorded. A door that
  * wires correctly with raw CDK gets a false alarm; it declares its hand-wired
  * origins with `cf.recordWired(...)`, or opts out with `wiringCheck: false`.
+ *
+ * A door that routes at the app (`routing: 'app'`) attaches only the app's
+ * entry function (`origins.entry`), which serves the assets, the API and the
+ * app's rules itself: the wiring check does not apply to it. A `routing`
+ * other than `'door'` or `'app'` fails synth (`InvalidPropsError`).
  */
 import { Annotations } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import { startWiringRecord, type WiringRecord } from './cf_helpers.js';
-import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
+import type { DoorInput, DoorRouting, FrontDoor, FrontDoorResult } from './front_door.js';
 import { type OriginHandle, originHandleFromUrl } from './layer.js';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 
@@ -84,6 +89,7 @@ export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDo
       resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-blocks/hosting/constructs.',
     });
   }
+  const routing = doorRoutingOf(door);
   const wiring = startWiringRecord(input);
   const result = door.build(scope, input);
   if (!result || typeof result.url !== 'string' || result.url.length === 0) {
@@ -94,12 +100,32 @@ export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDo
         'or the custom domain when the door serves one.',
     });
   }
-  if (options.wiringCheck !== false) checkWiring(scope, door.service, input, wiring);
+  if (options.wiringCheck !== false && routing === 'door') checkWiring(scope, door.service, input, wiring);
   const url = bareOrigin(result.url);
   return {
     result: { ...result, url, originHandle: result.originHandle ?? originHandleFromUrl(url) },
     wiring,
   };
+}
+
+/**
+ * Where a door runs the app's route table (`FrontDoor.routing`, default `'door'`).
+ *
+ * @param door the door.
+ * @returns `'door'` or `'app'`.
+ * @throws HostingError('InvalidPropsError') for any other value.
+ * @internal Framework-only.
+ */
+export function doorRoutingOf(door: Pick<FrontDoor, 'service' | 'routing'>): DoorRouting {
+  const routing: unknown = door.routing;
+  if (routing === undefined || routing === 'door') return 'door';
+  if (routing === 'app') return 'app';
+  throw new HostingError('InvalidPropsError', {
+    message: `Front door '${door.service}' has routing ${JSON.stringify(routing)}; it must be 'door' or 'app'.`,
+    resolution:
+      "Omit `routing` (or set 'door') for a door that renders the app's route table itself, " +
+      "or set `routing: 'app'` for a door that maps the hostname to the app's entry function (`origins.entry`).",
+  });
 }
 
 /**
