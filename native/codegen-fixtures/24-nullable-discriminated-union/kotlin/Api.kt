@@ -18,7 +18,6 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
@@ -102,9 +101,60 @@ public class Api(
   }
 
   public object GetNotification {
-    @Serializable
-    @JsonClassDiscriminator("type")
+    @Serializable(with = Result.ResultSerializer::class)
     public sealed class Result {
+      /**
+       * Reads and writes [Result] with its discriminator `type` as the JSON value
+       * the spec gives it.
+       */
+      public object ResultSerializer : KSerializer<Result> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Result")
+
+        override fun serialize(encoder: Encoder, `value`: Result) {
+          val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
+          val element = when (value) {
+            is Email -> buildJsonObject {
+              put("type", JsonPrimitive("email"))
+              output.json.encodeToJsonElement(Email.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is Sms -> buildJsonObject {
+              put("type", JsonPrimitive("sms"))
+              output.json.encodeToJsonElement(Sms.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is Unknown -> value.json
+          }
+          output.encodeJsonElement(element)
+        }
+
+        override fun deserialize(decoder: Decoder): Result {
+          val input = decoder as? JsonDecoder ?: throw SerializationException("Result can only be read from JSON")
+          val element = input.decodeJsonElement()
+          if (element is JsonObject) {
+            val fields = JsonObject(element - "type")
+            when (element["type"]) {
+              JsonPrimitive("email") -> return input.json.decodeFromJsonElement(Email.serializer(), fields)
+              JsonPrimitive("sms") -> return input.json.decodeFromJsonElement(Sms.serializer(), fields)
+              else -> if ((element["type"] as? JsonPrimitive)?.isString == true) return Unknown(element)
+            }
+          }
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"type\": \"email\"; or an object with \"type\": \"sms\"")
+        }
+      }
+
+      /**
+       * An arm this client was generated without: the object as the server sent it.
+       */
+      public data class Unknown(
+        public val json: JsonObject,
+      ) : Result() {
+        /**
+         * The discriminator value that names no known arm. Decoding only makes this arm
+         * for an object whose discriminator is a string.
+         */
+        public val discriminator: String
+          get() = (json.getValue("type") as JsonPrimitive).content
+      }
+
       @Serializable
       @SerialName("email")
       public data class Email(

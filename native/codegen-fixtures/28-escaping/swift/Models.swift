@@ -2,12 +2,36 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Kind: String, Codable {
-    case cost_ = "cost$"
-    case a_b = "a$b"
-    case x__y = "x$$y"
-    case b_c = "b-$c"
-    case d__e = "d_$e"
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
+    case cost_
+    case a_b
+    case x__y
+    case b_c
+    case d__e
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "cost$": self = .cost_
+        case "a$b": self = .a_b
+        case "x$$y": self = .x__y
+        case "b-$c": self = .b_c
+        case "d_$e": self = .d__e
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .cost_: return "cost$"
+        case .a_b: return "a$b"
+        case .x__y: return "x$$y"
+        case .b_c: return "b-$c"
+        case .d__e: return "d_$e"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Widget: Codable {

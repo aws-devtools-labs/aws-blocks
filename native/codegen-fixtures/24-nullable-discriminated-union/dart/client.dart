@@ -131,7 +131,7 @@ sealed class GetNotificationResult {
     switch (json['type'] as String) {
       case 'email': return EmailGetNotificationResult.fromJson(json);
       case 'sms': return SmsGetNotificationResult.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      default: return GetNotificationResultUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -207,6 +207,30 @@ class SmsGetNotificationResult extends GetNotificationResult {
 
   @override
   String toString() => 'SmsGetNotificationResult(message: $message)';
+}
+
+/// A `GetNotificationResult` arm this client was generated without.
+final class GetNotificationResultUnknown extends GetNotificationResult {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const GetNotificationResultUnknown(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['type'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetNotificationResultUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'GetNotificationResultUnknown' '($json)';
 }
 
 

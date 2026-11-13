@@ -1,4 +1,5 @@
 import Foundation
+import BlocksRuntime
 
 
 public nonisolated struct Cart: Codable {
@@ -51,14 +52,50 @@ public nonisolated struct Cart: Codable {
     }
 }
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
     case x
     case y
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "x": self = .x
+        case "y": self = .y
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .x: return "x"
+        case .y: return "y"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Status: String, Codable {
+public nonisolated enum Status: RawRepresentable, Codable, Hashable {
     case pending
     case shipped
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "pending": self = .pending
+        case "shipped": self = .shipped
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .shipped: return "shipped"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Order: Codable {
@@ -69,14 +106,50 @@ public nonisolated struct Order: Codable {
     }
 }
 
-public nonisolated enum TicketKind: String, Codable {
+public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable {
     case bug
     case task
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "bug": self = .bug
+        case "task": self = .task
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .bug: return "bug"
+        case .task: return "task"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum Kinds: String, Codable {
+public nonisolated enum Kinds: RawRepresentable, Codable, Hashable {
     case urgent
     case later
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "urgent": self = .urgent
+        case "later": self = .later
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .urgent: return "urgent"
+        case .later: return "later"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Text: Codable {
@@ -98,21 +171,33 @@ public nonisolated struct Count: Codable {
 public nonisolated enum Payload: Codable {
     case text(Text)
     case count(Count)
+    /// An arm this client was generated without: the object as the server sent it.
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case `type`
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("text", forKey: .`type`)
             try params.encode(to: encoder)
         case .count(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("count", forKey: .`type`)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
+    }
+
+    /// The discriminator of an arm this client was generated without; nil for a known arm.
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["type"] else { return nil }
+        return tag
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,7 +207,7 @@ public nonisolated enum Payload: Codable {
         case "text": self = .text(try Text(from: decoder))
         case "count": self = .count(try Count(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .`type`, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
@@ -146,21 +231,33 @@ public nonisolated struct Rich: Codable {
 public nonisolated enum Payloads: Codable {
     case plain(Plain)
     case rich(Rich)
+    /// An arm this client was generated without: the object as the server sent it.
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case format
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .plain(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("plain", forKey: .format)
             try params.encode(to: encoder)
         case .rich(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("rich", forKey: .format)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
+    }
+
+    /// The discriminator of an arm this client was generated without; nil for a known arm.
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["format"] else { return nil }
+        return tag
     }
 
     public init(from decoder: Decoder) throws {
@@ -170,14 +267,32 @@ public nonisolated enum Payloads: Codable {
         case "plain": self = .plain(try Plain(from: decoder))
         case "rich": self = .rich(try Rich(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .format, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
 
-public nonisolated enum TicketStatus: String, Codable {
+public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable {
     case open
     case closed
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "open": self = .open
+        case "closed": self = .closed
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .open: return "open"
+        case .closed: return "closed"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Ticket: Codable {

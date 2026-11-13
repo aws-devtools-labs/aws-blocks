@@ -2,13 +2,47 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum GroupValue: String, Codable {
+public nonisolated enum GroupValue: RawRepresentable, Codable, Hashable {
     case admins
     case users
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "admins": self = .admins
+        case "users": self = .users
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .admins: return "admins"
+        case .users: return "users"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum SignInProvider: String, Codable {
+public nonisolated enum SignInProvider: RawRepresentable, Codable, Hashable {
     case password
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "password": self = .password
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .password: return "password"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct AuthenticatedUser: Codable {
@@ -56,10 +90,30 @@ public nonisolated struct AuthenticatedUser: Codable {
     }
 }
 
-public nonisolated enum DeliveryMedium: String, Codable {
-    case sms = "SMS"
-    case email = "EMAIL"
-    case phoneNumber = "PHONE_NUMBER"
+public nonisolated enum DeliveryMedium: RawRepresentable, Codable, Hashable {
+    case sms
+    case email
+    case phoneNumber
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "SMS": self = .sms
+        case "EMAIL": self = .email
+        case "PHONE_NUMBER": self = .phoneNumber
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .sms: return "SMS"
+        case .email: return "EMAIL"
+        case .phoneNumber: return "PHONE_NUMBER"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct CodeDeliveryDetails: Codable {

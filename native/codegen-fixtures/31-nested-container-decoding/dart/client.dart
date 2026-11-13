@@ -51,13 +51,44 @@ class SignInOption {
 
 // --- API Namespaces ---
 
-enum Level {
+sealed class Level {
+  static const low = LevelKnown.low;
+  static const high = LevelKnown.high;
+  static const values = LevelKnown.values;
+  static final Map<String, LevelKnown> _byJson = LevelKnown.values.asNameMap();
+
+  String toJson();
+  static Level fromJson(String json) => _byJson[json] ?? LevelUnknown(json);
+}
+
+enum LevelKnown implements Level {
   low,
   high
 ;
 
+  @override
   String toJson() => name;
-  static Level fromJson(String json) => values.byName(json);
+}
+
+/// A `Level` value this client was generated without.
+final class LevelUnknown implements Level {
+  /// The value as the server sent it.
+  final String value;
+
+  const LevelUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LevelUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LevelUnknown' '($value)';
 }
 
 

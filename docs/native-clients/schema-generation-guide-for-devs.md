@@ -188,6 +188,12 @@ Both shapes — the map and the derived union — are exported. Customer code th
 
 > **Note on empty payloads.** Use `{}` (empty object type) rather than `Record<string, never>` for actions with no extra fields. The intersection `{ action: K } & Record<string, never>` is uninhabited because the discriminator can't satisfy the `never` index signature.
 
+### String literal unions in results are open in native clients
+
+A string literal union (`'pending' | 'done'`) emits as a string `enum`. When a method's result can carry it, native clients generate it open: a value they don't know decodes to an unknown case holding the string, rather than failing (see [codegen-design.md](./codegen-design.md#open-enums-values-a-client-doesnt-know)). So adding a value to a result's enum doesn't break shipped clients, though their exhaustive `switch`/`when` falls through to the unknown case for it. Removing or renaming a value is still breaking. An enum used only in parameters stays closed, so native clients can't build a value the server never declared. An enum used in both a result and a parameter is open in both, so a client can send back a value it received; the server validates it as usual.
+
+The same holds for a discriminated union in a result: an arm a newer backend adds (a new `status` in a sign-in result) decodes in shipped clients to an unknown case that keeps the object, so adding an arm is safe, while removing an arm or changing an existing arm's fields is still breaking.
+
 ### `Record<K, V>` emits `additionalProperties`
 
 `Record<string, string>` and other index-signature types emit as `{ type: "object", additionalProperties: { type: "string" } }`. Native codegen produces `Map<String, String>` / `Dictionary<String, String>`. This is correct but less precise than named fields — prefer explicit object types when the keys are known:

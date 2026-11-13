@@ -40,9 +40,27 @@ public nonisolated struct Bag: Codable {
     }
 }
 
-public nonisolated enum ProfileState: String, Codable {
-    case inProgress = "in-progress"
-    case in_Progress = "in_progress"
+public nonisolated enum ProfileState: RawRepresentable, Codable, Hashable {
+    case inProgress
+    case in_Progress
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "in-progress": self = .inProgress
+        case "in_progress": self = .in_Progress
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .inProgress: return "in-progress"
+        case .in_Progress: return "in_progress"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct Profile: Codable {

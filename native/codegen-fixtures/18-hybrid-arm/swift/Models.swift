@@ -1,14 +1,50 @@
 import Foundation
 
 
-public nonisolated enum Capability: String, Codable {
-    case webauthnGet = "webauthn-get"
-    case webauthnCreate = "webauthn-create"
+public nonisolated enum Capability: RawRepresentable, Codable, Hashable {
+    case webauthnGet
+    case webauthnCreate
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "webauthn-get": self = .webauthnGet
+        case "webauthn-create": self = .webauthnCreate
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .webauthnGet: return "webauthn-get"
+        case .webauthnCreate: return "webauthn-create"
+        case .unknown(let value): return value
+        }
+    }
 }
 
-public nonisolated enum AuthActionMethod: String, Codable {
-    case get = "GET"
-    case post = "POST"
+public nonisolated enum AuthActionMethod: RawRepresentable, Codable, Hashable {
+    case get
+    case post
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "GET": self = .get
+        case "POST": self = .post
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .get: return "GET"
+        case .post: return "POST"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct AuthAction: Codable {
@@ -52,13 +88,39 @@ public nonisolated struct AuthAction: Codable {
     }
 }
 
-public nonisolated enum AuthFieldType: String, Codable {
+public nonisolated enum AuthFieldType: RawRepresentable, Codable, Hashable {
     case number
     case password
     case email
     case text
     case tel
     case hidden
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "number": self = .number
+        case "password": self = .password
+        case "email": self = .email
+        case "text": self = .text
+        case "tel": self = .tel
+        case "hidden": self = .hidden
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .number: return "number"
+        case .password: return "password"
+        case .email: return "email"
+        case .text: return "text"
+        case .tel: return "tel"
+        case .hidden: return "hidden"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct AuthField: Codable {
@@ -94,13 +156,39 @@ public nonisolated struct AuthField: Codable {
     }
 }
 
-public nonisolated enum AuthStateState: String, Codable {
+public nonisolated enum AuthStateState: RawRepresentable, Codable, Hashable {
     case signedOut
     case signedIn
     case confirmingSignUp
     case confirmingSignIn
     case confirmingMfa
     case confirmingPasswordReset
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "signedOut": self = .signedOut
+        case "signedIn": self = .signedIn
+        case "confirmingSignUp": self = .confirmingSignUp
+        case "confirmingSignIn": self = .confirmingSignIn
+        case "confirmingMfa": self = .confirmingMfa
+        case "confirmingPasswordReset": self = .confirmingPasswordReset
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .signedOut: return "signedOut"
+        case .signedIn: return "signedIn"
+        case .confirmingSignUp: return "confirmingSignUp"
+        case .confirmingSignIn: return "confirmingSignIn"
+        case .confirmingMfa: return "confirmingMfa"
+        case .confirmingPasswordReset: return "confirmingPasswordReset"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct AuthState: Codable {

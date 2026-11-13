@@ -38,10 +38,30 @@ public final nonisolated class Api: Sendable {
                 self.updatedAt = updatedAt
             }
 
-            public enum Status: String, Codable {
+            public enum Status: RawRepresentable, Codable, Hashable {
                 case active
                 case inactive
                 case pending
+                /// A value this client was generated without, as the server sent it.
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "active": self = .active
+                    case "inactive": self = .inactive
+                    case "pending": self = .pending
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .active: return "active"
+                    case .inactive: return "inactive"
+                    case .pending: return "pending"
+                    case .unknown(let value): return value
+                    }
+                }
             }
         }
     }

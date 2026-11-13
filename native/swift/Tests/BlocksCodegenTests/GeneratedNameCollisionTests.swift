@@ -298,11 +298,13 @@ final class GeneratedNameCollisionTests: XCTestCase {
     func testEnumCasesAreSanitizedUniqueAndTheirRawValuesEscaped() throws {
         let output = try generate(schemas: #"{ "E": \#(strings([#"back\\slash"#, #"q\"uote"#, "default", "inProgress", "in-progress"])) }"#,
                                   methods: [method("api.get", result: ref("E"))])
-        assertContains(output.models, #"case back_slash = "back\\slash""#)
-        assertContains(output.models, #"case q_uote = "q\"uote""#)
+        // `E` is a result, so it is open: each raw value is a case of `init(rawValue:)` and `rawValue`.
+        assertContains(output.models, #"case "back\\slash": self = .back_slash"#)
+        assertContains(output.models, #"case "q\"uote": self = .q_uote"#)
         assertContains(output.models, "case `default`\n")
         assertContains(output.models, "case inProgress\n")
-        assertContains(output.models, #"case inProgress_2 = "in-progress""#)
+        assertContains(output.models, #"case "in-progress": self = .inProgress_2"#)
+        assertContains(output.models, #"case .inProgress_2: return "in-progress""#)
     }
 
     func testDiscriminatorKeyThatIsNotAnIdentifierKeepsItsWireName() throws {

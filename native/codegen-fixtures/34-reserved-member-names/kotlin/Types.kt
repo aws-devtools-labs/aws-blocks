@@ -2,11 +2,13 @@ package com.example.app
 
 import kotlin.Int
 import kotlin.String
+import kotlin.collections.List
 import kotlin.collections.Map
 import kotlin.collections.Set
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -18,18 +20,65 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 
-@Serializable
-public enum class Level {
-  @SerialName("values")
-  Values,
-  @SerialName("index")
-  Index,
-  @SerialName("name")
-  Name,
-  @SerialName("_hidden")
-  Hidden,
-  @SerialName("ok")
-  Ok,
+/**
+ * A string enum that keeps a value this client was generated without as [Unknown].
+ */
+@Serializable(with = Level.Serializer::class)
+public sealed class Level {
+  /**
+   * The value as it is sent on the wire.
+   */
+  public abstract val `value`: String
+
+  public data object Values : Level() {
+    override val `value`: String = "values"
+  }
+
+  public data object Index : Level() {
+    override val `value`: String = "index"
+  }
+
+  public data object Name : Level() {
+    override val `value`: String = "name"
+  }
+
+  public data object Hidden : Level() {
+    override val `value`: String = "_hidden"
+  }
+
+  public data object Ok : Level() {
+    override val `value`: String = "ok"
+  }
+
+  /**
+   * A value this client was generated without, as the server sent it.
+   */
+  public data class Unknown(
+    override val `value`: String,
+  ) : Level()
+
+  public companion object {
+    /**
+     * The known values, in the spec's order.
+     */
+    public val entries: List<Level> by lazy { listOf(Values, Index, Name, Hidden, Ok) }
+
+    /**
+     * The case for [value]: a known one, else [Unknown].
+     */
+    public fun fromValue(`value`: String): Level = entries.firstOrNull { it.value == value } ?: Unknown(value)
+  }
+
+  public object Serializer : KSerializer<Level> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("com.example.app.Level", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, `value`: Level) {
+      encoder.encodeString(value.value)
+    }
+
+    override fun deserialize(decoder: Decoder): Level = fromValue(decoder.decodeString())
+  }
 }
 
 @Serializable

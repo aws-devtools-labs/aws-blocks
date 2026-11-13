@@ -1,7 +1,10 @@
 package com.example.app.roundtrip
 
 import com.aws.blocks.kotlin.json.BlocksJson
+import com.example.app.AuthAction
 import com.example.app.AuthApi.SetAuthState
+import com.example.app.AuthField
+import com.example.app.AuthState
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
@@ -49,5 +52,18 @@ class HybridArmRoundTripTest : FunSpec({
         BlocksJson.encodeToJsonElement(serializer, input) shouldBe wire
         BlocksJson.decodeFromJsonElement(serializer, wire) shouldBe input
         BlocksJson.encodeToJsonElement(serializer, SetAuthState.Input.SignOut) shouldBe json("""{"action":"signOut"}""")
+    }
+
+    test("an auth state, field type or capability a newer server adds decodes and round-trips") {
+        val wire = json(
+            """{"state":"enrollingTotp","actions":[{"name":"verifyTotp","label":"Verify",""" +
+                """"fields":[{"name":"otp","label":"Code","type":"otp","required":true}],""" +
+                """"capability":"webauthn-future"}]}""",
+        )
+        val state = BlocksJson.decodeFromJsonElement(AuthState.serializer(), wire)
+        state.state shouldBe AuthState.State.Unknown("enrollingTotp")
+        state.actions[0].fields[0].type shouldBe AuthField.Type.Unknown("otp")
+        state.actions[0].capability shouldBe AuthAction.Capability.Unknown("webauthn-future")
+        BlocksJson.encodeToJsonElement(AuthState.serializer(), state) shouldBe wire
     }
 })
