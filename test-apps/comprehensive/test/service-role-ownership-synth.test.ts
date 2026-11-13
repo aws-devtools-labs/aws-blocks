@@ -18,8 +18,9 @@
  *
  * KMS key policies get the same check: every key whose policy names a service
  * principal, with those statements' conditions removed, must fail synth and
- * none may only warn. (Today no key in this app names a service principal;
- * this guards a block that adds one.)
+ * none may only warn. The fixture app adds a `Hosting` with monitoring, whose
+ * alarm topic key grants `cloudwatch.amazonaws.com`, so the key check always has
+ * at least one key to classify.
  */
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
@@ -56,6 +57,10 @@ describe('the service-principal trust check classifies every Building Block role
     assert.ok(expected.length >= 3, `expected the full app's service roles, found ${expected.join(', ')}`);
     assert.deepStrictEqual(warnings, [], `roles classified as the app's:\n  ${warnings.join('\n  ')}`);
     assert.deepStrictEqual([...errors].sort(), expected);
+    assert.ok(
+      serviceKeys.some((path) => path.endsWith('/AlarmTopicKey/Resource')),
+      `expected Hosting's alarm topic key among the keys that name a service principal, found ${serviceKeys.join(', ')}`,
+    );
     assert.deepStrictEqual(keyWarnings, [], `KMS keys classified as the app's:\n  ${keyWarnings.join('\n  ')}`);
     assert.deepStrictEqual([...keyErrors].sort(), [...serviceKeys].sort());
   });

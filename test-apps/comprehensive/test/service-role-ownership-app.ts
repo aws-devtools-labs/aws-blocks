@@ -16,11 +16,16 @@
  * KMS keys get the same treatment: the `Condition` of every key-policy statement
  * that names a service principal is removed, the key-policy check reports each
  * such key, and the JSON line also carries `keyErrors`, `keyWarnings` and
- * `serviceKeys` (every key whose policy names a service principal).
+ * `serviceKeys` (every key whose policy names a service principal). No block in
+ * the backend creates such a key today, so the stack also gets a `Hosting` with
+ * monitoring on (a static site from a scratch build output): its alarm topic
+ * key grants `cloudwatch.amazonaws.com`, which gives the key check a key to see.
  */
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksPresets, BlocksStack, Hosting } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
@@ -41,6 +46,13 @@ const stack = await BlocksStack.create(app, 'bb-test-role-ownership', {
   backendCDKPath: join(__dirname, '..', 'aws-blocks', 'index.ts'),
   defaults: BlocksPresets.sandbox,
 });
+
+// A minimal SPA build output for Hosting (never deployed).
+const site = mkdtempSync(join(tmpdir(), 'bb-role-ownership-site-'));
+mkdirSync(join(site, 'dist'));
+writeFileSync(join(site, 'dist', 'index.html'), '<!DOCTYPE html><html><body>ok</body></html>');
+writeFileSync(join(site, 'package.json'), JSON.stringify({ name: 'role-ownership-site', dependencies: {} }));
+new Hosting(stack, 'Hosting', { root: site, api: stack, monitoring: { enabled: true } });
 
 const serviceRoles: string[] = [];
 const serviceKeys: string[] = [];
