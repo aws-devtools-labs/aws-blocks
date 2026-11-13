@@ -1,0 +1,73 @@
+name: Install dependencies
+description: >-
+  Sets up Node and installs the workspace's dependencies. Restores node_modules
+  from the cache that node-modules-cache.yml saves on main for this Node
+  version, OS, CPU, lockfile and package.json files, and runs npm ci only on a
+  miss. A cache saved on the default branch is readable from every PR, whereas
+  one a PR saves is readable only from that PR, so PR runs never save
+  node_modules: a miss (a PR that changes the lockfile or a package.json, or
+  before main has saved one) falls back to npm ci with setup-node's npm
+  download cache, which setup-node still saves for that PR when its own key
+  misses. Linux and macOS only (the cache holds the workspace symlinks;
+  Windows jobs keep npm ci).
+inputs:
+  save:
+    description: >-
+      'true' saves node_modules after a miss, and only checks for a hit
+      (without downloading it). For node-modules-cache.yml on main only.
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # First, so the key below holds the Node version setup-node resolved: .nvmrc
+    # names only the major, and a runner image update can change the rest.
+    - id: node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: '.nvmrc'
+
+    # The key covers every package.json as well as the lockfile: npm ci fails
+    # when a manifest no longer matches package-lock.json, and a restored tree
+    # would skip that check. The paths are every node_modules directory npm ci
+    # creates (the root and the workspaces it can't hoist into it); the
+    # package.json patterns are the workspace locations. Keep the path list
+    # and the one in the save step below in sync.
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: node-modules-v1-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', '.npmrc', 'package.json', 'packages/*/package.json', 'test-apps/*/package.json', 'test-apps/*/*/package.json', 'test-apps/*/packages/*/package.json', 'scripts/agent-bench/package.json', 'test-infra/package.json') }}
+        lookup-only: ${{ inputs.save }}
+        path: |
+          node_modules
+          packages/*/node_modules
+          test-apps/*/node_modules
+          test-apps/*/*/node_modules
+          test-apps/*/packages/*/node_modules
+          scripts/agent-bench/node_modules
+          test-infra/node_modules
+
+    # setup-node's npm download cache only helps npm ci, so restore it only on
+    # a miss (it is ~750 MB). Node is already set up; this run adds the cache.
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: '.nvmrc'
+        cache: npm
+
+    - if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci --prefer-offline --no-audit --no-fund
+
+    - if: inputs.save == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.restore.outputs.cache-primary-key }}
+        path: |
+          node_modules
+          packages/*/node_modules
+          test-apps/*/node_modules
+          test-apps/*/*/node_modules
+          test-apps/*/packages/*/node_modules
+          scripts/agent-bench/node_modules
+          test-infra/node_modules
