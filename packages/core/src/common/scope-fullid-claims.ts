@@ -38,7 +38,10 @@ export type ScopePath = readonly string[];
 export interface ScopeFullIdClaims {
 	/** `fullId` → the path that claimed it first. */
 	readonly owners: Map<string, ScopePath>;
-	/** Every `fullId` a second path has claimed, so their descendants are not reported again. */
+	/**
+	 * Every pair of paths that collided, as an unordered key (see {@link claimScopeFullId}), so that the
+	 * same child under both paths of a pair is not reported again.
+	 */
 	readonly collided: Set<string>;
 }
 
@@ -81,16 +84,19 @@ function scopePath(scope: { readonly id: string; readonly parent?: unknown }, fu
  * Claim `fullId` for the path `scope` came from, in `claims`. A claim from the
  * same path again is accepted. A claim from a different path keeps the first
  * owner and returns a warning that names the `fullId` and both paths, for the
- * caller to report (`console.warn` at runtime, a CDK annotation at synth). A
- * scope whose parent's `fullId` already collided returns no warning even when
- * it collides too (a block's own child scopes, under both colliding paths): the
- * parent's warning already names the paths to rename.
+ * caller to report (`console.warn` at runtime, a CDK annotation at synth).
+ *
+ * A collision whose two parents are themselves a pair that collided returns no
+ * warning: it is the same child id under both paths of that pair (a block's own
+ * child scopes), and renaming either path of the parent pair fixes it too. Any
+ * other collision is reported, even under a `fullId` that already collided,
+ * because renaming the earlier pair would not fix it.
  *
  * @param claims - The registry to claim in.
  * @param scope - The scope being constructed.
  * @param fullId - Its `fullId`.
  * @returns The warning when a different scope path already claimed `fullId`
- *   and its parent's did not collide, else `undefined`.
+ *   and the collision is not inherited from its parents', else `undefined`.
  * @internal
  */
 export function claimScopeFullId(
@@ -105,8 +111,10 @@ export function claimScopeFullId(
 		return undefined;
 	}
 	if (owner.length === path.length && owner.every((id, i) => id === path[i])) return undefined;
-	claims.collided.add(fullId);
-	if (claims.collided.has(path.slice(0, -1).join('-'))) return undefined;
+	const pairKey = (a: ScopePath, b: ScopePath) => [JSON.stringify(a), JSON.stringify(b)].sort().join('\n');
+	// Recorded even when not reported, so a grandchild under both paths is recognized as inherited too.
+	claims.collided.add(pairKey(path, owner));
+	if (claims.collided.has(pairKey(path.slice(0, -1), owner.slice(0, -1)))) return undefined;
 	const [mine, theirs] = [path, owner].map((p) => p.map((id) => `'${id}'`).join(' > '));
 	return (
 		`Scope ${mine} resolves to the fullId '${fullId}', which Scope ${theirs} already uses. ` +

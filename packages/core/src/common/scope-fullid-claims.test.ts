@@ -45,16 +45,34 @@ describe('Scope fullId claims: two scope paths resolving to one fullId are repor
 
 	test('a collision is reported once, not again for each scope beneath it', (t) => {
 		const root = { id: 'claims-nested' };
-		new Scope('logger', { parent: new Scope('sessions', { parent: new Scope('user-service', { parent: root }) }) });
-		const logged = warnings(
-			t,
-			() =>
-				new Scope('logger', {
-					parent: new Scope('service-sessions', { parent: new Scope('user', { parent: root }) }),
-				}),
-		);
-		assert.strictEqual(logged.length, 1);
+		const firstLogger = new Scope('logger', {
+			parent: new Scope('sessions', { parent: new Scope('user-service', { parent: root }) }),
+		});
+		new Scope('sink', { parent: firstLogger });
+		const logged = warnings(t, () => {
+			const logger = new Scope('logger', {
+				parent: new Scope('service-sessions', { parent: new Scope('user', { parent: root }) }),
+			});
+			new Scope('sink', { parent: logger });
+		});
+		assert.strictEqual(logged.length, 1, 'neither the child nor the grandchild is reported');
 		assert.match(logged[0], /fullId 'claims-nested-user-service-sessions'/);
+	});
+
+	test('a second, independent collision under an already-colliding fullId is still reported', (t) => {
+		const root = { id: 'claims-independent' };
+		const ab = new Scope('a-b', { parent: root });
+		const a = new Scope('a', { parent: root });
+		const first = warnings(t, () => new Scope('b', { parent: a }));
+		assert.strictEqual(first.length, 1);
+		assert.match(first[0], /fullId 'claims-independent-a-b'/);
+		new Scope('b-c', { parent: a });
+		// 'a-b' > 'c' and 'a' > 'b-c' collide on their own: renaming 'a' > 'b' leaves them colliding.
+		const second = warnings(t, () => new Scope('c', { parent: ab }));
+		assert.strictEqual(second.length, 1);
+		assert.match(second[0], /fullId 'claims-independent-a-b-c'/);
+		assert.match(second[0], /'claims-independent' > 'a-b' > 'c'/);
+		assert.match(second[0], /'claims-independent' > 'a' > 'b-c'/);
 	});
 
 	test('the same path constructed again is the same block, not a collision', (t) => {

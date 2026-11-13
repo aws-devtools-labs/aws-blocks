@@ -62,6 +62,21 @@ describe('CDK Scope: two scope paths resolving to one fullId are reported at syn
 		assert.strictEqual(found[0].path, '/App/user/service-sessions');
 	});
 
+	test('a second, independent collision under an already-colliding fullId is still reported', () => {
+		const stack = root('App');
+		const ab = new Scope('a-b', { parent: stack as never });
+		const a = new Scope('a', { parent: stack as never });
+		new Scope('b', { parent: a });
+		new Scope('b-c', { parent: a });
+		// 'a-b' > 'c' and 'a' > 'b-c' collide on their own: renaming 'a' > 'b' leaves them colliding.
+		new Scope('c', { parent: ab });
+		const found = collisions(stack);
+		assert.deepStrictEqual(found.map((w) => w.path).sort(), ['/App/a-b/c', '/App/a/b']);
+		const second = found.find((w) => w.path === '/App/a-b/c');
+		assert.match(String(second?.message), /fullId 'App-a-b-c'/);
+		assert.match(String(second?.message), /'App' > 'a' > 'b-c'/);
+	});
+
 	test('distinct fullIds are not reported', () => {
 		const stack = root('App');
 		const service = new Scope('user-service', { parent: stack as never });
