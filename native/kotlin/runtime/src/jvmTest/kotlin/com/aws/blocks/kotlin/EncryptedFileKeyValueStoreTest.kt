@@ -308,4 +308,37 @@ class EncryptedFileKeyValueStoreTest {
         recovered.get("jar") shouldBe "post-loss"
     }
 
+    @Test
+    fun asksTheCustodyForTheKeyOnceEvenWhenItFails() = runTest {
+        // A Keychain item this process is not allowed to read prompts the user on every attempt,
+        // and the jar calls get and put for every request. Retrying would put a dialog in front
+        // of the user for the life of the process, so the failure has to be as memoized as a
+        // success. `by lazy` alone does not do that: it re-runs a block that threw.
+        val refusing = RefusingKeyCustody()
+        val store = EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") {
+            refusing
+        }
+
+        // Writes rather than reads: a read of an entry that is not there returns before it needs
+        // the key, so it would not exercise this either way.
+        repeat(10) { shouldThrow<KeyValueStoreException> { store.put("jar", "hello") } }
+
+        refusing.attempts shouldBe 1
+    }
+
+    /** Stands in for a keychain item the user declined to let this process read. */
+    private class RefusingKeyCustody : KeyCustody {
+        override val tier = KeyTier.OS
+        var attempts = 0
+
+        override fun load(alias: String): ByteArray? {
+            attempts++
+            throw KeyValueStoreException("The keychain refused to return the encryption key")
+        }
+
+        override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray =
+            throw KeyValueStoreException("not reached: load throws first")
+
+        override fun delete(alias: String) = Unit
+    }
 }

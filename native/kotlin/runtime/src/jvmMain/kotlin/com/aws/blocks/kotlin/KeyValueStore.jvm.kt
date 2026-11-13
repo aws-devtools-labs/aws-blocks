@@ -74,25 +74,43 @@ internal class EncryptedFileKeyValueStore(
     internal val keyTier: KeyTier get() = custody.tier
 
     /**
-     * Whether this instance was the one to mint the current key. Set during the lazy init below,
-     * read by [get] to decide whether an undecryptable entry is an orphan to discard or genuine
-     * corruption to surface. Read after a volatile write and before any volatile read of the same
-     * field is fine on the JVM memory model: [secretKey]'s lazy sets this before the volatile
-     * write that publishes the instance, so every consumer sees the final value.
+     * Whether this instance was the one to mint the current key. Set during [resolveKey], read by
+     * [get] to decide whether an undecryptable entry is an orphan to discard or genuine corruption
+     * to surface. Read after a volatile write and before any volatile read of the same field is
+     * fine on the JVM memory model: [resolveKey] sets this before the volatile write that
+     * publishes [keyAttempt], so every consumer sees the final value.
      */
     @Volatile
     private var mintedFreshKey: Boolean = false
 
-    private val secretKey: SecretKey by lazy {
+    /**
+     * The one attempt this store makes to reach its key, successful or not.
+     *
+     * A failure is memoized as deliberately as a success, because asking the custody again cannot
+     * help and is not free. A Keychain item this process is not allowed to read prompts the user on
+     * every attempt, and the jar calls [get] and [put] for every request, so retrying would put a
+     * dialog in front of the user indefinitely. `by lazy` alone does not do this: it caches the
+     * value a successful block returned and re-runs the block after one that threw. Wrapping the
+     * attempt in a [Result] makes the failure the cached value.
+     *
+     * [runCatching] takes [Throwable] rather than [Exception] for the same reason the self-test
+     * does: an unloadable native library arrives as an [Error], on the first call rather than at
+     * construction. Retrying that is equally hopeless.
+     */
+    private val keyAttempt: Result<SecretKey> by lazy { runCatching { resolveKey() } }
+
+    private val secretKey: SecretKey get() = keyAttempt.getOrThrow()
+
+    private fun resolveKey(): SecretKey {
         val held = custody.load(alias)
-        if (held != null) return@lazy SecretKeySpec(held, "AES")
+        if (held != null) return SecretKeySpec(held, "AES")
         val fresh = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
         val installed = custody.storeIfAbsent(alias, fresh)
         if (installed.contentEquals(fresh)) {
             mintedFreshKey = true
             discardEntriesWrittenUnderAnOlderKey()
         }
-        SecretKeySpec(installed, "AES")
+        return SecretKeySpec(installed, "AES")
     }
 
     /**
@@ -101,10 +119,10 @@ internal class EncryptedFileKeyValueStore(
      *
      * Leaving them would make every [get] throw until the directory is cleaned by hand: the jar
      * treats a decrypt failure as temporary and declines to replace an entry it cannot read, so a
-     * fresh sign-in would stop reaching storage. The caller signalled we are the one that installed
-     * the key — not a loser of the race whose [storeIfAbsent] handed back someone else's bytes —
-     * by asking whether [installed] equals the bytes it supplied. With a random fresh key, nothing
-     * else can produce those bytes, so the equality is proof we minted.
+     * fresh sign-in would stop reaching storage. [resolveKey] establishes that we are the one that
+     * installed the key — not a loser of the race whose `storeIfAbsent` handed back someone else's
+     * bytes — by comparing what came back against the bytes it supplied. With a random fresh key,
+     * nothing else can produce those bytes, so the equality is proof we minted.
      *
      * Reachable in two ways. On the OS tier, a key is lost between launches — a Keychain item
      * deleted, a Secret Service keyring recreated after a password change, a directory restored
@@ -140,16 +158,16 @@ internal class EncryptedFileKeyValueStore(
         val stored = try {
             Files.readString(path)
         } catch (_: NoSuchFileException) {
-            // The orphan sweep in [secretKey]'s lazy init could delete this file between the
-            // [Files.exists] check and this read on a concurrent reader. Treat as absent.
+            // The orphan sweep in [resolveKey] could delete this file between the [Files.exists]
+            // check and this read on a concurrent reader. Treat as absent.
             return@withContext null
         }
         val plaintext = decrypt(stored)
         if (plaintext != null) return@withContext plaintext
         // A decrypt failure means one of two things: real corruption with the key we hold, or an
         // orphan written under a previous key that this instance replaced. If we minted the key
-        // this instance, nothing we hold was written by us — the sweep in [secretKey]'s lazy init
-        // has already removed the file, so later calls see it as absent, but this call read it
+        // this instance, nothing we hold was written by us — the sweep in [resolveKey] has already
+        // removed the file, so later calls see it as absent, but this call read it
         // just before the sweep. Return null so the caller overwrites rather than failing on an
         // entry it will never be able to read. If we loaded the key, we are reading with the bytes
         // that wrote the entry, so a failure is genuine corruption and the caller must know.
