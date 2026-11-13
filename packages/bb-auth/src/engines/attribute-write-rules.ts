@@ -27,8 +27,8 @@
  *   a declared custom attribute marked `userWritable: false`. The CDK layer
  *   sets the client's `WriteAttributes` to everything else
  *   (`endUserWriteAttributes` in `cdk/mappers.ts`); checking here too covers
- *   an external pool and the local engine. `AdminCreateUser` is
- *   IAM-authorized and may write them.
+ *   an external pool and the local engine. `AdminCreateUser` and
+ *   `AdminUpdateUserAttributes` are IAM-authorized and may write them.
  * - **`sub`** → `InvalidParameterException`: Cognito-assigned and immutable,
  *   so no call writes it.
  *
@@ -78,10 +78,17 @@ import type { UserAttribute } from '../types.js';
  * - `adminCreateUser` — `AdminCreateUser`: a new user, IAM-authorized.
  * - `update` — `UpdateUserAttributes`, or a challenge answer's
  *   `userAttributes`: an existing user, through the app client.
+ * - `adminUpdate` — `AdminUpdateUserAttributes`: an existing user,
+ *   IAM-authorized.
  *
  * @internal
  */
-export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update';
+export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update' | 'adminUpdate';
+
+/** Whether `write` is IAM-authorized (the admin API), so the app client's write attributes do not apply. */
+export function isAdminWrite(write: AttributeWrite): boolean {
+	return write === 'adminCreateUser' || write === 'adminUpdate';
+}
 
 /**
  * In the schema, but outside an app client's default write permissions.
@@ -207,7 +214,7 @@ export function checkAttributeValues(
 		}
 	}
 	// 3. The app client's write permissions (the admin API is IAM-authorized).
-	if (write !== 'adminCreateUser') {
+	if (!isAdminWrite(write)) {
 		for (const [name] of values) {
 			if (VERIFIED_FLAGS.has(name) || adminOnly.has(name)) {
 				const e = rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');

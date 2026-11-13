@@ -131,6 +131,23 @@ function withoutResetGrant(template: CfnTemplateJson): void {
 }
 
 /**
+ * THE ADMIN UPDATE GRANT ALLOWLIST — `cognito-idp:AdminUpdateUserAttributes`
+ * in the `admin` lifecycle statement, for `auth.admin.updateUserAttributes`,
+ * which `AuthCognito` did not have. Only that one action is removed from
+ * `Auth`'s side; the rest of the statement must still match.
+ */
+function withoutAdminUpdateGrant(template: CfnTemplateJson): void {
+	const action = 'cognito-idp:AdminUpdateUserAttributes';
+	for (const resource of Object.values(template.Resources)) {
+		if (resource.Type !== 'AWS::IAM::Policy') continue;
+		const doc = resource.Properties?.PolicyDocument as { Statement: { Action: unknown }[] } | undefined;
+		for (const s of doc?.Statement ?? []) {
+			if (Array.isArray(s.Action)) s.Action = s.Action.filter((a) => a !== action);
+		}
+	}
+}
+
+/**
  * THE CLIENT ALLOWLIST — `WriteAttributes` on the native `client`, which
  * `AuthCognito` (frozen before it set one) leaves to Cognito's default of every
  * attribute. `Auth` sets exactly the standard attributes except the
@@ -234,6 +251,7 @@ function withoutAllowlisted(
 	const cognito = structuredClone(cognitoTemplate);
 	const auth = structuredClone(authTemplate);
 	withoutResetGrant(auth);
+	withoutAdminUpdateGrant(auth);
 	const authClient = resourceOfType(auth, 'AWS::Cognito::UserPoolClient');
 	if (authClient?.[1].Properties) {
 		authClient[1].Properties = stripAllowlistedClientProperties(

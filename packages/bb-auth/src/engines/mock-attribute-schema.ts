@@ -76,6 +76,7 @@ import {
 	adminOnlyAttributes,
 	checkAttributeValues,
 	immutableAttributeError,
+	isAdminWrite,
 	VERIFIED_FLAGS,
 	withAdminOnlyRefusalLog,
 } from './attribute-write-rules.js';
@@ -149,7 +150,7 @@ export class MockAttributeSchema {
 		// External pool: the block's app client may write only the declared custom
 		// attributes (`endUserWriteAttributes`), so Cognito refuses another `custom:`
 		// name through it, though the pool may have it.
-		if (this.externalPool && write !== 'adminCreateUser') {
+		if (this.externalPool && !isAdminWrite(write)) {
 			for (const [name, value] of Object.entries(attributes)) {
 				if (value !== undefined && name.startsWith('custom:') && !this.custom.has(name)) {
 					throw serviceError(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
@@ -171,7 +172,9 @@ export class MockAttributeSchema {
 					`Attributes did not conform to the schema: Type for attribute {${name}} could not be determined`,
 				);
 			}
-			if (write === 'update' && custom?.mutable === false) throw immutableAttributeError(name);
+			if ((write === 'update' || write === 'adminUpdate') && custom?.mutable === false) {
+				throw immutableAttributeError(name);
+			}
 		}
 	}
 }

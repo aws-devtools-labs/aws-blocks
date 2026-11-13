@@ -38,6 +38,7 @@ export type AdminDisabled = {
     listGroupsForUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     listUsersInGroup(group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     createUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+    updateUserAttributes(username: string, attributes: unknown, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     deleteUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     disableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     enableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
@@ -56,6 +57,7 @@ export type AdminDisabledOnBuiltin = {
     listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
     listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
     createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    updateUserAttributes(username: string, attributes: unknown, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
     deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
     disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
     enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
@@ -769,6 +771,7 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
     revokeUserSessions(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     scan(...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [filter?: AdminUserFilter]>): AsyncIterable<AdminUser<O>>;
     setUserPassword(username: string, password: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [options?: SetPasswordOptions]>): Promise<void>;
+    updateUserAttributes(username: string, attributes: Partial<Record<AttrOf<O>, string>>, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
 }
 
 // @public

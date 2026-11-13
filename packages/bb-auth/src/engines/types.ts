@@ -494,6 +494,14 @@ export interface NativeAdminEngine {
 			clientMetadata?: Record<string, string>;
 		},
 	): Promise<NativeAdminUser>;
+	/**
+	 * `AdminUpdateUserAttributes`: write `attributes` (already prefixed) on an
+	 * existing user, IAM-authorized, so a `userWritable: false` attribute and the
+	 * verified flags may be written. Throw `UserNotFoundException` for an
+	 * unknown user, and `InvalidParameterException` for a name the pool's
+	 * schema does not have or an immutable attribute.
+	 */
+	updateUserAttributes(username: string, attributes: Record<string, string>): Promise<void>;
 	/** `AdminDeleteUser`. */
 	deleteUser(username: string): Promise<void>;
 	/** `AdminDisableUser`. */

@@ -31,6 +31,7 @@ import {
 	cognitoError,
 	makeAwsAuth,
 	signInAs,
+	TEST_POOL_ID,
 	wireView,
 } from './test-support/aws-harness.js';
 import type { AuthOptions, CodeDeliveryPurpose } from './types.js';
@@ -121,7 +122,7 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 	]);
 	// Left out of the client's `WriteAttributes` (`userWritable: false`, see `endUserWriteAttributes`).
 	const adminOnly = new Set(['custom:role']);
-	const validate = (list: unknown, write: 'create' | 'adminCreate' | 'update') => {
+	const validate = (list: unknown, write: 'create' | 'adminCreate' | 'update' | 'adminUpdate') => {
 		const entries = (Array.isArray(list) ? list : []).map((entry: unknown) => ({
 			key: String(Reflect.get(Object(entry), 'Name')),
 			value: Reflect.get(Object(entry), 'Value'),
@@ -144,7 +145,7 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 		}
 		// 3. The app client's write permissions.
 		for (const { key } of entries) {
-			if (write !== 'adminCreate' && (verifiedFlags.has(key) || adminOnly.has(key))) {
+			if (write !== 'adminCreate' && write !== 'adminUpdate' && (verifiedFlags.has(key) || adminOnly.has(key))) {
 				throw cognitoError('NotAuthorizedException', 'A client attempted to write unauthorized attribute');
 			}
 		}
@@ -156,7 +157,10 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 					`Attributes did not conform to the schema: Type for attribute {${key}} could not be determined`,
 				);
 			}
-			if (key === 'sub' || (write === 'update' && custom.get(key)?.mutable === false)) {
+			if (
+				key === 'sub' ||
+				(write !== 'create' && write !== 'adminCreate' && custom.get(key)?.mutable === false)
+			) {
 				throw cognitoError('InvalidParameterException', 'Attribute cannot be updated.');
 			}
 		}
@@ -175,6 +179,11 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 	});
 	h.on('UpdateUserAttributesCommand', (input) => {
 		validate(input.UserAttributes, 'update');
+		return {};
+	});
+	h.on('AdminUpdateUserAttributesCommand', (input) => {
+		if (input.Username !== 'alice') throw cognitoError('UserNotFoundException', 'User does not exist.');
+		validate(input.UserAttributes, 'adminUpdate');
 		return {};
 	});
 	h.on('AdminCreateUserCommand', (input) => {
@@ -449,6 +458,93 @@ describe('parity: attributes on admin.createUser (AdminCreateUser)', () => {
 			assert.deepStrictEqual(views[1], expected, 'aws');
 		});
 	}
+});
+
+describe('parity: attributes on admin.updateUserAttributes (AdminUpdateUserAttributes)', () => {
+	const NOT_FOUND = { name: 'UserNotFoundException', code: 404 } as const;
+	for (const [label, attributes, expected] of [
+		['a standard and a mutable custom attribute', { name: 'Alice', team: 'ops' }, 'ok'],
+		['a `userWritable: false` attribute (an administrator may set it)', { role: 'admin' }, 'ok'],
+		['a `userWritable: false` attribute (`custom:` prefix)', { 'custom:role': 'admin' }, 'ok'],
+		['`email_verified` (an administrator may mark a contact verified)', { email_verified: 'true' }, 'ok'],
+		['an attribute the pool does not have', { attributes: { name: 'Alice' } }, INVALID],
+		['an unknown name with a string value', { nickname_: 'a' }, INVALID],
+		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, INVALID],
+		['a non-string value', { name: 7 }, INVALID],
+		['a 2,049-character value', { name: 'x'.repeat(2049) }, INVALID],
+		['an immutable custom attribute (`tier`)', { tier: 'platinum' }, INVALID],
+		['`sub`', { sub: 'mine' }, INVALID],
+	] as const) {
+		test(label, async () => {
+			const mock = await mockSignedIn();
+			const aws = makeAwsAuth(OPTIONS);
+			cognitoSchema(aws);
+			const views = [
+				await outcome(untyped(mock.auth.admin, 'updateUserAttributes', 'alice', attributes)),
+				await outcome(untyped(aws.auth.admin, 'updateUserAttributes', 'alice', attributes)),
+			];
+			assert.deepStrictEqual(views[0], expected, 'mock');
+			assert.deepStrictEqual(views[1], expected, 'aws');
+		});
+	}
+
+	test('an unknown user is 404 UserNotFoundException on both runtimes', async () => {
+		const mock = await mockSignedIn();
+		const aws = makeAwsAuth(OPTIONS);
+		cognitoSchema(aws);
+		for (const [name, p] of [
+			['mock', mock.auth.admin.updateUserAttributes('nobody', { name: 'X' })],
+			['aws', aws.auth.admin.updateUserAttributes('nobody', { name: 'X' })],
+		] as const) {
+			const view = await outcome(p);
+			assert.ok(view !== 'ok', name);
+			assert.deepStrictEqual({ name: view.name, code: view.code }, NOT_FOUND, name);
+		}
+	});
+
+	test('the user reads the admin-set attribute back, and cannot change it themselves (mock)', async () => {
+		const mock = await mockSignedIn();
+		await mock.auth.admin.updateUserAttributes('alice', { role: 'admin' });
+		const read = await mock.browser.request((ctx) => mock.auth.getUserAttributes(ctx));
+		assert.strictEqual(read['custom:role'], 'admin');
+		assert.deepStrictEqual(
+			await outcome(
+				mock.browser.request((ctx) => untyped(mock.auth, 'updateUserAttributes', ctx, { role: 'user' })),
+			),
+			UNAUTHORIZED,
+		);
+	});
+
+	test('a changed email is unverified unless the same call verifies it (mock)', async () => {
+		const mock = await mockSignedIn();
+		await mock.auth.admin.updateUserAttributes('alice', { email: 'alice2@example.com' });
+		assert.strictEqual((await mock.auth.admin.getUser('alice'))?.attributes.email_verified, 'false');
+		await mock.auth.admin.updateUserAttributes('alice', { email: 'alice3@example.com', email_verified: 'true' });
+		assert.strictEqual((await mock.auth.admin.getUser('alice'))?.attributes.email_verified, 'true');
+	});
+
+	test('a rejected update changes nothing, and an empty one sends nothing', async () => {
+		const mock = await mockSignedIn();
+		const before = await mock.auth.admin.getUser('alice');
+		await outcome(untyped(mock.auth.admin, 'updateUserAttributes', 'alice', { name: 'A', 'custom:dept': 'x' }));
+		assert.deepStrictEqual(await mock.auth.admin.getUser('alice'), before);
+		const aws = makeAwsAuth(OPTIONS);
+		cognitoSchema(aws);
+		await aws.auth.admin.updateUserAttributes('alice', {});
+		assert.deepStrictEqual(aws.sentNames(), []);
+		await aws.auth.admin.updateUserAttributes('alice', { role: 'admin', name: 'Alice' });
+		assert.deepStrictEqual(aws.sent.at(-1), {
+			name: 'AdminUpdateUserAttributesCommand',
+			input: {
+				UserPoolId: TEST_POOL_ID,
+				Username: 'alice',
+				UserAttributes: [
+					{ Name: 'custom:role', Value: 'admin' },
+					{ Name: 'name', Value: 'Alice' },
+				],
+			},
+		});
+	});
 });
 
 describe('parity: userAttributes on the new-password challenge (RespondToAuthChallenge NEW_PASSWORD_REQUIRED)', () => {

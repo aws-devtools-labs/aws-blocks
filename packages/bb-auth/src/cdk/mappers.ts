@@ -253,6 +253,7 @@ export function adminIamActions(actions?: readonly AdminAction[]): string[] {
 		'cognito-idp:AdminDisableUser',
 		'cognito-idp:AdminResetUserPassword',
 		'cognito-idp:AdminSetUserPassword',
+		'cognito-idp:AdminUpdateUserAttributes',
 		'cognito-idp:AdminGetUser',
 		// getUser also reports group memberships (AdminGetUser does not), so the
 		// lifecycle slice must be self-sufficient for that read.
