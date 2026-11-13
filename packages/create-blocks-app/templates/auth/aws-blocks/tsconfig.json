@@ -1,0 +1,31 @@
+{
+  // The backend is its own TypeScript project, checked with Node types. The
+  // frontend's tsconfig references it and reads the declarations `tsc -b`
+  // writes to node_modules/.tmp, so Node types stay out of browser code.
+  "compilerOptions": {
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "outDir": "../node_modules/.tmp/aws-blocks",
+    // The app root, so a file the backend imports from outside aws-blocks/
+    // only has to be added to "include".
+    "rootDir": "..",
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ESNext",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "**/*",
+    "../.blocks/**/*.d.ts"
+  ]
+}

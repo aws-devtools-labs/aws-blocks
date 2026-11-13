@@ -37,6 +37,12 @@ Open http://localhost:3000 after `npm run dev`.
   method (see the block's README).
 - **Standalone output** — `next.config.ts` sets `output: 'standalone'` so the
   build packages for Lambda deployment.
+- **One `tsconfig.json`**: it typechecks `src/` and `aws-blocks/` together,
+  with Node types global, so `src/` can use `process` without an error, even in a
+  Client Component. The Vite templates give the backend a TypeScript project of
+  its own instead, but `next build` ignores project references when it
+  type-checks ([vercel/next.js#67372](https://github.com/vercel/next.js/issues/67372)),
+  so it would check `aws-blocks/` with this `tsconfig.json` either way.
 
 ## Commands
 
