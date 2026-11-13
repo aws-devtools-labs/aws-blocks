@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin.realtime
 
 import com.aws.blocks.kotlin.defaultHttpClient
+import com.aws.blocks.kotlin.exceptions.RealtimeChannelClosedException
 import io.ktor.client.HttpClient
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
@@ -43,7 +44,7 @@ class RealtimeChannel<T>(
 
     fun subscribe(): Flow<T> {
         if (closed) {
-            throw IllegalStateException("Channel is closed")
+            throw RealtimeChannelClosedException()
         }
 
         return flow {
