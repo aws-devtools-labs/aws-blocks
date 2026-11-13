@@ -53,6 +53,14 @@ class DartCodeGenerator {
         "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
       );
     }
+    // Only a library with a typed OIDC result names these, so only it
+    // re-exports them: an app's own `OidcProvider` stays unambiguous in a
+    // library that doesn't need the runtime's.
+    if (_hasProviderEnum(model)) {
+      buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show TypedOidcClient, OidcProvider;",
+      );
+    }
 
     // Re-export UnknownTransferable for unbound top-level types and operation
     // results.
@@ -137,6 +145,10 @@ class DartCodeGenerator {
           buf.writeln(code);
           buf.writeln();
         }
+      }
+      for (final providers in _providerEnums(ns)) {
+        buf.writeln(_emitProviderEnum(providers, declared));
+        buf.writeln();
       }
       buf.writeln(
         _emitNamespace(ns, apiClasses[ns.name]!, model.types, declared),
@@ -346,6 +358,68 @@ class DartCodeGenerator {
         '  static ${enumType.name} fromJson(String json) => values.byName(json);',
       );
     }
+    buf.writeln('}');
+    return buf.toString();
+  }
+
+  /// Whether any operation of [model] generates a provider enum.
+  static bool _hasProviderEnum(CodegenModel model) =>
+      model.namespaces.any((ns) => _providerEnums(ns).isNotEmpty);
+
+  /// The provider enums of [ns]'s operations, in operation order (see
+  /// [TransferableType.providerEnum]).
+  static Iterable<OidcProviderEnum> _providerEnums(Namespace ns) sync* {
+    for (final op in ns.operations) {
+      if (_providerEnumOf(op.result) case final providers?) yield providers;
+    }
+  }
+
+  /// The provider enum of a direct or optional `oidc/client` result.
+  static OidcProviderEnum? _providerEnumOf(ResolvedType result) =>
+      switch (result) {
+        TransferableType(providerEnum: final e) => e,
+        NullableType(inner: TransferableType(providerEnum: final e)) => e,
+        _ => null,
+      };
+
+  /// The enum of the providers an operation's `OidcClient` signs in with.
+  /// Each value implements `OidcProvider`, carrying the name the backend
+  /// knows the provider by, so a value whose name isn't an identifier
+  /// (`login.gov`) is spelled as one (`loginGov`) and keeps its name.
+  String _emitProviderEnum(OidcProviderEnum providers, Set<String> declared) {
+    final name = providers.name;
+    final ids = _identifiers(
+      providers.values,
+      reserved: _providerEnumMembers,
+      declared: declared,
+    );
+    final buf = StringBuffer();
+    buf.writeln(
+      '/// The providers `${escapeForDiagnostic(providers.operation)}` signs in with.',
+    );
+    buf.writeln('enum $name implements OidcProvider {');
+    buf.writeln(
+      providers.values
+          .map((v) => '  ${ids[v]!}(${_dartStringLiteral(v)})')
+          .join(',\n'),
+    );
+    buf.writeln(';');
+    buf.writeln();
+    buf.writeln('  const $name(this.providerName);');
+    buf.writeln();
+    buf.writeln('  @override');
+    buf.writeln('  final String providerName;');
+    buf.writeln();
+    buf.writeln(
+      '  /// The provider the backend knows as [name], or null if the spec '
+      'named none.',
+    );
+    buf.writeln('  static $name? fromProviderName(String name) {');
+    buf.writeln('    for (final provider in values) {');
+    buf.writeln('      if (provider.providerName == name) return provider;');
+    buf.writeln('    }');
+    buf.writeln('    return null;');
+    buf.writeln('  }');
     buf.writeln('}');
     return buf.toString();
   }
@@ -932,6 +1006,8 @@ class DartCodeGenerator {
       EnumType(name: final name) => name,
       SealedClassType(name: final name) => name,
       SchemaReference(name: final name) => name,
+      TransferableType(providerEnum: OidcProviderEnum(name: final p)) =>
+        'TypedOidcClient<$p>',
       TransferableType(blocksType: final kt, typeArgs: final args) =>
         _transferableDartType(kt, args, allTypes),
       TupleType(items: final items) =>
@@ -1134,7 +1210,7 @@ class DartCodeGenerator {
       ),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($descriptor)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($descriptor)',
-      'oidc/client' => _oidcClientFromJson(descriptor, s),
+      'oidc/client' => _oidcClientFromJson(descriptor, type, s),
       _ => null,
     };
   }
@@ -1142,13 +1218,24 @@ class DartCodeGenerator {
   /// An `OidcClient` needs the calling client's base URL and stores. An
   /// operation passes its own `_client`; a model that holds one (at any depth)
   /// takes a `BlocksClient client` in its `fromJson` (see [_needsClient]).
-  String _oidcClientFromJson(String descriptor, _DecodeScope s) {
+  /// A result whose spec named its providers is wrapped in a
+  /// `TypedOidcClient` of their enum.
+  String _oidcClientFromJson(
+    String descriptor,
+    TransferableType type,
+    _DecodeScope s,
+  ) {
     final c = s.client;
     if (c == null) {
       throw StateError('an oidc/client decoded with no BlocksClient in scope');
     }
-    return 'OidcClient.fromJson($descriptor, baseUrl: $c.baseUrl, '
+    final client =
+        'OidcClient.fromJson($descriptor, baseUrl: $c.baseUrl, '
         'tokenStore: $c.tokenStore, sessionStore: $c.sessionStore)';
+    return switch (type.providerEnum) {
+      OidcProviderEnum(name: final p) => 'TypedOidcClient<$p>($client)',
+      null => client,
+    };
   }
 
   /// A `RealtimeChannel<T>` from [descriptor]. An object message type decodes
@@ -1673,6 +1760,18 @@ class DartCodeGenerator {
     'toJson',
   };
 
+  /// What a provider enum declares or inherits besides its values: Dart's
+  /// `values`, `index` and `name`, `providerName` and `fromProviderName`.
+  static const _providerEnumMembers = {
+    ..._objectMembers,
+    'fromProviderName',
+    'index',
+    'name',
+    'override',
+    'providerName',
+    'values',
+  };
+
   /// What a generated enum declares or inherits besides its values: Dart's
   /// `values`, `index` and `name`, and the generated `fromJson` / `toJson`.
   static const _enumMembers = {
@@ -1691,50 +1790,26 @@ class DartCodeGenerator {
   Set<String> _declaredNames(
     CodegenModel model,
     Map<String, String> apiClasses,
-  ) => {..._typeNames(model), ...apiClasses.values};
+  ) => {
+    ..._typeNames(model),
+    ...apiClasses.values,
+    for (final ns in model.namespaces)
+      for (final providers in _providerEnums(ns)) providers.name,
+    // A member named like a runtime type the library uses would shadow it.
+    if (_hasProviderEnum(model)) ...oidcRuntimeTypeNames,
+  };
 
   /// `Blocks`, `Servers`, and the name of every model, enum, union and
-  /// variant class. The builder has already made each a usable identifier.
-  Set<String> _typeNames(CodegenModel model) {
-    final names = {'Blocks', 'Servers'};
-    void addUnion(SealedClassType union) {
-      names.add(union.name);
-      for (final v in union.variants) {
-        names.add(v.className);
-        if (v.embeddedUnion case final embedded?) addUnion(embedded);
-      }
-    }
+  /// variant class (see [modelTypeNames]).
+  Set<String> _typeNames(CodegenModel model) =>
+      modelTypeNames(model.types.values);
 
-    for (final type in model.types.values) {
-      switch (type) {
-        case RecordType(name: final n) || EnumType(name: final n):
-          names.add(n);
-        case SealedClassType():
-          addUnion(type);
-        default:
-          break;
-      }
-    }
-    return names;
-  }
-
-  /// The `…Api` class of each namespace, keyed by the namespace's name: the
-  /// name camel-cased and capitalized, then `Api` (`todos` is `TodosApi`,
-  /// `a.b` is `ABApi`, `_default` is `$defaultApi`; see [_identifiers]).
-  /// The class is generated, so it yields to a type of the same name
-  /// (`TodosApi$`), and of namespaces that land on one class, the one whose
-  /// name is already an identifier keeps it, as its `Blocks` field does.
-  Map<String, String> _apiClassNames(CodegenModel model) {
-    final names = model.namespaces.map((ns) => ns.name).toList();
-    return dartIdentifiers(
-      [
-        ...names.where((n) => sanitizeIdentifier(n) == n),
-        ...names.where((n) => sanitizeIdentifier(n) != n),
-      ],
-      reserved: {..._typeNames(model), ...generatedTopLevelNames},
-      sanitize: (n) => '${_capitalize(sanitizeIdentifier(n))}Api',
-    );
-  }
+  /// The `…Api` class of each namespace, keyed by the namespace's name (see
+  /// [apiClassNamesOf]).
+  Map<String, String> _apiClassNames(CodegenModel model) => apiClassNamesOf(
+    model.namespaces.map((ns) => ns.name).toList(),
+    _typeNames(model),
+  );
 
   /// The Dart identifier for each of [names]: names from the spec (JSON
   /// keys, operation, parameter, namespace and server names, enum values)
@@ -1793,9 +1868,6 @@ class DartCodeGenerator {
     }
     return candidate;
   }
-
-  String _capitalize(String s) =>
-      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   /// [type], with a `$ref` to a schema that has no Dart declaration replaced
   /// by the type that schema resolves to (see [_aliasTarget]), at the top

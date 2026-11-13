@@ -17,5 +17,6 @@ export 'src/realtime_channel.dart';
 export 'src/session_store.dart';
 export 'src/token_store.dart';
 export 'src/transferable_descriptor.dart';
+export 'src/typed_oidc_client.dart';
 export 'src/unknown_transferable.dart';
 export 'src/web_socket_pool.dart';

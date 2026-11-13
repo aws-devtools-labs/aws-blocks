@@ -1,5 +1,21 @@
 ## Unreleased
 
+- Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
+  `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
+  of type `P` (and send its `providerName`) instead of a name, so a typo or
+  a provider the client doesn't have is a compile error. Generated clients
+  return one for a method whose spec names its providers. It is the same
+  object as the `OidcClient` it wraps, with no cost at runtime: every other
+  member is the client's, and it can be passed wherever an `OidcClient` is
+  expected, where it takes names again. `OidcClient` itself is unchanged.
+- Add `OidcProvider`, the interface a provider type implements:
+  `providerName` is the name the backend knows the provider by.
+- `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
+  its descriptor doesn't list or has no config for, as `signInRelay` does.
+  It used to fail a null check.
+- `OidcClient.exchange` throws `OidcUnknownProviderException` for a
+  provider its descriptor doesn't list, before sending anything, as Kotlin's
+  does. It used to post the name to the backend, which rejected it.
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers

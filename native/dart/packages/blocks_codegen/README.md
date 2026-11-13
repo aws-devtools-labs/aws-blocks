@@ -35,6 +35,15 @@ namespace beside `authCognitoApi`) takes the short name over, renaming the
 other union's arm. The codegen warns about each rename; pass
 `--fail-on-collision` to make it an error.
 
+A method whose result is an OIDC client that names its providers gets a
+provider enum named `<Api class><Method>Provider` (`AuthApiGetClientProvider`
+for `auth.getClient`, and for `auth.get_client`) and returns
+`TypedOidcClient<AuthApiGetClientProvider>`. When the library already declares
+that name, the enum is `<Api class><Method>ResultProvider` and the codegen
+warns. A provider name that isn't an identifier is camel-cased like an enum
+value (`login.gov` is `loginGov`) and keeps its name as the value's
+`providerName`.
+
 ## License
 
 Apache 2.0

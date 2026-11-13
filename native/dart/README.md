@@ -101,6 +101,19 @@ print(greeting.message); // "Hello, World!"
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
+**Typed OIDC providers**: when a method returns an OIDC client and the spec names its providers, the method returns a `TypedOidcClient` of an enum generated for it, so `signInRelay` accepts only those providers and a typo doesn't compile:
+
+```dart
+final oidc = await blocks.auth.getClient(); // TypedOidcClient<AuthApiGetClientProvider>
+final user = await oidc.signInRelay(
+  AuthApiGetClientProvider.google,
+  launcher: launcher,
+  relayTo: 'com.example.app://auth',
+);
+```
+
+The enum is named `<Api class><Method>Provider`. Each value carries the name the backend knows the provider by (`loginGov` is `'login.gov'`), and `fromProviderName(name)` finds a value from a name known only at runtime. A `TypedOidcClient` is the runtime's `OidcClient` with those three methods narrowed, so every other member works as before. A spec that names no providers, a client inside a model, and a client built with `OidcClient(...)` are a plain `OidcClient`, which takes the provider's name: `signInRelay('google', …)`.
+
 **Unbound transferables** — a direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of untyped `dynamic`. Only bare direct results are covered.
 
 **Declared native packages** — when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).

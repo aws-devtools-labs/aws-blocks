@@ -4,6 +4,50 @@
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
   an arm named like another type already does.
+- **Breaking for apps whose spec names an OIDC client's providers:** a method
+  whose direct or optional result is an `oidc/client` with a string enum in
+  `x-blocks-type-args[0]` now generates an enum of those providers,
+  `<Api class><Method>Provider` (`AuthApiGetClientProvider` for
+  `auth.getClient`; a method name with separators is PascalCased, so
+  `auth.get_client` gives the same), implementing `OidcProvider`, and
+  returns `TypedOidcClient<AuthApiGetClientProvider>` instead of
+  `OidcClient`, so its `signIn`, `signInRelay` and `exchange` take only that
+  method's own providers and a typo doesn't compile. This matches the Kotlin
+  and Swift clients. Two things that compiled before no longer do:
+  - Passing a provider name to the result:
+    `final oidc = await blocks.auth.getClient(); oidc.signInRelay('google', …)`.
+    Pass the generated value, `oidc.signInRelay(AuthApiGetClientProvider.google, …)`,
+    or `AuthApiGetClientProvider.fromProviderName(name)` for a name known
+    only at runtime.
+  - Overriding the generated method with its old return type, as a test
+    fake might: `Future<OidcClient> getClient()`. Return
+    `Future<TypedOidcClient<AuthApiGetClientProvider>>`, wrapping the client
+    as `TypedOidcClient<AuthApiGetClientProvider>(client)`.
+  - Using an app type named `OidcProvider` or `TypedOidcClient` in a file
+    that also imports the generated client, which now re-exports the
+    runtime's: the name is `ambiguous_import`. Hide it on one import
+    (`import 'blocks.dart' hide OidcProvider;`) or prefix one.
+
+  `TypedOidcClient` is an `OidcClient`, so code that stores the result in an
+  `OidcClient`, passes it to one, or assigns the method to a
+  `Future<OidcClient> Function()` keeps compiling, and takes names there.
+
+  A provider name that isn't an identifier is camel-cased like an enum value
+  and keeps its name (`login.gov` is `loginGov`, with `providerName`
+  `'login.gov'`); a repeated name is generated once, and two that reduce to
+  one identifier are told apart with a warning. When the library already
+  declares the enum's name, it is `<Api class><Method>ResultProvider` and the
+  codegen warns.
+- A spec that names no providers, and an OIDC client inside a model, list,
+  map or parameter, are still a plain `OidcClient`, unchanged.
+- A generated client with a typed OIDC result also re-exports
+  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
+  named like one of them (`OidcProvider$`). Any other client, including one
+  whose OIDC clients are all untyped, re-exports and reserves neither.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
 - **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
