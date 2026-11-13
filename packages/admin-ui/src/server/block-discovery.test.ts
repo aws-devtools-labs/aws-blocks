@@ -40,11 +40,11 @@ describe('discoverBlocks — a simple project', () => {
 	it('reports type, id, fullId, category, file and line for each block', () => {
 		const root = makeProject({
 			'aws-blocks/index.ts': source(
-				"import { Scope, KVStore, DistributedTable } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from '@aws-blocks/blocks';",
 				'',
 				"const scope = new Scope('shop');",
 				"export const store = new KVStore(scope, 'store', {});",
-				"export const orders = new DistributedTable(scope, 'orders');",
+				"export const orders = new KVStore(scope, 'orders');",
 			),
 		});
 
@@ -71,11 +71,11 @@ describe('discoverBlocks — a simple project', () => {
 				configPreview: '{}',
 			},
 			{
-				type: 'DistributedTable',
+				type: 'KVStore',
 				id: 'orders',
 				fullId: 'shop-orders',
 				category: 'data',
-				description: BLOCK_CATALOG.get('DistributedTable')?.description,
+				description: BLOCK_CATALOG.get('KVStore')?.description,
 				file: 'aws-blocks/index.ts',
 				line: 5,
 			},
@@ -247,12 +247,12 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 	it('surfaces a known block whose id is not a string literal as non-literal-id', () => {
 		const root = makeProject({
 			'aws-blocks/index.ts': source(
-				"import { Scope, KVStore, DistributedTable } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from '@aws-blocks/blocks';",
 				'',
 				"const scope = new Scope('dyn');",
 				"const name = 'from-variable';",
 				'export const a = new KVStore(scope, name);',
-				`export const b = new DistributedTable(scope, \`tpl-\${name}\`);`,
+				`export const b = new KVStore(scope, \`tpl-\${name}\`);`,
 				"export const ok = new KVStore(scope, 'literal');",
 			),
 		});
@@ -265,7 +265,7 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 		);
 		assert.deepStrictEqual(result.unknownConstructs, [
 			{ text: 'KVStore', file: 'aws-blocks/index.ts', line: 5, reason: 'non-literal-id' },
-			{ text: 'DistributedTable', file: 'aws-blocks/index.ts', line: 6, reason: 'non-literal-id' },
+			{ text: 'KVStore', file: 'aws-blocks/index.ts', line: 6, reason: 'non-literal-id' },
 		]);
 	});
 
@@ -299,9 +299,9 @@ describe('discoverBlocks — which files are scanned', () => {
 			),
 			// Blocks may be declared in a factory helper, not just the entry file.
 			'aws-blocks/tables/orders.ts': source(
-				"import { DistributedTable } from '@aws-blocks/bb-distributed-table';",
+				"import { KVStore } from '@aws-blocks/bb-kv-store';",
 				'export function makeOrders(scope: unknown) {',
-				"\treturn new DistributedTable(scope, 'orders');",
+				"\treturn new KVStore(scope, 'orders');",
 				'}',
 			),
 			'aws-blocks/scripts/sandbox.ts': source(
@@ -370,15 +370,15 @@ describe('discoverBlocks — extracted fields', () => {
 	 * a test that breaks on a correct change teaches people to ignore it.
 	 */
 	it('carries the catalog description onto a discovered block', () => {
-		const expected = BLOCK_CATALOG.get('DistributedTable')?.description;
-		assert.ok(expected, 'bb-distributed-table exports one class, so it must have a description');
+		const expected = BLOCK_CATALOG.get('KVStore')?.description;
+		assert.ok(expected, 'bb-kv-store exports one class, so it must have a description');
 
 		const root = makeProject({
 			'aws-blocks/index.ts': source(
-				"import { Scope, DistributedTable } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from '@aws-blocks/blocks';",
 				'',
 				"const scope = new Scope('described');",
-				"export const todos = new DistributedTable(scope, 'todos');",
+				"export const todos = new KVStore(scope, 'todos');",
 			),
 		});
 
@@ -491,18 +491,18 @@ describe('discoverBlocks — extracted fields', () => {
 	it('extracts keySchema from string literals and omits it when a part is a variable', () => {
 		const root = makeProject({
 			'aws-blocks/index.ts': source(
-				"import { Scope, DistributedTable } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from '@aws-blocks/blocks';",
 				'',
 				"const scope = new Scope('tables');",
 				"const pk = 'tenant';",
-				"export const orders = new DistributedTable(scope, 'orders', {",
+				"export const orders = new KVStore(scope, 'orders', {",
 				"\tkey: { partitionKey: 'pk', sortKey: 'sk' },",
 				'});',
-				"export const users = new DistributedTable(scope, 'users', {",
+				"export const users = new KVStore(scope, 'users', {",
 				"\tkey: { partitionKey: 'pk' },",
 				'});',
-				"export const events = new DistributedTable(scope, 'events', { key: { partitionKey: pk } });",
-				"export const audit = new DistributedTable(scope, 'audit', { key: { partitionKey: 'pk', sortKey: pk } });",
+				"export const events = new KVStore(scope, 'events', { key: { partitionKey: pk } });",
+				"export const audit = new KVStore(scope, 'audit', { key: { partitionKey: 'pk', sortKey: pk } });",
 			),
 		});
 
