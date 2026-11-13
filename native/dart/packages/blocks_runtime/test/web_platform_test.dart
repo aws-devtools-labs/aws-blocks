@@ -1,6 +1,7 @@
 @TestOn('browser')
 library;
 
+import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime/src/rpc_user_agent_headers.dart';
 import 'package:blocks_runtime/src/timeout_client.dart';
 import 'package:blocks_runtime/src/web_socket_connect.dart';
@@ -31,5 +32,20 @@ void main() {
       throwsA(anything),
     );
     client.close();
+  });
+
+  test('the file-path transfers throw UnsupportedError on web', () {
+    expect(
+      () => FileUploadHandle.fromJson({
+        'url': 'http://127.0.0.1:1/put',
+      }).uploadFromFile('a.bin'),
+      throwsUnsupportedError,
+    );
+    expect(
+      () => FileDownloadHandle.fromJson({
+        'url': 'http://127.0.0.1:1/get',
+      }).downloadToFile('a.bin'),
+      throwsUnsupportedError,
+    );
   });
 }

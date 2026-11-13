@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
+import 'package:http/http.dart' as http;
 
+import 'local_file.dart';
 import 'timeout_client.dart';
 import 'transferable_descriptor.dart';
 import 'user_agent_client.dart';
@@ -43,4 +46,50 @@ class FileDownloadHandle {
       client.close();
     }
   }
+
+  /// Streams the file into [sink] as it arrives, so it does not have to fit
+  /// in memory.
+  ///
+  /// [sink] is not closed; the caller owns it. Bytes already written stay in
+  /// [sink] if the download fails partway, so a caller that needs all or
+  /// nothing should write somewhere it can discard, or use [downloadToFile].
+  ///
+  /// Throws an [Exception] on an HTTP error status (before anything is
+  /// written), and rethrows a network error.
+  Future<void> downloadTo(StreamSink<List<int>> sink) async {
+    final client = UserAgentClient(newBlocksHttpClient());
+    try {
+      final response = await client.send(http.Request('GET', Uri.parse(url)));
+      if (response.statusCode != 200) {
+        // TODO(error-taxonomy): use the shared file-transfer error type.
+        throw Exception('Download failed: HTTP ${response.statusCode}');
+      }
+      // A StreamController's addStream forwards an error to its listener and
+      // completes normally, so catch it here and throw it from this call
+      // whatever kind of sink the caller passed.
+      Object? failure;
+      StackTrace? failureStack;
+      await sink.addStream(
+        response.stream.handleError((Object e, StackTrace s) {
+          failure ??= e;
+          failureStack ??= s;
+        }),
+      );
+      if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Downloads the file to [path], replacing any file already there.
+  ///
+  /// Atomic: the body is written to a new file in the same directory and
+  /// renamed over [path] once complete, so [path] holds either its previous
+  /// contents or the whole download, and a failed download leaves no partial
+  /// file. (This matches Swift's `downloadTo(fileURL:)`; [downloadTo] and
+  /// Kotlin's `downloadTo(sink)` leave durability to the caller.)
+  ///
+  /// Throws [UnsupportedError] on the web, which has no file paths.
+  Future<void> downloadToFile(String path) =>
+      writeLocalFileAtomically(path, downloadTo);
 }
