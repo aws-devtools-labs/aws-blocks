@@ -529,6 +529,7 @@ frontDoor: {
 }
 ```
 
+<!-- docs-history: keep — upgrade path for stacks deployed with the derived header value -->
 **Upgrading from the earlier derived secret.** Earlier releases derived the
 header value from the stack name and construct path. The first deploy with the
 random secret updates the REST API policy within seconds, while the
@@ -537,6 +538,7 @@ answers 403 in between. To upgrade without that window, deploy once with
 `serverOrigin: { acceptLegacyVerifyHeader: true }`, and then deploy again
 without it. For that one deploy:
 
+<!-- docs-history: keep — upgrade path for stacks deployed with the derived header value -->
 - the SSR REST API's policy accepts both values;
 - with a Nuxt IPX optimizer, the SSR REST API keeps the image routes it served
   in earlier releases, for the edges still sending image requests there;
