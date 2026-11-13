@@ -23,7 +23,10 @@
  *    reader uses, together in one module. This file produces no key of its own,
  *    and every on-disk key it compares against goes through the same
  *    canonicaliser, so a hand-edited `["u1", "t1"]` and a numeric `["u1",9]`
- *    both match the record the browser displayed.
+ *    both match the record the browser displayed. A `KVStore` data file
+ *    (`store.json`) has no serialized key: each item carries its key
+ *    attributes, and `kv-store-file.ts` owns that layout in the same way. A
+ *    record there is addressed by the same named key values.
  *
  * 3. NEVER REJECTS. Every outcome — success, refusal, malformed input — comes
  *    back as a `LocalWriteResult`. A write surface that throws makes the caller
@@ -41,20 +44,33 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { BlockKeySchema, WriteMode } from '../contract/v1.js';
 import { isSafeBlockFullId, listLocalStores, type LocalStore } from './bb-data.js';
+import {
+	indexOfKvItem,
+	isKvStoreFile,
+	isStringKeyed,
+	KV_RESERVED_PREFIX,
+	kvStoreFileOf,
+	replaceKvItem,
+	reservedFieldOf,
+} from './kv-store-file.js';
 import { canonicalizePairKey, serializePairKey } from './pair-key.js';
 import type { detectLocalDevServer } from './detect.js';
 import { detectLocalDevServer as detectLocalDevServerImpl } from './detect.js';
 import { keyFieldsOf, keyOf, validateRecord } from './record-validate.js';
 
 /**
- * The only filename we write.
+ * The filenames we write.
  *
  * A store directory can hold `data.json`, `store.json` or `state.json`, and the
- * reader is happy with all three. Writing is narrower on purpose: only the pair
- * format has a key model to address a record BY, and `data.json` is the file
- * that carries it. See `UNSUPPORTED_STORE`.
+ * reader is happy with all three. Writing is narrower on purpose: only a format
+ * with a key model to address a record BY can be written, and two have one. The
+ * pair format keeps a serialized key next to each item, and `data.json` is the
+ * file that carries it. The `KVStore` data file (`store.json`) keeps the key
+ * attributes in each item, so it has a key model when the block declares its
+ * key fields. See `UNSUPPORTED_STORE`.
  */
-const WRITABLE_FILENAME = 'data.json';
+const PAIR_FILENAME = 'data.json';
+const KV_STORE_FILENAME = 'store.json';
 
 /** `.bb-data` is written with 2-space indentation; a diff of it should stay readable. */
 const STORE_INDENT = 2;
@@ -84,12 +100,25 @@ export interface LocalWriteContext {
 type PairEntry = [string, unknown];
 
 /** A store file opened for writing, plus the bytes we must put back unchanged. */
-interface OpenPairStore {
+interface OpenStoreBase {
 	store: LocalStore;
-	pairs: PairEntry[];
 	/** Whether the file on disk ended with a newline, so a write does not add or drop one. */
 	trailingNewline: boolean;
 }
+
+/** A pair-format `data.json`. */
+interface OpenPairStore extends OpenStoreBase {
+	format: 'pairs';
+	pairs: PairEntry[];
+}
+
+/** A `KVStore` data file (`store.json`) of a store with declared key fields. */
+interface OpenKvStore extends OpenStoreBase {
+	format: 'kv-store';
+	items: unknown[];
+}
+
+type OpenStore = OpenPairStore | OpenKvStore;
 
 function ok(message: string): LocalWriteResult {
 	return { ok: true, message };
@@ -165,6 +194,18 @@ function isPairEntry(value: unknown): value is PairEntry {
 	return Array.isArray(value) && value.length === 2 && typeof value[0] === 'string';
 }
 
+/** Index of the record addressed by `key` (pair format) or by `keyValues` (`KVStore` data file), or `-1`. */
+function indexOfRecord(opened: OpenStore, key: string, keyValues: Record<string, string>, keyFields: string[]): number {
+	return opened.format === 'pairs'
+		? indexOfKey(opened.pairs, key, keyFields)
+		: indexOfKvItem(opened.items, keyValues, keyFields);
+}
+
+/** What goes back on disk for an opened store. */
+function contentOf(opened: OpenStore): unknown {
+	return opened.format === 'pairs' ? opened.pairs : kvStoreFileOf(opened.items);
+}
+
 /**
  * Resolves and reads the store to write, or the refusal that stops us.
  *
@@ -172,7 +213,7 @@ function isPairEntry(value: unknown): value is PairEntry {
  * fallback to a different one), and with no name the reader's first store wins,
  * so "the store the browser was showing" is the store that gets written.
  */
-function openPairStore(context: LocalWriteContext): OpenPairStore | LocalWriteResult {
+function openStore(context: LocalWriteContext): OpenStore | LocalWriteResult {
 	const stores = listLocalStores(context.projectRoot, context.blockFullId);
 	if (stores.length === 0) {
 		return refuse('STORE_NOT_FOUND', `No local .bb-data store found for block "${context.blockFullId}".`);
@@ -212,11 +253,12 @@ function openPairStore(context: LocalWriteContext): OpenPairStore | LocalWriteRe
 	// reader, so this reports the file we would actually open rather than the
 	// name we hoped it was.
 	const filename = basename(store.file);
-	if (filename !== WRITABLE_FILENAME) {
+	if (filename !== PAIR_FILENAME && filename !== KV_STORE_FILENAME) {
 		return refuse(
 			'UNSUPPORTED_STORE',
 			`Store "${store.id}" is backed by ${filename}, which has no key model to address a record by. ` +
-				`Only a pair-format ${WRITABLE_FILENAME} store can be written.`,
+				`Only a pair-format ${PAIR_FILENAME} store, or a KVStore ${KV_STORE_FILENAME} with declared key ` +
+				'fields, can be written.',
 		);
 	}
 
@@ -237,6 +279,31 @@ function openPairStore(context: LocalWriteContext): OpenPairStore | LocalWriteRe
 		return refuse('UNSUPPORTED_STORE', `Could not parse ${store.id}/${filename} as JSON: ${messageOf(error)}`);
 	}
 
+	const trailingNewline = raw.endsWith('\n');
+
+	if (filename === KV_STORE_FILENAME) {
+		// A `store.json` in any other shape (the object map of an earlier
+		// release) has no key attributes to address a record by.
+		if (!isKvStoreFile(parsed)) {
+			return refuse(
+				'UNSUPPORTED_STORE',
+				`Store "${store.id}" (${filename}) is not a KVStore data file with a version, so it has no key ` +
+					'model to address a record by.',
+			);
+		}
+		// A store with no declared key keys each item by one string that is not a
+		// field of the value. The key fields the caller sent do not describe such
+		// a file, and an item written by them is one the store does not read.
+		if (isStringKeyed(parsed.items)) {
+			return refuse(
+				'UNSUPPORTED_STORE',
+				`Store "${store.id}" (${filename}) keys its records by a string, not by declared key fields, ` +
+					'so a record cannot be addressed by the key fields of the block.',
+			);
+		}
+		return { format: 'kv-store', store, items: parsed.items, trailingNewline };
+	}
+
 	// An EMPTY array is a legitimate empty pair store — the reader cannot tell
 	// it apart from any other empty array and does not need to, but a write path
 	// must be able to create the first record in a store.
@@ -248,10 +315,10 @@ function openPairStore(context: LocalWriteContext): OpenPairStore | LocalWriteRe
 		);
 	}
 
-	return { store, pairs: parsed, trailingNewline: raw.endsWith('\n') };
+	return { format: 'pairs', store, pairs: parsed, trailingNewline };
 }
 
-function isRefusal(value: OpenPairStore | LocalWriteResult): value is LocalWriteResult {
+function isRefusal(value: OpenStore | LocalWriteResult): value is LocalWriteResult {
 	return 'ok' in value;
 }
 
@@ -259,7 +326,8 @@ function isRefusal(value: OpenPairStore | LocalWriteResult): value is LocalWrite
 let tempCounter = 0;
 
 /**
- * Serialises `pairs` over `file` atomically.
+ * Serialises `content` (the pairs, or the `KVStore` data file) over `file`
+ * atomically.
  *
  * Temp file in the SAME directory, then `renameSync`: same directory means the
  * same filesystem, which is what makes the rename atomic, so a reader (or a
@@ -268,8 +336,8 @@ let tempCounter = 0;
  * so a concurrent `listLocalStores` cannot mistake it for a store file in the
  * window before the rename.
  */
-function writeStoreAtomically(file: string, pairs: PairEntry[], trailingNewline: boolean): void {
-	const body = JSON.stringify(pairs, null, STORE_INDENT) + (trailingNewline ? '\n' : '');
+function writeStoreAtomically(file: string, content: unknown, trailingNewline: boolean): void {
+	const body = JSON.stringify(content, null, STORE_INDENT) + (trailingNewline ? '\n' : '');
 	tempCounter += 1;
 	const temp = join(dirname(file), `.${basename(file)}.${process.pid}.${Date.now()}.${tempCounter}.tmp`);
 	try {
@@ -348,7 +416,8 @@ function isKeySchemaRefusal(value: BlockKeySchema | LocalWriteResult): value is 
 }
 
 /**
- * Creates or replaces one record in a block's local pair store.
+ * Creates or replaces one record in a block's local pair store or `KVStore`
+ * data file.
  *
  * `create` on an existing key is `ALREADY_EXISTS` and `edit` on a missing key is
  * `NOT_FOUND`, so neither mode can quietly do the other one's job — the caller
@@ -377,31 +446,52 @@ export async function putLocalRecord(
 		return refuse('VALIDATION_FAILED', `Record is missing a value for every key field (${keyFields.join(', ')}).`);
 	}
 
-	const opened = openPairStore(context);
+	const opened = openStore(context);
 	if (isRefusal(opened)) return opened;
 
-	const { store, pairs, trailingNewline } = opened;
-	const existing = indexOfKey(pairs, key, keyFields);
+	if (opened.format === 'kv-store') {
+		// The store owns every top-level attribute with this prefix (its key and
+		// its expiry are there), and its own `put` refuses a value that has one.
+		const reserved = reservedFieldOf(validated.record);
+		if (reserved !== undefined) {
+			return refuse(
+				'VALIDATION_FAILED',
+				`Field '${reserved}' starts with ${KV_RESERVED_PREFIX}, the prefix the store keeps for its own ` +
+					'attributes. Rename the field.',
+			);
+		}
+	}
+
+	const { store, trailingNewline } = opened;
+	const existing = indexOfRecord(opened, key, validated.keyValues, keyFields);
 
 	if (mode === 'create') {
 		if (existing !== -1) {
 			return refuse('ALREADY_EXISTS', `A record with key ${key} already exists in store "${store.id}".`);
 		}
-		pairs.push([key, validated.record]);
+		if (opened.format === 'pairs') opened.pairs.push([key, validated.record]);
+		else opened.items.push(validated.record);
 	} else {
 		if (existing === -1) {
 			return refuse('NOT_FOUND', `No record with key ${key} in store "${store.id}".`);
 		}
-		// Replace the ITEM and keep the key string exactly as it was on disk. A
-		// re-encode would rewrite a numeric sort key (`["u1",9]`) into its string
-		// form, which is a change to the key nobody asked for; keeping the
-		// original also holds the record at its existing position, so an edit
-		// diffs as one record rather than as a reordering.
-		pairs[existing] = [pairs[existing][0], validated.record];
+		if (opened.format === 'pairs') {
+			// Replace the ITEM and keep the key string exactly as it was on disk. A
+			// re-encode would rewrite a numeric sort key (`["u1",9]`) into its string
+			// form, which is a change to the key nobody asked for; keeping the
+			// original also holds the record at its existing position, so an edit
+			// diffs as one record rather than as a reordering.
+			opened.pairs[existing] = [opened.pairs[existing][0], validated.record];
+		} else {
+			// The same rule for a `KVStore` item, whose key is in the item itself:
+			// the key attributes stay as they were on disk. So does the expiry, which
+			// is not part of the value the editor showed.
+			opened.items[existing] = replaceKvItem(opened.items[existing], validated.record, keyFields);
+		}
 	}
 
 	try {
-		writeStoreAtomically(store.file, pairs, trailingNewline);
+		writeStoreAtomically(store.file, contentOf(opened), trailingNewline);
 	} catch (error) {
 		return refuse('UNSUPPORTED_STORE', `Could not write store "${store.id}": ${messageOf(error)}`);
 	}
@@ -430,20 +520,21 @@ export async function deleteLocalRecord(
 		return refuse('VALIDATION_FAILED', `A value is required for every key field (${keyFields.join(', ')}).`);
 	}
 
-	const opened = openPairStore(context);
+	const opened = openStore(context);
 	if (isRefusal(opened)) return opened;
 
-	const { store, pairs, trailingNewline } = opened;
-	const existing = indexOfKey(pairs, key, keyFields);
+	const { store, trailingNewline } = opened;
+	const existing = indexOfRecord(opened, key, keyValues, keyFields);
 	if (existing === -1) {
 		return refuse('NOT_FOUND', `No record with key ${key} in store "${store.id}".`);
 	}
 	// Exactly one: `splice` at a found index, never a filter over a predicate
 	// that could match twice.
-	pairs.splice(existing, 1);
+	if (opened.format === 'pairs') opened.pairs.splice(existing, 1);
+	else opened.items.splice(existing, 1);
 
 	try {
-		writeStoreAtomically(store.file, pairs, trailingNewline);
+		writeStoreAtomically(store.file, contentOf(opened), trailingNewline);
 	} catch (error) {
 		return refuse('UNSUPPORTED_STORE', `Could not write store "${store.id}": ${messageOf(error)}`);
 	}

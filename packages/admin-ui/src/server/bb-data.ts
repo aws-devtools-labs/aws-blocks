@@ -34,7 +34,8 @@ import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import type { BlockKeySchema, DataRecord, DataStore } from '../contract/v1.js';
 import { decodeCursor, encodeCursor, InvalidCursorError, resolvePageLimit } from './data-cursor.js';
-import { keySchemaFields, resolveSerializedKey } from './pair-key.js';
+import { describeKvStoreKeys, isKvStoreFile, readKvItem } from './kv-store-file.js';
+import { keySchemaFields, resolveSerializedKey, serializePairKey } from './pair-key.js';
 import { isAncillaryStoreName, redactRecordValue, redactValue } from './redact.js';
 
 /** The on-disk root a locally-run blocks app writes its stores into. */
@@ -42,13 +43,18 @@ const BB_DATA_DIRNAME = '.bb-data';
 
 /**
  * Filename preference within a store directory. Different block kinds name
- * their file differently (`data.json` for table-shaped stores, `store.json`
- * for KV/session stores, `state.json` for auth state), and a store directory
- * can hold more than one — a lock file, a backup, a sibling index. Preferring
- * in this order keeps the browser deterministic instead of alphabetical-by-
- * accident.
+ * their file differently (`store.json` for `KVStore` and the session store,
+ * `data.json` for the table-shaped file of an earlier release, `state.json`
+ * for auth state), and a store directory can hold more than one — a lock file,
+ * a backup, a sibling index. Preferring in this order keeps the browser
+ * deterministic instead of alphabetical-by-accident.
+ *
+ * `store.json` is ahead of `data.json` because that is the order the `KVStore`
+ * mock reads them in: it takes a `data.json` only from a directory that has no
+ * `store.json`, converts it, and writes `store.json` from then on. In a
+ * directory that has both, nothing reads the `data.json` any more.
  */
-const PREFERRED_FILENAMES = ['data.json', 'store.json', 'state.json'] as const;
+const PREFERRED_FILENAMES = ['store.json', 'data.json', 'state.json'] as const;
 
 /**
  * The key-field name reported for the object-map format.
@@ -205,8 +211,8 @@ function describeStore(realRoot: string, name: string): LocalStore | undefined {
 /**
  * Ancillary last, then shorter name, then lexicographic.
  *
- * Ancillary stores (`-codes`, `-sessions`, `-tokens`, `-challenges`, `-cache`)
- * are usually EMPTY at rest — a one-time code lives for minutes — so landing on
+ * Ancillary stores (`-codes`, `-sessions`, `-session-store`, `-tokens`,
+ * `-challenges`, `-cache`) are usually EMPTY at rest — a one-time code lives for minutes — so landing on
  * one first makes a perfectly populated block look broken to whoever opened the
  * browser. Shorter-name-next puts the block's own store (`<fullId>`) ahead of
  * its shards (`<fullId>-users`), which is the one a reader almost always wants.
@@ -267,6 +273,8 @@ interface RawRecord {
 	value: unknown;
 	/** Set only when the display unwrap changed the value — see `unwrapForDisplay`. */
 	valueAsStored?: unknown;
+	/** Epoch seconds. Set only for a `KVStore` item that keeps its expiry outside the value. */
+	expiresAt?: number;
 	/**
 	 * True when `key` is a property NAME from the store's own shape rather than
 	 * a data value.
@@ -277,6 +285,12 @@ interface RawRecord {
 	 * `{ sessionSecret: 's3cr3t' }` would come back in clear. The pair format's
 	 * key is the opposite case: `'["u1","t9"]'` is user DATA, and masking on it
 	 * would blank real records whose ids happen to contain a word like `token`.
+	 *
+	 * The string key of a `KVStore` with no declared key is treated as a name too.
+	 * It was a property name of the object map that an earlier release wrote for
+	 * the same store, and it often names what the value is (`'github-token'`), so
+	 * the value under such a key stays masked. The declared key fields of a
+	 * `KVStore` are user data, like the pair format's key.
 	 */
 	keyIsFieldName?: boolean;
 }
@@ -364,7 +378,47 @@ function unwrapJsonStringFields(value: unknown): unknown {
 }
 
 /**
- * Normalises the three on-disk shapes into records.
+ * Normalises the records of a `KVStore` data file (`kv-store-file.ts` owns the
+ * layout of an item).
+ *
+ * A store with no `key` option has one string key, reported under the field
+ * name `key`. A store with declared key fields is labelled from the block's key
+ * schema, as the pair format is: the fields are in each item, but only the
+ * schema says which of them are the key. Without the schema the records are
+ * numbered, and no key is invented.
+ *
+ * The string key of a store with no declared key takes part in redaction as a
+ * field name does (see `RawRecord.keyIsFieldName`). A declared key is user
+ * data, as in the pair format, and does not.
+ */
+function normaliseKvStoreItems(items: unknown[], keySchema?: BlockKeySchema): ParsedStore {
+	const keys = describeKvStoreKeys(items, keySchemaFields(keySchema));
+	return {
+		records: items.map((item, index) => {
+			const read = readKvItem(item, keys);
+			// The display key is the string key itself, or the declared key in the
+			// form the writer reports it in. An item with no key that can be named
+			// falls back to its position, like any other array element.
+			const key =
+				read.keyValues === undefined
+					? undefined
+					: keys.stringKeyed
+						? read.keyValues[keys.keyFields[0]]
+						: serializePairKey(read.keyValues, keys.keyFields);
+			const record: RawRecord = { key: key ?? String(index), ...unwrapForDisplay(read.value) };
+			if (read.keyValues !== undefined) record.keyValues = read.keyValues;
+			if (read.expiresAt !== undefined) record.expiresAt = read.expiresAt;
+			if (keys.stringKeyed && read.keyValues !== undefined) record.keyIsFieldName = true;
+			return record;
+		}),
+		keyFields: keys.keyFields,
+		scanComplete: true,
+	};
+}
+
+/**
+ * Normalises the on-disk shapes into records: the `KVStore` data file, and the
+ * three shapes below it.
  *
  * `keyFields` stays `[]` for the pair format: the key is a single serialized
  * string (`'["u1","t9"]'`) whose field NAMES live in the block's key schema,
@@ -373,7 +427,13 @@ function unwrapJsonStringFields(value: unknown): unknown {
  * it can be filled in truthfully.
  */
 function normaliseStoreContent(parsed: unknown, keySchema?: BlockKeySchema): ParsedStore {
-	// 1. Array of [serializedKey, item] pairs — DistributedTable / KVStore `data.json`.
+	// 0. `{ version: 2, items }` — the `KVStore` data file. Checked first: it is
+	//    also a plain object, and read as an object map it would show two records
+	//    named `version` and `items`.
+	if (isKvStoreFile(parsed)) return normaliseKvStoreItems(parsed.items, keySchema);
+
+	// 1. Array of [serializedKey, item] pairs — the `data.json` of a release
+	//    before `KVStore` took declared key fields.
 	if (isPairArray(parsed)) {
 		const keyFields = keySchemaFields(keySchema);
 		return {
@@ -388,7 +448,8 @@ function normaliseStoreContent(parsed: unknown, keySchema?: BlockKeySchema): Par
 		};
 	}
 
-	// 2. Plain object map — Session/KV `store.json`, Auth `state.json`.
+	// 2. Plain object map — Auth `state.json`, and the `store.json` of a release
+	//    before the `KVStore` data file had a version.
 	if (isPlainObject(parsed)) {
 		return {
 			records: Object.entries(parsed).map(([key, item]) => ({
@@ -547,7 +608,8 @@ export function readLocalData(options: ReadLocalDataOptions): LocalDataPage {
 	// moves the field name out of the value, so `{ sessionSecret: 's3cr3t' }`
 	// would otherwise come back in clear — its name no longer visible to the
 	// name-based layer and its value too short for shape detection. A pair-format
-	// key is user data, so it is deliberately NOT used this way.
+	// key is user data, so it is deliberately NOT used this way. The string key of
+	// a `KVStore` with no declared key is used this way: see `keyIsFieldName`.
 	let redacted = false;
 	const records: DataRecord[] = slice.map((raw) => {
 		const outcome = raw.keyIsFieldName ? redactRecordValue(raw.key, raw.value) : redactValue(raw.value);
@@ -559,6 +621,7 @@ export function readLocalData(options: ReadLocalDataOptions): LocalDataPage {
 		// the UNREDACTED record, and handing it to the browser would undo the
 		// redaction that had just been applied one line above.
 		if (raw.valueAsStored !== undefined && !outcome.redacted) record.valueAsStored = raw.valueAsStored;
+		if (raw.expiresAt !== undefined) record.expiresAt = raw.expiresAt;
 		return record;
 	});
 

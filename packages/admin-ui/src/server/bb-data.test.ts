@@ -97,18 +97,20 @@ describe('listLocalStores', () => {
 		);
 	});
 
-	it('prefers data.json, then store.json, then state.json, then alphabetical', () => {
+	it('prefers store.json, then data.json, then state.json, then alphabetical', () => {
 		const root = makeRoot();
 		writeStore(root, 'a', 'zeta.json', {});
 		writeStore(root, 'a', 'state.json', {});
 		writeStore(root, 'a', 'store.json', {});
 		writeStore(root, 'a', 'data.json', {});
-		assert.strictEqual(listLocalStores(root, 'a')[0].label, 'a (data.json)');
+		// The order the KVStore mock reads them in: a data.json next to a
+		// store.json is the file of an earlier release, and nothing reads it.
+		assert.strictEqual(listLocalStores(root, 'a')[0].label, 'a (store.json)');
 
 		const second = makeRoot();
 		writeStore(second, 'a', 'state.json', {});
-		writeStore(second, 'a', 'store.json', {});
-		assert.strictEqual(listLocalStores(second, 'a')[0].label, 'a (store.json)');
+		writeStore(second, 'a', 'data.json', {});
+		assert.strictEqual(listLocalStores(second, 'a')[0].label, 'a (data.json)');
 
 		const third = makeRoot();
 		writeStore(third, 'a', 'state.json', {});
@@ -630,5 +632,226 @@ describe('the display unwrap must not round-trip into the store', () => {
 
 		assert.strictEqual(page.records[0].redacted, true);
 		assert.strictEqual(page.records[0].valueAsStored, undefined);
+	});
+});
+
+describe('readLocalData — the KVStore data file', () => {
+	/** `.bb-data/<store>/store.json` as the KVStore mock writes it. */
+	function writeKvStore(root: string, storeName: string, items: unknown[]): void {
+		writeStore(root, storeName, 'store.json', { version: 2, items });
+	}
+
+	it('reads a store with no declared key: the key, the value and the expiry of each item', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-cache', [
+			{ _bkv_pk: 'greeting', _bkv_value: 'hello' },
+			{ _bkv_pk: 'user:u1', name: 'Ada', visits: 3, _bkv_ttl: 1_800_000_000 },
+			{ _bkv_pk: 'nothing', _bkv_value: null },
+		]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-cache' });
+
+		assert.strictEqual(page.source, 'bb-data');
+		assert.strictEqual(page.totalRecords, 3);
+		assert.strictEqual(page.totalRecordsExact, true);
+		assert.deepStrictEqual(page.keyFields, ['key']);
+		assert.deepStrictEqual(
+			page.records.map((record) => record.key),
+			['greeting', 'user:u1', 'nothing'],
+		);
+		assert.deepStrictEqual(page.records[0].keyValues, { key: 'greeting' });
+		assert.strictEqual(page.records[0].value, 'hello');
+		assert.strictEqual(page.records[0].expiresAt, undefined);
+		// An object value is stored flat. The attributes of the block are not part of it.
+		assert.deepStrictEqual(page.records[1].value, { name: 'Ada', visits: 3 });
+		assert.strictEqual(page.records[1].expiresAt, 1_800_000_000);
+		assert.strictEqual(page.records[2].value, null);
+		assert.strictEqual(page.redacted, false);
+	});
+
+	it('reads a store with declared key fields, labelled from the key schema of the block', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-todos', [
+			{ userId: 'u1', createdAt: 9, title: 'first', _bkv_ttl: 1_800_000_000 },
+			{ userId: 'u1', createdAt: 12, title: 'second' },
+		]);
+
+		const page = readLocalData({
+			projectRoot: root,
+			blockFullId: 'app-todos',
+			keySchema: { partitionKey: 'userId', sortKey: 'createdAt' },
+		});
+
+		assert.deepStrictEqual(page.keyFields, ['userId', 'createdAt']);
+		assert.deepStrictEqual(
+			page.records.map((record) => record.key),
+			['["u1","9"]', '["u1","12"]'],
+		);
+		assert.deepStrictEqual(page.records[0].keyValues, { userId: 'u1', createdAt: '9' });
+		// The key fields are fields of the value, so they stay in it, as stored.
+		assert.deepStrictEqual(page.records[0].value, { userId: 'u1', createdAt: 9, title: 'first' });
+		assert.strictEqual(page.records[0].expiresAt, 1_800_000_000);
+		assert.strictEqual(page.records[1].expiresAt, undefined);
+	});
+
+	it('numbers the records of a declared-key store when the key schema is not known', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-todos', [
+			{ userId: 'u1', createdAt: 9, title: 'first' },
+			{ userId: 'u1', createdAt: 12, title: 'second' },
+		]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-todos' });
+
+		// Nothing is invented: no field names, no key values.
+		assert.deepStrictEqual(page.keyFields, []);
+		assert.deepStrictEqual(
+			page.records.map((record) => record.key),
+			['0', '1'],
+		);
+		assert.strictEqual(page.records[0].keyValues, undefined);
+		assert.deepStrictEqual(page.records[1].value, { userId: 'u1', createdAt: 12, title: 'second' });
+	});
+
+	it('leaves an expiry that is a field of the value in the value', () => {
+		const root = makeRoot();
+		// A store with `ttl: 'expiresAt'` keeps the expiry in that field.
+		writeKvStore(root, 'app-todos', [{ id: 'a', expiresAt: 1_800_000_000 }]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-todos', keySchema: { partitionKey: 'id' } });
+
+		assert.deepStrictEqual(page.records[0].value, { id: 'a', expiresAt: 1_800_000_000 });
+		assert.strictEqual(page.records[0].expiresAt, undefined);
+	});
+
+	it('reads an empty store as zero records, not as an object map of version and items', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-cache', []);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-cache' });
+
+		assert.strictEqual(page.source, 'bb-data');
+		assert.strictEqual(page.totalRecords, 0);
+		assert.strictEqual(page.totalRecordsExact, true);
+		assert.deepStrictEqual(page.records, []);
+	});
+
+	it('still reads the object map of an earlier release under the same file name', () => {
+		const root = makeRoot();
+		writeStore(root, 'app-cache', 'store.json', { version: '"v7"', items: '["a","b"]' });
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-cache' });
+
+		assert.deepStrictEqual(page.keyFields, ['key']);
+		assert.deepStrictEqual(
+			page.records.map((record) => record.key),
+			['version', 'items'],
+		);
+	});
+
+	it('shows an entry that is not an item by its position', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-cache', [{ _bkv_pk: 'a', _bkv_value: 1 }, 'stray']);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-cache' });
+
+		assert.deepStrictEqual(
+			page.records.map((record) => record.key),
+			['a', '1'],
+		);
+		assert.strictEqual(page.records[1].value, 'stray');
+		assert.strictEqual(page.records[1].keyValues, undefined);
+	});
+
+	it('pages through the items with an exact total', () => {
+		const root = makeRoot();
+		writeKvStore(
+			root,
+			'app-cache',
+			Array.from({ length: 5 }, (_, index) => ({ _bkv_pk: `k${index}`, _bkv_value: index })),
+		);
+
+		const first = readLocalData({ projectRoot: root, blockFullId: 'app-cache', limit: 2 });
+		assert.strictEqual(first.totalRecords, 5);
+		assert.deepStrictEqual(
+			first.records.map((record) => record.key),
+			['k0', 'k1'],
+		);
+		const second = readLocalData({
+			projectRoot: root,
+			blockFullId: 'app-cache',
+			limit: 2,
+			cursor: first.nextCursor,
+		});
+		assert.deepStrictEqual(
+			second.records.map((record) => record.key),
+			['k2', 'k3'],
+		);
+	});
+
+	it('masks the tokens of a session store row, and lists the store as ancillary', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-signin-session-store', [
+			{
+				_bkv_pk: 'Zm9vYmFyYmF6',
+				idToken: 'aaa.bbb.ccc',
+				accessToken: 'ddd.eee.fff',
+				refreshToken: 'ggg',
+				version: 2,
+				_bkv_ttl: 1_800_000_000,
+			},
+		]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-signin' });
+
+		assert.strictEqual(page.stores[0].ancillary, true);
+		assert.strictEqual(page.redacted, true);
+		const value = page.records[0].value as Record<string, unknown>;
+		assert.strictEqual(value.idToken, REDACTED);
+		assert.strictEqual(value.accessToken, REDACTED);
+		assert.strictEqual(value.refreshToken, REDACTED);
+		assert.strictEqual(value.version, 2);
+		assert.strictEqual(page.records[0].expiresAt, 1_800_000_000);
+		// Nothing was unwrapped for display, and a masked record never carries the stored form.
+		assert.strictEqual(page.records[0].valueAsStored, undefined);
+	});
+
+	it('masks a value under a string key that names a credential, as the object map did', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-settings', [
+			{ _bkv_pk: 'github-token', _bkv_value: 'short' },
+			{ _bkv_pk: 'greeting', _bkv_value: 'hello' },
+		]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-settings' });
+
+		assert.strictEqual(page.records[0].value, REDACTED);
+		assert.strictEqual(page.records[0].redacted, true);
+		assert.strictEqual(page.records[1].value, 'hello');
+		assert.strictEqual(page.records[1].redacted, false);
+	});
+
+	it('does NOT mask a declared-key record whose key value contains such a word', () => {
+		const root = makeRoot();
+		writeKvStore(root, 'app-todos', [{ id: 'token-holder', title: 'task' }]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-todos', keySchema: { partitionKey: 'id' } });
+
+		assert.strictEqual(page.records[0].redacted, false);
+		assert.deepStrictEqual(page.records[0].value, { id: 'token-holder', title: 'task' });
+	});
+
+	it('reads store.json, not a data.json of an earlier release that sits beside it', () => {
+		const root = makeRoot();
+		writeStore(root, 'app-todos', 'data.json', [[JSON.stringify(['old']), { id: 'old' }]]);
+		writeKvStore(root, 'app-todos', [{ id: 'new' }]);
+
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-todos', keySchema: { partitionKey: 'id' } });
+
+		assert.match(page.stores[0].label, /store\.json/);
+		assert.deepStrictEqual(
+			page.records.map((record) => record.keyValues),
+			[{ id: 'new' }],
+		);
 	});
 });

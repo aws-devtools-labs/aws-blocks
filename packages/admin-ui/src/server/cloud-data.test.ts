@@ -26,7 +26,7 @@ import { REDACTED } from './redact.js';
 
 function makeBlock(overrides: Partial<DiscoveredBlock> = {}): DiscoveredBlock {
 	return {
-		type: 'DistributedTable',
+		type: 'KVStore',
 		id: 'todos',
 		fullId: 'my-app-todos',
 		category: 'data',
@@ -164,8 +164,8 @@ describe('resolveCloudStores — attribution from labelled groups', () => {
 	// so `users` claimed `usersessions`'s resources — and because userPoolId is
 	// single-valued it adopted whichever pool matched last in stack order.
 	it('does not let a block "users" claim a sibling "usersessions" resources', () => {
-		const users = makeBlock({ type: 'DistributedTable', id: 'users', fullId: 'my-app-users' });
-		const userSessions = makeBlock({ type: 'DistributedTable', id: 'usersessions', fullId: 'my-app-usersessions' });
+		const users = makeBlock({ type: 'KVStore', id: 'users', fullId: 'my-app-users' });
+		const userSessions = makeBlock({ type: 'KVStore', id: 'usersessions', fullId: 'my-app-usersessions' });
 		const groups = [
 			appGroup('my-app-users', [tableResource('stack-my-app-users-T1', 'myappusersTableAAA')]),
 			appGroup('my-app-usersessions', [
@@ -255,6 +255,27 @@ describe('readCloudData — DynamoDB path', () => {
 		assert.strictEqual(page.records[0].key, `u1${KEY_SEPARATOR}7`);
 		// 0 is a real key value, not an absent one.
 		assert.deepStrictEqual(page.records[1].keyValues, { userId: 'u2', version: '0' });
+	});
+
+	it('shows a KVStore item as stored, keyed by the attribute DescribeTable reports', async () => {
+		const page = await readCloudData({
+			block: makeBlock(),
+			groups,
+			describeTable: async () => ({ keyFields: ['_bkv_pk'] }),
+			scanTable: async () => ({ items: [{ _bkv_pk: 'greeting', _bkv_value: 'hello', _bkv_ttl: 1_800_000_000 }] }),
+		});
+
+		assert.deepStrictEqual(page.keyFields, ['_bkv_pk']);
+		assert.strictEqual(page.records[0].key, 'greeting');
+		assert.deepStrictEqual(page.records[0].keyValues, { _bkv_pk: 'greeting' });
+		// The cloud path shows the attributes of the item. It does not read the
+		// layout, so a write addresses the item by the same attribute.
+		assert.deepStrictEqual(page.records[0].value, {
+			_bkv_pk: 'greeting',
+			_bkv_value: 'hello',
+			_bkv_ttl: 1_800_000_000,
+		});
+		assert.strictEqual(page.records[0].expiresAt, undefined);
 	});
 
 	it('falls back to the row index when no key attribute carries a value', async () => {

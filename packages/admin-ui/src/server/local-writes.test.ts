@@ -453,3 +453,208 @@ describe('key round-trips through the reader', () => {
 		assert.deepStrictEqual(readPairs(path), [[JSON.stringify(['a']), { id: 'a', n: 99 }]]);
 	});
 });
+
+describe('a KVStore data file (store.json)', () => {
+	/** `.bb-data/<store>/store.json` as the KVStore mock writes it. */
+	function writeKvStore(root: string, store: string, items: unknown[]): string {
+		return writeStore(root, store, 'store.json', { version: 2, items });
+	}
+
+	/** The items of the file, which must still be a version 2 file. */
+	function readItems(path: string): unknown[] {
+		const file = JSON.parse(readFileSync(path, 'utf-8')) as { version: unknown; items: unknown[] };
+		assert.deepStrictEqual(Object.keys(file), ['version', 'items']);
+		assert.strictEqual(file.version, 2);
+		return file.items;
+	}
+
+	it('creates a record as an item after the existing ones', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ userId: 'u1', todoId: 't1', title: 'first' }]);
+
+		const result = await putLocalRecord(
+			contextFor(root, COMPOSITE),
+			{ userId: 'u1', todoId: 't2', title: 'second' },
+			'create',
+		);
+
+		assert.strictEqual(result.ok, true, result.message);
+		assert.match(result.message, /\["u1","t2"\]/);
+		assert.deepStrictEqual(readItems(path), [
+			{ userId: 'u1', todoId: 't1', title: 'first' },
+			{ userId: 'u1', todoId: 't2', title: 'second' },
+		]);
+	});
+
+	it('creates the first record in an empty store', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', []);
+
+		const result = await putLocalRecord(contextFor(root, SINGLE), { id: 'a', title: 'only' }, 'create');
+
+		assert.strictEqual(result.ok, true, result.message);
+		assert.deepStrictEqual(readItems(path), [{ id: 'a', title: 'only' }]);
+	});
+
+	it('refuses a duplicate key with ALREADY_EXISTS, also when the stored key is a number', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ userId: 'u1', todoId: 9, title: 'first' }]);
+		const before = readFileSync(path, 'utf-8');
+
+		const result = await putLocalRecord(
+			contextFor(root, COMPOSITE),
+			{ userId: 'u1', todoId: '9', title: 'again' },
+			'create',
+		);
+
+		assert.strictEqual(result.refusalCode, 'ALREADY_EXISTS');
+		assert.strictEqual(readFileSync(path, 'utf-8'), before);
+	});
+
+	it('an edit keeps the position, the key as stored and the expiry of the item', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [
+			{ userId: 'u1', todoId: 't1', title: 'first' },
+			{ userId: 'u1', todoId: 9, title: 'second', note: 'old', _bkv_ttl: 1_800_000_000 },
+			{ userId: 'u1', todoId: 't3', title: 'third' },
+		]);
+
+		const result = await putLocalRecord(
+			contextFor(root, COMPOSITE),
+			{ userId: 'u1', todoId: '9', title: 'second edited' },
+			'edit',
+		);
+
+		assert.strictEqual(result.ok, true, result.message);
+		assert.deepStrictEqual(readItems(path), [
+			{ userId: 'u1', todoId: 't1', title: 'first' },
+			// The numeric key is not turned into a string, the expiry stays, and a
+			// field that the edit removed is gone.
+			{ userId: 'u1', todoId: 9, title: 'second edited', _bkv_ttl: 1_800_000_000 },
+			{ userId: 'u1', todoId: 't3', title: 'third' },
+		]);
+	});
+
+	it('refuses an edit of a missing key with NOT_FOUND and leaves the file untouched', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ userId: 'u1', todoId: 't1', title: 'first' }]);
+		const before = readFileSync(path, 'utf-8');
+
+		const result = await putLocalRecord(
+			contextFor(root, COMPOSITE),
+			{ userId: 'u1', todoId: 'nope', title: 'x' },
+			'edit',
+		);
+
+		assert.strictEqual(result.refusalCode, 'NOT_FOUND');
+		assert.strictEqual(readFileSync(path, 'utf-8'), before);
+	});
+
+	it('deletes exactly one item', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [
+			{ userId: 'u1', todoId: 't1', title: 'first' },
+			{ userId: 'u1', todoId: 't2', title: 'second' },
+			{ userId: 'u2', todoId: 't1', title: 'third' },
+		]);
+
+		const result = await deleteLocalRecord(contextFor(root, COMPOSITE), { userId: 'u1', todoId: 't1' });
+
+		assert.strictEqual(result.ok, true, result.message);
+		assert.deepStrictEqual(readItems(path), [
+			{ userId: 'u1', todoId: 't2', title: 'second' },
+			{ userId: 'u2', todoId: 't1', title: 'third' },
+		]);
+		assert.strictEqual(
+			(await deleteLocalRecord(contextFor(root, COMPOSITE), { userId: 'u1', todoId: 't1' })).refusalCode,
+			'NOT_FOUND',
+		);
+	});
+
+	it('refuses a record with a field in the prefix the store keeps for itself', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ id: 'a', title: 'first' }]);
+		const before = readFileSync(path, 'utf-8');
+
+		const created = await putLocalRecord(contextFor(root, SINGLE), { id: 'b', _bkv_ttl: 1 }, 'create');
+		const edited = await putLocalRecord(contextFor(root, SINGLE), { id: 'a', _bkv_pk: 'x' }, 'edit');
+
+		assert.strictEqual(created.refusalCode, 'VALIDATION_FAILED');
+		assert.match(created.message, /_bkv_ttl/);
+		assert.strictEqual(edited.refusalCode, 'VALIDATION_FAILED');
+		assert.strictEqual(readFileSync(path, 'utf-8'), before);
+	});
+
+	it('refuses a store that keys its records by a string', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ _bkv_pk: 'a', _bkv_value: 1 }]);
+		const before = readFileSync(path, 'utf-8');
+
+		const put = await putLocalRecord(contextFor(root, SINGLE), { id: 'a' }, 'create');
+		const removed = await deleteLocalRecord(contextFor(root, SINGLE), { id: 'a' });
+
+		assert.strictEqual(put.refusalCode, 'UNSUPPORTED_STORE');
+		assert.match(put.message, /store\.json/);
+		assert.strictEqual(removed.refusalCode, 'UNSUPPORTED_STORE');
+		assert.strictEqual(readFileSync(path, 'utf-8'), before);
+	});
+
+	it('refuses a store of a block with no key schema, which a store with no declared key is', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ _bkv_pk: 'a', _bkv_value: 1 }]);
+		const before = readFileSync(path, 'utf-8');
+
+		const result = await putLocalRecord(contextFor(root), { key: 'b' }, 'create');
+
+		assert.strictEqual(result.refusalCode, 'VALIDATION_FAILED');
+		assert.match(result.message, /key schema/);
+		assert.strictEqual(readFileSync(path, 'utf-8'), before);
+	});
+
+	it('leaves valid JSON with 2-space indentation and the original trailing newline', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', [{ id: 'a' }]);
+
+		await putLocalRecord(contextFor(root, SINGLE), { id: 'b' }, 'create');
+
+		const raw = readFileSync(path, 'utf-8');
+		assert.strictEqual(raw, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`);
+
+		// The mock writes no trailing newline, and a write does not add one.
+		const bare = writeStore(root, 'app-notes', 'store.json', JSON.stringify({ version: 2, items: [] }, null, 2));
+		const context = { ...contextFor(root, SINGLE), blockFullId: 'app-notes' };
+		assert.strictEqual((await putLocalRecord(context, { id: 'a' }, 'create')).ok, true);
+		assert.strictEqual(readFileSync(bare, 'utf-8'), JSON.stringify({ version: 2, items: [{ id: 'a' }] }, null, 2));
+	});
+
+	it('survives a create, edit and delete cycle that the reader sees the same way', async () => {
+		const root = makeRoot();
+		const path = writeKvStore(root, 'app-todos', []);
+		const context = contextFor(root, SINGLE);
+
+		assert.strictEqual((await putLocalRecord(context, { id: 'a', n: 1 }, 'create')).ok, true);
+		assert.strictEqual((await putLocalRecord(context, { id: 'b', n: 2 }, 'create')).ok, true);
+		assert.strictEqual((await putLocalRecord(context, { id: 'a', n: 99 }, 'edit')).ok, true);
+		assert.strictEqual((await deleteLocalRecord(context, { id: 'b' })).ok, true);
+
+		assert.deepStrictEqual(readItems(path), [{ id: 'a', n: 99 }]);
+		const page = readLocalData({ projectRoot: root, blockFullId: 'app-todos', keySchema: SINGLE });
+		assert.deepStrictEqual(page.keyFields, ['id']);
+		assert.deepStrictEqual(page.records[0]?.keyValues, { id: 'a' });
+		assert.deepStrictEqual(page.records[0]?.value, { id: 'a', n: 99 });
+		assert.strictEqual(page.totalRecords, 1);
+	});
+
+	it('writes store.json, not a data.json of an earlier release that sits beside it', async () => {
+		const root = makeRoot();
+		const stale = writeStore(root, 'app-todos', 'data.json', [[JSON.stringify(['old']), { id: 'old' }]]);
+		const staleBefore = readFileSync(stale, 'utf-8');
+		const path = writeKvStore(root, 'app-todos', []);
+
+		const result = await putLocalRecord(contextFor(root, SINGLE), { id: 'new' }, 'create');
+
+		assert.strictEqual(result.ok, true, result.message);
+		assert.deepStrictEqual(readItems(path), [{ id: 'new' }]);
+		assert.strictEqual(readFileSync(stale, 'utf-8'), staleBefore);
+	});
+});
