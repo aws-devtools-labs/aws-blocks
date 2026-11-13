@@ -171,7 +171,9 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 }
 ```
 
-The constants are `AuthErrors`, exported from `@aws-blocks/bb-auth` (and re-exported by `@aws-blocks/blocks`). See the [`Auth` README](../../packages/bb-auth/README.md).
+The constants are `AuthErrors`, exported from `@aws-blocks/bb-auth` (and re-exported by `@aws-blocks/blocks` for backend code). See the [`Auth` README](../../packages/bb-auth/README.md).
+
+To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `@aws-blocks/blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
 
 ## Related
 

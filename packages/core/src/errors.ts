@@ -216,6 +216,10 @@ export function blocksError(name: string, message: string): Error {
  * `authApi.setAuthState()` call notifies nothing on the page, so a UI that
  * renders from `onAuthChange` never sees the sign-in.
  *
+ * To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your
+ * app's own `dependencies`: the browser entry of `@aws-blocks/blocks` does not
+ * re-export it. The string name, `'NotAuthorizedException'`, works without it.
+ *
  * @example
  * ```typescript
  * import { hasAuthError } from '@aws-blocks/blocks/client';
