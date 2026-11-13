@@ -21,7 +21,7 @@ String _generate(String fixture) {
 
 void main() {
   group('open enums', () {
-    final output = _generate('43-open-enums');
+    final output = _generate('45-open-enums');
 
     test('a result enum is a sealed class with known and unknown cases', () {
       expect(output, contains('sealed class Status {'));
@@ -151,7 +151,7 @@ dependencies:
     Directory('${work.path}/bin').createSync();
     File(
       '${work.path}/bin/tasks.dart',
-    ).writeAsStringSync(_generate('43-open-enums'));
+    ).writeAsStringSync(_generate('45-open-enums'));
     File(
       '${work.path}/bin/auth.dart',
     ).writeAsStringSync(_generate('18-hybrid-arm'));

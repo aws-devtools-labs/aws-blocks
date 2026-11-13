@@ -113,6 +113,13 @@ public class Api(
     return BlocksJson.decodeFromJsonElement(result)
   }
 
+  public suspend fun getLabels(): Labels {
+    val request = BlocksRequest(method = "api.getLabels", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getLabels")
+    return BlocksJson.decodeFromJsonElement(result)
+  }
+
   public object UpdateTask {
     @Serializable
     public data class Result(

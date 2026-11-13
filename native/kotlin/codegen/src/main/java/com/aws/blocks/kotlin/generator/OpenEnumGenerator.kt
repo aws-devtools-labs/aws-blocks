@@ -39,12 +39,18 @@ internal object OpenEnumGenerator {
         serialName: String,
         literal: (String) -> String,
     ): TypeSpec {
-        val taken = constants.map { it.first }.toSet()
+        // Compared without case: these are nested classes, and on a case-insensitive file system
+        // `Unknown` and `UNKNOWN` would be one class file. The enum's own name is taken too.
+        val taken = (constants.map { it.first } + name).map { it.lowercase() }.toSet()
         // A spec value named `unknown` keeps its constant; the fallback steps aside.
-        val unknown = if ("Unknown" in taken) free("UnknownValue", taken) else "Unknown"
-        val serializer = free("Serializer", taken + unknown)
+        val unknown = if ("unknown" in taken) free("UnknownValue", taken) else "Unknown"
+        val serializer = free("Serializer", taken + unknown.lowercase())
         // A constant named `Companion` would clash with the default companion object's name.
-        val companion = if ("Companion" in taken) free("Known", taken + unknown + serializer) else null
+        val companion = if ("companion" in taken) {
+            free("Known", taken + unknown.lowercase() + serializer.lowercase())
+        } else {
+            null
+        }
         val self = ClassName("", name)
 
         val builder = TypeSpec.classBuilder(name)
@@ -141,11 +147,11 @@ internal object OpenEnumGenerator {
         return builder.build()
     }
 
-    /** [base], or `base2`, `base3`, … while a constant has it. */
+    /** [base], or `base2`, `base3`, … while a name in [taken] (lowercased) has it, ignoring case. */
     private fun free(base: String, taken: Set<String>): String {
-        if (base !in taken) return base
+        if (base.lowercase() !in taken) return base
         var attempt = 2
-        while ("$base$attempt" in taken) attempt++
+        while ("$base$attempt".lowercase() in taken) attempt++
         return "$base$attempt"
     }
 
