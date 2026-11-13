@@ -111,6 +111,8 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+// The native OIDC client (`getClient()`), typed by the providers above in the generated Kotlin client.
+export const oidcAuthApi = auth.createOidcApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getCursorChannel(): Promise<RealtimeChannel<Cursor>> {
