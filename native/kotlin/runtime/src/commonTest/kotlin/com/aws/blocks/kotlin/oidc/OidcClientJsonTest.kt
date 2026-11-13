@@ -15,7 +15,6 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonObject
 
 /** Shaped like a generated model: every [OidcClient] is `@Contextual`, at any depth. */
 @Serializable
@@ -86,14 +85,12 @@ class OidcClientJsonTest {
     }
 
     @Test
-    fun `encodes every OIDC client in a model as its descriptor`() {
-        // A generated client sends a model holding OIDC clients (a parameter) this way.
+    fun `OIDC clients are read-only, so encoding a model holding one throws`() {
+        // Transferables only come back from the server; nothing sends one.
         val json = OidcClient.json(httpClient, server, "r")
         val decoded = json.decodeFromJsonElement<LoginMenu>(Json.parseToJsonElement(menu))
-        json.encodeToJsonElement(decoded.primary) shouldBe Json.parseToJsonElement("""{"label":"G","client":$descriptor}""")
-        val encoded = json.encodeToJsonElement(decoded).jsonObject
-        encoded.getValue("byName") shouldBe Json.parseToJsonElement("""{"g":$descriptor}""")
-        encoded.getValue("clients") shouldBe Json.parseToJsonElement("[$descriptor,null]")
+        shouldThrow<UnsupportedOperationException> { json.encodeToJsonElement(decoded.primary) }
+            .message shouldBe "Transferables are read-only"
     }
 
     @Test

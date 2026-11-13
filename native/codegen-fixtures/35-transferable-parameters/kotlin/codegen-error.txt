@@ -1,0 +1,1 @@
+Transferable types (realtime/channel) cannot be serialized — they are read-only

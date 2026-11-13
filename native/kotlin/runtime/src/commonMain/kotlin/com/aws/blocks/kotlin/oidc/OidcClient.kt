@@ -32,11 +32,8 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonEncoder
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.modules.SerializersModule
@@ -54,8 +51,6 @@ class OidcClient<P : OidcProvider> internal constructor(
     internal val config: OidcClientConfig,
     internal val httpClient: HttpClient,
     internal val server: BlocksServer,
-    /** The descriptor this client was hydrated from, unchanged; `null` for one built by [forAuth]. */
-    private val wireDescriptor: JsonObject? = null,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
@@ -335,16 +330,6 @@ class OidcClient<P : OidcProvider> internal constructor(
         _authState.value = OidcAuthState.SignedOut
     }
 
-    /**
-     * This client's `{ "__blocks": "oidc/client", … }` descriptor: the one it was hydrated from,
-     * unchanged, or, for a client built by [forAuth], its paths and providers. A generated client
-     * sends an OIDC client parameter this way.
-     */
-    fun toJson(): JsonObject = wireDescriptor ?: buildJsonObject {
-        put("__blocks", "oidc/client")
-        for ((key, value) in BlocksJson.encodeToJsonElement(config).jsonObject) put(key, value)
-    }
-
     companion object {
         // Reported to the session when the identity provider named no error of its own, so
         // these are what an app's error page branches on. Each one names a step of the flow.
@@ -442,7 +427,7 @@ class OidcClient<P : OidcProvider> internal constructor(
         ): OidcClient<P> {
             val config = BlocksJson.decodeFromJsonElement<OidcClientConfig>(element)
                 .copy(relayTo = relayTo)
-            return OidcClient(config, httpClient, server, element as? JsonObject)
+            return OidcClient(config, httpClient, server)
         }
 
         /**
@@ -461,10 +446,8 @@ class OidcClient<P : OidcProvider> internal constructor(
          *
          * Decoding such a model with plain [BlocksJson] throws a
          * [kotlinx.serialization.SerializationException], because there's no client to bind the
-         * OIDC client to. Encoding an OIDC client with this [Json] writes its descriptor
-         * ([OidcClient.toJson]), which is how a generated client sends a model holding one as a
-         * parameter. (OIDC clients used to be read-only: encoding one threw
-         * [UnsupportedOperationException].)
+         * OIDC client to. OIDC clients are read-only: encoding one throws
+         * [UnsupportedOperationException].
          *
          * @param blocksClient the client whose server and HTTP session each OIDC client uses.
          * @param relayTo the custom-scheme URL the backend relays the sign-in result to (see
@@ -503,9 +486,7 @@ internal class OidcClientSerializer(
     }
 
     override fun serialize(encoder: Encoder, value: OidcClient<*>) {
-        val jsonEncoder = encoder as? JsonEncoder
-            ?: throw SerializationException("An OidcClient can only be encoded to JSON")
-        jsonEncoder.encodeJsonElement(value.toJson())
+        throw UnsupportedOperationException("Transferables are read-only")
     }
 }
 
