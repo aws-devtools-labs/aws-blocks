@@ -16,7 +16,8 @@ Creates no SES resources. The CDK layer only:
 
 - **IAM Permissions:** grants `ses:SendEmail` and `ses:SendBulkEmail` to the parent scope's handler automatically, on this account's SES identities and configuration sets in the stack's own region and partition
 - **VPC endpoint requirement:** declares the SES interface endpoint, which the shared VPC layer provisions when the app's compute runs in a VPC
-- **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). Nothing is checked at synth or deploy time.
+- **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). SES itself is not queried at synth or deploy time.
+- **Reserved-domain check:** at synth, a `fromAddress` on a reserved domain (`example.com`/`.net`/`.org` and subdomains; the `.test`, `.example`, `.invalid` and `.localhost` TLDs, per RFC 2606 and RFC 6761) adds the acknowledgeable CDK warning `@aws-blocks/bb-email-client:UnverifiableSender`, because such a domain can never be verified and every send would fail. A reserved `replyTo` address adds `@aws-blocks/bb-email-client:UndeliverableReplyTo`. Both are warnings on every stage (sandbox and production); the check is purely on the address string.
 
 **Prerequisites (out of band):**
 

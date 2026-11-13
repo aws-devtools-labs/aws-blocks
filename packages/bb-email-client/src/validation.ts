@@ -129,3 +129,28 @@ export function validateBatchSize(count: number, maxBatchSize: number): void {
 		throw blocksError(EmailErrors.InvalidInput, `Batch size ${count} exceeds the maximum of ${maxBatchSize} messages.`);
 	}
 }
+
+/** Second-level domains reserved for documentation (RFC 2606 section 3). */
+const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+/** Top-level domains reserved by RFC 2606 section 2 and RFC 6761 section 6. */
+const RESERVED_TLDS = ['test', 'example', 'invalid', 'localhost'];
+
+/**
+ * The reserved domain an address is on, or `undefined` when it is on a normal
+ * domain. Reserved names (`example.com`, `example.net`, `example.org` and their
+ * subdomains, and anything under `.test`, `.example`, `.invalid` or
+ * `.localhost`) are never delegated, so they can't be verified as an SES
+ * identity and mail to them can't be delivered. Accepts a bare addr-spec or a
+ * name-addr; matching ignores case and a trailing dot.
+ */
+export function reservedDomainOf(address: string): string | undefined {
+	const addrSpec = NAME_ADDR_REGEX.exec(address)?.[1] ?? address;
+	const at = addrSpec.lastIndexOf('@');
+	if (at < 0) return undefined;
+	const domain = addrSpec.slice(at + 1).trim().toLowerCase().replace(/\.$/, '');
+	if (!domain) return undefined;
+	const tld = domain.slice(domain.lastIndexOf('.') + 1);
+	const reserved =
+		RESERVED_TLDS.includes(tld) || RESERVED_DOMAINS.some((name) => domain === name || domain.endsWith(`.${name}`));
+	return reserved ? domain : undefined;
+}

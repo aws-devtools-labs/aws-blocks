@@ -100,6 +100,24 @@ bounds what a single request can send but not how many requests a caller makes.
 | `configurationSet` | `string` | ❌ | SES configuration set name |
 | `maxBatchSize` | `number` | ❌ | Most messages one `sendBatch()` call accepts (positive integer, default `100`). An invalid value throws `InvalidInputException` from the constructor, and at synth |
 
+#### Reserved sender domains
+
+`fromAddress` must be on a domain SES can verify. A sender on a reserved domain
+(`example.com`, `example.net`, `example.org` and their subdomains, or anything under
+`.test`, `.example`, `.invalid` or `.localhost`, per RFC 2606 and RFC 6761) can never be
+verified, so every send from it fails with `DomainNotVerifiedException` once deployed.
+Synth flags it with the warning `@aws-blocks/bb-email-client:UnverifiableSender`, in
+sandbox and production alike; a `replyTo` address on such a domain gets
+`@aws-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
+app still synthesizes and deploys, and the local mock still accepts the address. If the
+sender is deliberate (for example a stack that never sends), acknowledge it:
+
+```typescript
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-email-client:UnverifiableSender');
+```
+
 ### `emailClient.send(message): Promise<SendResult>`
 
 Send to one or more recipients. Returns `{ messageId: string }`.
