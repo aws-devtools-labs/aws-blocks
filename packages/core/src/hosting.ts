@@ -368,7 +368,7 @@ export interface HostingProps {
    * Days to retain SUPERSEDED build artifacts in S3 before they are expired.
    * Default: 30. The build currently referenced by CloudFront KVS (`meta.b`)
    * is NEVER expired regardless of this value — only builds that have been
-   * replaced by a newer deploy are cleaned up (issue #480). Raise this to keep
+   * replaced by a newer deploy are cleaned up. Raise this to keep
    * a longer rollback window. Must be at least `skewProtection.maxAge`
    * (converted to days), or synth throws `InvalidSkewProtectionMaxAgeError`.
    */
@@ -684,7 +684,7 @@ export interface HostingProps {
    * hotswapped (`startSandbox({ preview: true })`). A changed build gets a new
    * `builds/<id>/` prefix, so deleted files stop being served and the ISR tag
    * seed re-runs; Next.js's `_buildManifest.js` and `_ssgManifest.js`, whose
-   * URL no longer changes, are served with a revalidating Cache-Control.
+   * URL stays the same from build to build, are served with a revalidating Cache-Control.
    *
    * The door's asset proxy is not held back until the uploads finish:
    * CloudFormation creates it alongside them, which shortens a first deploy.

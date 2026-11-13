@@ -637,7 +637,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
-	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
+	 * `bb-logger` CDK construct is a no-op and doesn't touch it. */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
