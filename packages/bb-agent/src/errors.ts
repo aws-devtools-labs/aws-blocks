@@ -78,6 +78,42 @@ export function persistedTurnError(
 	return { error: meta.error, ...(errorName && { errorName }) };
 }
 
+/**
+ * Whether the completed last row of a reconnect read can be the in-flight turn's answer.
+ *
+ * With text streamed, the row must continue it. With nothing streamed, the read may predate the
+ * in-flight turn's user row (written after `stream()` returns) and end at an earlier turn's
+ * answer. It is behind when it holds fewer user rows than the client shows; only then is a row
+ * equal to the previous answer treated as that turn's. Counts can drift (a send that failed
+ * before its row was written leaves an extra bubble), so the content check stays as well.
+ */
+export function rowContinuesTurn(
+	history: readonly { role: string; content: string }[],
+	messages: readonly { id: string; role: string; content: string }[],
+	assistantId: string | null,
+	assistantText: string,
+): boolean {
+	const last = history[history.length - 1];
+	if (!last) return false;
+	if (assistantText !== '') return last.content.startsWith(assistantText);
+	const readIsBehind =
+		history.filter((m) => m.role === 'user').length < messages.filter((m) => m.role === 'user').length;
+	return !(readIsBehind && last.content === previousAnswer(messages, assistantId));
+}
+
+/** The last answer shown before the in-flight turn's bubble, or undefined when there is none. */
+function previousAnswer(
+	messages: readonly { id: string; role: string; content: string }[],
+	assistantId: string | null,
+): string | undefined {
+	const at = messages.findIndex((m) => m.id === assistantId);
+	for (let i = (at === -1 ? messages.length : at) - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m.role === 'assistant' && m.content) return m.content;
+	}
+	return undefined;
+}
+
 /** Maximum number of levels (the error itself plus its causes) {@link walkCauseChain} visits. */
 const MAX_CAUSE_DEPTH = 5;
 

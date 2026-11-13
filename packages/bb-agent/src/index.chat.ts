@@ -28,7 +28,7 @@
 
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
-import { AgentErrors, agentErrorFromChunk, blocksAgentError, persistedTurnError } from './errors.js';
+import { AgentErrors, agentErrorFromChunk, blocksAgentError, persistedTurnError, rowContinuesTurn } from './errors.js';
 
 export type { ChatTransport, ChunkStream, TurnRequest, RealtimeChannelDescriptor } from './transport.js';
 export { realtimeTransport } from './transport.js';
@@ -429,12 +429,12 @@ export function createChat(options: CreateChatOptions): ChatController {
 				if (stillSameInFlightTurn) armFailsafe();
 			} else if (turnComplete && stillSameInFlightTurn) {
 				// Adopt the persisted final text ONLY if it extends what we've already
-				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
-				// persisted text). If it does NOT extend our stream, `last` is a stale /
-				// previous-turn assistant row that does not continue the current bubble;
-				// adopting it would overwrite live text with prior-turn content and halt
-				// streaming, so we treat the turn as still running and wait for the terminal
-				// chunk instead.
+				// streamed this turn (the stream is a prefix of the persisted text, or nothing
+				// streamed yet and the row is not the previous turn's answer). If it does NOT
+				// extend our stream, `last` is a stale / previous-turn assistant row that does
+				// not continue the current bubble; adopting it would overwrite live text with
+				// prior-turn content and halt streaming, so we treat the turn as still running
+				// and wait for the terminal chunk instead.
 				//
 				// INVARIANT (resume path): a resume-start conversation must not end in a
 				// content-bearing assistant row. On resume, sendMessage({ interruptResponses })
@@ -446,7 +446,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// custom getConversation adapter that role-filters to user/assistant (as
 				// loadConversation does client-side) could re-expose this by dropping the interrupt
 				// row and surfacing a prior assistant row as `last`.
-				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
+				// With nothing streamed, a read missing this turn's user row can end at the previous
+				// turn's answer; rowContinuesTurn rejects that row (see its doc).
+				const extendsStream = rowContinuesTurn(history, messages, assistantId, assistantText);
 				if (extendsStream) {
 					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
 					// Replace the in-flight assistant bubble with the persisted final text.
