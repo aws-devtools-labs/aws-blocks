@@ -1,5 +1,7 @@
 # @aws-blocks/core
 
+<!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthOIDC block -->
+
 ## 0.8.0
 
 ### Minor Changes

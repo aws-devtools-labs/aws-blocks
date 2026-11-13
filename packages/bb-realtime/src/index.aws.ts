@@ -53,6 +53,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	InferMessage,
 	RealtimeChannelDescriptor,
 } from './types.js';
 

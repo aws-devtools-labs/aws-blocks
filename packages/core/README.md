@@ -570,10 +570,12 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 
 Lives in the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS Blocks API calls — `withAuth` reads them and forwards them to every AWS Blocks API call made inside the callback.
 
+**Next.js** detection is built in: `withAuth` reads the request's cookies through `cookies()` from `next/headers`, so with no second argument it works anywhere that call does — server components, route handlers and server actions. **Nuxt** is also detected (reads the active Nitro request; requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`). Any other framework passes the request's `Cookie` header explicitly, or registers a provider once:
+
 ```typescript
 import { withAuth } from '@aws-blocks/blocks/server';
 
-// Auto-detects cookies (Next.js detection is built in)
+// Next.js server component or route handler: cookies come from next/headers' cookies()
 const posts = await withAuth(() => api.listMyPosts());
 
 // Other frameworks: pass cookies explicitly as the 2nd arg…

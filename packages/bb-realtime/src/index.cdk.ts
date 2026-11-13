@@ -40,6 +40,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	InferMessage,
 	RealtimeChannelDescriptor,
 } from './types.js';
 import { BB_NAME } from './version.js';

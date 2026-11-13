@@ -7,9 +7,11 @@ import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 assertNotMockInDeployedEnv('bb-agent');
 
 export { Agent } from './agent.mock.js';
+// The base class of `Agent`, as a type, so the members `Agent` inherits have a named declaration.
+export type { AgentBase } from './agent.js';
 // Exported so api-extractor can resolve the (protected, @internal) dispatchTurn signature; the type
 // itself is @internal — not part of the public API (customers use stream()/resume()).
 export type { AgentTurnPayload } from './agent.js';
 export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
-export type { AgentConfig, AgentResult, AgentStreamChunk, AgentStreamResult, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, InterruptResponse, ToolCallRecord, ModelConfig, BedrockGuardrail, StreamOptions, Message, Conversation, JSONValue, TokenUsage } from './types.js';
+export type { AgentConfig, AgentResult, AgentStreamChunk, AgentStreamResult, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, InterruptResponse, ToolCallRecord, ModelConfig, BedrockGuardrail, StreamOptions, Message, Conversation, JSONValue, TokenUsage, ConversationManagerConfig, MessageMetadata, GuardrailsConfig, InferenceConfig } from './types.js';

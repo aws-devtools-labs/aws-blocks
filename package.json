@@ -105,6 +105,8 @@
     "build:tech-design-pdf": "node scripts/build-tech-design-pdf.mjs",
     "sync-docs": "node scripts/sync-catalog.mjs --write",
     "sync-docs:check": "node scripts/sync-catalog.mjs --check",
+    "update:imports": "node scripts/gen-imports-reference.mjs",
+    "check:imports": "node scripts/gen-imports-reference.mjs --check",
     "review-pr": "bash scripts/review-pr.sh",
     "publish:local": "tsx scripts/publish/publish.ts",
     "version": "changeset version && npm install --package-lock-only",

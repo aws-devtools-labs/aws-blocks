@@ -61,14 +61,14 @@ The frontend calls every method, public and protected, like any other namespace:
 
 ```ts
 // src/main.ts
-import { AuthErrors, isAuthError } from '@aws-blocks/blocks';
+import { isBlocksError } from '@aws-blocks/blocks/client';
 import { notesApi } from 'aws-blocks';
 
 await notesApi.health(); // works signed out
 try {
   await notesApi.addNote('hello');
 } catch (e) {
-  if (isAuthError(e, AuthErrors.NotAuthenticated)) {
+  if (isBlocksError(e, 'NotAuthenticatedException')) {
     // signed out: show the sign-in UI
   }
 }
@@ -468,6 +468,7 @@ The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) on
 
 **The stub in local dev and sandbox, the real provider in production.** Keep one provider id and pick its entry from `getDeploymentType()`. The client code (`signIn:corp`) is the same everywhere:
 
+<!-- doc-snippet: fragment — uses the app's scope -->
 ```typescript
 // aws-blocks/index.ts
 import { Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
@@ -793,6 +794,7 @@ new Auth(scope, 'auth', {
 
   **A client of the block's own pool** is created after the block, so its id can't be passed to the constructor as a token. Add it in `aws-blocks/index.cdk.ts`, then list the id the first deploy printed:
 
+  <!-- doc-snippet: fragment — continues the CDK entry file after its `blocksStack` is created -->
   ```typescript
   // aws-blocks/index.cdk.ts — after `const blocksStack = await BlocksStack.create(...)`
   import * as cdk from 'aws-cdk-lib';

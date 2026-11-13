@@ -68,6 +68,7 @@ For `AuthCognito`, "kept" assumes the first `Auth` deploy still has a pool-backe
 
 Your pool and your users survive, **provided the block's id is unchanged**. Their sessions survive only if the session secret stays in SSM: see ["The session secret moves to Secrets Manager"](#the-session-secret-moves-to-secrets-manager) below.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-cognito -->
 ```ts
 // Before (AuthCognito)
 import { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
@@ -138,6 +139,7 @@ To keep sessions valid across the switch, set `secretsStore: 'ssm'` **before** t
 
 Direct providers keep their identity: `userId` is still `` `${iss}:${sub}` ``. Nothing in AWS is destroyed, and no Cognito pool is created. The old session cookie is ignored, so each user signs in once more after the deploy.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-oidc -->
 ```ts
 // Before (AuthOIDC)
 import { AuthOIDC, google, github, customOidc, relayOrigin, stubIdp } from '@aws-blocks/bb-auth-oidc';
@@ -315,6 +317,7 @@ Before relying on it, check the username format for one real user in the Cognito
 
 **There is no migration path.** Cognito can't import `AuthBasic`'s bcrypt password hashes, so every existing user must **sign up again** after the switch. The codemod rewrites the code and marks every `AuthBasic` block with a TODO, but the decision to switch is yours.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-basic -->
 ```ts
 // Before (AuthBasic)
 import { AuthBasic, AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
