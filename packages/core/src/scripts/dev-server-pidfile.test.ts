@@ -132,6 +132,10 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     assert.ok(record, `no pidfile for the listening dev server:\n${devOut}`);
     assert.equal(record.ppid, dev.pid);
     assert.equal(record.port, port);
+    // The whole record, not a bare {pid, ppid, port}: `dev stop` and the liveness
+    // checks read the command lines, and the reap protocol names the record by its token.
+    assert.ok(record.token, 'the record written on listening carries its token');
+    assert.ok(record.command, 'the record written on listening carries the command line');
 
     const stopEntry = join(__dirname, 'dev-server.js').replace(/\\/g, '/');
     const { stdout } = await execFileAsync(
