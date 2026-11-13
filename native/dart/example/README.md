@@ -1,6 +1,7 @@
 # Dart SDK Example & E2E Tests
 
-This directory contains the E2E test suite for the Dart native SDK. It runs
+This directory contains a sample app, [`bin/auth_cold_start.dart`](#sample-app-signed-in-across-launches),
+and the E2E test suite for the Dart native SDK. Both run
 against the **`test-apps/native-bindings`** backend, which exercises the blocks
 native clients consume (three `Auth` blocks — email + password, a
 Cognito-style configuration and OIDC through the local stub IdP — plus realtime,
@@ -19,6 +20,7 @@ file, KV, and a DistributedTable-backed todo list).
   - `oidc_test.dart` — OIDC server-relay against the stub IdP (local only; see below)
   - `rpc_wire_test.dart` — the JSON-RPC wire contract against `api.echoArgs`: params are positional, so a left-out optional keeps its slot as `null` and trailing unset ones are left off
 - `bin/e2e_test.dart` — Test runner (executes all suites sequentially)
+- `bin/auth_cold_start.dart`: sample app that stays signed in across launches (see below)
 - `lib/blocks_client.dart` — Generated client (produced fresh by `run-e2e.sh`,
   not checked in as source of truth)
 
@@ -37,6 +39,72 @@ To run against a deployed endpoint:
 ```bash
 native/dart/run-e2e.sh --blocks-url https://xxx.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api
 ```
+
+## Sample app: signed in across launches
+
+`bin/auth_cold_start.dart` is a command-line app for the email + password
+`Auth` block (`authBasicApi`). Each run is a fresh launch: it loads the saved
+session, calls `getAuthState()`, prints the state and the actions it offers,
+and then runs at most one action through `setAuthState`.
+
+Two things make the session survive a restart, and an app needs both:
+
+- **A persistent session store.** `Blocks(baseUrl: ...)` keeps cookies in
+  memory, so without one every launch starts signed out. The app passes a
+  `PersistentSessionStore` and calls `await session.load()` before the first
+  request. Its `TokenStore` is a small JSON file store defined in the app;
+  in a Flutter app use `FlutterSecureStore` from `blocks_runtime_flutter`
+  instead, since the file holds the session cookie in plain text.
+- **`getAuthState()` on launch.** The server checks the saved cookie and
+  answers `signedIn` with the user, or `signedOut`. The client keeps no auth
+  state of its own between launches.
+
+```dart
+final session = PersistentSessionStore(store: JsonFileTokenStore(path));
+await session.load();
+final blocks = Blocks(baseUrl: url, sessionStore: session);
+final state = await blocks.authBasicApi.getAuthState();
+```
+
+### Running it
+
+From the monorepo root, after `npm install` and `npm run build`:
+
+```bash
+# 1. Start the backend on a free port (it prints sign-up codes to the console).
+(cd test-apps/native-bindings && PORT=3001 npx tsx aws-blocks/scripts/server.ts)
+
+# 2. In another terminal: generate the spec and the client.
+(cd test-apps/native-bindings && npm run spec)
+cd native/dart/packages/blocks_codegen
+printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../blocks_runtime\n' > pubspec_overrides.yaml
+dart pub get
+dart run bin/blocks_codegen.dart \
+  --spec ../../../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
+  --output ../../example/lib/blocks_client.dart
+cd ../../example
+printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../packages/blocks_runtime\n  blocks_codegen:\n    path: ../packages/blocks_codegen\n' > pubspec_overrides.yaml
+dart pub get
+
+# 3. Each command is a new launch.
+export BLOCKS_URL=http://localhost:3001/aws-blocks/api
+dart run bin/auth_cold_start.dart                                 # signedOut
+dart run bin/auth_cold_start.dart sign-up alice 'Passw0rd!' alice@example.com
+dart run bin/auth_cold_start.dart confirm alice <code from the server console>
+dart run bin/auth_cold_start.dart                                 # signedIn as alice
+dart run bin/auth_cold_start.dart sign-out
+dart run bin/auth_cold_start.dart sign-in alice 'Passw0rd!'
+```
+
+The `pubspec_overrides.yaml` files point both packages at the in-repo
+runtime, as `run-e2e.sh` and CI do. The session is saved in
+`.dart_tool/auth_cold_start_session.json`; set `BLOCKS_SESSION_FILE` to use
+another file, or delete it to start over.
+
+Confirming the code doesn't sign the user in by itself: the state it returns
+offers `autoSignIn`, which the app submits next. A wrong password comes back
+as a `signedOut` state with an `error`; a wrong code comes back `retriable`,
+and the user stays where they were.
 
 ## Verification codes and deployed backends
 

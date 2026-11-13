@@ -210,7 +210,8 @@ jobs:
           # dep unifies with the path version.
           printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../packages/blocks_runtime\n  blocks_codegen:\n    path: ../packages/blocks_codegen\n' > pubspec_overrides.yaml
           dart pub get
-          dart analyze lib/blocks_client.dart
+          # The sample app is analyzed with the client so it keeps compiling.
+          dart analyze lib/blocks_client.dart bin/auth_cold_start.dart
 
       - name: Run E2E tests
         working-directory: native/dart/example
