@@ -46,6 +46,7 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
         const val UTF8 = 0x08000100
         const val ERR_SUCCESS = 0
         const val ERR_DUPLICATE_ITEM = -25299
+        const val ERR_ITEM_NOT_FOUND = -25300
 
         val security: Security = Native.load("Security", Security::class.java)
         val coreFoundation: CoreFoundation = Native.load("CoreFoundation", CoreFoundation::class.java)
@@ -59,6 +60,16 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
             NativeLibrary.getInstance(library).getGlobalVariableAddress(name)
     }
 
+    /**
+     * Null means no usable key is held: either no item at all, or an item whose contents are not a
+     * key this store could have written. Anything else — above all a refused access prompt — is
+     * thrown rather than reported as absent.
+     *
+     * The distinction is what keeps a denied prompt from being read as "mint a new key". Reported as
+     * absent, it would send the caller into [storeIfAbsent], where the duplicate item already there
+     * drives a second read and so a second prompt, on every call the jar makes for the life of the
+     * process. Thrown, it reaches the caller once and stays there.
+     */
     override fun load(alias: String): ByteArray? = withCf { cf ->
         val query = cf.dictionary(
             constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
@@ -67,7 +78,13 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
             constant("Security", "kSecReturnData") to constant("CoreFoundation", "kCFBooleanTrue"),
         )
         val out = PointerByReference()
-        if (security.SecItemCopyMatching(query, out) != ERR_SUCCESS) return@withCf null
+        val status = security.SecItemCopyMatching(query, out)
+        if (status == ERR_ITEM_NOT_FOUND) return@withCf null
+        if (status != ERR_SUCCESS) {
+            // errSecAuthFailed and errSecInteractionNotAllowed land here: an item this process is
+            // not allowed to read, which is emphatically not the same as one that is not there.
+            throw KeyValueStoreException("The keychain refused to return the encryption key (status $status)")
+        }
         // `kSecReturnData` hands back a copy, so this reference is ours to release.
         val data = cf.owned(out.value) ?: return@withCf null
         val length = coreFoundation.CFDataGetLength(data).toInt()
@@ -76,22 +93,33 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
     }
 
     override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray {
-        val status = withCf { cf ->
-            val attributes = cf.dictionary(
-                constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
-                constant("Security", "kSecAttrService") to cf.string(service),
-                constant("Security", "kSecAttrAccount") to cf.string(alias),
-                constant("Security", "kSecValueData") to cf.data(key),
-            )
-            security.SecItemAdd(attributes, null)
-        }
+        val status = add(alias, key)
         if (status == ERR_SUCCESS) return key
-        // Another process stored one first, and its key is the one entries were written under.
-        if (status == ERR_DUPLICATE_ITEM) {
-            return load(alias)
-                ?: throw KeyValueStoreException("Could not read the encryption key another process stored")
+        if (status != ERR_DUPLICATE_ITEM) {
+            throw KeyValueStoreException("The keychain refused to store the encryption key (status $status)")
         }
-        throw KeyValueStoreException("The keychain refused to store the encryption key (status $status)")
+        // An item is already there. Usually another process stored one first, and its key is the
+        // one entries were written under, so it wins and this call adopts it.
+        load(alias)?.let { return it }
+        // The item is readable but holds nothing usable — not a refused prompt, which [load] throws
+        // rather than reporting as absent. Nothing can have been written under it, so replacing it
+        // orphans nothing, and leaving it would wedge the store: every call would find a duplicate
+        // it cannot read and this method would throw for the life of the directory.
+        delete(alias)
+        if (add(alias, key) == ERR_SUCCESS) return key
+        // Another process got there between the delete and the add. Its key is the one to use.
+        return load(alias)
+            ?: throw KeyValueStoreException("Could not read the encryption key another process stored")
+    }
+
+    private fun add(alias: String, key: ByteArray): Int = withCf { cf ->
+        val attributes = cf.dictionary(
+            constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
+            constant("Security", "kSecAttrService") to cf.string(service),
+            constant("Security", "kSecAttrAccount") to cf.string(alias),
+            constant("Security", "kSecValueData") to cf.data(key),
+        )
+        security.SecItemAdd(attributes, null)
     }
 
     override fun delete(alias: String) {

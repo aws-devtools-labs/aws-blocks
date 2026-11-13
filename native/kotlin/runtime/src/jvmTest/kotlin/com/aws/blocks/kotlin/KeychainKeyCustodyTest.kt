@@ -85,4 +85,24 @@ class KeychainKeyCustodyTest {
             runCatching { custody().delete(other) }
         }
     }
+
+    @Test
+    fun replacesAnItemThatHoldsSomethingOtherThanAKey() {
+        if (!onMac) return
+
+        // An item under our service and account that is not a 32-byte key, as an older format or
+        // a partial write would leave. Left in place it would wedge the store: the add reports a
+        // duplicate, the read cannot use what is there, and every call would throw for the life of
+        // the directory. Nothing can have been written under it, so replacing it orphans nothing.
+        //
+        // Planted through this custody rather than the `security` tool on purpose. An item the
+        // tool creates carries the tool's code identity, so reading it from this JVM asks the user
+        // to consent — which would make this test hang on a dialog and take the suite with it.
+        custody().storeIfAbsent(alias, byteArrayOf(1, 2, 3)).toList() shouldBe listOf<Byte>(1, 2, 3)
+
+        custody().load(alias).shouldBeNull()
+
+        custody().storeIfAbsent(alias, key).toList() shouldBe key.toList()
+        custody().load(alias)!!.toList() shouldBe key.toList()
+    }
 }
