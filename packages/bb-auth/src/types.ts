@@ -1277,8 +1277,10 @@ export interface UserAttribute {
 	 * a tenant id, a plan tier). The block's app clients then leave it out of
 	 * their write attributes, so Cognito refuses an end-user write, and `Auth`
 	 * rejects one with `NotAuthorizedException` before calling Cognito,
-	 * locally too. Set it server-side instead (`admin.createUser`, or
-	 * Cognito's `AdminUpdateUserAttributes`). Can't be combined with
+	 * locally too. Set it server-side instead: `admin.createUser`, or, for a
+	 * user who already exists, Cognito's `AdminUpdateUserAttributes` with your
+	 * own SDK client and the stored name (`custom:<name>`); `Auth` does not
+	 * grant `cognito-idp:AdminUpdateUserAttributes`. Can't be combined with
 	 * `required: true`, which has no effect on a custom attribute.
 	 *
 	 * A provider's `attributeMapping` onto it writes the provider's claim on
