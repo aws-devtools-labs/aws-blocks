@@ -32,6 +32,13 @@ const store = new KVStore(scope, 'app-store', {});
 // it and serves it to the UI through the local-only `getLastCode` method below.
 // On AWS, Cognito emails the codes and the hook never runs, so `getLastCode`
 // returns `null` there.
+//
+// `mfa: { mode: 'optional', types: ['TOTP'] }`: users can add an authenticator
+// app through `authApi` (`setUpTotp`, then `verifyTotpSetup`); once they do, the
+// <Authenticator> asks for its 6-digit code at sign-in. Users who never set one
+// up sign in exactly as before. `totpVerification: 'rfc6238'` makes the local
+// pool check those codes the way Cognito does, instead of accepting any six
+// digits; it is ignored once deployed.
 let lastCode: { username: string; code: string; purpose: string } | null = null;
 
 const auth = new Auth(scope, 'auth', {
@@ -43,6 +50,8 @@ const auth = new Auth(scope, 'auth', {
     groups: ['editors', 'readers'],
     attributes: [{ name: 'department' }],
   },
+  mfa: { mode: 'optional', types: ['TOTP'] },
+  totpVerification: 'rfc6238',
   codeDelivery: async (username, code, purpose) => {
     lastCode = { username, code, purpose };
     console.log(`[auth] ${purpose} code for ${username}: ${code}`);

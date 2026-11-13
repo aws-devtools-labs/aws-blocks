@@ -4,7 +4,8 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning, totpCodeFor } from '@aws-blocks/blocks/utils';
+import type { AuthState } from '@aws-blocks/blocks';
 import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -238,4 +239,58 @@ test('KV Store - set and get (signed in, keys isolated per user)', async (t) => 
 
   // A different user sees their own namespace, not the first user's value.
   assert.strictEqual(await b.api.getValue('test-key'), null);
+});
+
+// ─── MFA (authenticator app) ──────────────────────────────────────────────────
+// The steps a custom MFA settings page and the <Authenticator> submit. The local
+// pool checks codes against the shared secret (`totpVerification: 'rfc6238'`),
+// and `totpCodeFor` computes the code an authenticator app would show.
+
+/** The value `state` carries in field [field] of its action [action]. */
+function fieldOf(state: AuthState, action: string, field: string): string {
+  const value = state.actions.find((a) => a.name === action)?.fields.find((f) => f.name === field)?.defaultValue;
+  assert.ok(value, `${action}.${field} in ${JSON.stringify(state)}`);
+  return value;
+}
+
+/** A six-digit code the pool cannot accept: none of the steps around now. */
+function wrongTotpCode(sharedSecret: string): string {
+  const near = new Set([-1, 0, 1, 2].map((step) => totpCodeFor(sharedSecret, Date.now() + step * 30_000)));
+  for (let n = 0; ; n++) {
+    const code = String(n).padStart(6, '0');
+    if (!near.has(code)) return code;
+  }
+}
+
+test('mfa: a user who sets up an authenticator app must enter its code at sign-in', async (t) => {
+  if (skipUnlessLocal(t)) return;
+  const name = `mfa-${Date.now().toString(36)}@example.com`;
+  const user = await newUser(name);
+
+  const setup = await user.authApi.setAuthState({ action: 'setUpTotp' });
+  const sharedSecret = fieldOf(setup, 'verifyTotpSetup', 'sharedSecret');
+  assert.match(fieldOf(setup, 'verifyTotpSetup', 'otpauthUri'), new RegExp(`^otpauth://totp/.*secret=${sharedSecret}`));
+
+  const badSetup = await user.authApi.setAuthState({ action: 'verifyTotpSetup', code: wrongTotpCode(sharedSecret) });
+  assert.strictEqual(badSetup.errorName, 'EnableSoftwareTokenMFAException');
+  assert.strictEqual(badSetup.retriable, true, 'a wrong code keeps the setup form');
+  const enrolled = await user.authApi.setAuthState({ action: 'verifyTotpSetup', code: totpCodeFor(sharedSecret) });
+  assert.strictEqual(enrolled.state, 'signedIn', JSON.stringify(enrolled));
+  assert.strictEqual(enrolled.error, undefined);
+
+  await user.authApi.setAuthState({ action: 'signOut' });
+  const challenged = await user.authApi.setAuthState({ action: 'signIn', username: name, password });
+  assert.strictEqual(challenged.state, 'confirmingSignIn', 'the password alone no longer signs in');
+  assert.strictEqual(fieldOf(challenged, 'confirmSignIn', 'challenge'), 'code');
+  const session = fieldOf(challenged, 'confirmSignIn', 'session');
+  await assert.rejects(() => user.api.whoAmI(), (e: unknown) => isBlocksError(e, 'NotAuthenticatedException'));
+
+  const wrong = await user.authApi.setAuthState({ action: 'confirmSignIn', challenge: 'code', session, code: wrongTotpCode(sharedSecret) });
+  assert.strictEqual(wrong.errorName, 'CodeMismatchException');
+  assert.strictEqual(wrong.retriable, true, 'the user can try the code again');
+  await assert.rejects(() => user.api.whoAmI(), (e: unknown) => isBlocksError(e, 'NotAuthenticatedException'));
+
+  const signedIn = await user.authApi.setAuthState({ action: 'confirmSignIn', challenge: 'code', session, code: totpCodeFor(sharedSecret) });
+  assert.strictEqual(signedIn.state, 'signedIn', JSON.stringify(signedIn));
+  assert.strictEqual((await user.api.whoAmI()).attributes.email, name);
 });
