@@ -966,7 +966,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 - **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
 - **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
-- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids for the user pool, the app client and the session secret, its pool name and its session format, so an app that switches keeps its user pool and its users. Signed-in sessions do not carry over: the session store is a new table, so each user signs in once (`packages/bb-auth/MIGRATION.md`).
 - **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
 
 ### Rationale

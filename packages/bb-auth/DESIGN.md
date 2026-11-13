@@ -97,9 +97,9 @@ A deployed `'cognito'` block flipped to `'builtin'` would drop its pool; the imm
 
 ### Session compatibility contract
 
-The non-negotiable: an app switching `AuthCognito` → `Auth` with the same id keeps its signed-in users. `Auth` therefore uses **exactly** `AuthCognito`'s session layer, not `AuthOIDC`'s:
+`Auth` uses `AuthCognito`'s session layer, not `AuthOIDC`'s: the cookie, its signature, the row and the expiry rules below are `AuthCognito`'s. Two rows differ for an app that switches `AuthCognito` → `Auth` with the same id: the store is a new table, and under `secretsStore: 'secrets-manager'` the secret is a new one. So such an app keeps its users, and each of them signs in once more:
 
-| Aspect | Contract (identical to `AuthCognito`) |
+| Aspect | Contract (identical to `AuthCognito`, except where a row says so) |
 |---|---|
 | Cookie name | `auth_<fullId>` in **every** runtime (one prefix, so a session also survives a mock↔AWS switch — this settles the `_` vs `-` question) |
 | Cookie value | `<sessionId>.<base64url(HMAC-SHA256(sessionId, secret))>`, verified in constant time |
