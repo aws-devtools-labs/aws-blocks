@@ -54,7 +54,7 @@
     "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-rds-data": "^3.1156.0",
     "@aws-sdk/client-secrets-manager": "^3.1156.0",
-    "@electric-sql/pglite": "0.5.11",
+    "@electric-sql/pglite": "0.5.16",
     "pg": "^8.23.1",
     "pluralize": "^8.0.0"
   },

@@ -25,15 +25,15 @@
   "dependencies": {
     "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
-    "nuxt": "^4.6.3",
-    "vue": "^3.5.44"
+    "nuxt": "^4.6.4",
+    "vue": "^3.5.45"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "concurrently": "^8.2.2",
-    "aws-cdk-lib": "^2.274.0",
+    "aws-cdk-lib": "^2.275.0",
     "constructs": "^10.8.1",
     "@playwright/test": "^1.64.1"
   }
