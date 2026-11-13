@@ -841,6 +841,8 @@ Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda
 
 Ownership follows who created the role, not where it sits in the construct tree: AWS Blocks marks the constructs its own blocks, computes and stack-level helpers create, and every other covered role is your app's.
 
+A condition only counts under an operator that requires the key and with a value that names an account. The operator must be `StringEquals`, `StringEqualsIgnoreCase`, `StringLike`, `ArnEquals` or `ArnLike`, or one of their `ForAnyValue:` forms. An `…IfExists` operator, a negated operator (`StringNotEquals`, `ArnNotLike`, …), `Null` or a `ForAllValues:` operator doesn't count. Neither does a value of `*` alone, an `aws:SourceAccount` with a wildcard, or an `aws:SourceArn` whose account segment is empty or a wildcard. A value built from tokens is read by its literal parts, so `arn:${stack.partition}:cloudwatch:*:*:alarm:*` is still caught, while a value that starts with a token and has no literal account segment (such as `${topic.topicArn}/*`) counts. The KMS key-policy check below uses the same rules.
+
 Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role, meaning any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
 
 **Resolving the warning.** Add both conditions to the trust statement (but don't condition an API Gateway CloudWatch Logs role: API Gateway doesn't send these keys when it delivers logs, so logs stop arriving. Name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check already accepts, or acknowledge the warning). For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
@@ -872,3 +874,20 @@ eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition',
 ```ts
 cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition');
 ```
+
+**KMS (Key Management Service) key policies.** The same check reads the key policy of every `AWS::KMS::Key` in the same set of scopes. An `Allow` statement that names an AWS service principal must carry one of:
+
+- `aws:SourceAccount` or `aws:SourceArn` ([AWS global condition keys in AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-aws.html)); either one is enough;
+- for CloudWatch Logs (`logs.<region>.amazonaws.com`, or `.amazonaws.com.cn`), `kms:EncryptionContext:aws:logs:arn` ([Encrypt log data in CloudWatch Logs using AWS KMS](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html)).
+
+A key counts under the same operators and values as for roles (above), so an `…IfExists`, negated, `Null` or `ForAllValues:` operator doesn't scope the statement, and neither does a value that leaves the account open. `aws:SourceOrgID` and `aws:SourceOrgPaths` don't count, because they admit every account in the organization. `kms:ViaService` doesn't count either: it applies when an IAM principal calls through a service, and a service principal's own requests don't carry it.
+
+One principal is exempt: `events.amazonaws.com`, in a statement that grants only `kms:GenerateDataKey*` and `kms:Decrypt`. Amazon SNS documents that `aws:SourceAccount`, `aws:SourceArn` and `aws:SourceOrgID` in a key policy aren't supported for EventBridge publishing to an encrypted topic ([Enable compatibility between event sources from AWS services and encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services)), so either condition stops delivery.
+
+As with roles, a key AWS Blocks creates fails synth, naming the key's construct path, the principal and the statement index; a key your app creates gets a synth warning with the id `@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition`, which you acknowledge the same way:
+
+```ts
+cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition');
+```
+
+The key `Hosting` creates for its alarm topic grants `cloudwatch.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` (this account's alarms in the Region), as [Amazon SNS documents for encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services). Other resource policies and KMS grants aren't checked.
