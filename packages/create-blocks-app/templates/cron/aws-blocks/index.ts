@@ -53,6 +53,10 @@ new CronJob(scope, 'paused', {
 // (`const auth = new Auth(scope, 'auth')`) and call it first — see
 // node_modules/@aws-blocks/bb-auth/README.md:
 //   const user = await auth.requireAuth(context);
+//
+// Clients call `<export name>.<method>()`, so this one is `api.lastRun()`. For
+// `orders.create()`, add `export const orders = new ApiNamespace(scope, 'orders', …)`
+// rather than a `create` method here. The second argument is only a label.
 export const api = new ApiNamespace(scope, 'api', () => ({
   // The most recent run of a job, or null if it has not fired yet.
   async lastRun(job: 'heartbeat' | 'paused') {
