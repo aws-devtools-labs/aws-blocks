@@ -4,7 +4,7 @@ Design document for the auth common package. For usage, see [README.md](./README
 
 **Package:** `@aws-blocks/auth-common`
 **Type:** Shared interface (not a standalone Building Block)
-**AWS Service:** None — defines the contract that `Auth` (`@aws-blocks/bb-auth`) implements. It was written for, and implemented by, the three blocks `Auth` replaced: `AuthBasic`, `AuthOIDC` and `AuthCognito`.
+**AWS Service:** None — defines the contract that `Auth` (`@aws-blocks/bb-auth`) implements.
 
 ## Purpose
 
@@ -165,15 +165,15 @@ sequenceDiagram
 
 ## `BlocksAuth` contract notes
 
-- **Method shorthand, on purpose.** Every member is declared as a method (`requireAuth(context): …`), never as a property holding a function type. Under `strictFunctionTypes`, property-style function types check parameters contravariantly, while methods are checked bivariantly. Implementations narrow parameters (e.g. `Auth.requireRole` accepts only its declared group names, as `AuthCognito.requireRole` did), and only method shorthand lets those implementations satisfy the interface. `src/blocks-auth.types-test.ts` pins both the passing case and the property-syntax counterexample.
-- **`requireRole` is required.** `Auth` implements it. It was optional while two of the blocks `Auth` replaced (`AuthBasic`, `AuthOIDC`) existed, because they had no roles; it became a required member when they were removed.
-- **The 401 name is `NotAuthenticatedException`.** `Auth` throws it from `requireAuth`, as `AuthCognito` and `AuthOIDC` did (the removed `AuthBasic` threw `SessionExpiredException`).
+- **Method shorthand, on purpose.** Every member is declared as a method (`requireAuth(context): …`), never as a property holding a function type. Under `strictFunctionTypes`, property-style function types check parameters contravariantly, while methods are checked bivariantly. Implementations narrow parameters (e.g. `Auth.requireRole` accepts only its declared group names), and only method shorthand lets those implementations satisfy the interface. `src/blocks-auth.types-test.ts` pins both the passing case and the property-syntax counterexample.
+- **`requireRole` is required.** `Auth` implements it.
+- **The 401 name is `NotAuthenticatedException`.** `Auth` throws it from `requireAuth`.
 
 ## Auth error vocabulary
 
 `AuthErrors` (`src/errors.ts`) is the one set of error names the `Auth` block throws. Names follow Amazon Cognito's exception names wherever Cognito has one; the federation-flow names keep the same `*Exception` suffix. Matching is by `name` (`isAuthError` / `isBlocksError` on a thrown error, `hasAuthError` on a returned `AuthState`), which works the same on server and client.
 
-Adding `AuthErrors` changed nothing about what the predecessor blocks threw. There are **no runtime aliases**: a caller matching an old `AuthBasic` name will not match the new one, so each rename below is a breaking change when `AuthBasic` callers move to `Auth` (see [`MIGRATION.md`](../bb-auth/MIGRATION.md#error-names)).
+There are **no runtime aliases**: a caller matching an `AuthBasic` name does not match its `AuthErrors` replacement, so each rename below needs a code change when moving from `AuthBasic` to `Auth` (see [`MIGRATION.md`](../bb-auth/MIGRATION.md#error-names)).
 
 ### Mapping from predecessor names
 
@@ -195,7 +195,7 @@ Adding `AuthErrors` changed nothing about what the predecessor blocks threw. The
 
 New names with no predecessor: `ReauthenticationRequired`, `ProviderUnavailable`, `EmailPasswordNotEnabled`, `NoFederatedProvider`, `PasskeysNotEnabled`, `MfaNotEnabled`.
 
-`AuthCognito` also passed any other Cognito exception through by its service name (e.g. `CodeDeliveryFailureException`); those are not part of the vocabulary, and `Auth` reports them as `InternalErrorException`.
+Any other Cognito exception (e.g. `CodeDeliveryFailureException`, which `AuthCognito` passed through by its service name) is not part of the vocabulary; `Auth` reports it as `InternalErrorException`.
 
 ## Cross-Tab Auth State Broadcasting
 
@@ -226,7 +226,7 @@ That gives two views of one source:
 
 The store's only inputs are hydration (one shared in-flight `getAuthState()` per `api`), `submitAuthAction`, and a cross-tab refetch: a broadcast from another tab triggers one `getAuthState()` per `api` that has store subscribers (the `Authenticator` is one), installed with the first subscriber and removed with the last. The refetch is skipped when the broadcast names the user the store shows, the store is in no flow, and nothing was sent after the answer it shows: no request in flight can then have seen the session before the other tab's change or after it. A same-window broadcast is not refetched, because `submitAuthAction` already wrote the store. The snapshot keeps its identity between writes, as `useSyncExternalStore` requires.
 
-`submitAuthAction` tags its broadcast, in this window and to other tabs, with the RPC namespace of the API it ran on (the generated client answers `Symbol.for('aws-blocks.apiNamespace')` with it, the same in every tab): another API's `onAuthChange` skips the message and its store does not refetch, so signing in to one auth block never hands its user to another's listener. An untagged message (`broadcastAuthChange(user)` without an `api`, or a tab running an older `@aws-blocks/auth-common`) reaches every API, as before; so does any message for an API that is not a generated client. The id includes an overridden URL: on one backend, `generateClient({ url: X }).authApi` is `X#authApi` and the default client's `authApi` is `authApi`, so neither gets the other's tagged messages.
+`submitAuthAction` tags its broadcast, in this window and to other tabs, with the RPC namespace of the API it ran on (the generated client answers `Symbol.for('aws-blocks.apiNamespace')` with it, the same in every tab): another API's `onAuthChange` skips the message and its store does not refetch, so signing in to one auth block never hands its user to another's listener. An untagged message (`broadcastAuthChange(user)` without an `api`, or a tab running an older `@aws-blocks/auth-common`) reaches every API; so does any message for an API that is not a generated client. The id includes an overridden URL: on one backend, `generateClient({ url: X }).authApi` is `X#authApi` and the default client's `authApi` is `authApi`, so neither gets the other's tagged messages.
 
 ### Ordering answers
 
@@ -252,9 +252,9 @@ Known limitations, all on failure paths and all settled by the next broadcast, s
 
 Display: the session answer if it is signed in, else the flow answer if there is one, else the session answer. `submitAuthAction` broadcasts a `signedIn` / `signedOut` result when the store shows it, which a session action's result always is. A result the store does not show is not this tab's state and is not broadcast: a failed sign-in sent before the session was seen signed in, or one under a signed-in state the store is re-reading.
 
-`onAuthChange` follows the store: it takes broadcasts at their word as before, and then emits the store's user whenever that differs from what it emitted — after the refetch a cross-tab broadcast triggers (so a stale broadcast is corrected) and when the store re-reads. An answer the store learned before the last broadcast arrived is older than that broadcast and is emitted only if it agrees with it, so when the refetch fails the broadcast stands: a sign-out another tab made stays a sign-out on a network blip, even though the store still shows the user it knew. Otherwise it ends where `subscribeAuthState` does. A user equal to the last one it emitted is not emitted again (a broadcast still is, as before). Since it follows the store, an `api` with only `onAuthChange` subscribers (`AuthenticatedContent`, `AccountMenuBar`) also sends one `getAuthState()` per broadcast from another tab (except one the store skips, above).
+`onAuthChange` follows the store: it takes broadcasts at their word, and then emits the store's user whenever that differs from what it emitted — after the refetch a cross-tab broadcast triggers (so a stale broadcast is corrected) and when the store re-reads. An answer the store learned before the last broadcast arrived is older than that broadcast and is emitted only if it agrees with it, so when the refetch fails the broadcast stands: a sign-out another tab made stays a sign-out on a network blip, even though the store still shows the user it knew. Otherwise it ends where `subscribeAuthState` does. A user equal to the last one it emitted is not emitted again (a broadcast still is). Since it follows the store, an `api` with only `onAuthChange` subscribers (`AuthenticatedContent`, `AccountMenuBar`) also sends one `getAuthState()` per broadcast from another tab (except one the store skips, above).
 
-The race tests check this exhaustively: every interleaving of up to three concurrent operations (hydration, another tab's sign-in or sign-out and the refetch it triggers, a submit with a terminal result, a submit with a mid-flow result, a session timeout followed by a new sign-in, and failures of each), for one and two APIs, both with this cookie timing and with the old naive timing in which a request's effect lands when it is sent. After every event the snapshot must be the one the rule names; once everything settles it must equal the session's truth (a fresh read, or the step the tab is still in) when no request failed, `onAuthChange` must agree with it (or hold the last broadcast, when a refetch failed), and nothing may cross APIs. With cookie timing, `onAuthChange`'s emissions are also checked against the server's session: once it reported a sign-out the server had made, it reports a user again only after a sign-in since (another tab's late broadcast excepted: it names a sign-in that happened, and the refetch corrects it). Reads are bounded by their causes (one per API, broadcast, action and failure), and a run that does not settle, or an enumeration that overruns its time budget, fails.
+The race tests check this exhaustively: every interleaving of up to three concurrent operations (hydration, another tab's sign-in or sign-out and the refetch it triggers, a submit with a terminal result, a submit with a mid-flow result, a session timeout followed by a new sign-in, and failures of each), for one and two APIs, both with this cookie timing and with a naive timing in which a request's effect lands when it is sent. After every event the snapshot must be the one the rule names; once everything settles it must equal the session's truth (a fresh read, or the step the tab is still in) when no request failed, `onAuthChange` must agree with it (or hold the last broadcast, when a refetch failed), and nothing may cross APIs. With cookie timing, `onAuthChange`'s emissions are also checked against the server's session: once it reported a sign-out the server had made, it reports a user again only after a sign-in since (another tab's late broadcast excepted: it names a sign-in that happened, and the refetch corrects it). Reads are bounded by their causes (one per API, broadcast, action and failure), and a run that does not settle, or an enumeration that overruns its time budget, fails.
 
 `npm test` runs the one-API sets and the two-API sets of up to two operations (about 1.2 million interleavings). The two-API, three-operation sets (about 8.6 million more) run with `AUTH_STORE_RACES_FULL=1`; the `Auth Store Races` workflow does that on every PR that changes `src/ui.ts` or the race model. Run it locally the same way after changing the store: `AUTH_STORE_RACES_FULL=1 node --test dist/ui.races.*.test.js` in this package.
 
@@ -273,7 +273,7 @@ The cookie contains a signed JWT. The BB handles token validation internally —
 ## Design-Token Layer (self-injecting theme)
 
 The UI components are vanilla-DOM factories by design, so they drop into
-lit-html, vanilla, React, and Next.js alike. Styling them had to preserve
+lit-html, vanilla, React, and Next.js alike. Styling them must preserve
 that neutrality: a React-only component library (Cloudscape, MUI) cannot
 restyle a vanilla-DOM component, and a separate stylesheet every host must
 import renders unstyled the moment a host forgets the import.
