@@ -62,12 +62,13 @@ class RpcWireE2ETest {
             client.execute(BlocksRequest(method = "echoArgs", params = emptyList(), id = BlocksRequest.nextId()))
         }
         dotless.name shouldBe "InvalidRequest"
-        dotless.code shouldBe -32600
+        dotless.status shouldBe 500
 
         val defaultNamespace = shouldThrow<ApiException> {
             client.execute(BlocksRequest(method = "_default.echoArgs", params = emptyList(), id = BlocksRequest.nextId()))
         }
-        defaultNamespace.code shouldBe -32601
+        defaultNamespace.name shouldBe "MethodNotFound"
+        defaultNamespace.status shouldBe 500
         defaultNamespace.message shouldContain "API '_default' not found"
     }
 }

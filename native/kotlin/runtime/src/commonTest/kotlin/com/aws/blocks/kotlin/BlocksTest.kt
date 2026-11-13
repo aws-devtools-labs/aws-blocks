@@ -1,12 +1,14 @@
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.exceptions.BlocksException
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 class BlocksTest {
 
@@ -46,6 +48,16 @@ class BlocksTest {
         }
 
         failure.message!! shouldContain "closed"
+    }
+
+    @Test
+    fun `a request through a closed Blocks reports the closed state`() = runTest {
+        val blocks = Blocks(BlocksServer("local", "http://localhost:3000/aws-blocks/api"))
+        blocks.close()
+        val e = assertFailsWith<ClientClosedException> {
+            blocks.client().execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        }
+        e.message shouldBe CLOSED_MESSAGE
     }
 
     @Test
