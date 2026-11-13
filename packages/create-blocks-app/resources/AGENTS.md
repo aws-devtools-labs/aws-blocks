@@ -4,7 +4,7 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
-- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class with its errors constant (e.g. `DistributedTable`, `DistributedTableErrors`) from `@aws-blocks/blocks`; browser code and tests import client helpers from `@aws-blocks/blocks/client`.
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `DistributedTable`, `DistributedTableErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
 - **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
@@ -197,6 +197,8 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 - A Next.js or backend-only app has one `tsconfig.json` with Node types, and `npm run typecheck` is `tsc --noEmit`.
 
 ## Block specifics
+
+Defaults quoted here can change between versions: the block's `README.md` in the docs folder is authoritative for the installed version.
 
 ### Secrets
 
