@@ -7,8 +7,9 @@
   `X.values` still name, and any other value decodes to `XUnknown`, whose
   `value` is the string as sent. `toJson()` writes that string back, so an
   unknown value round-trips. An exhaustive `switch` over `X` needs an
-  `XUnknown()` case, and `name`, `index` and `values.byName` are on `XKnown`
-  only. An enum that only parameters use stays a closed Dart enum.
+  `XUnknown()` case. `name` and `index` are on `XKnown` only;
+  `X.values.byName` still works, since `X.values` is `XKnown.values`. An enum
+  that only parameters use stays a closed Dart enum.
 
 - Fix two arms of one union whose discriminator values generate the same
   class name (`Foo` and `foo`) being declared as one class twice, which did not
