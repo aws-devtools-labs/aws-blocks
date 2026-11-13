@@ -244,7 +244,11 @@ function oidcUserInfo(user: AuthenticatedUser): OidcUserInfo {
 
 export const authBasicApi = authBasic.createApi();
 export const authCognitoApi = authCognito.createApi();
-export const oidcAuthApi = oidcAuth.createApi();
+// The native SDKs' OIDC client (`getClient()` → the `oidc/client` transferable),
+// under the export name the native suites have always used.
+export const oidcAuthApi = oidcAuth.createOidcApi();
+// The OIDC block's sign-in state machine, for the web demo's Authenticator.
+export const oidcAuthStateApi = oidcAuth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 

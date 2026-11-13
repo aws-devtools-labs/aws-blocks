@@ -51,6 +51,9 @@ export class Auth {
 	createApi(): never {
 		throw serverSide('createApi');
 	}
+	createOidcApi(): never {
+		throw serverSide('createOidcApi');
+	}
 	protect(): never {
 		throw serverSide('protect');
 	}

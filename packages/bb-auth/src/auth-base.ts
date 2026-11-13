@@ -70,7 +70,7 @@ import {
 } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
-import type { FederationRouteHost } from './federation-routes.js';
+import { type FederationRouteHost, federationRoutePaths } from './federation-routes.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import {
 	handlePreSignUpTrigger,
@@ -138,6 +138,10 @@ import type {
 	MfaPreferenceInput,
 	MfaSetting,
 	MfaTypeOf,
+	OidcClientApiOf,
+	OidcClientDescriptor,
+	OidcClientHandle,
+	OidcProviderConfig,
 	PasskeyDescription,
 	PasskeyGate,
 	PasswordGate,
@@ -712,6 +716,69 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			setAuthState: async (input: AuthActionInput): Promise<AuthState<AuthStateUser<O>>> =>
 				this.dispatch(input, context),
 		}));
+	}
+
+	/**
+	 * The native SDKs' OIDC client, as one RPC method: `getClient()` returns
+	 * the `oidc/client` transferable that the Swift, Kotlin and Dart SDKs
+	 * hydrate into their `OidcClient`. It carries this block's sign-in routes
+	 * (so a second block with its own `redirects.callbackPath` just works)
+	 * and the providers a native client can sign in with here, and the
+	 * generated client types `signIn` by this block's provider ids.
+	 *
+	 * It adds no sign-in protocol: the client signs in through the relay
+	 * routes the block already serves (`authorize-params`, `callback`,
+	 * `exchange`, `signout`). Export it only if a native app signs in with a
+	 * federated provider. A web frontend uses the `signIn:<id>` actions of
+	 * {@link createApi}, or `createAuthClient()` on another origin.
+	 *
+	 * `getClient()` is public, like `getAuthState()`: it returns only what the
+	 * `authorize-params` routes already serve to anyone. A provider that is
+	 * unavailable in this runtime (managed login in `npm run dev`) is left out.
+	 *
+	 * @example
+	 * ```ts
+	 * export const authApi = auth.createApi();
+	 * export const oidcAuthApi = auth.createOidcApi();
+	 * // Swift: let oidc = try await blocks.oidcAuthApi.getClient()
+	 * //        try await oidc.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)
+	 * ```
+	 */
+	createOidcApi(): OidcClientApiOf<O> {
+		return new ApiNamespace(this, 'oidc', (context: BlocksContext) => ({
+			getClient: async (): Promise<OidcClientHandle<ProviderIdOf<O>>> => this.oidcClientHandle(context),
+		}));
+	}
+
+	/** `createOidcApi().getClient()`: the descriptor, from the same paths the routes are mounted at. */
+	private async oidcClientHandle(context: BlocksContext): Promise<OidcClientHandle<ProviderIdOf<O>>> {
+		const paths = federationRoutePaths(this.config);
+		// The provider map is keyed by `ProviderIdOf<O>` at the type level only.
+		const providers: ProviderIdOf<O>[] = [];
+		const providerConfigs: Record<string, OidcProviderConfig> = {};
+		for (const { provider, engine } of this.providers.values()) {
+			if (engine.unavailable || !engine.authorizeParams) continue;
+			const params = await engine.authorizeParams(context);
+			providers.push(provider.id as ProviderIdOf<O>);
+			providerConfigs[provider.id] = {
+				authorizeUrl: params.authorizeUrl,
+				clientId: params.clientId,
+				scopes: [...params.scopes],
+				kind: params.kind,
+			};
+		}
+		const descriptor: OidcClientDescriptor<ProviderIdOf<O>> = {
+			__blocks: 'oidc/client',
+			providers,
+			providerConfigs,
+			callbackPath: paths.callback,
+			exchangePath: paths.exchange,
+			signOutPath: paths.signOut,
+			signInBasePath: `${paths.base}/signin`,
+			authorizeParamsBasePath: `${paths.base}/authorize-params`,
+		};
+		const { __blocks: _tag, ...fields } = descriptor;
+		return { ...fields, toJSON: () => descriptor };
 	}
 
 	/**

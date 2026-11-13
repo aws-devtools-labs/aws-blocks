@@ -54,6 +54,8 @@ const BLOCKS = {
 } as const;
 type Block = keyof typeof BLOCKS;
 const NAMES = Object.keys(BLOCKS) as Block[];
+/** The blocks whose `createOidcApi()` the spec carries: two with a provider, and one with none. */
+const OIDC_BLOCKS = ['federated', 'mixed', 'password'] as const satisfies readonly Block[];
 /** The blocks with email + password, which have `signIn`. */
 const PASSWORD_BLOCKS = NAMES.filter((b) => b !== 'federated');
 
@@ -79,6 +81,7 @@ const scope = new Scope('shape');
 ${NAMES.map((b) => `const ${b}Options = ${BLOCKS[b]} as const;\nconst ${b} = new Auth(scope, '${b}', ${b}Options);`).join('\n')}
 
 ${NAMES.map((b) => `export const ${b}Api = ${b}.createApi();`).join('\n')}
+${OIDC_BLOCKS.map((b) => `export const ${b}OidcApi = ${b}.createOidcApi();`).join('\n')}
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 ${PASSWORD_BLOCKS.map((b) => `	async ${b}SignIn(username: string, pw: string) { return ${b}.signIn(username, pw, context); },`).join('\n')}
@@ -102,7 +105,11 @@ const METHODS = [
 function inProcessBackend(): Record<string, unknown> {
 	const scope = new Scope('shape');
 	const backend: Record<string, unknown> = {};
-	for (const b of NAMES) backend[`${b}Api`] = new Auth(scope, b, OPTIONS[b]).createApi();
+	for (const b of NAMES) {
+		const auth = new Auth(scope, b, OPTIONS[b]);
+		backend[`${b}Api`] = auth.createApi();
+		if ((OIDC_BLOCKS as readonly Block[]).includes(b)) backend[`${b}OidcApi`] = auth.createOidcApi();
+	}
 	const unused = async () => null;
 	backend.api = new ApiNamespace(scope, 'api', () => Object.fromEntries(METHODS.map((m) => [m, unused])));
 	return backend;
@@ -164,6 +171,21 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		for (const challenge of ['code', 'mfaType', 'totpSetup', 'email', 'password', 'firstFactor', 'webauthn']) {
 			assert.ok(actions.includes(`"${challenge}"`), `confirmSignIn keeps the ${challenge} challenge`);
 		}
+	});
+
+	test("createOidcApi().getClient() is the oidc/client transferable, typed by each block's own provider ids", () => {
+		// What the native generators read: Swift/Kotlin turn the enum into `<Namespace>.GetClient.Provider`.
+		const typed = {
+			'x-blocks-transferable': 'oidc/client',
+			'x-blocks-type-args': [{ type: 'string', enum: ['okta'] }],
+		};
+		assert.deepStrictEqual(method('federatedOidcApi.getClient').result.schema, typed);
+		assert.deepStrictEqual(method('mixedOidcApi.getClient').result.schema, typed);
+		// No provider: no enum, so the native client is the untyped one (`OidcClient<AnyProvider>`, `OIDCClient<String>`).
+		assert.deepStrictEqual(method('passwordOidcApi.getClient').result.schema, {
+			'x-blocks-transferable': 'oidc/client',
+		});
+		assert.deepStrictEqual(method('federatedOidcApi.getClient').params, []);
 	});
 
 	test('signIn results carry every sign-in step, for every block with email + password', () => {
