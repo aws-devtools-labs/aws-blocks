@@ -1,5 +1,180 @@
 # @aws-blocks/bb-agent
 
+## 0.8.0
+
+### Minor Changes
+
+- be8864c: fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller
+
+  `stream()` and `resume()` accepted any `conversationId` alongside a `userId` and never checked that the conversation belonged to that user. A caller who knew another user's conversation ID could add turns to it, or approve (and `trust`) that user's pending tool call, which then ran with the agent's IAM role. The same ID also let a caller read the conversation's history, and listen to or push chunks onto its live Realtime channel (the default `channelId` is the conversation ID).
+
+  - **`stream()` and `resume()`** now throw `AgentErrors.ConversationNotFound` unless `options.conversationId` was created by `createConversationId(userId)` for the same `options.userId`. The check runs before anything is persisted or dispatched, and reads the conversation record with a strongly consistent read, so a `stream()` right after `createConversationId()` is not rejected on AWS.
+  - **A turn without a `conversationId`** no longer runs in a conversation's session on AWS. Its AgentCore session id was the caller-chosen `channelId`, and the AgentCore entry used that as the conversation, so `stream({ channelId: <another user's conversation id> })` skipped the ownership check. It now gets its own session and, as in the local mock, no persisted conversation. **Breaking (AWS only):** a deployed agent that relied on reusing a `channelId` without a `conversationId` to keep memory across turns loses it; pass a `conversationId` instead (`createConversationId()` for persistence agents, a server-chosen key for `inferenceOnly` agents).
+  - **`getPendingInterrupts(conversationId, { userId })`** now requires an options object with the caller's `userId` and returns `[]` for a conversation that user doesn't own. **Breaking:** `getPendingInterrupts(id)` becomes `getPendingInterrupts(id, { userId })`.
+  - **`getConversation(id, { userId, limit? })`** now requires the caller's `userId` in its existing options object and returns `[]` for a conversation that user doesn't own. **Breaking:** `getConversation(id)` / `getConversation(id, { limit })` become `getConversation(id, { userId })` / `getConversation(id, { userId, limit })`.
+  - **`getChannel(channelId, { userId })`** now requires an options object with the caller's `userId`. With persistence enabled, a turn's chunks are published on a channel scoped to the user who started it, so a caller can't listen to, or push chunks onto, another user's channel, whatever `channelId` they pass. **Breaking:** `getChannel(channelId)` becomes `getChannel(channelId, { userId })`, with the same `userId` you pass to `stream()`/`resume()`. `inferenceOnly` agents ignore the value but still take `{ userId }`: pass the session's `userId` as for persistence agents, not a placeholder, so the call stays correct if persistence is turned on later; their channels are not user-scoped.
+  - There is no backward-compatible form: the old calls carry no `userId`, so they could only keep returning another user's data or change behaviour. With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` naming the new signature when the options object or its `userId` is missing, instead of returning data. Build the options from the session's `userId`; don't spread a caller-supplied object into them.
+
+  Agents with `inferenceOnly: true` keep no conversation records, so these checks don't apply to them: a `conversationId` passed to one is a shared session key, so don't let callers choose it.
+
+  The channel key changes with persistence enabled, so reload chat sessions that were open across the upgrade (including turns that were running while the deploy rolled out); a subscription made before it no longer receives chunks.
+
+  If you pass a `conversationId` that was never created with `createConversationId()`, `stream()` now rejects it; create the conversation first. Pass a `userId` taken from the authenticated session, never from a request parameter. The README's Authorization section and End-to-End example (which now includes the `getPendingInterrupts` and `resume` handlers) show this.
+
+- 4457ea4: feat(bb-agent): add `sessionScope: 'user'` to isolate `inferenceOnly` sessions per user
+
+  An `inferenceOnly` agent keeps no conversation records, so it can't check that a `conversationId` belongs to the caller: by default the id is a shared session key, and anyone who passes it continues that session and receives its channel. The new `sessionScope` option lets such an agent isolate sessions per user instead:
+
+  - `sessionScope: 'user'` keys the session by the `userId` together with the `conversationId`, and scopes the Realtime channel to the `userId`. A caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. On AWS, the two users also run in different AgentCore runtime sessions.
+  - With `'user'`, `stream()`, `resume()` and `getChannel()` require a non-empty string `options.userId` (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without one. A runtime invocation that arrives without a `userId` is refused rather than run as `'anonymous'`.
+  - The default stays `'shared'`, so existing agents behave as before. Switching an existing agent to `'user'` starts new sessions: sessions stored under the bare `conversationId` are not resumed.
+  - The option is ignored when persistence is enabled; those agents already check conversation ownership.
+
+### Patch Changes
+
+- 3d7479a: fix(bb-agent): report a turn that failed while the chat was disconnected
+
+  If the chat's connection dropped and the turn failed before it reconnected, the `error` chunk was lost. `createChat` and `useChat` then kept loading for about 11 minutes and reported "Timed out waiting for the agent to respond after reconnect." instead of the real error.
+
+  On reconnect, both clients now recognize the row the backend saves for a failed turn, including a turn a `maxLlmCalls` or `maxToolIterations` cap stopped, whose partial text they keep. They end the turn right away and pass the recorded error to `onError`, typed the same way as a live `error` chunk (for example `AgentErrors.ModelUnavailable`). When the previous turn also failed, the saved row could be that turn's, so the client keeps waiting for the turn as before.
+
+- d51b8ee: Harden `untrustedOutput` tools: an error thrown by the tool now reaches the model inside the same `<untrusted-data>` block as a successful result, and delimiter-shaped text is detected on an NFKC-normalized copy stripped of invisible characters (zero-width, bidirectional controls, variation selectors, fillers), so lookalike delimiters can't close the block early. Only a string that contains such text is rewritten; other content reaches the model unchanged apart from Unicode tag characters, which are always removed, and structured results stay valid JSON. The original error of a throwing untrusted tool is logged at `warn` (its name and any AWS status and request id, not its message).
+- 5f55dac: Internal: the user-agent tests name their parent auth block `Auth` instead of `AuthBasic`, which this release removes. No runtime change.
+- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
+
+  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
+
+- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
+
+  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
+
+  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-blocks/bb-realtime` and `@aws-blocks/blocks`.
+  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
+  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
+  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
+  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
+  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
+
+  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
+
+- 8e96367: fix: stop sending raw backend error text to clients
+
+  Several Building Blocks passed the raw text of an unexpected error (an AWS SDK, database, storage or hook error, which can name account ids, role and resource ARNs, and request details) to the client. They now follow the same rule as the RPC serializer: the message of an `ApiError` or a branded Building Block error (`blocksError()` / `brandBlocksError()`) still reaches the client unchanged, and any other error is logged server-side and reported as `Internal error`.
+
+  - **bb-agent:** when a turn fails, the `error` chunk, the persisted `metadata.error`, and the `StreamFailed` error from `complete()` carry `Internal error` unless the failure is a branded Building Block error. A malformed or invalid canned-responses dictionary (the local `canned` provider) now fails with a branded `InvalidModelConfigException` on the server, so its fixed message, e.g. `InvalidModelConfigException: Malformed canned responses JSON in 'responses.json'.`, reaches the client; it names the file by basename only and never quotes its contents, and the parser's detail is logged server-side. `complete()` still rejects with `StreamFailed` for it. Conversations persisted before this change keep the `metadata.error` text they were saved with, and `getConversation()` still returns it.
+  - **bb-email-client:** `send()` errors have stable messages per `EmailErrors` code, and a failed `sendBatch()` entry reports the error code or SES entry status instead of the raw SES text. The SES error is logged and kept on the error's non-enumerable `cause`.
+
+- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
+
+  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
+
+  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
+  - The waiter state machine roles of the `DistributedTable` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
+  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
+  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
+  - The `@aws-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
+
+  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-blocks/core` and `@aws-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
+
+  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
+  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
+
+  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
+
+  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-blocks/core` README.
+
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6297d5a]
+- Updated dependencies [a5a5dd3]
+- Updated dependencies [e8e3262]
+- Updated dependencies [eacc87e]
+- Updated dependencies [7c23ab9]
+- Updated dependencies [b2eb306]
+- Updated dependencies [bfaddeb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [94d5900]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [be8864c]
+- Updated dependencies [99638ca]
+- Updated dependencies [2d7ce4a]
+- Updated dependencies [9d69412]
+- Updated dependencies [5f55dac]
+- Updated dependencies [e8673cd]
+- Updated dependencies [8fb67ec]
+- Updated dependencies [11877b6]
+- Updated dependencies [77c2c75]
+- Updated dependencies [f643a76]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [2095f31]
+- Updated dependencies [42b84b2]
+- Updated dependencies [10eb382]
+- Updated dependencies [6bac1c9]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-file-bucket@0.5.0
+  - @aws-blocks/bb-realtime@0.6.0
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.7.0
 
 ### Minor Changes

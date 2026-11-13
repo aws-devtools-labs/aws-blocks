@@ -1,5 +1,323 @@
 # @aws-blocks/create-blocks-app
 
+## 0.10.0
+
+### Minor Changes
+
+- 184df0b: feat(create-blocks-app): typecheck the backend with Node types and the browser code without them
+
+  The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `tsconfig` typechecked the backend source with the frontend's settings. The templates passed because their one `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error, and a frontend `tsconfig` with `"types": ["vite/client"]`, as create-vite's has, failed with `TS2591: Cannot find name 'process'` in `aws-blocks/`.
+
+  - The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) now check the browser and the backend as separate TypeScript projects, the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` without Node types and reads the backend through a project reference to `aws-blocks/tsconfig.json`, which checks every backend file with Node types. `npm run typecheck` is `tsc -b --force`, and `npm run build` is `tsc -b --force && vite build`. A Node global in `src/` is now a type error.
+  - `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types: `next build` ignores project references, and backend-only apps run all their code on Node.
+  - Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (except in a Next.js project) and prints how to reference it. It never edits the project's `tsconfig`.
+  - Apps scaffolded before this change keep working as they are. To move one to the new layout, see [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend). `TROUBLESHOOTING.md` in `@aws-blocks/blocks` lists the TypeScript errors of the layout and their fixes.
+
+  The decision and the alternatives considered are recorded as D-028 in `docs/DECISIONS.md`.
+
+- ba80bbd: feat(create-blocks-app): scaffold apps that call the cdk-blocks CLI
+
+  New apps no longer get `aws-blocks/scripts/*.ts` wrappers. Every lifecycle script in `package.json` keeps its name and becomes an alias of the `cdk-blocks` CLI from `@aws-blocks/blocks`: `"dev": "cdk-blocks dev"`, `"dev:stop": "cdk-blocks dev stop"`, `"sandbox": "cdk-blocks sandbox"`, `"sandbox:deploy": "cdk-blocks sandbox deploy"`, `"sandbox:destroy": "cdk-blocks sandbox destroy"`, `"deploy": "cdk-blocks deploy"`, `"destroy": "cdk-blocks destroy"`, `"secret": "cdk-blocks secret"`, `"typegen": "cdk-blocks generate types"`, `"spec": "cdk-blocks generate spec"`, `"vendorize": "cdk-blocks vendorize"` and `"cleanup": "cdk-blocks dev stop --all"`. `npm run dev` and the other commands work as before; run `npx --no -- cdk-blocks --help` for every command and its options. The next steps and docs show the npm scripts first and `npx --no -- cdk-blocks <command>` for a direct run: `--no` uses the installed CLI and never downloads a package, while a bare `npx blocks` would install the unrelated `blocks` package from npm.
+
+  The dev server settings that `server.ts` used to hard-code are now in `package.json` under `"blocks": { "dev": { … } }`: port 3001 and `"frontend": false` for the backend-only templates (`api-only`, `backend`, `sql`), so they stay backend-only when added to a project that has `vite` or `next`, and `frontendPort: 3100` for the others. No template sets `frontendCommand`: `cdk-blocks dev` starts Vite, or `next dev` for `nextjs`, from the app's dependencies on the effective frontend port, so `npm run dev -- --port 4000 --frontend-port 4100` moves both servers. Adding AWS Blocks to an existing project writes the same scripts and, unless the project already has `blocks.dev`, copies only the template's `port` and `"frontend": false`, so `cdk-blocks dev` runs the project's own Vite or Next.js dev server whichever template you add. The Amplify overlay's `blocks:dev` and `blocks:stop` scripts call the CLI too (backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, so `cdk-blocks dev` does not start the Amplify app's own Vite or Next.js frontend a second time); the overlay keeps `aws-blocks/scripts/generate-client.ts`, because its client needs the Amplify auth middleware.
+
+  Three behaviours change with the CLI. `npm run destroy` now asks before it deletes the production stack, and without a terminal it needs `npm run destroy -- --yes`. `npm run sandbox:destroy` now asks before it deletes the sandbox stack when it runs in a terminal; `npm run sandbox:destroy -- --yes` skips the question, and without a terminal it runs without asking, as before. `npm run cleanup` now stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
+
+  The scaffolded `AGENTS.md` describes the Blocks CLI (`--output json`, `--query`, `--yes` and the exit codes) and no longer says that `sandbox:deploy` generates the client after the deploy. The `@aws-blocks/core` README now shows how to set the dev server host with `cdk-blocks dev --host` or `package.json#blocks.dev.host`, and says that only `BLOCKS_DEV_HOST` opts the local `/realtime` WebSocket into another host; the CLI sets it from that host.
+
+  Also in the scaffolded apps:
+
+  - `AGENTS.md` backgrounds the dev server with `npm run dev > dev.log 2>&1 &`: without the redirect, a background dev server stops at its next log line once the shell that started it closes. Every template's `.gitignore` now ignores `*.log`, so `dev.log` and `deploy.log` are not committed.
+  - `npm run test:e2e` finds the dev server on `package.json#blocks.dev.port` (default 3000, or 3001 for the backend-only templates) instead of a hard-coded port, so it reuses a server on the configured port rather than starting a second one. `AGENTS.md` says to stop a server started with `npm run dev -- --port <n>` with the same flag, or with `npm run cleanup`.
+  - The template READMEs say to run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`; a fresh app has no generated types, so the check exits 1 until then.
+  - `"prebuild"` is `cdk-blocks generate client` instead of the `blocks-generate-client` bin, so every script is an alias of the `cdk-blocks` CLI as the docs say. Both write the same `aws-blocks/client.js` with the same defaults and exit codes.
+  - The next steps quote a `cd` path that has a space, and give the backend-only templates' API URL on port 3001 instead of `http://localhost:3000`. `--template=<name>` works as well as `--template <name>`. The Amplify overlay's Blocks-native migration step says to point the `sandbox` script at `cdk-blocks sandbox` (the overlay's `npm run sandbox` runs `ampx sandbox`). The `backend` README names the JSON-RPC namespace correctly: the exported variable name, not the `ApiNamespace` argument, and gives the dev server's API URL as `http://localhost:3001/aws-blocks/api`.
+  - `AGENTS.md` names `cdk-blocks db migrate aws-blocks/migrations` and `cdk-blocks db status aws-blocks/migrations`, which apply and list the SQL migrations against the local PGlite database, and `npm run vendorize -- <package>`, which copies a Building Block into the app.
+
+- 5f55dac: New apps now create a user pool where users sign in with their email address, matched ignoring case: every template that constructs `Auth` passes `users: { signInWith: ['email'], caseSensitive: false }`. Cognito fixes both settings when the pool is created, and this is the pool shape Amplify's client libraries expect, so an app can add an Amplify frontend later without a new pool. The email is now the username: sign-up asks for an email address and no separate username, and the UI shows the user's email. The scaffolded `AGENTS.md` explains the shape and that it can't change after the pool exists.
+- 5f55dac: New apps now use the unified `Auth` block. Every template that signs users in (`default`, `react`, `demo`, `api-only`, `sql` and the auth template) now uses `Auth` from `@aws-blocks/blocks` instead of `AuthBasic` or `AuthCognito`. The block id stays `'auth'`.
+
+  **Sign-up now needs the emailed code.** A new account confirms its email address with a 6-digit code, then the user is signed in automatically, with no second password entry. With `AuthBasic`, users were signed in as soon as they signed up. When you run locally (`npm run dev`), no email is sent: the code is printed in the terminal, and each template's e2e tests read it from `.bb-data/`. Once deployed, Amazon Cognito emails the code. Its default sender is limited to 50 emails a day.
+
+  **The `auth-cognito` template is now `auth`.** There is one auth block now, so the template is named for what it shows: email sign-up with a code, groups with `requireRole`, profile attributes, password change and sign-out everywhere. `--template auth-cognito` still works and scaffolds `auth`. The template now signs in with email + password instead of a passwordless email code, because Cognito can only send that code through Amazon SES, which a user pool created by the block doesn't have.
+
+  The `amplify` overlay's token verifier now implements the `BlocksAuth` interface and throws the same error names as `Auth` (`NotAuthenticatedException`, `NotAuthorizedException`), and its `requireGroup()` is now `requireRole()`. The `AGENTS.md` scaffolded into every app explains how to configure `Auth`, gate methods with `requireAuth` / `requireRole`, and where the `Auth` docs live.
+
+- f32185c: Add the `blocks dashboard` command, which starts the Blocks Admin UI against the app it is run from on a free loopback port and opens it with a session token. `blocks dashboard doctor` diagnoses the app and prints a report instead, for when the server will not start. Accepts `--port`, `--profile`, `--region`, `--project`, `--allow-origin` and `--json`, and rejects a flag whose value is another flag rather than silently accepting it.
+
+  The dashboard is opt-in: `@aws-blocks/admin-ui` is resolved from the app and offered for install when missing, so an app that never runs it carries none of its dependencies. The default template gains an `npm run dashboard` script.
+
+### Patch Changes
+
+- d18846c: feat: add an `agent` template with a deterministic e2e test
+
+  `npx @aws-blocks/create-blocks-app my-app --template agent` scaffolds an AI Agent
+  with a tool and `Auth`-gated chat. Locally it runs on the built-in
+  `canned` provider, a deterministic fake model that needs no AWS account and no
+  LLM, so the shipped e2e test drives a plain-text turn and a tool-calling turn
+  over the real RPC boundary and checks the tool's side effect landed.
+
+- 4ff7fd3: The `AGENTS.md` that `create-blocks-app` adds to every new app now covers facts that coding agents often missed in the block docs:
+
+  - **Namespaces:** a requested call such as `orders.create(...)` maps to an exported `orders` namespace.
+  - **Errors:** a named `ApiError` reaches the client with its status and name, while a plain `Error` becomes an unnamed `500`.
+  - **Client-side imports:** browser code and tests import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`, because `@aws-blocks/blocks` exports nothing under the browser condition. Check `instanceof ApiError` before reading `.status`.
+  - **Missing items:** `get()` returns `null` for a missing item, and `FileBucket.getUrl()` does not check that the file exists.
+
+  The Quick Reference now lists which imports come from `@aws-blocks/blocks` and which from `@aws-blocks/blocks/client`. The workflow explains how `npm run test:e2e` starts and stops its own dev server on the configured port.
+
+- 1ff5bcc: docs: tell agents to read a block's README first in the generated `AGENTS.md`
+
+  The docs bullet and the matching rule no longer ask agents to read `API.md` and `DESIGN.md` whenever they exist. Agents read the block's `README.md` first, open `API.md` only for an exact signature or type, and open `DESIGN.md` only when they are stuck or need implementation details.
+
+- 2eb62fa: The `hasAuthError` example in the `@aws-blocks/core` README and JSDoc now submits the action with `submitAuthAction` from `@aws-blocks/blocks/ui` and imports `hasAuthError` from `@aws-blocks/blocks/client`. The old example called `authApi.setAuthState()` directly, which signs the user in but never notifies `onAuthChange` or `AuthenticatedContent`, so a custom form built from it stayed on the sign-in screen. The `installCookieJar` documentation from `@aws-blocks/blocks/utils` now shows up in editors, because it is attached to the function instead of an internal variable.
+
+  The `AGENTS.md` that `create-blocks-app` adds to new apps now says that `onAuthChange` fires for sign-ins and sign-outs made through `Authenticator` or `submitAuthAction`, lists `submitAuthAction` for custom auth forms, and warns that a direct `authApi.setAuthState()` call notifies nothing on the page.
+
+- 5f55dac: The sign-in UI now shows a signed-in user's email address instead of a generated id. When users sign in with their email or phone number (`users: { signInWith: ['email'] }`), Amazon Cognito gives each user a generated username (a UUID), and the `Authenticator` and `AccountMenuBar` showed that UUID ("Signed in as: 815424a9-…").
+
+  `AuthState.user` now has an optional `displayName`, which `Auth` sets in the signed-in state:
+
+  - a username the user chose stays as it is;
+  - otherwise it is the user's email address, then their phone number (each skipped if the session's ID token marks it unverified, as it does for an email the user changed with `updateUserAttributes` and hasn't confirmed yet), then `preferred_username`, then the username.
+
+  The `Authenticator` and `AccountMenuBar` show `displayName`, and fall back to `username` when it is absent. `displayName` is for display only, so keep keying data on `userId` / `userSub`. Only the signed-in caller's own state carries it, never a signed-out or mid-sign-in state. Users returned by `requireAuth()` and `getCurrentUser()` don't have it; read `user.attributes.email` on the server instead.
+
+  The `auth` template's status line now shows `displayName` directly.
+
+- 5f55dac: feat(bb-auth): `Auth` options: a block-level `store` and one `providers` map
+
+  `Auth` options start with where your users live. A block-level `store` picks it, and every sign-in provider goes in one `providers` map, keyed by provider id and tagged with its `type`:
+
+  ```ts
+  // The default store (omit `store`): users live in a Cognito user pool.
+  const auth = new Auth(scope, "auth", {
+    providers: {
+      google: {
+        type: "google",
+        clientId: "your-google-client-id",
+        clientSecret: googleSecret,
+      },
+      entra: {
+        type: "oidc",
+        issuer: "https://login.microsoftonline.com/<tenant>/v2.0",
+        clientId: "entra-client-id",
+        clientSecret: entraSecret,
+      },
+      corp: {
+        type: "saml",
+        metadataUrl: "https://idp.example.com/saml/metadata",
+      },
+    },
+  });
+
+  // store: 'builtin': no user pool; your backend verifies each provider itself.
+  const sso = new Auth(scope, "sso", {
+    store: "builtin",
+    providers: {
+      okta: {
+        type: "oidc",
+        issuer: "https://dev-12345.okta.com",
+        clientId: "0oa-your-client-id",
+      },
+      github: github({ clientId: "Iv1.abc", clientSecret: githubSecret }),
+    },
+    // Both blocks have providers, so this one gets its own sign-in routes.
+    redirects: {
+      callbackPath: "/aws-blocks/auth/sso/callback",
+      signOutPath: "/aws-blocks/auth/sso/signout",
+    },
+  });
+  ```
+
+  - **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` needs no options): email + password, `mfa`, `passkeys`, `admin`, `userPool`, `email`, and `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. A `type: 'oidc'` entry federates through Cognito and requires `clientSecret`. A social entry is keyed by its type (`google: { type: 'google', … }`).
+  - **`store: 'builtin'`**: no user pool. Users live at their identity provider, and the block keeps only its session table. `providers` of `type: 'oidc'` (`clientSecret` optional, so public PKCE-only clients work), `github()` / `customOauth2()` (`type: 'oauth2'`) and `stubIdp()` (`type: 'stub'`). `users` takes only `groups`, `allowBearerAuth: true` accepts the provider's access token, and `validateUser` runs at sign-in only. `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool` and `codeDelivery` don't apply, and the signed-in user's `signInProvider` is one of the block's provider ids (never `'password'`).
+  - **One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. Use two `Auth` blocks, each with its own session cookie and `createApi()`, and let the frontend pick one per sign-in. When both have `providers`, give the second its own `redirects.callbackPath` / `signOutPath`, as `sso` above does.
+  - **Checked at compile time, and again at runtime.** A wrong combination is a compile error. Most name the fix in their type, such as `ERROR_needs_store_cognito<'emailPassword'>` under `store: 'builtin'`. `stubIdp()`, `github()` or `customOauth2()` on the default store is a compile error too (`'"stub"' is not assignable to '"oidc"'`): add `store: 'builtin'`. The constructor rejects the same combinations with a readable message in `npm run dev`, at synth and in Lambda. It also rejects what the compiler can't see, such as options built from JSON, a `providers` value that isn't an object of provider entries, or a social entry keyed differently from its type. A default-store block with `emailPassword: false` and no provider fails in `npm run dev`, at synth and in Lambda.
+  - **Editor help on a `'builtin'` block.** The options it refuses (`mfa`, `admin`, `userPool`, `users.signInWith`, …) are marked `@deprecated`, so completions list them last and struck through; `emailPassword` stays unmarked, since `false` is allowed. `allowBearerAuth: { clientIds }` there names the fix (`ERROR_needs_store_cognito<'allowBearerAuth (object form)'>`). A `providers` map picked per environment (`isProd ? { okta: … } : { local: stubIdp() }`) keeps both provider ids narrow for `getSignInUrl()` and `requireRole()`.
+  - **Checked at synth.** On both stores, synth checks `redirects` (`callbackPath` / `signOutPath` must be explicit paths under `/aws-blocks/auth/`, not the bare prefix) and `postSignInPath` / `postSignOutPath`, and rejects a provider id containing `/`. Two blocks of one backend that would mount the same sign-in or sign-out routes (both with `providers` on the default `redirects`), or two `stubIdp()` providers under the same key, fail synth naming both blocks, and at runtime the stub case names the fix rather than a bare `DuplicateRouteException`. A plain string as a `'builtin'` provider's `clientSecret` is refused at construction. On the default store, a `type: 'oidc'` entry with an empty or falsy `clientSecret` (`''`, `0`, `false`), or an `attributesRequestMethod` other than `'GET'` / `'POST'`, is refused at construction in `npm run dev`, at synth and in Lambda.
+  - **Docs and messages.** `allowBearerAuth` and `validateUser` say that a bearer token is verified per request and does not run `validateUser`, so gate per request when you rely on it. An option error never echoes a string value longer than 8 characters, including a `store` or a provider `type` (a misplaced token prints as `a string (40 characters)`). A provider whose id names an `Object.prototype` member (such as `constructor`) gets the default label "Sign in with Constructor".
+  - **`bb-auth migrate`** rewrites `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks to this shape. A block constructed from a class the app re-exports through its own module (`export { AuthBasic } from '@aws-blocks/bb-auth-basic'`, `export *` of an old package) gets the same option mapping, kept defaults and TODOs as a direct import. `AuthBasic` blocks keep their password policy: each character class it left unset is written as `false` (`Auth` requires all four by default). A local `export { AuthCognitoErrors }` of a renamed import becomes `export { AuthErrors as AuthCognitoErrors }`. An `AuthOIDC` `providers` array with a spread is kept as is, with a TODO. Each moved `stubIdp()` gets a TODO that `Auth` refuses it on a production deployment, and `stubIdp({ name: 'dev' })` becomes `stubIdp()`. A provider factory called outside the block, a `require()` of an old package, and an `AuthBasicUser` import in a project that never reads `createdAt` get accurate TODOs (none, for the last). `migrate <path>` with a path that doesn't exist exits 2.
+  - **Stable identifiers.** Construct ids, user-id formats (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users), the session format, and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`) depend on the provider keys and block ids, not on how the options are written. An `AuthCognito` app keeps its construct ids, so nothing deployed is replaced.
+
+  Also updated: the umbrella README's sign-in method guide (`@aws-blocks/blocks`), the `Auth` snippet and RLS notes in the generated `MIGRATION_GUIDE.md` from `db pull` (`@aws-blocks/bb-data`), the `Secret` README's provider-secret note (`@aws-blocks/bb-secret`), the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`), and the `AuthAction.unavailable` example (`@aws-blocks/auth-common`), whose hint reads "…or use stubIdp() in a store: 'builtin' block locally."
+
+- 5f55dac: `Auth` has `protect()`, for an API namespace that is deny by default. `auth.protect(scope, 'notesApi', { public: (context) => ({ ...methods }), methods: (context, user) => ({ ...methods }) })` returns an ordinary `ApiNamespace`. For each call to one of its `methods`, the session is checked first, and only then is the `methods` factory called, once, with the signed-in user, typed by the block's options (`AuthenticatedUser<O>`). So nothing in it runs for a signed-out caller, and a forgotten guard, or one called without `await`, can't leave a method open. A signed-out call to any name that isn't a `public` method gets 401 `NotAuthenticatedException`, whether or not the method exists, so the protected methods can't be listed without a session; a signed-in caller gets "method not found" for an unknown name. `public` methods (optional) run as in a plain `ApiNamespace`. A name defined in both is a compile error. With `{ role: 'admin' }` as the last argument, every protected method also requires that group, as `requireRole` does (401 first, then 403 `NotAuthorizedException`); `compute` and every other `ApiNamespace` option go in the same object and are passed on to the namespace. It works the same locally and on AWS, and the frontend calls every method like any other namespace. Existing `ApiNamespace` code is unchanged.
+
+  The OpenRPC spec (`blocks-generate-spec`) describes every method of a `protect()` namespace, public and protected, and warns, naming the namespace, if it can't list them. It also now describes the parameters of a namespace typed through a mapped type, such as one returned by a factory, by name and type, instead of as a single `args` parameter.
+
+  The `Auth` README has a "Protect every method" recipe. The `ApiNamespace` docs and the scaffolded `AGENTS.md` now recommend `auth.protect` for namespaces with signed-in methods, and say that a guard which isn't awaited protects nothing. The templates don't add a floating-promise lint rule: Biome's `noFloatingPromises` doesn't flag an un-awaited `requireAuth` / `requireRole` call, so `protect` is the safeguard.
+
+- 5f55dac: fix(create-blocks-app): show todo and last-code errors in the `auth` template
+
+  In the `auth` template, a failed toggle, priority change, title edit or delete previously did nothing visible, and a failed title edit left the unsaved text in the input. These now reload the list, so the row shows the saved value again, and report the failure in the existing todo status line. A failed "Show last code" lookup now shows an error instead of an unhandled rejection.
+
+- 792e269: feat(blocks): add `cdk-blocks migrate`
+
+  `npx --no -- cdk-blocks migrate` moves an app that create-blocks-app scaffolded with `aws-blocks/scripts/*.ts` wrappers to the `cdk-blocks` CLI. It rewrites each `package.json` script whose value is exactly a generated command (for example `"deploy": "tsx aws-blocks/scripts/deploy.ts"` becomes `"deploy": "cdk-blocks deploy"`), moves the port and frontend settings of a generated `server.ts` to `package.json#blocks.dev` (`"frontend": false` for a backend-only one), and deletes the generated wrappers that nothing uses any more. A wrapper that a script or any app file other than Markdown docs still uses is kept: it reads TypeScript and JavaScript sources (including nested and parent-relative imports such as `import '../server.js'`), shell scripts, Dockerfiles, and dot directories such as `.github` and `.vscode`. In a git repository the app files are the tracked files and the untracked files that are not gitignored, in any directory, so gitignored build output and logs do not count, plus the files of a submodule or an untracked git repository inside the app; outside git, or where git does not track the app (a parent repository ignores its directory), they are the files under the app directory other than `node_modules`, `.git`, build output (`build-temp` included) and tool caches. Markdown docs and editor rules (`*.md`, `*.mdx`, `*.mdc`), binary files, files over 1 MiB and symbolic links never count. It does not read outside the app directory, so check the scripts of a parent workspace yourself. It recognises every wrapper version that create-blocks-app has shipped, ignoring whitespace. A wrapper you changed is never deleted, only reported. If you changed `server.ts`, the `sandbox` scripts are kept too, because `sandbox.ts` starts that server, and a `sandbox.ts` that stays keeps its `server.ts`; in the Amplify overlay, `blocks:stop` and `stop.ts` are kept as well, because that `stop.ts` stops the server's own port. If `.blocks/config.json` is missing or has no `stackId`, as in apps scaffolded before create-blocks-app wrote it, the `deploy` and `destroy` scripts and wrappers are kept, because `cdk-blocks deploy` and `cdk-blocks destroy` need it; the report says how to add it. Every other script is left alone.
+
+  Run `npx --no -- cdk-blocks migrate --dry-run` first to see the plan. Unless you pass `--force`, it refuses an app outside git (or where git is not installed), a git working tree with uncommitted changes, an app that git does not track (so git could not undo the changes), and a repository that git fails to read, such as one with "dubious ownership", quoting git's error. `--output json` prints `{changed, removed, kept, scriptsRewritten, devConfig}`, where `devConfig` is the `blocks.dev` config that migrate adds to `package.json` (or, with `--dry-run`, would add), or `null`. It exits 0 when the app is fully migrated and 1 when kept items remain for you to finish by hand; exit 1 is a report, not a crash, and running it again is safe.
+
+  It recognises the wrappers of every public create-blocks-app release up to 0.4.0, including the `sandbox.ts` that runs `npm run sandbox:preview`, whose `"sandbox:preview": "tsx aws-blocks/scripts/sandbox.ts --preview"` becomes `"sandbox:preview": "cdk-blocks sandbox preview"`.
+
+  Fixes from CLI testing:
+
+  - Two `cdk-blocks migrate` runs at the same time no longer crash with `ENOENT` when one deletes a wrapper that the other is reading or planned to delete.
+  - `cdk-blocks migrate --dry-run` no longer says "everything else was migrated" above the items it would keep.
+  - The hint for an app without `stackId` now says that `<stackId>-prod` must equal the production stack name in `aws-blocks/index.cdk.ts`: an app that hard-codes `my-blocks-stack-prod` uses `{"stackId": "my-blocks-stack"}`.
+  - A wrapper that matches no known version is reported as an "unrecognised version (only public create-blocks-app releases are recognised)", not as "customized": it may be an unmodified file from a release that migrate does not know. The README and `cdk-blocks migrate -h` say that only the public releases are recognised.
+  - A generated script that still runs a kept, unrecognised wrapper (for example `dev` and `dev:server` with a changed `server.ts`) is now listed in `kept` with the reason, so `--output json` names every script that still uses `aws-blocks/scripts`.
+  - `cdk-blocks migrate` writes `blocks.dev.frontendCommand` only when it differs from the command `cdk-blocks dev` detects from the `vite` or `next` dependency; the ports still move. A migrated default app gets `{"frontendPort": 3100}`, as new apps do, so `cdk-blocks dev --frontend-port` keeps working.
+  - With `--output json`, a refusal (uncommitted changes, an app git does not track, a git failure) prints `{"error": {"message", "hint"}}` on stdout, so a script can tell it from kept items, which also exit 1. `cdk-blocks migrate -h` and the README list the exit codes: 0 fully migrated, 1 kept items remain or refused, 2 usage error.
+  - `cdk-blocks migrate` keeps a wrapper that a CI workflow, shell script, Dockerfile or script runs from another working directory: a bare `scripts/deploy.ts` or `deploy.ts` there now counts as a use (`working-directory: aws-blocks` with `npx tsx scripts/deploy.ts`, `cd aws-blocks/scripts && npx tsx typegen.ts`). In a monorepo it also reads every `package.json` and every CI, shell, Make and Docker file that git tracks outside the app, at any depth (`.github/workflows/*`, `scripts/deploy-web.sh`, `ci/Makefile`, `tools/release/package.json`; not under `node_modules`, nor over 1 MiB), and, when the app is in a git submodule, those files of the superproject, so it no longer deletes a wrapper that a root workflow, a monorepo script or a sibling workspace still runs.
+  - `cdk-blocks migrate --query <path>` checks the path against the result before anything runs, as the other commands do: `kept.0.reason`, `scriptsRewritten.<script>.to` and `devConfig.frontendPort` are accepted, and a typo exits 2 with the fields it could be.
+  - `cdk-blocks migrate --query <path>` prints a refusal only as the error on stderr, with nothing on stdout, also under `--output json`: `--query` prints one field of the result, and a refusal has no result. The `{"error"}` document is for `--output json` without `--query`.
+  - An app `package.json` that is not valid JSON stops `cdk-blocks migrate` with `cannot read <app>/package.json: <the parse error>`, as the other commands say, instead of only `Unexpected end of JSON input`.
+  - In a monorepo, a file above the app counts as a use of a wrapper only when it names this app: `apps/web/aws-blocks/scripts/deploy.ts` (relative to the repository top or to the file), or a bare `aws-blocks/scripts/deploy.ts`, `scripts/deploy.ts` or `deploy.ts` in a file that changes into the app (`working-directory: apps/web`, `cd apps/web`). Before, `apps/api`'s workflow, with `working-directory: apps/api` or `apps/api/aws-blocks/scripts/typegen.ts`, kept `apps/web`'s wrappers and made its migration exit 1.
+  - An app `package.json` that is valid JSON but not an object (`null`, an array, a string) stops `cdk-blocks migrate` with `<app>/package.json must be a JSON object, not null.` and changes nothing, instead of `Cannot read properties of null (reading 'scripts')`, or `Nothing to migrate` for an array or a string.
+  - A path written with backslashes counts as a use of a wrapper: `npx tsx aws-blocks\scripts\deploy.ts` in a `.cmd`, `.bat` or `.ps1` file (or a `package.json` script) keeps `deploy.ts`, which `cdk-blocks migrate` deleted before.
+  - On Windows, two `cdk-blocks migrate` runs at the same time no longer crash with `EPERM: operation not permitted, rmdir '…\aws-blocks\scripts'`: a directory that the other run holds or is deleting is tried again, then left to it.
+  - Outside git, or where git is not installed, `cdk-blocks migrate` now refuses unless you pass `--force`, as it does for an app that git does not track: git could not undo the rewritten scripts or the deleted wrappers. The hint points to `--dry-run` first, and `--output json` prints the `{"error"}` document.
+  - In a monorepo, a quoted `cd` or `working-directory` into the app now counts when it holds an escaped quote (`cd "apps/we\"b"`) or a command substitution: `cd "$(git rev-parse --show-toplevel)/apps/web" && npx tsx aws-blocks/scripts/deploy.ts`, or `cd "$(dirname "$0")/../apps/web"` from the script's own directory. Before, `cdk-blocks migrate` deleted `deploy.ts` there and exited 0 while the root script still ran it.
+  - A `.blocks/config.json` that is not valid JSON is no longer reported as missing: the kept `deploy` and `destroy` items say `.blocks/config.json is not valid JSON (<the parse error>): fix <path>, then run cdk-blocks migrate again`, as core's deploy and `cdk-blocks whoami` do, instead of telling you to create the file.
+  - A `package.json` edit made while `cdk-blocks migrate` scanned the app is no longer overwritten: migrate now stops with `package.json changed while cdk-blocks migrate ran; nothing was written.` before it writes or deletes anything, also with `--force`, and `--output json` prints the `{"error"}` document. Before, it wrote the scripts it had planned over the edit, and could delete a wrapper that a newly added script ran.
+  - A wrapper that a field of the app's `package.json` other than `scripts` runs is no longer deleted: a `lint-staged`, `simple-git-hooks` or `nodemonConfig` block with `tsx aws-blocks/scripts/typegen.ts` (or a bare `scripts/deploy.ts` after `cd aws-blocks`) keeps that wrapper, reported as `generated, but still used by package.json#lint-staged`. Before, `cdk-blocks migrate` read only the `scripts` of the app's own `package.json`, deleted the wrapper and exited 0.
+
+- 041af90: Scaffolded apps now pin every `@aws-blocks/*` dependency to a caret range on the release line this CLI version was tested with (for example `"@aws-blocks/blocks": "^0.9.0"`) instead of `"*"`. This covers fresh projects from every template, the `aws-blocks/` workspace added to an Amplify Gen 2 project, and adding AWS Blocks to an existing project. A clean reinstall now stays on the release line the app was created with and picks up later releases on that line; moving to a new (pre-1.0: breaking) release line is your choice. A range your existing project already lists in `dependencies` is kept.
+
+  `@aws-blocks/create-blocks-app` is now released with every `@aws-blocks/blocks` release and has the same version number, so this release skips ahead to blocks' version. The latest CLI therefore starts a new app on the latest `@aws-blocks/blocks` release.
+
+  The `aws-blocks/` workspace added to an Amplify Gen 2 project now imports `KVStore` from `@aws-blocks/blocks` and no longer lists `@aws-blocks/bb-kv-store` as a dependency of its own.
+
+  Apps scaffolded with an earlier version still declare `"*"`, so their next clean install can pull a breaking release. To pin yours, replace each `"*"` for an `@aws-blocks/*` package in `package.json` (and in `aws-blocks/package.json`, if present) with a caret range for the version you have installed, for example `"^0.9.0"` (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
+
+- 02c1589: fix(create-blocks-app): gate the remaining public template methods and git-ignore secrets when adding Blocks to an existing project
+
+  - The `api-only` template's `createUploadUrl` / `createDownloadUrl` now call
+    `auth.requireAuth(context)` and scope the path to the caller, so a signed-out
+    caller can no longer mint presigned URLs to read or write any file in the
+    bucket.
+  - The `demo` template's SQL ledger methods (`openAccount`, `balanceOf`,
+    `transfer`) now call `auth.requireAuth(context)`, and accounts belong to the
+    signed-in user (a new `owner` column in `accounts`), so a caller can only
+    read and move money between their own accounts. `transfer` declines a
+    non-positive amount, which previously slipped past the overdraft guard, and
+    an amount that is not a finite number (a numeric string passed `> 0`).
+  - The `demo` template's `searchDocs` now calls `auth.requireAuth(context)`: on
+    deploy each query is a billed Bedrock retrieval.
+  - The `demo` and `auth-cognito` templates' `updateTodo` copies only `completed`,
+    `priority` and `title` from `updates`. It spread the whole argument, so a
+    caller could set the owner key and write a todo into another user's list.
+  - Adding Blocks to an existing project (or an Amplify Gen 2 app) now appends
+    `.env`, `.env.*` (except `.env.example`), `*.pem`, `*.key`, `*.p12`,
+    `credentials` files (not `credentials/` directories), and `.aws/` to its
+    `.gitignore`, the same patterns the templates ship. Entries are compared as
+    whole lines, so an existing `.env.local` no longer stops `.env` being added.
+    The `.env.example` / `credentials/` exceptions are left out when the project's
+    own `.gitignore` could already ignore those names, so they never un-ignore them.
+    A project that un-ignores `.env` (`!.env`) gets `.env` ignored again, and
+    `.env.*` also ignores new `.env.development` / `.env.production` files (files
+    git already tracks stay tracked). The plan and the `Modified .gitignore` line
+    now list the entries added, and a CRLF `.gitignore` keeps CRLF line endings.
+  - The `api-only` and `demo` templates keep FileBucket versioning on (the
+    default), so an overwritten or deleted file can be restored, and the
+    `api-only` template's `createUploadUrl` and the `demo` template's
+    `getUploadSlot` sign only an explicit list of content types
+    (`ALLOWED_UPLOAD_TYPES`).
+
+- 5f55dac: The `auth` template's `api` namespace is now defined with `auth.protect`: its signed-in methods run only after the session check, with the signed-in user, and `ping` and `getLastCode` are its `public` methods. The frontend and the scaffolded e2e tests call it as before. One behaviour change: `signOutEverywhere` now needs a session, so an anonymous call answers `401 NotAuthenticatedException` instead of clearing the cookie and returning `{ success: true }`. The template's frontend calls it only from the signed-in UI.
+- 5f55dac: The e2e tests of new apps now use the new `getLastAuthCode` and `createTestClient` helpers from `@aws-blocks/blocks/utils`.
+
+  - Tests read each sign-up code with `getLastAuthCode`. Previously they read `.bb-data/my-app-auth/last-code.json` directly, a path that breaks when the scope or the block is renamed.
+  - The "another user can neither see nor change them" tests keep two users signed in at once, instead of signing out and back in.
+
+- 5f55dac: The `auth` template's role-gated section now shows the `npx @aws-blocks/bb-auth users add-to-group` command.
+- ba80bbd: fix(create-blocks-app): fail on a failed install, and fix scaffolds that did not work
+
+  - `create-blocks-app` exits 1 when a step such as `npm install` fails, instead of printing the error and exiting 0, so `npx @aws-blocks/create-blocks-app app && cd app` stops at the failed scaffold.
+  - The `nextjs` template's `.gitignore` ignores `.open-next/` (the deploy's build output) and `*.tsbuildinfo` (written by `next build`).
+  - Adding AWS Blocks to an existing project adds `zod` to its dependencies, at the template's version, when the copied `aws-blocks/` backend imports it. Before, `zod` resolved only when another package happened to hoist it.
+  - Scaffolding into a workspace of an npm workspaces monorepo stops before it writes anything, unless the monorepo root also lists the app's `aws-blocks/` folder, and prints the `"workspaces"` entry to add; once the root lists it, `npm install` runs at the root, where npm links the app's `aws-blocks` package. npm installs a workspace's dependencies at the root and ignores the app's nested `"workspaces": ["aws-blocks"]`, so before this the scaffold reported success with an app that could not import `aws-blocks`.
+  - To find that root, `create-blocks-app` reads each `"workspaces"` glob as npm does, with `minimatch`: a brace glob such as `"{apps,packages}/*"` includes `apps/web`, and an entry such as `"!packages/legacy"` leaves that folder out of the workspaces, unless a later entry lists it again, so an app there installs in its own folder.
+  - `npm run test:e2e` can run again and again against one running dev server, as `AGENTS.md` suggests: it exits when the tests finish (`--test-force-exit`) instead of hanging on the realtime client's open socket, and the `default` and `react` tests sign up a new user each run instead of a fixed `testuser@example.com`, which the persisted local auth store already had on the second run.
+  - The scaffolded `AGENTS.md` matches the app's dev server: its local API URLs use the `package.json` `"blocks.dev.port"` (3001 in the backend-only `api-only`, `backend` and `sql` templates, instead of 3000), and a backend-only app's workflow no longer tells the agent to edit a frontend in `src/`.
+  - Every template that has `npm run secret` also has `npm run config` (`cdk-blocks config`), which the release notes promised, and its README lists it.
+
+- 5f55dac: Scaffolded apps no longer describe the removed `AuthBasic` block: the generated `AGENTS.md` said that `AuthBasic` without `codeDelivery` signs the user in at sign-up, and now says that every sign-up confirms its email with a code and `codeDelivery` only receives the code locally. The templates no longer use `any`: the React template infers its `User` type from the backend's `authApi` and types its realtime subscription, the demo template exposes its page handlers with `Object.assign(window, …)` and reads caught errors through `isBlocksError` and `Error`, and the Amplify overlay types the backend it receives. A new test fails when a template or resource names a removed auth block or uses `: any` / `as any`.
+- 05a88e1: When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.
+
+  A credential failure message now names the profile and the deployment Region. When the fix is `aws login` and the profile has no Region or a different one, the message first prints `aws configure set region <region> --profile <name>`, so that the sign-in uses the Region you deploy to, and says to sign in again after a later Region change. If the profile's Region is set in the AWS credentials file, which overrides the config file that `aws configure set` writes, the message asks you to change it there instead. When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region than the deployment, which the AWS CLI would use instead, the `aws login` command includes `--region <region>`.
+
+- 9009efa: feat: add a `cron` template with scheduled CronJobs
+
+  `npx @aws-blocks/create-blocks-app my-app --template cron` scaffolds a
+  backend-only app with a `CronJob` that runs every minute and records each run
+  in a `KVStore`, plus a disabled job that shows `enabled: false`. The shipped
+  e2e test waits for the first scheduled run and checks that the disabled job
+  never fires.
+
+- a63c3a5: fix(create-blocks-app): keep todo errors visible in the demo template
+
+  In the demo template, a failed toggle, priority change or title edit showed its error and then reloaded the list, and the reload cleared the error straight away. The list now reloads first and the error is shown afterwards, so it stays on screen.
+
+- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
+
+  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
+  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
+  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
+
+- 2b144de: feat: add an `observability` template with Logger, Metrics, Tracer and Dashboard
+
+  `npx @aws-blocks/create-blocks-app my-app --template observability` scaffolds a
+  backend-only app whose `placeOrder` method, gated by `Auth`, writes a
+  structured log line, emits an `OrdersPlaced` metric and runs inside a trace
+  segment, with a CloudWatch
+  Dashboard over the metric. The shipped e2e test checks all four locally: the
+  log and EMF metric lines in the dev server's output, the saved trace, and the
+  dashboard route.
+
+- 5a31d94: The `react` template's e2e now checks that creating, reprioritizing and deleting a todo each reach a live Realtime subscriber. The `demo` template's EmailClient e2e now checks the sent mail's recipient, sender, subject and body in the local outbox, and that an invalid address is rejected.
+- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
+
+  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
+
+  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-blocks/bb-realtime` and `@aws-blocks/blocks`.
+  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
+  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
+  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
+  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
+  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
+
+  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
+
+- 5f55dac: The scaffolded `AGENTS.md` no longer contradicts itself about API namespaces: a method is called as `<exported name>.<method>` (`export const api = new ApiNamespace(…)` → `api.*`), not by the second argument to `new ApiNamespace(…)`.
+- e286b16: docs(telemetry): make the first-run telemetry notice describe exactly what is collected
+
+  The notice printed the first time the CLI or `create-blocks-app` collects usage data said the data was anonymous and that no personal data was collected. It now lists what an event can include: random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). It says that events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code, and that, as with any HTTPS request, the collection endpoint also receives your IP address.
+
+  The notice now names the opt-outs that work everywhere: `AWS_BLOCKS_DISABLE_TELEMETRY` set to `1`, `true` or `yes`, or `npx --no -- cdk-blocks telemetry disable --global` or `npx --no -- blocks-telemetry --disable --global` run inside an AWS Blocks app. Without `--global`, these commands opt out the current app only. The `@aws-blocks/blocks` README describes the same in its CLI section.
+
+  What is collected and when has not changed.
+
+- c00ab16: docs(telemetry): state the retention periods in the first-run notice
+
+  The first-run telemetry notice printed by the CLI and `create-blocks-app`, and the `@aws-blocks/blocks` README, now say that the collection endpoint does not store your IP address, except in logs of requests that its firewall blocks, and that events are kept for up to 1 year and logs of all requests, blocked or not, for up to 10 years.
+
+- 5247488: The commented `DistributedTable` example in the `bare` template now shows a secondary index (`indexes` is an object keyed by index name, not an array), a point read with `get()` that takes the whole key as an object, and a newest-first index query with `order: 'desc'` (the values are `'asc'` and `'desc'`). The `api-only` template's items table gains the same index and sort-order notes as comments.
+- aaf473e: fix(create-blocks-app): load the generated client only after the dev server is ready in template e2e tests
+
+  When `npm run test:e2e` started the dev server itself, the test imported `aws-blocks` before the server had regenerated `aws-blocks/client.js`. An API namespace you had exported since the client was last generated was then `undefined` in the test, and calls to it failed with `Cannot read properties of undefined` on that run. The test now waits for the server to answer before it imports the client, and no longer pauses for a fixed two seconds after starting the server. The Next.js template already created its client after the server was ready and is unchanged.
+
+- 9434f01: The `aws-blocks/index.ts` scaffolded by the `bare`, `backend`, `nextjs` and `cron` templates now explains that clients call an API by its export name (`api.greet()`), so a new client namespace such as `orders.create()` needs its own `export const orders = new ApiNamespace(...)`, and that the constructor's second argument is only a label. The commented `DistributedTable` example in the `bare` template also notes that the partition key and sort key together identify an item.
+- 475054b: The `test/e2e.test.ts` file in new apps no longer hides the global `setTimeout`. It imported `setTimeout` from `node:timers/promises` under that name, so a test you added that called `setTimeout(() => …, ms)` failed with a type error. The promise version is now imported as `sleep`.
+- 5f55dac: Templates: per-user data is keyed on `userSub`, and `updateTodo` can no longer write into another user's list.
+
+  - **`updateTodo` (`demo`, `auth`)** spread the caller's `updates` object over the stored todo. The RPC layer passes through properties the TypeScript signature doesn't declare, so a crafted request could set the todo's key fields and overwrite or create a todo in someone else's list. It now copies only `completed`, `priority` and `title`. If you scaffolded an app from either template, make the same change to its `updateTodo`.
+  - **Keyed on `userSub`** (`default`, `react`, `demo`, `api-only`, `sql`, and the commented example in `bare`): per-user rows used the username as their owner key. They now use `user.userSub`, the id that stays the same for the user's lifetime, as the `auth` template already did. The todo field is renamed from `userId` to `userSub`. This only affects newly scaffolded apps.
+  - Each template's e2e tests now check that a second user can't list, read, update or delete the first user's items.
+
+- 1ade81b: The `api-only` template README now has a "Security model" section: every API method is a public endpoint until you gate it with `auth.requireAuth(context)`, and a presigned URL lets whoever holds it read or write that key until it expires. The template security tests now check every template, so any method that signs a URL (`getUrl`, `putUrl`, `getFileHandle`, `createUploadHandle`) must start with `requireAuth` or `requireRole`.
+
 ## 0.4.0
 
 ### Minor Changes

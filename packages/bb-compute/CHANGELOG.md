@@ -1,5 +1,187 @@
 # @aws-blocks/bb-compute
 
+## 0.2.1
+
+### Patch Changes
+
+- f133ff8: On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.
+
+  - Each container namespace path (`/aws-blocks/api/<export name>`) gets its own CloudFront behavior, ahead of the `/aws-blocks/api/*` gateway behavior, all on one VPC origin per distribution for the backend's load balancer listener (whose path rules pick the compute) — so a distribution uses one of the account's VPC origins (25 by default) however many containers serve API traffic. Namespaces on Lambda computes, auth routes and `RawRoute`s still go through the gateway.
+  - A viewer-request CloudFront Function stamps the viewer's host on those requests, so `ctx.request.url` in the container is the public URL, including a custom domain.
+  - The load balancer admits CloudFront's origin-facing prefix list on its listener ports; the prefix list is looked up at deploy time, so stacks stay environment-agnostic.
+  - A direct call skips the gateway's throttling and access logs; the distribution's web ACL (`apiWaf`, or Hosting's WAF) covers it, and synth warns when there is none.
+  - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
+  - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
+  - Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+  - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.
+
+- 9ebf67a: An API namespace can run on a `container` compute:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+  ```
+
+  The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/aws-blocks/api/render`.
+
+  - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
+  - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+  - The load balancer drops request headers that aren't valid HTTP before they reach a task.
+  - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 35 s) before it shuts down.
+  - A `Scope` with a container `compute` now places its `ApiNamespace`s on that container too, instead of failing synth.
+  - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.
+  - `runContainer()` takes the backend module (`runContainer({ backend })`) and serves its API on port 8080, with readiness on port 8081; called without it, the container answers a health check on port 8080 as before. A container compute passes it only when the compute serves API traffic.
+  - The container compute's dashboard section gains API request, 5xx, latency and task-health widgets.
+
+- 76fd75c: The container compute's default image, `public.ecr.aws/docker/library/node:24-slim`, is now pinned by its multi-arch index digest, as a digest-only `node@sha256:…` reference. Every task start pulls the same image, and a re-pushed tag no longer changes what runs under the stack's execution role. A custom `image` is still used exactly as written. The `image` docs now recommend pinning custom images by digest.
+- 3ae8592: fix(bb-container-compute): deploys no longer reset an autoscaled container's task count
+
+  A container `Compute` with autoscaling no longer declares a task count in its
+  CloudFormation template. Before, every deploy that changed the app's code reset
+  the running task count to `minInstances`, stopping tasks that were running jobs.
+
+  Running jobs also get longer to finish when a task is stopped by a deploy or by
+  scale-in: the container now waits up to 120 seconds (the AWS Fargate maximum),
+  up from 25 seconds. A job still running after that is stopped and retried.
+
+  The `bb-compute`, `bb-async-job` and `bb-cron-job` READMEs now say that a deploy
+  restarts a job still running after that window, and that the restart counts as
+  one of the job's attempts.
+
+- e5822ed: A container compute on the default image now runs as the image's unprivileged `node` user (uid/gid 1000) instead of root. It boots from `/home/node/app` and starts in `/home/node` (its working directory), both owned by that user. The API and readiness ports (8080/8081) aren't privileged, so most apps keep working unchanged. Code that relied on root no longer works on the default image: writing to `/app` (no longer created), to `/` or under `/usr/local`, or installing packages at boot. As in Lambda, write scratch files under `/tmp`; relative paths resolve under `/home/node`. A custom `image` is unaffected: it still runs as the image's own default user, in its own working directory, and boots from `/app`. If your app needs root on the stock Node image, set `image` to it explicitly.
+- 3ae8592: feat(bb-container-compute): scale a container compute to zero between jobs
+
+  A container `Compute` with `scaling: { minInstances: 0 }` now starts a task when
+  a job is waiting. Before, a service at zero tasks never woke for a backlog
+  smaller than `backlogPerInstance` (default 100), so its jobs were never run.
+
+  ```ts
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    scaling: { minInstances: 0, maxInstances: 2 },
+  });
+  ```
+
+  Use `minInstances: 0` only for long-running jobs that can tolerate high latency
+  before they start; most workloads should use `minInstances` of 1 or more. Waking
+  usually takes a few minutes (queue metrics, the scaling alarm, and the task's
+  start), and up to about 20 minutes when the job's queue has been idle for more
+  than six hours. Computes with `minInstances` of 1 or more deploy the same
+  autoscaling as before.
+
+  `minInstances: 0` also requires at least one `AsyncJob` or `CronJob` on the
+  compute and the default (or `queue-depth`) scaling strategy. Anything else fails
+  synth: with no job nothing would ever start a task, and a `cpu` or `memory`
+  strategy could scale in to zero while a job is still running.
+
+  Instance bounds are now checked at synth: `minInstances` must be an integer of
+  0 or more, `maxInstances` an integer of 1 or more, and `minInstances` must not
+  exceed `maxInstances`.
+
+- 44c7377: feat(core): `defaults.strictNamespacePlacement` serves each API namespace only on the compute it is placed on
+
+  An `ApiNamespace` given its own `compute` is routed to that compute at `/aws-blocks/api/{namespace}`, but the bare `POST /aws-blocks/api` endpoint is served by the default compute and dispatches on the JSON-RPC body. A raw call such as `{ "method": "reports.build" }` to the bare endpoint therefore runs `reports` on the default compute, outside the VPC, container or sizing its placement was meant to give it.
+
+  - **New `BlocksDefaults.strictNamespacePlacement`** (`false` in both presets). Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the preset you already use, and each compute's dispatcher serves only the namespaces placed on it, on any RPC path. A call to a namespace placed elsewhere gets the same `-32601` "method not found" error as an unknown namespace. Namespaces without a placement keep running on the default compute, on the bare endpoint and on their own path. The typed TypeScript client and the Kotlin, Swift and Dart clients already call each namespace at its own path, so they keep working. A raw HTTP caller, or a native client generated before per-namespace paths, that posts a placed namespace to the bare endpoint is refused once you turn it on. The option applies only to deployed computes: the local dev server keeps serving every namespace on every path.
+  - **Every API compute rolls on a change.** The placement map is set in the environment of every compute that serves an API namespace, the default one included, so turning the option on or moving a namespace to another compute updates each function and task definition and no running compute keeps an old map. Synth fails with a clear error if the encoded map is over 2 KB. A compute whose environment has its compute id but no readable map fails to start (a Lambda function retries on the next request) instead of serving every namespace.
+  - **New synth warning** `blocks:apigateway:bare-endpoint-serves-placed-namespaces` when some namespace runs on its own compute and `strictNamespacePlacement` is off. Turn the option on, or, if raw callers still need the bare endpoint, acknowledge the warning with `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` on the stack or backend returned by `create()`.
+
+  The option keeps a namespace's code on its own compute and network. It doesn't split IAM: every compute still runs under the app's one execution role.
+
+- c607deb: Behind a Blocks CloudFront front door, a Lambda handler's `ctx.request.url` is now the URL the client called: the distribution's domain, or the custom domain it was called at (`https://d111.cloudfront.net/aws-blocks/api/orders`, not `https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api/orders`). Links and redirects a handler builds from it stay on the public domain, where the app's cookies are scoped. A container namespace behind the same door already reported that URL; the two compute types now agree. `getRequestBaseUrl()` is unchanged: it stays the gateway's origin and stage, for code that must reach the gateway directly.
+
+  - Applies to the `apiFrontDoor: 'cloudfront'` distribution and to `Hosting`'s CloudFront door (on either tier). A viewer-request CloudFront Function on their API behaviors to the gateway stamps the viewer's host as `x-blocks-public-host`; each door registers its hosts under the backend's `BLOCKS_PUBLIC_HOSTS` config.
+  - A handler takes the stamped host only when it is one of the backend's front-door hosts (for a wildcard alias such as `*.example.com`, a subdomain at any depth, not the apex); any other value is ignored.
+  - Requests sent to the `execute-api` URL directly, and requests through `Hosting`'s other doors (ALB, API Gateway, stacked, bring-your-own), keep reporting the gateway's host.
+  - The sandbox dev server's loopback `X-Forwarded-Host` still takes precedence, so redirect-based sign-in in a sandbox keeps working through the CloudFront URL. In both the Lambda handler and the container, it now contributes only its host: a query, fragment or userinfo in it no longer reaches `ctx.request.url`, and a request path starting `//` or `/\` can't change the URL's host.
+  - A container namespace the gateway proxies to behind a Blocks CloudFront door (on the `apigateway` tier, or when CloudFront can't reach its VPC) also reports the public URL now, instead of the gateway's.
+  - `Auth`'s same-origin relay allowance follows: when a sign-in starts, a `relayTo` on the host the client called behind a Blocks CloudFront door counts as same-origin, where the gateway's `execute-api` host did before. When the IdP calls back, the relay re-check accepts a relay to any host the backend serves over HTTPS (each CloudFront door's hosts and the gateway's), so a sign-in that started on one of a door's hosts, or on the `execute-api` URL, still finishes when the callback arrives on another.
+  - Each CloudFront door adds one CloudFront Function to the account.
+
+- 8a5726c: test: check `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob and Dashboard
+
+  Each of these blocks now has a synth test that sets `defaults.permissionsBoundary`
+  and fails if any IAM role in any synthesized template, including custom-resource
+  provider roles, the CronJob scheduler role and the container task execution
+  role, lacks the boundary or is missing from the `<stack>.blocks-iam.json`
+  report. No runtime or synth behavior changes.
+
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6236bf9]
+- Updated dependencies [6297d5a]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [2b250f8]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [8a5726c]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-container-compute@0.3.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+
 ## 0.2.0
 
 ### Minor Changes

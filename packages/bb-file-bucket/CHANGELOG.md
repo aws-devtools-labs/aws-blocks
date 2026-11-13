@@ -1,5 +1,110 @@
 # @aws-blocks/bb-file-bucket
 
+## 0.5.0
+
+### Minor Changes
+
+- 7c23ab9: feat(bb-file-bucket): signed upload constraints, opt-in download disposition, stricter key validation and 400 for invalid input
+
+  - **Presigned uploads always sign a `Content-Type`.** `putUrl()` and `createUploadHandle()` now sign the `contentType` you pass, or `application/octet-stream` when you pass none, so the upload must send exactly that header (S3 answers `403 SignatureDoesNotMatch` otherwise). `createUploadHandle().upload()` and its hydrated client handle always send it. **Breaking:** an upload to a `putUrl()` URL created without `contentType` must now send `Content-Type: application/octet-stream`; pass the `contentType` the client will send. `createUploadHandle()` without `contentType` now stores `application/octet-stream` instead of the browser's file type; pass `contentType: file.type` to keep it. Browser uploads now always send `Content-Type`, so `corsRules` must allow it in `allowedHeaders`. `put()` without `contentType` now stores `application/octet-stream` on AWS too, matching local dev.
+  - **`contentType` must be a single media type.** `put()`, `putUrl()` and `createUploadHandle()` reject (400 `ValidationFailed`) a `contentType` that is not `type/subtype` with optional `; name=value` parameters — for example a comma-separated list, non-ASCII or control characters, or an empty value.
+  - **`contentType` is signed and stored in canonical form.** Parameters are rendered as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`); a quoted value is written bare when its content is a token (`charset="utf-8"` becomes `charset=utf-8`) and otherwise stays quoted. HTTP clients that re-render a parsed `Content-Type`, such as the native Kotlin client, then send exactly the signed value.
+  - **New `contentLength` option** on `putUrl()` / `createUploadHandle()` signs the exact upload size, so only a body of that size is accepted.
+  - **New bucket options `allowedContentTypes` and `maxUploadBytes`.** `allowedContentTypes` (exact media types or `type/*` wildcards) restricts the content types `put()`, `putUrl()` and `createUploadHandle()` accept. A `type/*` wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, the JavaScript and ECMAScript types (`text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript`, `application/x-javascript`), or any `+xml` subtype; list one exactly to accept it. `maxUploadBytes` caps `put()` bodies and makes presigned uploads require a `contentLength` at or under it. Both are checked identically in local dev and on AWS, and their shape is validated at synth.
+  - **New `attachment` option** on `getUrl()` / `getFileHandle()`: `true` or a filename signs a `Content-Disposition: attachment` into the download URL, so the browser saves the file instead of displaying it. Directional formatting and zero-width characters are removed from the filename, `/` and `\` are replaced with `_`, and a filename that is empty, `.` or `..` is rejected. Default behavior is unchanged.
+  - **Stricter key validation.** Keys are also rejected when they contain a backslash, C1 control characters, U+2028/U+2029, or bidirectional formatting characters, a segment that contains `.` or `..` once `%2e`, `%2f` and `%5c` are decoded, or more than 1,024 bytes in UTF-8. `scan({ prefix })` now validates the prefix with the same rules (an empty prefix and a trailing `/` are allowed).
+  - **`ValidationFailed` is now an `ApiError` with status 400**, so API methods answer invalid keys, prefixes, expiry values and upload constraints with HTTP 400 instead of 500. The name and message format are unchanged, and messages never include the key.
+  - **`VersionNotFound` from `restoreVersion()` now has the fixed message `The requested version does not exist`**, without the key or version id.
+
+  The README adds sections on per-user isolation (derive keys from the authenticated user, never from a client-supplied key or prefix), upload constraints, serving user uploads, and the key rules; its examples now build keys from the caller's identity.
+
+- 072c3ff: An unrecognized `encryption` value on `KVStore`, `DistributedTable` or `FileBucket` now fails the synth with an error that lists the valid values (`'aws-managed'`, `'customer-managed'`, or the block's `fromKmsKey(arn)`). Previously such a value (for example a typo like `'kms-managed'` in untyped JavaScript, or a value loaded from JSON or the environment) only emitted an `UnknownEncryption` warning and fell back to the AWS-managed key, so a request for a customer-managed key could be silently downgraded. Apps that pass a valid value, or omit `encryption`, are unaffected; an app that hits the new error was never getting the encryption it asked for and should correct the value.
+
+### Patch Changes
+
+- e8e3262: Brand the `ValidationFailed` error thrown for an invalid object key so its name and message reach RPC clients instead of a generic internal error.
+- eacc87e: Local file server now returns 404 `NoSuchKey` for presigned GETs of a versioned key whose current version is a delete marker, matching S3 and `get()`.
+- 94d5900: The production settings of `DistributedTable` and `FileBucket` now live in a `PRODUCTION.md` next to each block's `README.md`, which links to it. `DistributedTable`'s covers scaling and cost, durability, deletion protection and encryption. `FileBucket`'s covers access logging, KMS encryption, Object Lock, scaling and cost. Both files ship in their packages and in `@aws-blocks/blocks` under `docs/<block>/`, and the shorter READMEs can be read in one pass.
+- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
+
+  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
+
+- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
+
+  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
+
+- 11877b6: The FileBucket docs now state that `get()` always downloads the whole body and is the only call that returns `contentType` and `metadata`, because there is no metadata-only read. `scan()` returns `size` and `lastModified` without the body.
+- 77c2c75: Docs: FileBucket object metadata is set when the object is written and can't be edited in place. Each `put()` replaces it, and a `put()` without `metadata` leaves none. A new "Changing Metadata" README section shows how to change it (re-`put()` the same body with the complete new set) and what that implies: a full GET and PUT, `cacheControl` passed again, another stored version on versioned buckets (the default), a rewrite that isn't atomic, and no custom metadata on presigned uploads. It also notes that S3 stores metadata keys in lowercase while the local mock keeps their case; DESIGN.md lists this among the mock vs AWS differences. The `PutOptions.metadata` and `put()` JSDoc say the same.
+- f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6297d5a]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c1fabce]
+- Updated dependencies [c045273]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [44c7377]
+- Updated dependencies [2a358ff]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [072c3ff]
+- Updated dependencies [5f55dac]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [60360c1]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [2095f31]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.4.0
 
 ### Minor Changes
