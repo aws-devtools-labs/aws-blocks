@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetEvent {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let createdAt: Date
             public let date: String
             public let email: String

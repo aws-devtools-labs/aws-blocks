@@ -119,7 +119,7 @@ final class PrimitiveUnionArmTests: XCTestCase {
         assertContains(output.api, "case result_Variant3(Result_Variant3)")
         // The element of an array of objects is declared beside the union, like a variant's struct.
         assertContains(output.api, "case result_Variant2([Result_Variant2])")
-        assertContains(output.api, "public struct Result_Variant2: Codable {\n            public let q: String")
+        assertContains(output.api, "public struct Result_Variant2: Codable, Sendable {\n            public let q: String")
     }
 
     func testValueArmsInComponentSchemasAndNestedRecords() throws {
@@ -137,7 +137,7 @@ final class PrimitiveUnionArmTests: XCTestCase {
         assertContains(output.models, "case filterValue_Variant1(Int)")
         assertContains(output.models, "        case inner_Variant0(Bool)")
         assertContains(output.models, "case filterObjs_Variant0([FilterObjs_Variant0])")
-        assertContains(output.models, "public nonisolated struct FilterObjs_Variant0: Codable {\n    public let q: String")
+        assertContains(output.models, "public nonisolated struct FilterObjs_Variant0: Codable, Sendable {\n    public let q: String")
     }
 
     func testUnionsThatDifferOnlyInAValueArmAreNotMerged() throws {

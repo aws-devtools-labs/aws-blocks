@@ -23,13 +23,13 @@ public final nonisolated class Api: Sendable {
 
     public enum SetStatus {
 
-        public enum Status: String, Codable {
+        public enum Status: String, Codable, Sendable {
             case active
             case inactive
             case pending
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let status: Status
             public let updatedAt: String
 
@@ -38,7 +38,7 @@ public final nonisolated class Api: Sendable {
                 self.updatedAt = updatedAt
             }
 
-            public enum Status: String, Codable {
+            public enum Status: String, Codable, Sendable {
                 case active
                 case inactive
                 case pending

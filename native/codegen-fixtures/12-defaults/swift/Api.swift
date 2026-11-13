@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum CreateItem {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let active: Bool
             public let retries: Int
             public let role: String

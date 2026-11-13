@@ -39,7 +39,7 @@ public final nonisolated class Posts: Sendable {
 
     public enum List {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let authorId: String
             public let id: String
             public let title: String
@@ -54,7 +54,7 @@ public final nonisolated class Posts: Sendable {
 
     public enum Create {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let authorId: String
             public let body: String
             public let title: String
@@ -66,7 +66,7 @@ public final nonisolated class Posts: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let authorId: String
             public let id: String
             public let title: String
@@ -81,7 +81,7 @@ public final nonisolated class Posts: Sendable {
 
     public enum Delete {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -129,7 +129,7 @@ public final nonisolated class Users: Sendable {
 
     public enum Create {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let email: String
             public let name: String
 

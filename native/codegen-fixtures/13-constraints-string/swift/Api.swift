@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum CreateUser {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let code: String
             public let email: String
             public let nickname: String?
@@ -55,7 +55,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

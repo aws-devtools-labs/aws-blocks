@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum DoAction {
 
-        public struct ActionCreate_: Codable {
+        public struct ActionCreate_: Codable, Sendable {
             public let title: String
 
             public init(title: String) {
@@ -39,7 +39,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct ActionRe_Move: Codable {
+        public struct ActionRe_Move: Codable, Sendable {
             public let id: String
 
             public init(id: String) {
@@ -47,7 +47,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case actionCreate_(ActionCreate_)
             case actionRe_Move(ActionRe_Move)
 
@@ -79,7 +79,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

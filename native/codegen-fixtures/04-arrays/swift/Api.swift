@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum ListItems {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let id: String
             public let name: String
 

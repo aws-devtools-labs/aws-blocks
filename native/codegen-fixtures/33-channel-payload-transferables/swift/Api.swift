@@ -86,7 +86,7 @@ public final nonisolated class Api: Sendable {
                 self.channel = channel
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let text: String
 
                 public init(text: String) {
@@ -105,7 +105,7 @@ public final nonisolated class Api: Sendable {
                 self.channel = channel
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let count: Double
 
                 public init(count: Double) {

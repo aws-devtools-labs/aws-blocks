@@ -41,19 +41,19 @@ public final nonisolated class Api: Sendable {
 
     public enum GetOptions {
 
-        public struct Options: Codable {
+        public struct Options: Codable, Sendable {
 
             public init() {
             }
         }
 
-        public struct Extra: Codable {
+        public struct Extra: Codable, Sendable {
 
             public init() {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
 
             public init() {
             }
@@ -62,7 +62,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetEnvelope {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let attachments: [Attachment]
             public let id: String
             public let meta: Meta
@@ -90,13 +90,13 @@ public final nonisolated class Api: Sendable {
                 self.settings = settings
             }
 
-            public struct Attachment: Codable {
+            public struct Attachment: Codable, Sendable {
 
                 public init() {
                 }
             }
 
-            public struct Meta: Codable {
+            public struct Meta: Codable, Sendable {
 
                 public init() {
                 }

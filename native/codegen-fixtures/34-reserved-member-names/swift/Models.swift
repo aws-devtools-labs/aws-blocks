@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Doc: Codable {
+public nonisolated struct Doc: Codable, Sendable {
     public let String: String
     public let __v: Int?
     public let _id: String
@@ -50,7 +50,7 @@ public nonisolated struct Doc: Codable {
     }
 }
 
-public nonisolated struct Extras: Codable {
+public nonisolated struct Extras: Codable, Sendable {
     public let additionalProperties: String
     public let id: String
     public let attributes: [String: Int]
@@ -94,7 +94,7 @@ public nonisolated struct Extras: Codable {
     }
 }
 
-public nonisolated enum Level: String, Codable {
+public nonisolated enum Level: String, Codable, Sendable {
     case values
     case index
     case name

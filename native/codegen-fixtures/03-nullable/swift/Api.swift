@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetProfile {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let age: Int?
             public let bio: String?
             public let name: String

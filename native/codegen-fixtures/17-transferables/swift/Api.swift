@@ -45,7 +45,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetChannel {
 
-        public struct ResultMessage: Codable {
+        public struct ResultMessage: Codable, Sendable {
             public let message: String
             public let timestamp: Double
 

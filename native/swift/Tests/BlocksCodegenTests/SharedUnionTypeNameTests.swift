@@ -65,8 +65,8 @@ final class SharedUnionTypeNameTests: XCTestCase {
     func testTwoNamespacesShareOneTopLevelType() throws {
         let output = try generate([setAuthState("alphaAuth"), setAuthState("zetaAuth")])
 
-        XCTAssertEqual(count("public nonisolated enum AuthActionInput: Codable {", in: output.models), 1)
-        assertContains(output.models, "    public struct SignIn: Codable {\n")
+        XCTAssertEqual(count("public nonisolated enum AuthActionInput: Codable, Sendable {", in: output.models), 1)
+        assertContains(output.models, "    public struct SignIn: Codable, Sendable {\n")
         XCTAssertEqual(count("public func setAuthState(input: AuthActionInput) async throws -> String {", in: output.api), 2)
         assertNotContains(output.api, "public enum Input")
         assertNotContains(output.api, "public struct SignIn")
@@ -91,7 +91,7 @@ final class SharedUnionTypeNameTests: XCTestCase {
         let output = try generate([setAuthState("alphaAuth", typeName: nil)])
 
         assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
-        assertContains(output.api, "        public enum Input: Codable {")
+        assertContains(output.api, "        public enum Input: Codable, Sendable {")
         assertNotContains(output.models + output.api, "AuthActionInput")
     }
 
@@ -106,7 +106,7 @@ final class SharedUnionTypeNameTests: XCTestCase {
         )
 
         assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
-        assertContains(output.models, "public nonisolated struct AuthActionInput: Codable {")
+        assertContains(output.models, "public nonisolated struct AuthActionInput: Codable, Sendable {")
     }
 
     func testADifferentShapeUnderTheSameNameKeepsItsNestedInput() throws {

@@ -79,7 +79,7 @@ public final nonisolated class Api: Sendable {
 
     public enum PutItems {
 
-        public struct Item: Codable {
+        public struct Item: Codable, Sendable {
             public let sku: String
 
             public init(sku: String) {
@@ -87,7 +87,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Items: Codable {
+        public struct Items: Codable, Sendable {
             public let qty: Double
             public let sku: String
 
@@ -97,7 +97,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let item: Item
             public let items: [Items]
 
@@ -106,7 +106,7 @@ public final nonisolated class Api: Sendable {
                 self.items = items
             }
 
-            public struct Item: Codable {
+            public struct Item: Codable, Sendable {
                 public let count: Double
 
                 public init(count: Double) {
@@ -114,7 +114,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Items: Codable {
+            public struct Items: Codable, Sendable {
                 public let sku: String
 
                 public init(sku: String) {
@@ -135,7 +135,7 @@ public final nonisolated class Api: Sendable {
                 self.feeds = feeds
             }
 
-            public struct FeedMessage: Codable {
+            public struct FeedMessage: Codable, Sendable {
                 public let text: String
 
                 public init(text: String) {
@@ -143,7 +143,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct FeedsMessage: Codable {
+            public struct FeedsMessage: Codable, Sendable {
                 public let count: Double
 
                 public init(count: Double) {
@@ -155,7 +155,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Act {
 
-        public struct Pick: Codable {
+        public struct Pick: Codable, Sendable {
             public let item: Item
             public let items: [Items]
 
@@ -164,7 +164,7 @@ public final nonisolated class Api: Sendable {
                 self.items = items
             }
 
-            public struct Item: Codable {
+            public struct Item: Codable, Sendable {
                 public let sku: String
 
                 public init(sku: String) {
@@ -172,7 +172,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Items: Codable {
+            public struct Items: Codable, Sendable {
                 public let qty: Double
 
                 public init(qty: Double) {
@@ -181,7 +181,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Skip: Codable {
+        public struct Skip: Codable, Sendable {
             public let reason: String
 
             public init(reason: String) {
@@ -189,7 +189,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case pick(Pick)
             case skip(Skip)
 
@@ -224,7 +224,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Check {
 
-        public struct Result_2: Codable {
+        public struct Result_2: Codable, Sendable {
             public let input: String
 
             public init(input: String) {
@@ -232,7 +232,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let passed: Bool
 
             public init(passed: Bool) {

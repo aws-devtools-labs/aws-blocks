@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum SetScore {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let level: Int
             public let score: Double
             public let step: Double
@@ -38,7 +38,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

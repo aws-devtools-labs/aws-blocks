@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum SignUp {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let password: String
             public let username: String
             public let attributes: [String: String]
@@ -75,7 +75,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

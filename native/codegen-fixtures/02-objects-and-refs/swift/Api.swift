@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum CreateTodo {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let priority: Int
             public let title: String
 

@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Sample_Type__X___Kind: String, Codable {
+public nonisolated enum Sample_Type__X___Kind: String, Codable, Sendable {
     case a_b = "a\"b"
     case c_d = "c;d"
     case x_y = "x`y"
@@ -14,7 +14,7 @@ public nonisolated enum Sample_Type__X___Kind: String, Codable {
     case _sp_ace = " sp ace"
 }
 
-public nonisolated struct Sample_Type__X___: Codable {
+public nonisolated struct Sample_Type__X___: Codable, Sendable {
     public let _unnamed: String?
     public let __x_: String?
     public let __unnamed: String?

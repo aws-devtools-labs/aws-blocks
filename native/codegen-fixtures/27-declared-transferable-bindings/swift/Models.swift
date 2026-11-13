@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated struct DeviceLabel: Codable {
+public nonisolated struct DeviceLabel: Codable, Sendable {
     public let name: String
 
     public init(name: String) throws {

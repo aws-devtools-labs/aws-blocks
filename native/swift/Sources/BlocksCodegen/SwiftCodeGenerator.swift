@@ -31,6 +31,8 @@ public struct SwiftCodeGenerator {
     private(set) var nestedTypesByName: [String: [NestedTypeNode]] = [:]
     /// Component schemas by type name, to follow a `typeReference` when walking a type.
     private(set) var typesByName: [String: ResolvedType] = [:]
+    /// The generated types that can't be `Sendable` (see SwiftCodeGenerator+Sendable.swift).
+    private(set) var nonSendableNames: Set<String> = []
     let declaredBindings: [String: DeclaredTransferableBinding]
     /// Unconditional once a module is declared: the generator cannot know a
     /// customer package's export list.
@@ -71,6 +73,7 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
+        generator.nonSendableNames = Self.nonSendableTypeNames(in: model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -262,7 +265,7 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable, Sendable {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: indent + "    "))
             lines.append("\(indent)}")
         case .union(_, let variants, let discriminator):
@@ -278,7 +281,8 @@ public struct SwiftCodeGenerator {
     ) {
         let fields = fields.filter { !isVoidType($0.type) }
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public struct \(name): Codable {", lines: &lines)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "\(indent)public struct \(name): \(conformances) {", lines: &lines)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -443,7 +447,8 @@ public struct SwiftCodeGenerator {
 
         lines.append("")
         let declaration = sharedTopLevel ? "public nonisolated enum" : "public enum"
-        emitDeclaration(name, line: "\(indent)\(declaration) \(name): Codable {", lines: &lines)
+        let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+        emitDeclaration(name, line: "\(indent)\(declaration) \(name): \(conformances) {", lines: &lines)
         lines.append(contentsOf: unionCaseLines(variants, indent: indent))
         if let disc = discriminator {
             emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
@@ -768,7 +773,7 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
+            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable, Sendable {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: "    "))
             lines.append("}")
 
@@ -817,7 +822,8 @@ public struct SwiftCodeGenerator {
             }
             var body: [String] = []
             body.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
+            let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+            emitDeclaration(name, line: "public nonisolated enum \(name): \(conformances) {", lines: &body)
             body.append(contentsOf: unionCaseLines(variants, indent: ""))
             // Internal-discriminator union: write the discriminator at JSON
             // top level alongside the payload.
@@ -877,7 +883,8 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        emitDeclaration(name, line: "public nonisolated struct \(name): Codable {", lines: &body)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "public nonisolated struct \(name): \(conformances) {", lines: &body)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1636,7 +1643,8 @@ private extension SwiftCodeGenerator {
                 }
             }
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): Codable {", lines: &lines)
+            let conformances = valueConformances([node.type])
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): \(conformances) {", lines: &lines)
             lines.append(contentsOf: unionCaseLines(variants, indent: indent))
             if let disc = discriminator {
                 emitDiscriminatedCoding(name: node.name, variants: variants, discriminator: disc, indent: indent, lines: &lines)

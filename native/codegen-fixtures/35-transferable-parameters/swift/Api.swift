@@ -73,7 +73,7 @@ public final nonisolated class Api: Sendable {
 
     public enum RelayInline {
 
-        public struct FeedMessage: Codable {
+        public struct FeedMessage: Codable, Sendable {
             public let text: String
 
             public init(text: String) {

@@ -23,7 +23,7 @@ public final nonisolated class AuthApi: Sendable {
 
     public enum SetAuthState {
 
-        public struct SignUp: Codable {
+        public struct SignUp: Codable, Sendable {
             public let password: String
             public let username: String
             public let attributes: [String: String]
@@ -68,7 +68,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct ResetPassword: Codable {
+        public struct ResetPassword: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -76,7 +76,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct SignIn: Codable {
+        public struct SignIn: Codable, Sendable {
             public let password: String
             public let username: String
 
@@ -86,7 +86,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct SignInWithPasskey: Codable {
+        public struct SignInWithPasskey: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -94,7 +94,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct ConfirmSignUp: Codable {
+        public struct ConfirmSignUp: Codable, Sendable {
             public let code: String
             public let password: String?
             public let username: String
@@ -119,7 +119,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct ResendSignUpCode: Codable {
+        public struct ResendSignUpCode: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -127,7 +127,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct ConfirmResetPassword: Codable {
+        public struct ConfirmResetPassword: Codable, Sendable {
             public let code: String
             public let newPassword: String
             public let username: String
@@ -139,7 +139,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct AutoSignIn: Codable {
+        public struct AutoSignIn: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -147,11 +147,11 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct ConfirmSignIn: Codable {
+        public struct ConfirmSignIn: Codable, Sendable {
             public let session: String
             public let challenge: ConfirmSignInChallenge
 
-            public struct Code: Codable {
+            public struct Code: Codable, Sendable {
                 public let code: String
 
                 public init(code: String) {
@@ -159,7 +159,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct MfaType: Codable {
+            public struct MfaType: Codable, Sendable {
                 public let mfaType: String
 
                 public init(mfaType: String) {
@@ -167,7 +167,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct NewPassword: Codable {
+            public struct NewPassword: Codable, Sendable {
                 public let newPassword: String
 
                 public init(newPassword: String) {
@@ -175,7 +175,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct TotpSetup: Codable {
+            public struct TotpSetup: Codable, Sendable {
                 public let code: String
                 public let sharedSecret: String
 
@@ -185,7 +185,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct Email: Codable {
+            public struct Email: Codable, Sendable {
                 public let email: String
 
                 public init(email: String) {
@@ -193,7 +193,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct Password: Codable {
+            public struct Password: Codable, Sendable {
                 public let password: String
 
                 public init(password: String) {
@@ -201,7 +201,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct FirstFactor: Codable {
+            public struct FirstFactor: Codable, Sendable {
                 public let firstFactor: String
 
                 public init(firstFactor: String) {
@@ -209,7 +209,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public struct Webauthn: Codable {
+            public struct Webauthn: Codable, Sendable {
                 public let credential: String
 
                 public init(credential: String) {
@@ -217,7 +217,7 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
-            public enum ConfirmSignInChallenge: Codable {
+            public enum ConfirmSignInChallenge: Codable, Sendable {
                 case code(Code)
                 case mfaType(MfaType)
                 case newPassword(NewPassword)
@@ -301,7 +301,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct CompletePasskeyRegistration: Codable {
+        public struct CompletePasskeyRegistration: Codable, Sendable {
             public let credential: String
 
             public init(credential: String) {
@@ -309,7 +309,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct DeletePasskey: Codable {
+        public struct DeletePasskey: Codable, Sendable {
             public let credentialId: String
 
             public init(credentialId: String) {
@@ -317,7 +317,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct VerifyTotpSetup: Codable {
+        public struct VerifyTotpSetup: Codable, Sendable {
             public let code: String
 
             public init(code: String) {
@@ -325,7 +325,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public struct UpdateMfaPreference: Codable {
+        public struct UpdateMfaPreference: Codable, Sendable {
             public let email: Email?
             public let sms: Sms?
             public let totp: Totp?
@@ -349,21 +349,21 @@ public final nonisolated class AuthApi: Sendable {
                 self.totp = totp
             }
 
-            public enum Email: String, Codable {
+            public enum Email: String, Codable, Sendable {
                 case enabled = "ENABLED"
                 case disabled = "DISABLED"
                 case preferred = "PREFERRED"
                 case notPreferred = "NOT_PREFERRED"
             }
 
-            public enum Sms: String, Codable {
+            public enum Sms: String, Codable, Sendable {
                 case enabled = "ENABLED"
                 case disabled = "DISABLED"
                 case preferred = "PREFERRED"
                 case notPreferred = "NOT_PREFERRED"
             }
 
-            public enum Totp: String, Codable {
+            public enum Totp: String, Codable, Sendable {
                 case enabled = "ENABLED"
                 case disabled = "DISABLED"
                 case preferred = "PREFERRED"
@@ -371,7 +371,7 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case signUp(SignUp)
             case resetPassword(ResetPassword)
             case signIn(SignIn)

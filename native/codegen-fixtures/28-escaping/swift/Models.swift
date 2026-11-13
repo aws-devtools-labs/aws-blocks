@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum WidgetKind: String, Codable {
+public nonisolated enum WidgetKind: String, Codable, Sendable {
     case cost_ = "cost$"
     case a_b = "a$b"
     case x__y = "x$$y"
@@ -10,7 +10,7 @@ public nonisolated enum WidgetKind: String, Codable {
     case d__e = "d_$e"
 }
 
-public nonisolated struct Widget: Codable {
+public nonisolated struct Widget: Codable, Sendable {
     public let code: String
     public let count: Int?
     public let flag: Bool?

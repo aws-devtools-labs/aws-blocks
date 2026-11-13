@@ -2,16 +2,16 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum AuthenticatedUserGroups: String, Codable {
+public nonisolated enum AuthenticatedUserGroups: String, Codable, Sendable {
     case admins
     case users
 }
 
-public nonisolated enum AuthenticatedUserSignInProvider: String, Codable {
+public nonisolated enum AuthenticatedUserSignInProvider: String, Codable, Sendable {
     case password
 }
 
-public nonisolated struct AuthenticatedUser: Codable {
+public nonisolated struct AuthenticatedUser: Codable, Sendable {
     public let attributes: [String: String?]
     public let claims: [String: JSONValue]?
     public let federatedIdentity: FederatedIdentity?
@@ -56,13 +56,13 @@ public nonisolated struct AuthenticatedUser: Codable {
     }
 }
 
-public nonisolated enum CodeDeliveryDetailsDeliveryMedium: String, Codable {
+public nonisolated enum CodeDeliveryDetailsDeliveryMedium: String, Codable, Sendable {
     case sms = "SMS"
     case email = "EMAIL"
     case phoneNumber = "PHONE_NUMBER"
 }
 
-public nonisolated struct CodeDeliveryDetails: Codable {
+public nonisolated struct CodeDeliveryDetails: Codable, Sendable {
     public let attributeName: String
     public let deliveryMedium: CodeDeliveryDetailsDeliveryMedium
     public let destination: String
@@ -74,7 +74,7 @@ public nonisolated struct CodeDeliveryDetails: Codable {
     }
 }
 
-public nonisolated struct FederatedIdentity: Codable {
+public nonisolated struct FederatedIdentity: Codable, Sendable {
     public let providerId: String
     public let sub: String
 

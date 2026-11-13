@@ -71,7 +71,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoPrimitive {
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case value_Variant0(String)
             case value_Variant1(Int)
             case value_Variant2(Double)
@@ -121,7 +121,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoCollection {
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case value_Variant0([String])
             case value_Variant1([String: Int])
 
@@ -155,7 +155,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoShape {
 
-        public struct Value_Variant1: Codable {
+        public struct Value_Variant1: Codable, Sendable {
             public let label: String
             public let tags: [String]?
 
@@ -176,7 +176,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case point(Point)
             case value_Variant1(Value_Variant1)
             case value_Variant2([Point])
@@ -224,7 +224,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoLiteral {
 
-        public struct Value_Variant4: Codable {
+        public struct Value_Variant4: Codable, Sendable {
             public let size: Double
 
             public init(size: Double) {
@@ -232,12 +232,12 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Value_Variant3: String, Codable {
+        public enum Value_Variant3: String, Codable, Sendable {
             case small
             case large
         }
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case value_Variant0
             case value_Variant1
             case value_Variant2
@@ -291,7 +291,7 @@ public final nonisolated class Api: Sendable {
             private enum EmptyKey: CodingKey {}
         }
 
-        public struct Result_Variant4: Codable {
+        public struct Result_Variant4: Codable, Sendable {
             public let size: Double
 
             public init(size: Double) {
@@ -299,12 +299,12 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result_Variant3: String, Codable {
+        public enum Result_Variant3: String, Codable, Sendable {
             case small
             case large
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case result_Variant0
             case result_Variant1
             case result_Variant2
@@ -361,7 +361,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoTagged {
 
-        public struct Circle: Codable {
+        public struct Circle: Codable, Sendable {
             public let radius: Double
 
             public init(radius: Double) {
@@ -369,7 +369,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Square: Codable {
+        public struct Square: Codable, Sendable {
             public let side: Double
 
             public init(side: Double) {
@@ -377,7 +377,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case value_Variant0(String)
             case circle(Circle)
             case square(Square)
@@ -421,7 +421,7 @@ public final nonisolated class Api: Sendable {
 
     public enum EchoMoment {
 
-        public enum Value: Codable {
+        public enum Value: Codable, Sendable {
             case value_Variant0(Date)
             case value_Variant1(Int)
 
@@ -455,7 +455,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetFile {
 
-        public struct Result_Variant1: Codable {
+        public struct Result_Variant1: Codable, Sendable {
             public let reason: String
 
             public init(reason: String) {
@@ -463,7 +463,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case result_Variant0(FileDownloadHandle)
             case result_Variant1(Result_Variant1)
 

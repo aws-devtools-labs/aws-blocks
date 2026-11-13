@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Cart: Codable {
+public nonisolated struct Cart: Codable, Sendable {
     public let id: String
     public let item: Item
     public let items: [Items]
@@ -16,7 +16,7 @@ public nonisolated struct Cart: Codable {
         self.tagsValue = tagsValue
     }
 
-    public nonisolated struct Item: Codable {
+    public nonisolated struct Item: Codable, Sendable {
         public let sku: String
 
         public init(sku: String) {
@@ -24,7 +24,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct Items: Codable {
+    public nonisolated struct Items: Codable, Sendable {
         public let qty: Double
         public let sku: String
 
@@ -34,7 +34,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct TagsValue_2: Codable {
+    public nonisolated struct TagsValue_2: Codable, Sendable {
         public let label: String
 
         public init(label: String) {
@@ -42,7 +42,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct TagsValue: Codable {
+    public nonisolated struct TagsValue: Codable, Sendable {
         public let weight: Double
 
         public init(weight: Double) {
@@ -51,17 +51,17 @@ public nonisolated struct Cart: Codable {
     }
 }
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum Kind: String, Codable, Sendable {
     case x
     case y
 }
 
-public nonisolated enum OrderStatus: String, Codable {
+public nonisolated enum OrderStatus: String, Codable, Sendable {
     case pending
     case shipped
 }
 
-public nonisolated struct Order: Codable {
+public nonisolated struct Order: Codable, Sendable {
     public let status: OrderStatus
 
     public init(status: OrderStatus) {
@@ -69,17 +69,17 @@ public nonisolated struct Order: Codable {
     }
 }
 
-public nonisolated enum TicketKind: String, Codable {
+public nonisolated enum TicketKind: String, Codable, Sendable {
     case bug
     case task
 }
 
-public nonisolated enum TicketKinds: String, Codable {
+public nonisolated enum TicketKinds: String, Codable, Sendable {
     case urgent
     case later
 }
 
-public nonisolated struct Text: Codable {
+public nonisolated struct Text: Codable, Sendable {
     public let body: String
 
     public init(body: String) {
@@ -87,7 +87,7 @@ public nonisolated struct Text: Codable {
     }
 }
 
-public nonisolated struct Count: Codable {
+public nonisolated struct Count: Codable, Sendable {
     public let total: Double
 
     public init(total: Double) {
@@ -95,7 +95,7 @@ public nonisolated struct Count: Codable {
     }
 }
 
-public nonisolated enum TicketPayload: Codable {
+public nonisolated enum TicketPayload: Codable, Sendable {
     case text(Text)
     case count(Count)
 
@@ -127,7 +127,7 @@ public nonisolated enum TicketPayload: Codable {
     }
 }
 
-public nonisolated struct Plain: Codable {
+public nonisolated struct Plain: Codable, Sendable {
     public let raw: String
 
     public init(raw: String) {
@@ -135,7 +135,7 @@ public nonisolated struct Plain: Codable {
     }
 }
 
-public nonisolated struct Rich: Codable {
+public nonisolated struct Rich: Codable, Sendable {
     public let html: String
 
     public init(html: String) {
@@ -143,7 +143,7 @@ public nonisolated struct Rich: Codable {
     }
 }
 
-public nonisolated enum TicketPayloads: Codable {
+public nonisolated enum TicketPayloads: Codable, Sendable {
     case plain(Plain)
     case rich(Rich)
 
@@ -175,12 +175,12 @@ public nonisolated enum TicketPayloads: Codable {
     }
 }
 
-public nonisolated enum TicketStatus: String, Codable {
+public nonisolated enum TicketStatus: String, Codable, Sendable {
     case open
     case closed
 }
 
-public nonisolated struct Ticket: Codable {
+public nonisolated struct Ticket: Codable, Sendable {
     public let kind: TicketKind
     public let kinds: [TicketKinds]
     public let payload: TicketPayload
