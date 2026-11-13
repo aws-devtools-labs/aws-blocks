@@ -1,5 +1,5 @@
 {
-	"$comment": "Recorded by `upgrade-in-place.ts --dry-run` (cdk synth under --conditions=cdk, suffix upgrade-dryrun), trimmed to the auth block and BlocksSecretsBulk.",
+	"$comment": "Recorded by `upgrade-in-place.ts --dry-run` (cdk synth under --conditions=cdk, suffix upgrade-dryrun), trimmed to the auth block and BlocksSecretsBulk. The session store table (child id `session-store`) was edited by hand to the logical id, path, name, key attribute and TTL attribute that this revision synthesizes; it was not recorded again.",
 	"Resources": {
 		"upgradeauthpool556377DE": {
 			"Type": "AWS::Cognito::UserPool",
@@ -83,12 +83,12 @@
 				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/group-admins"
 			}
 		},
-		"upgradeauthsessionstable29328177": {
+		"upgradeauthsessionstoretableC85094EE": {
 			"Type": "AWS::DynamoDB::Table",
 			"Properties": {
 				"AttributeDefinitions": [
 					{
-						"AttributeName": "pk",
+						"AttributeName": "_bkv_pk",
 						"AttributeType": "S"
 					}
 				],
@@ -96,11 +96,11 @@
 				"DeletionProtectionEnabled": false,
 				"KeySchema": [
 					{
-						"AttributeName": "pk",
+						"AttributeName": "_bkv_pk",
 						"KeyType": "HASH"
 					}
 				],
-				"TableName": "bb-test-upgrade-dryrun-upgrade-auth-sessions",
+				"TableName": "bb-test-upgrade-dryrun-upgrade-auth-session-store",
 				"Tags": [
 					{
 						"Key": "blocks:deploy-mode",
@@ -116,14 +116,14 @@
 					}
 				],
 				"TimeToLiveSpecification": {
-					"AttributeName": "ttl",
+					"AttributeName": "_bkv_ttl",
 					"Enabled": true
 				}
 			},
 			"UpdateReplacePolicy": "Delete",
 			"DeletionPolicy": "Delete",
 			"Metadata": {
-				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/sessions/table/Resource"
+				"aws:cdk:path": "bb-test-upgrade-dryrun/upgrade/auth/session-store/table/Resource"
 			}
 		},
 		"BlocksSecretsBulk": {

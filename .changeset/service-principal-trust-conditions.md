@@ -2,7 +2,7 @@
 "@aws-blocks/core": minor
 "@aws-blocks/hosting": patch
 "@aws-blocks/bb-knowledge-base": patch
-"@aws-blocks/bb-distributed-table": patch
+"@aws-blocks/bb-kv-store": patch
 "@aws-blocks/bb-container-compute": patch
 "@aws-blocks/bb-database": patch
 "@aws-blocks/bb-auth": patch
@@ -18,7 +18,7 @@ fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal t
 The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
 
 - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
-- The waiter state machine roles of the `DistributedTable` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
+- The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
 - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
 - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
 - The `@aws-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.

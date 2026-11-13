@@ -3,7 +3,7 @@
 Design document for the Agent Building Block. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-agent`
-**Type:** Composite (uses DistributedTable, Realtime, FileBucket internally) + an AgentCore Runtime
+**Type:** Composite (uses KVStore, Realtime, FileBucket internally) + an AgentCore Runtime
 **AWS Services:** Bedrock AgentCore Runtime, Bedrock, DynamoDB, S3, API Gateway (WebSocket)
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)
 
@@ -16,7 +16,7 @@ managed) — not the shared Blocks request handler — and streams chunks to the
 | Internal BB / resource | Purpose | Created when |
 |-------------|---------|-------------|
 | **FileBucket** | Session persistence (Strands SessionManager) | Always |
-| **DistributedTable** | Frontend message history | `inferenceOnly: false` |
+| **KVStore** | Frontend message history | `inferenceOnly: false` |
 | **Realtime** | Streaming chunks to caller | Always |
 | **AgentCore Runtime** | Hosts the streaming loop (co-bundled backend + `serve()`) | Always (AWS) |
 
@@ -27,7 +27,7 @@ stream()/resume() → InvokeAgentRuntime (returns immediately)
      async task and returns an ack immediately
                 ↓
          runAgent() → Strands agent loop → publishes chunks to Realtime (as the shared execution role)
-                                         → persists messages to DistributedTable
+                                         → persists messages to KVStore
                                          → SessionManager saves state to FileBucket
 ```
 
@@ -86,7 +86,7 @@ The conversation record in the `convos` table is keyed by `{ userId, conversatio
 
 **The caller's identity travels in an options object** (`getConversation(id, { userId, limit? })`, `getPendingInterrupts(conversationId, { userId })`, `getChannel(channelId, { userId })`), as `stream()`/`resume()` already take it, so later fields stay additive. No backward-compatible form exists: the pre-ownership calls carry no `userId`, so keeping them callable would either keep returning another user's data or silently change what they return. With persistence enabled, anything that is not an object with a non-empty string `userId` throws `InvalidUsage` instead.
 
-**The ownership read is strongly consistent** (`DistributedTable.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
+**The ownership read is strongly consistent** (`KVStore.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
 
 **Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, { userId })`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, and the runtime computes the same key. `inferenceOnly` agents keep no owner and publish on the bare `channelId`, as before, unless they set `sessionScope: 'user'` (below).
 
@@ -125,7 +125,7 @@ A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strand
 
 The CDK class provisions:
 - **FileBucket:** `${id}-sn` — session snapshot storage
-- **DistributedTable:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
+- **KVStore:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
 - **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
   harness. It runs **as the shared Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
@@ -151,7 +151,7 @@ handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered 
 every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
 from the shared execution role.
 
-> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`.
+> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`. The two `KVStore` children also take their options from one place in both layers: `conversationsTableOptions` and `messagesTableOptions` in `schemas.ts`.
 
 ## Model Providers
 

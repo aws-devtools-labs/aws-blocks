@@ -49,32 +49,31 @@ await files.write('key', content);
 const data = await files.read('key');
 ```
 
-### DistributedTable
-DynamoDB-like key-value storage with local SQLite mocking.
-
-```typescript
-import { DistributedTable } from '@aws-blocks/blocks';
-
-const table = new DistributedTable('app', 'data', {
-  partitionKey: 'userId',
-  sortKey: 'timestamp'
-});
-```
-
 ### KVStore
-Simple key-value storage for user-scoped data.
+Key-value and document storage backed by DynamoDB. With no options it is a string-keyed store; with a `schema` and a `key` it holds records that you list or query.
 
 ```typescript
 import { KVStore } from '@aws-blocks/blocks';
+import { z } from 'zod';
 
 const store = new KVStore(scope, 'settings');
+
+const events = new KVStore(scope, 'events', {
+  schema: z.object({ userId: z.string(), timestamp: z.number(), kind: z.string() }),
+  key: { partitionKey: 'userId', sortKey: 'timestamp' },
+});
 
 // Data methods run at request time, inside a handler — not at CDK synth time.
 await store.put(`user:${userId}:theme`, 'dark');
 const theme = await store.get(`user:${userId}:theme`);
+
+await events.put({ userId, timestamp: Date.now() }, { kind: 'sign-in' });
+for await (const { key, value } of events.query({ where: { userId: { equals: userId } }, order: 'desc', limit: 10 })) {
+  console.log(key.timestamp, value.kind);
+}
 ```
 
-See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, TTL, and conditional writes.
+See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, keys, indexes, TTL, and conditional writes.
 
 ### SQLTable
 Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.

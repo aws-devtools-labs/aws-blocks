@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * UPGRADE-IN-PLACE E2E — proves an existing `AuthCognito` deployment survives
- * switching to the unified `Auth` block: same user pool, same users, same
- * sessions table and HMAC secret, and signed-in sessions still valid.
+ * UPGRADE-IN-PLACE E2E — proves an existing `AuthCognito` deployment upgrades
+ * to the unified `Auth` block with one successful deploy: same user pool, same
+ * app client, same users and the same HMAC secret. The session store is a
+ * clean break: `Auth` keeps its sessions in a new table (`<fullId>-session-store`),
+ * the old `sessions` table leaves the stack, a session cookie from before the
+ * upgrade is answered as signed out (not as an error), and a fresh sign-in
+ * works.
  *
  * ## How to run
  *
@@ -47,25 +51,42 @@
  *    checkout. The live template must be `AuthCognito`'s (a user pool and no
  *    `Auth` immutability guard) and the new one `Auth`'s (the guard), so the
  *    proof can never pass by comparing `Auth` with itself. `cdk diff` against
- *    the live stack must show no replacement,
- *    removal or addition of the `UserPool` / `UserPoolClient` (or the sessions
- *    table / secret), and the live template must pass the continuity comparator.
+ *    the live stack must show no replacement, removal or addition of the
+ *    `UserPool` / `UserPoolClient` or the secret; it must show the old
+ *    `sessions` table removed and the `session-store` table added; and the
+ *    live template must pass the continuity comparator.
  * 4. `deploy()`s again — same suffix, no `destroy()` in between. The stack must
  *    reach `UPDATE_COMPLETE`; on a rollback the `UpdateUserPool` error is pulled
  *    from the stack events (what `cdk diff` cannot show).
- * 5. Asserts the physical ids are unchanged (a replaced pool or client gets a
- *    new id; a custom-named table or parameter cannot be replaced under the same
- *    name, and step 4 required `UPDATE_COMPLETE`), the seeded user still signs in
- *    (directly against Cognito, and through the `Auth` app with the same
- *    `userSub`), and the PRE-UPGRADE cookie still authenticates (`requireAuth` →
- *    same `userSub`), which proves the session secret's value and the sessions
- *    table's rows survived.
- * 6. `destroy()`s the stack in a `finally`.
+ * 5. Asserts:
+ *    - the pool id, the client id and the secret's parameter name are unchanged
+ *      (a replaced pool or client gets a new id). The secret is an SSM
+ *      parameter on both sides because the app deploys with
+ *      `BlocksPresets.sandbox`, whose `secretsStore` is `'ssm'`. Under
+ *      `'secrets-manager'` `Auth` keeps the secret in Secrets Manager; this
+ *      harness does not cover that move;
+ *    - the sessions are in a NEW physical table, named `…-session-store`;
+ *    - the old `sessions` table is no longer a resource of the stack, and the
+ *      stack events show it deleted. The app deploys with
+ *      `BlocksPresets.sandbox`, whose removal policy is `Delete`, so "deleted"
+ *      is the outcome that applies; under a `Retain` policy the table would
+ *      stay in the account, outside the stack;
+ *    - the seeded user still signs in directly against Cognito;
+ *    - the PRE-UPGRADE cookie no longer authenticates: `requireAuth` answers
+ *      401 `NotAuthenticatedException` (the signed-out answer, not a 5xx), and
+ *      the response clears the cookie;
+ *    - a fresh sign-in through the `Auth` app works, returns the same
+ *      `userSub`, and its cookie authenticates.
+ * 6. `destroy()`s the stack in a `finally`. Nothing else is left to clean up:
+ *    the update itself deleted the old table (asserted in step 5). If the
+ *    events show the table retained instead, the harness fails and prints the
+ *    table's name and the command that deletes it; it has no DynamoDB
+ *    permission of its own.
  *
  * The dry-run does everything except touch AWS: it builds both revisions,
  * synthesizes both templates under `--conditions=cdk`, checks the pair really is
  * `AuthCognito` → `Auth`, runs the continuity comparator, and runs `cdk diff --template <before>` (offline) through the
- * same replacement parser as step 3. Its child processes get no credentials.
+ * same parser and the same session-store check as step 3. Its child processes get no credentials.
  *
  * ## AWS actions (real mode)
  *
@@ -101,6 +122,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	type CfnTemplate,
 	type ContinuityResult,
+	clearsCookie,
 	compareContinuity,
 	compareDeployedIdentity,
 	type DeployedIdentity,
@@ -121,7 +143,9 @@ import {
 	protectedResources,
 	type RpcOutcome,
 	realModeRefusal,
+	removalOutcome,
 	type SessionCookie,
+	sessionStoreDiffErrors,
 	stackNameFor,
 	USAGE,
 	UsageError,
@@ -441,7 +465,11 @@ function printContinuity(result: ContinuityResult): void {
 	for (const n of result.notes) console.log(`  note: ${n}`);
 }
 
-/** Run the step-3 assertions on a before/after template pair and a `cdk diff` output. */
+/**
+ * Run the step-3 assertions on a before/after template pair and a `cdk diff`
+ * output: the pool, the client and the secret are kept; the sessions table is
+ * replaced by the session store.
+ */
 function assertNoReplacement(before: CfnTemplate, after: CfnTemplate, diffText: string): void {
 	const revisionErrors = upgradeRevisionErrors(before, after);
 	must(
@@ -452,32 +480,48 @@ function assertNoReplacement(before: CfnTemplate, after: CfnTemplate, diffText: 
 	const continuity = compareContinuity(before, after);
 	printContinuity(continuity);
 	const continuityOk = record(
-		'template continuity: pool, client, sessions and secret keep logical id, type and physical name; ' +
-			'no service-immutable pool property changes',
+		'template continuity: pool, client and secret keep logical id, type and physical name; no ' +
+			'service-immutable pool property changes; the sessions table is gone and one session-store table is new',
 		continuity.errors.length === 0,
 		continuity.errors.join('\n'),
 	);
 	const changes = parseCdkDiff(diffText);
-	const protectedIds = continuity.before.filter((r) => r.role === 'sessions' || r.role === 'session-secret');
+	const protectedIds = continuity.before.filter((r) => r.role === 'session-secret');
 	const violations = findDiffViolations(changes, {
 		types: DIFF_PROTECTED_TYPES,
 		logicalIds: protectedIds.map((r) => r.logicalId),
 	});
+	const sessionIds = [continuity.legacySessions?.logicalId, continuity.sessionStore?.logicalId];
 	const touched = changes.filter(
 		(c) =>
 			(DIFF_PROTECTED_TYPES as readonly string[]).includes(c.type) ||
-			protectedIds.some((r) => r.logicalId === c.logicalId),
+			protectedIds.some((r) => r.logicalId === c.logicalId) ||
+			sessionIds.includes(c.logicalId),
 	);
-	console.log(`  cdk diff: ${changes.length} changed resource(s); on protected resources:`);
+	console.log(`  cdk diff: ${changes.length} changed resource(s); on protected resources and the session tables:`);
 	for (const c of touched)
 		console.log(`    ${c.line}${c.replacingProperties.length ? ` [${c.replacingProperties.join(', ')}]` : ''}`);
 	if (touched.length === 0) console.log('    (none)');
 	const diffOk = record(
-		'cdk diff: no replacement, removal or addition of UserPool / UserPoolClient / sessions / secret',
+		'cdk diff: no replacement, removal or addition of UserPool / UserPoolClient / secret',
 		violations.length === 0,
 		violations.join('\n'),
 	);
-	if (!continuityOk || !diffOk) throw new HarnessFailure('step 3: the upgrade would replace a protected resource');
+	// Only meaningful when the templates have both tables; the continuity check reports it when they do not.
+	const storeErrors =
+		continuity.legacySessions && continuity.sessionStore
+			? sessionStoreDiffErrors(changes, continuity.legacySessions.logicalId, continuity.sessionStore.logicalId)
+			: ['the templates do not have the old sessions table and exactly one session-store table (see above)'];
+	const storeOk = record(
+		'cdk diff: the old sessions table leaves the stack and the session-store table is added',
+		storeErrors.length === 0,
+		storeErrors.join('\n'),
+	);
+	if (!continuityOk || !diffOk || !storeOk) {
+		throw new HarnessFailure(
+			'step 3: the upgrade would replace a protected resource, or does not replace the sessions table as planned',
+		);
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,7 +548,7 @@ async function runDryRun(opts: HarnessOptions): Promise<number> {
 		const after = await synth('synth Auth', afterApp, PR_ROOT, opts.suffix, synthEnv);
 		console.log(`  before: ${before.path}\n  after:  ${after.path}`);
 
-		heading('Step 3 offline: no replacement (template continuity + cdk diff --template)');
+		heading('Step 3 offline: pool, client and secret kept; the session store is a new table (template continuity + cdk diff --template)');
 		const diffText = await cdkDiff(afterApp, opts.suffix, synthEnv, before.path);
 		assertNoReplacement(before.template, after.template, diffText);
 	} catch (error) {
@@ -645,10 +689,12 @@ async function createAws(region: string) {
 			};
 			const ids = await physicalIds(stackName);
 			const secret = byRole('session-secret').physicalName;
+			// `Auth`'s session-store table when the template has it, else the sessions table of the earlier release.
+			const sessionsTable = prot.find((p) => p.role === 'session-store') ?? byRole('sessions');
 			return {
 				userPoolId: ids[byRole('pool').logicalId],
 				clientId: ids[byRole('client').logicalId],
-				sessionsTableName: ids[byRole('sessions').logicalId],
+				sessionsTableName: ids[sessionsTable.logicalId],
 				sessionSecretParameterName: Array.isArray(secret) ? secret[0] : String(secret),
 			};
 		},
@@ -703,7 +749,7 @@ function describeOutcome(call: RpcCall): string {
 		code === 501
 			? '\n(501: the Auth runtime is not implemented at this revision — rerun with --skip-runtime-checks for the CloudFormation half)'
 			: code === 401
-				? '\n(401: the session is not recognized — signed-in sessions did NOT survive the upgrade)'
+				? '\n(401: the session is not recognized)'
 				: '';
 	return `HTTP ${call.httpStatus}, RPC error ${code} ${name ?? ''}: ${message}${hint}`;
 }
@@ -714,17 +760,19 @@ function resultField(call: RpcCall, field: string): unknown {
 		: undefined;
 }
 
-// The drivers deploy with BLOCKS_STAGE=production, and each stage writes its own CDK outputs
-// document (core's `OUTPUTS_FILE`), so read the production one, not the sandbox's.
-const OUTPUTS_DOC = join('.blocks-sandbox', 'outputs.production.json');
+// The drivers deploy with BLOCKS_STAGE=production. The PR revision writes one CDK outputs document
+// for each stage (core's `OUTPUTS_FILE`), so its production deploy writes `outputs.production.json`.
+// The base release wrote every deploy to `outputs.json`. Read the first one that exists.
+const OUTPUTS_DOCS = [join('.blocks-sandbox', 'outputs.production.json'), join('.blocks-sandbox', 'outputs.json')];
 
 function readApiUrl(appDir: string, stackName: string): string {
-	const outputs = JSON.parse(readFileSync(join(appDir, OUTPUTS_DOC), 'utf8')) as Record<
-		string,
-		Record<string, string>
-	>;
+	const doc = OUTPUTS_DOCS.find((candidate) => existsSync(join(appDir, candidate)));
+	if (!doc) {
+		throw new HarnessFailure(`no CDK outputs document in ${appDir} (looked for ${OUTPUTS_DOCS.join(', ')})`);
+	}
+	const outputs = JSON.parse(readFileSync(join(appDir, doc), 'utf8')) as Record<string, Record<string, string>>;
 	const url = outputs[stackName]?.ApiUrl;
-	if (!url) throw new HarnessFailure(`no ApiUrl output for ${stackName} in ${appDir}/${OUTPUTS_DOC}`);
+	if (!url) throw new HarnessFailure(`no ApiUrl output for ${stackName} in ${appDir}/${doc}`);
 	return url;
 }
 
@@ -741,6 +789,25 @@ function orphanBanner(stackName: string, region: string, account: string, status
 			`██    status:  ${status ?? 'unknown'}`,
 			'██  Delete it now:',
 			`██    aws cloudformation delete-stack --stack-name ${stackName} --region ${region}`,
+			bar,
+			'',
+		].join('\n'),
+	);
+}
+
+/** The old sessions table was retained instead of deleted: name it and how to delete it. The harness cannot (no DynamoDB grant). */
+function retainedTableBanner(tableName: string, region: string, account: string): void {
+	const bar = '█'.repeat(78);
+	console.error(
+		[
+			'',
+			bar,
+			'██  LEFT BEHIND — the old sessions table was retained, not deleted, by the update.',
+			`██    table:   ${tableName}`,
+			`██    region:  ${region}`,
+			`██    account: ${account}`,
+			'██  Delete it now:',
+			`██    aws dynamodb delete-table --table-name ${tableName} --region ${region}`,
 			bar,
 			'',
 		].join('\n'),
@@ -888,7 +955,7 @@ async function runReal(opts: HarnessOptions): Promise<number> {
 		);
 
 		// ── Step 3 ──────────────────────────────────────────────────────────
-		heading('Step 3: switch to Auth; cdk diff against the live stack shows no replacement');
+		heading('Step 3: switch to Auth; cdk diff against the live stack keeps pool, client and secret, and replaces the sessions table');
 		const after = await synth('synth Auth', afterApp, PR_ROOT, opts.suffix, env);
 		const diffText = await cdkDiff(afterApp, opts.suffix, env);
 		assertNoReplacement(liveBefore, after.template, diffText);
@@ -916,24 +983,55 @@ async function runReal(opts: HarnessOptions): Promise<number> {
 		const apiAfter = readApiUrl(afterApp, stackName);
 
 		// ── Step 5 ──────────────────────────────────────────────────────────
-		heading('Step 5: identity, users and sessions survived');
+		heading('Step 5: pool, client, secret and users kept; a new session store; the old cookie is signed out');
 		const identityAfter = await aws.readIdentity(stackName, await aws.liveTemplate(stackName));
 		const identityDiff = compareDeployedIdentity(identityBefore, identityAfter);
 		record(
-			'pool id, client id, sessions table and secret parameter names are unchanged (CloudFormation physical ids)',
+			'pool id, client id and secret parameter name are unchanged; the sessions are in a new table named ' +
+				'…-session-store (CloudFormation physical ids)',
 			identityDiff.length === 0,
 			identityDiff.join('\n'),
 		);
+		console.log(`  sessions table: ${identityBefore.sessionsTableName} → ${identityAfter.sessionsTableName}`);
+		const legacyTable = prot.find((r) => r.role === 'sessions');
+		const idsAfter = await aws.physicalIds(stackName);
+		record(
+			'the old sessions table is no longer a resource of the stack',
+			legacyTable !== undefined && !(legacyTable.logicalId in idsAfter),
+			legacyTable ? `logical id ${legacyTable.logicalId}` : 'the pre-upgrade template had no sessions table',
+		);
+		// The app deploys with BlocksPresets.sandbox (removal policy Delete), so the update deletes the
+		// old table. Under a Retain policy the events would say DELETE_SKIPPED and the table would stay
+		// in the account; that is not the case this app is in, so it fails here and names the table.
+		const removal = legacyTable
+			? removalOutcome(await aws.stackEvents(stackName), legacyTable.logicalId)
+			: 'unknown';
+		record(
+			'the update deleted the old sessions table (removal policy Delete), so the run leaves no table behind',
+			removal === 'deleted',
+			`stack events for the old table: ${removal}`,
+		);
+		if (removal === 'retained') retainedTableBanner(identityBefore.sessionsTableName, region, account);
 		const direct = await aws.passwordSignIn(identityAfter.clientId, username, password);
 		record('seeded user still signs in against Cognito (USER_PASSWORD_AUTH)', direct === null, direct ?? undefined);
 		if (opts.skipRuntimeChecks) {
 			console.log('  --skip-runtime-checks: not checking the pre-upgrade cookie or app sign-in through Auth.');
 		} else {
 			const whoAfter = await rpc(apiAfter, 'whoAmI', [], sessionCookie);
+			const signedOut =
+				!whoAfter.outcome.ok &&
+				whoAfter.outcome.code === 401 &&
+				whoAfter.outcome.name === 'NotAuthenticatedException';
 			record(
-				'the PRE-UPGRADE cookie is still valid (requireAuth → same userSub): same session secret and sessions',
-				resultField(whoAfter, 'userSub') === userSub,
+				'the PRE-UPGRADE cookie no longer authenticates: requireAuth answers 401 NotAuthenticatedException ' +
+					'(the signed-out answer), not a server error',
+				signedOut && whoAfter.httpStatus < 500,
 				describeOutcome(whoAfter),
+			);
+			record(
+				'the signed-out answer clears the pre-upgrade cookie',
+				clearsCookie(whoAfter.setCookies, sessionCookie.name),
+				`Set-Cookie: ${JSON.stringify(whoAfter.setCookies)}`,
 			);
 			const signInAfter = await rpc(apiAfter, 'signIn', [username, password]);
 			record(
@@ -941,6 +1039,20 @@ async function runReal(opts: HarnessOptions): Promise<number> {
 				resultField(signInAfter, 'status') === 'signedIn' && resultField(signInAfter, 'userSub') === userSub,
 				describeOutcome(signInAfter),
 			);
+			const newCookie = extractSessionCookie(signInAfter.setCookies);
+			record(
+				'the fresh sign-in set a session cookie under the same name',
+				newCookie?.name === sessionCookie.name,
+				`Set-Cookie: ${JSON.stringify(signInAfter.setCookies)}`,
+			);
+			if (newCookie) {
+				const whoNew = await rpc(apiAfter, 'whoAmI', [], newCookie);
+				record(
+					'the new cookie authenticates (requireAuth → same userSub): the session is in the new store',
+					resultField(whoNew, 'userSub') === userSub,
+					describeOutcome(whoNew),
+				);
+			}
 		}
 	} catch (error) {
 		failed = true;

@@ -9,7 +9,11 @@
  * Fixtures (`fixtures/`):
  * - `template.auth-cognito.json` / `template.auth.json` — recorded by the
  *   dry-run (`cdk synth` under `--conditions=cdk`), trimmed to the auth block.
- * - `cdk-diff.clean.txt` — recorded `cdk diff --template` output, AuthCognito → Auth.
+ *   In `template.auth.json` the session-store table was then edited by hand to
+ *   what this revision synthesizes (child id `session-store`).
+ * - `cdk-diff.clean.txt` — recorded `cdk diff --template` output, AuthCognito → Auth,
+ *   plus the two lines for the session tables (`[-]` the old one, `[+]` the new
+ *   one), added by hand in the form `cdk diff` prints.
  * - `cdk-diff.pool-renamed.txt` — recorded the same way with bb-auth's `pool`
  *   child id deliberately renamed to `userPool` in its built output.
  * - `stack-events.*.json` — DescribeStackEvents response shape, constructed
@@ -25,6 +29,7 @@ import {
 	AUTH_POOL_GUARD_TYPE,
 	type CfnTemplate,
 	classifyStackStatus,
+	clearsCookie,
 	compareContinuity,
 	compareDeployedIdentity,
 	DEFAULT_BASE_REF,
@@ -47,7 +52,9 @@ import {
 	parseHarnessArgs,
 	protectedResources,
 	realModeRefusal,
+	removalOutcome,
 	type StackEventLike,
+	sessionStoreDiffErrors,
 	stableStringify,
 	stackNameFor,
 	UNAUTHENTICATED_AWS_ACTIONS,
@@ -64,7 +71,10 @@ const events = (name: string): StackEventLike[] => fixtureJson<{ StackEvents: St
 
 const POOL = 'upgradeauthpool556377DE';
 const CLIENT = 'upgradeauthclientDFB740B2';
+/** The sessions table of the earlier release (child id `sessions`). */
 const TABLE = 'upgradeauthsessionstable29328177';
+/** `Auth`'s session-store table (child id `session-store`). */
+const STORE = 'upgradeauthsessionstoretableC85094EE';
 const STACK = 'bb-test-upgrade-123-1';
 
 function renameLogicalId(t: CfnTemplate, from: string, to: string, newPath?: string): CfnTemplate {
@@ -206,8 +216,9 @@ describe('upgradeRevisionErrors — the pair must be AuthCognito → Auth, never
 	test('Auth on both sides (a post-cutover base revision) is refused — it would pass vacuously otherwise', () => {
 		const before = withGuard(template('auth'));
 		const after = withGuard(template('auth'));
-		// The identity comparison alone cannot tell: Auth reproduces AuthCognito's identity exactly.
-		assert.deepStrictEqual(compareContinuity(before, after).errors, []);
+		// The continuity check reports it too (the before side has no `sessions` table), but the
+		// revision check is the one that names the cause.
+		assert.match(compareContinuity(before, after).errors.join('\n'), /no 'sessions' resource/);
 		const errors = upgradeRevisionErrors(before, after);
 		assert.strictEqual(errors.length, 1);
 		assert.match(errors[0], /BEFORE template has Auth's immutability guard/);
@@ -318,6 +329,15 @@ describe('protectedResources', () => {
 		assert.deepStrictEqual(byRole['session-secret'], ['/bb-test-upgrade-dryrun-upgrade-auth-session-secret']);
 	});
 
+	test('the Auth template has the session-store table, and no sessions table', () => {
+		assert.deepStrictEqual(
+			protectedResources(template('auth'))
+				.filter((r) => r.type === 'AWS::DynamoDB::Table')
+				.map((r) => [r.role, r.logicalId, r.physicalName]),
+			[['session-store', STORE, 'bb-test-upgrade-dryrun-upgrade-auth-session-store']],
+		);
+	});
+
 	test('ignores resources outside the block path', () => {
 		assert.deepStrictEqual(
 			protectedResources(template('auth-cognito'), 'some/other-block').map((r) => r.role),
@@ -327,11 +347,21 @@ describe('protectedResources', () => {
 });
 
 describe('compareContinuity', () => {
-	test('recorded AuthCognito → Auth: continuity holds; the DeletionProtection change is a note', () => {
+	test('recorded AuthCognito → Auth: pool, client and secret are kept; the sessions table is replaced by the session store', () => {
 		const result = compareContinuity(template('auth-cognito'), template('auth'));
 		assert.deepStrictEqual(result.errors, []);
 		assert.ok(
 			result.notes.some((n) => n.includes(POOL) && n.includes('DeletionProtection')),
+			result.notes.join('\n'),
+		);
+		assert.strictEqual(result.legacySessions?.logicalId, TABLE);
+		assert.strictEqual(result.sessionStore?.logicalId, STORE);
+		assert.ok(
+			result.notes.some((n) => n.startsWith(`REMOVED sessions ${TABLE}`) && n.includes('DeletionPolicy Delete')),
+			result.notes.join('\n'),
+		);
+		assert.ok(
+			result.notes.some((n) => n.startsWith(`ADDED session-store ${STORE}`)),
 			result.notes.join('\n'),
 		);
 	});
@@ -354,12 +384,50 @@ describe('compareContinuity', () => {
 		);
 	});
 
-	test('a renamed sessions table or a removed secret resource is an error', () => {
-		const renamed = template('auth');
-		const table = renamed.Resources[TABLE];
-		table.Properties = { ...table.Properties, TableName: 'something-else' };
-		assert.match(compareContinuity(template('auth-cognito'), renamed).errors.join('\n'), /RENAMED sessions/);
+	test('the session store: a sessions table that stays, no store, two stores, or a store with the old name is an error', () => {
+		const kept = template('auth');
+		kept.Resources[TABLE] = template('auth-cognito').Resources[TABLE];
+		assert.match(
+			compareContinuity(template('auth-cognito'), kept).errors.join('\n'),
+			/KEPT sessions .* the deploy would fail/,
+		);
 
+		const noStore = template('auth');
+		delete noStore.Resources[STORE];
+		assert.match(
+			compareContinuity(template('auth-cognito'), noStore).errors.join('\n'),
+			/has 0 session-store table\(s\) .* expected exactly one/,
+		);
+
+		const twoStores = template('auth');
+		twoStores.Resources.upgradeauthsessionstoretableSECOND = structuredClone(twoStores.Resources[STORE]);
+		assert.match(
+			compareContinuity(template('auth-cognito'), twoStores).errors.join('\n'),
+			/has 2 session-store table\(s\)/,
+		);
+
+		const oldName = template('auth');
+		oldName.Resources[STORE].Properties = {
+			...oldName.Resources[STORE].Properties,
+			TableName: 'bb-test-upgrade-dryrun-upgrade-auth-sessions',
+		};
+		const oldNameErrors = compareContinuity(template('auth-cognito'), oldName).errors.join('\n');
+		assert.match(oldNameErrors, /has the name of the old sessions table/);
+		assert.match(oldNameErrors, /does not end with '-session-store'/);
+
+		const underOldChildId = renameLogicalId(
+			template('auth'),
+			STORE,
+			'upgradeauthsessionstableNEW',
+			'bb-test-upgrade-dryrun/upgrade/auth/sessions/table/Resource',
+		);
+		assert.match(
+			compareContinuity(template('auth-cognito'), underOldChildId).errors.join('\n'),
+			/ADDED sessions upgradeauthsessionstableNEW/,
+		);
+	});
+
+	test('a removed or renamed secret resource is an error', () => {
 		const noSecret = template('auth');
 		delete noSecret.Resources.BlocksSecretsBulk;
 		assert.match(compareContinuity(template('auth-cognito'), noSecret).errors.join('\n'), /REMOVED session-secret/);
@@ -381,11 +449,11 @@ describe('compareContinuity', () => {
 		assert.match(compareContinuity(template('auth-cognito'), renamed).errors.join('\n'), /RENAMED pool/);
 
 		const retyped = template('auth');
-		retyped.Resources[TABLE].Type = 'AWS::DynamoDB::GlobalTable';
-		assert.match(compareContinuity(template('auth-cognito'), retyped).errors.join('\n'), /TYPE CHANGED sessions/);
+		retyped.Resources[CLIENT].Type = 'AWS::Cognito::UserPoolResourceServer';
+		assert.match(compareContinuity(template('auth-cognito'), retyped).errors.join('\n'), /TYPE CHANGED client/);
 	});
 
-	test('replace-only properties: client GenerateSecret / UserPoolId, table KeySchema', () => {
+	test('replace-only properties: client GenerateSecret / UserPoolId', () => {
 		const secret = template('auth');
 		secret.Resources[CLIENT].Properties = { ...secret.Resources[CLIENT].Properties, GenerateSecret: true };
 		assert.match(
@@ -399,13 +467,6 @@ describe('compareContinuity', () => {
 			UserPoolId: { Ref: 'X' },
 		};
 		assert.match(compareContinuity(template('auth-cognito'), repointed).errors.join('\n'), /client .* UserPoolId/);
-
-		const rekeyed = template('auth');
-		rekeyed.Resources[TABLE].Properties = {
-			...rekeyed.Resources[TABLE].Properties,
-			KeySchema: [{ AttributeName: 'id', KeyType: 'HASH' }],
-		};
-		assert.match(compareContinuity(template('auth-cognito'), rekeyed).errors.join('\n'), /KeySchema/);
 	});
 
 	test('service-immutable pool properties (the rollback-on-update trap) are errors', () => {
@@ -425,12 +486,13 @@ describe('compareContinuity', () => {
 	});
 
 	test('schema: a changed or new required attribute is an error; a new optional one is not', () => {
-		const withSchema = (schema: unknown[]) => {
-			const t = template('auth-cognito');
+		// BEFORE is the AuthCognito template, AFTER the Auth template, each with the given pool schema.
+		const withSchema = (schema: unknown[], side: 'auth-cognito' | 'auth' = 'auth') => {
+			const t = template(side);
 			t.Resources[POOL].Properties = { ...t.Resources[POOL].Properties, Schema: schema };
 			return t;
 		};
-		const before = withSchema([{ Name: 'tenant', AttributeDataType: 'String', Mutable: true }]);
+		const before = withSchema([{ Name: 'tenant', AttributeDataType: 'String', Mutable: true }], 'auth-cognito');
 		const changed = withSchema([{ Name: 'tenant', AttributeDataType: 'Number', Mutable: true }]);
 		assert.match(compareContinuity(before, changed).errors.join('\n'), /schema attribute 'tenant'/);
 		const removed = withSchema([]);
@@ -485,20 +547,37 @@ describe('compareContinuity', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('parseCdkDiff + findDiffViolations', () => {
-	const protection = { types: DIFF_PROTECTED_TYPES, logicalIds: [TABLE, 'BlocksSecretsBulk'] };
+	const protection = { types: DIFF_PROTECTED_TYPES, logicalIds: ['BlocksSecretsBulk'] };
 
-	test('recorded clean AuthCognito → Auth diff: the pool is updated in place, nothing is replaced', () => {
+	test('recorded clean AuthCognito → Auth diff: the pool is updated in place, nothing protected is replaced, and the sessions table is replaced by the session store', () => {
 		const changes = parseCdkDiff(fixtureText('cdk-diff.clean.txt'));
 		assert.deepStrictEqual(
 			changes.map((c) => [c.action, c.type, c.logicalId, c.impact]),
 			[
+				['remove', 'AWS::DynamoDB::Table', TABLE, 'destroy'],
+				['add', 'AWS::DynamoDB::Table', STORE, 'none'],
 				['update', 'AWS::IAM::Policy', 'BlocksRoleDefaultPolicyF2F3EE2E', 'none'],
 				['update', 'AWS::Lambda::Function', 'DefaultComputeHandlerF1C2C112', 'none'],
 				['update', 'AWS::Cognito::UserPool', POOL, 'none'],
 			],
 		);
-		assert.strictEqual(changes[2].path, 'upgrade/auth/pool');
+		assert.strictEqual(changes[4].path, 'upgrade/auth/pool');
 		assert.deepStrictEqual(findDiffViolations(changes, protection), []);
+		assert.deepStrictEqual(sessionStoreDiffErrors(changes, TABLE, STORE), []);
+	});
+
+	test('sessionStoreDiffErrors: a retained table leaves as orphan; a diff with no removal is reported', () => {
+		const orphan = parseCdkDiff(
+			[
+				`[-] AWS::DynamoDB::Table upgrade/auth/sessions/table ${TABLE} orphan`,
+				`[+] AWS::DynamoDB::Table upgrade/auth/session-store/table ${STORE}`,
+			].join('\n'),
+		);
+		assert.deepStrictEqual(sessionStoreDiffErrors(orphan, TABLE, STORE), []);
+		const none = sessionStoreDiffErrors([], TABLE, STORE);
+		assert.strictEqual(none.length, 2, none.join('\n'));
+		assert.match(none[0], /no change for the old sessions table/);
+		assert.match(none[1], /does not add the session-store table/);
 	});
 
 	test('recorded diff with the pool child id renamed: DELETE + CREATE of the pool, client REPLACE', () => {
@@ -546,8 +625,12 @@ describe('parseCdkDiff + findDiffViolations', () => {
 		const v = findDiffViolations(changes, protection);
 		assert.match(v[0], /^would REPLACE AWS::Cognito::UserPoolClient/);
 		assert.match(v[1], /^would ORPHAN/);
-		// The sessions table is protected by logical id even though its type is not.
-		assert.match(v[2], /^would REPLACE AWS::DynamoDB::Table .* via KeySchema, TableName/);
+		assert.strictEqual(v.length, 2);
+		// A sessions table changed in place, with no session-store table added: the upgrade plan is not met.
+		const storeErrors = sessionStoreDiffErrors(changes, TABLE, STORE);
+		assert.strictEqual(storeErrors.length, 2, storeErrors.join('\n'));
+		assert.match(storeErrors[0], /does not remove the old sessions table .* would fail the deploy/);
+		assert.match(storeErrors[1], /does not add the session-store table/);
 	});
 
 	test('unprotected changes and IAM table rows are not violations', () => {
@@ -655,24 +738,60 @@ describe('extractUpdateFailures — surfacing the UpdateUserPool error', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('compareDeployedIdentity', () => {
-	const identity: DeployedIdentity = {
+	const before: DeployedIdentity = {
 		userPoolId: 'us-east-1_AbCdEf123',
 		clientId: '1a2b3c4d5e6f7g8h9i0j',
 		sessionsTableName: 'bb-test-upgrade-1-1-upgrade-auth-sessions',
 		sessionSecretParameterName: '/bb-test-upgrade-1-1-upgrade-auth-session-secret',
 	};
+	const after: DeployedIdentity = {
+		...before,
+		sessionsTableName: 'bb-test-upgrade-1-1-upgrade-auth-session-store',
+	};
 
-	test('identical → no differences', () => {
-		assert.deepStrictEqual(compareDeployedIdentity(identity, { ...identity }), []);
+	test('pool, client and secret kept, sessions in the new session-store table → no problems', () => {
+		assert.deepStrictEqual(compareDeployedIdentity(before, after), []);
 	});
 
-	test('every changed physical id is reported', () => {
-		const after = { ...identity, userPoolId: 'us-east-1_New', sessionsTableName: 'other' };
-		const diff = compareDeployedIdentity(identity, after);
+	test('a changed pool, client or secret is reported', () => {
+		const diff = compareDeployedIdentity(before, {
+			...after,
+			userPoolId: 'us-east-1_New',
+			sessionSecretParameterName: '/other',
+		});
 		assert.deepStrictEqual(diff, [
 			'user pool id changed: us-east-1_AbCdEf123 → us-east-1_New',
-			'sessions table name changed: bb-test-upgrade-1-1-upgrade-auth-sessions → other',
+			'session-secret SSM parameter name changed: /bb-test-upgrade-1-1-upgrade-auth-session-secret → /other',
 		]);
+	});
+
+	test('sessions still in the old table, or a new table with another name, is reported', () => {
+		assert.deepStrictEqual(compareDeployedIdentity(before, { ...before }), [
+			'the sessions are still in the table bb-test-upgrade-1-1-upgrade-auth-sessions: expected a new table for the session store',
+			'the session-store table name bb-test-upgrade-1-1-upgrade-auth-sessions does not end with -session-store',
+		]);
+		assert.deepStrictEqual(compareDeployedIdentity(before, { ...after, sessionsTableName: 'other' }), [
+			'the session-store table name other does not end with -session-store',
+		]);
+	});
+});
+
+describe('removalOutcome — how the old sessions table left the stack', () => {
+	const event = (status: string, id = TABLE): StackEventLike => ({ LogicalResourceId: id, ResourceStatus: status });
+
+	test('DELETE_COMPLETE → deleted (a Delete policy: what the harness app deploys with)', () => {
+		const stackEvents = [event('CREATE_COMPLETE'), event('DELETE_IN_PROGRESS'), event('DELETE_COMPLETE')];
+		assert.strictEqual(removalOutcome(stackEvents, TABLE), 'deleted');
+	});
+
+	test('DELETE_SKIPPED → retained (a Retain policy: the table stays in the account, outside the stack)', () => {
+		assert.strictEqual(removalOutcome([event('CREATE_COMPLETE'), event('DELETE_SKIPPED')], TABLE), 'retained');
+	});
+
+	test('DELETE_FAILED → failed; no delete event, or events of another resource → unknown', () => {
+		assert.strictEqual(removalOutcome([event('DELETE_FAILED')], TABLE), 'failed');
+		assert.strictEqual(removalOutcome([event('CREATE_COMPLETE')], TABLE), 'unknown');
+		assert.strictEqual(removalOutcome([event('DELETE_COMPLETE', POOL)], TABLE), 'unknown');
 	});
 });
 
@@ -743,6 +862,18 @@ describe('JSON-RPC and the session cookie', () => {
 			message: 'not implemented',
 		});
 		assert.strictEqual(decodeRpcResponse(null).ok, false);
+	});
+
+	test('clearsCookie: true only for a line that deletes exactly that cookie', () => {
+		const cleared = ['auth_app-auth=; Max-Age=0; Path=/; HttpOnly'];
+		assert.strictEqual(clearsCookie(cleared, 'auth_app-auth'), true);
+		assert.strictEqual(clearsCookie(cleared, 'auth_app'), false);
+		assert.strictEqual(clearsCookie(['auth_app-auth=abc.def; Max-Age=3600; Path=/'], 'auth_app-auth'), false);
+		assert.strictEqual(
+			clearsCookie(['auth_app-auth=; Expires=Thu, 01 Jan 1970 00:00:00 GMT'], 'auth_app-auth'),
+			true,
+		);
+		assert.strictEqual(clearsCookie([], 'auth_app-auth'), false);
 	});
 
 	test('extractSessionCookie picks the live auth_<fullId> cookie and skips deletions', () => {

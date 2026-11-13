@@ -51,7 +51,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  * `Secret`, the recommended home for credentials.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes and queries, use `KVStore` or `DistributedTable`.
+ * writes and queries, use `KVStore`.
  *
  * **Best practices:**
  * - One AppSetting per logical configuration value

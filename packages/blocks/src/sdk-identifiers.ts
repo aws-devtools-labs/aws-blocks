@@ -20,7 +20,6 @@ import type { CronJob } from '@aws-blocks/bb-cron-job';
 import type { Dashboard } from '@aws-blocks/bb-dashboard';
 import type { Database } from '@aws-blocks/bb-data';
 import type { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import type { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import type { KVStore } from '@aws-blocks/bb-kv-store';
@@ -47,8 +46,7 @@ import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
  * const { tableName } = getSdkIdentifiers(store); // ← typed as { tableName: string }
  * ```
  */
-export function getSdkIdentifiers(bb: KVStore<any>): { tableName: string };
-export function getSdkIdentifiers(bb: DistributedTable<any, any, any>): { tableName: string };
+export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): { tableName: string };
 export function getSdkIdentifiers(bb: FileBucket<any>): { bucketName: string };
 export function getSdkIdentifiers(bb: AsyncJob<any>): { queueUrl: string };
 export function getSdkIdentifiers(bb: AppSetting<any>): { parameterName: string };

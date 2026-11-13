@@ -9,7 +9,6 @@
 
 import { ApiNamespace, Scope } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -27,7 +26,7 @@ const scope = new Scope('vpc-smoke');
 
 const kv = new KVStore(scope, 'cache');
 
-const table = new DistributedTable(scope, 'items', {
+const table = new KVStore(scope, 'items', {
   schema: z.object({
     pk: z.string(),
     sk: z.string(),
@@ -75,10 +74,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async tablePutQuery(pk: string, sk: string, data: string) {
-    await table.put({ pk, sk, data });
+    await table.put({ pk, sk }, { data });
     const items: Array<{ pk: string; sk: string; data: string }> = [];
-    for await (const item of table.query({ where: { pk: { equals: pk } } })) {
-      items.push(item);
+    for await (const { value } of table.query({ where: { pk: { equals: pk } } })) {
+      items.push(value);
     }
     await table.delete({ pk, sk });
     return items;

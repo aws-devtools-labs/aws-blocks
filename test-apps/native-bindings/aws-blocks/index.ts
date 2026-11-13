@@ -13,7 +13,6 @@ import {
   Realtime,
   RealtimeChannel,
   FileBucket,
-  DistributedTable,
 } from '@aws-blocks/blocks';
 import { Auth, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-blocks/bb-auth';
@@ -144,7 +143,7 @@ const realtime = new Realtime(scope, 'collab', {
   },
 });
 
-// --- DistributedTable (Todos) ------------------------------------------------
+// --- KVStore with a schema and a key (Todos) ---------------------------------
 // Per-user todos: the partition key is the owner's `userSub` (stable for the
 // user's lifetime), and every todo method reads and writes only the caller's
 // partition, so one user can never list, read or change another user's todos.
@@ -166,7 +165,7 @@ export interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userSub',
@@ -474,7 +473,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // Todos (DistributedTable) — gated on the email + password block
+  // Todos (KVStore with a schema and a key) — gated on the email + password block
   // --------------------------------------------------------------------------
 
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
@@ -488,7 +487,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now(),
     };
-    await todos.put(todo);
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
     return todo;
   },
 
@@ -503,7 +502,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } else {
       iterator = todos.query({ where });
     }
-    return await Array.fromAsync(iterator);
+    return await Array.fromAsync(iterator, (entry) => entry.value);
   },
 
   async getTodo(todoId: string): Promise<Todo | null> {
@@ -519,7 +518,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // signature doesn't declare, so spreading `updates` would let a caller rewrite
     // `userSub` / `todoId` and write into another user's partition.
     const { completed, priority, title } = updates ?? {};
-    await todos.put({
+    await todos.put({ userSub: user.userSub, todoId }, {
       ...existing,
       ...(completed !== undefined ? { completed } : {}),
       ...(priority !== undefined ? { priority } : {}),

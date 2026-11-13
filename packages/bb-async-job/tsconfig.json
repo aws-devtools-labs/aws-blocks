@@ -12,7 +12,7 @@
       "path": "../bb-logger"
     },
     {
-      "path": "../bb-distributed-table"
+      "path": "../bb-kv-store"
     },
     {
       "path": "../bb-lambda-compute"

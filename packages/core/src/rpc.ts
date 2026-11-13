@@ -91,12 +91,26 @@ export const RpcErrorCode = {
 
 let _nextId = 1;
 
-/** Build a JSON-RPC 2.0 request body string ready to POST. */
+/**
+ * Build a JSON-RPC 2.0 request body string ready to POST.
+ *
+ * Trailing `undefined` arguments are left out of `params`. JSON has no
+ * `undefined`: `JSON.stringify([2, undefined])` gives `[2,null]`, so an
+ * optional argument that the caller did not pass would reach the method as
+ * `null`. A default parameter value would then not apply, and the method
+ * would see `null` where its type says `undefined`. Without the trailing
+ * `undefined`s, the method is called with the arguments the caller passed.
+ *
+ * An `undefined` before a later argument still becomes `null`, because the
+ * later argument must keep its position. An explicit `null` is sent as it is.
+ */
 export function encodeRpcRequest(apiNamespace: string, method: string, args: unknown[]): string {
+  let length = args.length;
+  while (length > 0 && args[length - 1] === undefined) length--;
   return JSON.stringify({
     jsonrpc: VERSION,
     method: `${apiNamespace}.${method}`,
-    params: args,
+    params: length === args.length ? args : args.slice(0, length),
     id: _nextId++,
   });
 }

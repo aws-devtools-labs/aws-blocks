@@ -2645,7 +2645,7 @@ function rpcError(result: any): { code: number; message: string } | undefined {
 describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
   it('rejects a method on an exported Building Block (Scope) instance', async () => {
     let wrote = false;
-    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    // Structurally a Scope (id + fullId), like `export const todos = new KVStore(scope, 'todos')`.
     const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
     const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
     assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');

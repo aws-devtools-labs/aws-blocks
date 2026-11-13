@@ -43,7 +43,7 @@ class FakeBlock extends Scope {
 /** Stands in for a first-party block that hoists a shared helper to stack scope. */
 class FakeHoistingBlock extends Scope {
 	constructor(scope: ScopeParent, id: string) {
-		super(id, { parent: scope, bbName: 'DistributedTable' });
+		super(id, { parent: scope, bbName: 'KVStore' });
 		const stack = cdk.Stack.of(this);
 		const before = new Set(stack.node.children);
 		new iam.Role(stack, 'BlocksFakeHelperRole', { assumedBy: new iam.ServicePrincipal('glue.amazonaws.com') });

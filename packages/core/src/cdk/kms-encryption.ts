@@ -44,7 +44,7 @@ export type ResolvedKmsEncryption =
 /**
  * Resolve a block's `encryption` option into a service-agnostic choice. Shared
  * by every Blocks storage resource that exposes `encryption`
- * (`bb-kv-store`, `bb-distributed-table`, `bb-file-bucket`) so the accepted
+ * (`bb-kv-store`, `bb-file-bucket`) so the accepted
  * values and the unrecognized-value error cannot drift between them. Each
  * caller maps the result onto its own service's encryption props.
  *

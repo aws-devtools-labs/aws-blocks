@@ -3,7 +3,7 @@
 
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import * as cdk from 'aws-cdk-lib';
@@ -11,7 +11,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 import { mintedMantleRegion } from './mantle.js';
-import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { agentStreamChunkSchema, conversationsTableOptions, messagesTableOptions } from './schemas.js';
 import type { AgentConfig } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -24,7 +24,7 @@ export class Agent extends BuildingBlockScope {
 	/**
 	 * CDK layer for the Agent BB.
 	 *
-	 * Provisions the session FileBucket, the conversation + message DistributedTables, the
+	 * Provisions the session FileBucket, the conversation + message KVStores, the
 	 * Realtime BB used to stream chunks to the browser, and the AgentCore Runtime that hosts
 	 * the streaming agent loop. All AgentCore-specific provisioning (co-bundle, runtime role
 	 * and its grants, container env, and the handler's invoke permission) lives in the
@@ -48,14 +48,8 @@ export class Agent extends BuildingBlockScope {
 		// Conversation metadata + message history. These grant read/write to the shared execution
 		// role, which the AgentCore Runtime then runs as — so the loop can persist history.
 		if (!config?.inferenceOnly) {
-			new DistributedTable(this, 'convos', {
-				schema: conversationSchema,
-				key: { partitionKey: 'userId', sortKey: 'conversationId' },
-			});
-			new DistributedTable(this, 'messages', {
-				schema: messageSchema,
-				key: { partitionKey: 'conversationId', sortKey: 'messageId' },
-			});
+			new KVStore(this, 'convos', conversationsTableOptions);
+			new KVStore(this, 'messages', messagesTableOptions);
 		}
 
 		new Realtime(this, 'rt', {

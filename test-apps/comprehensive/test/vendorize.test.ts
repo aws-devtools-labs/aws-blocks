@@ -12,7 +12,7 @@
  * 5. A vendorized block that ships deploy-time Lambdas still synthesizes, and
  *    the Lambda code assets it emits exist on disk: `Auth` (the user-pool
  *    immutability guard + the Cognito IdP registration, carrying the edited
- *    vendorized source), `DistributedTable` with a GSI (the GSI manager),
+ *    vendorized source), `KVStore` with a GSI (the GSI manager),
  *    `Database` and `DistributedDatabase` (the migration Lambda)
  *
  * Note: In the monorepo, root workspaces take priority over nested ones,
@@ -166,16 +166,19 @@ new Auth(scope, 'auth-federated', {
   });
 
   // Same shape as Auth: `build:lambda` writes `dist/gsi-manager-lambda/`, which a
-  // vendorized copy doesn't have. Any table with an index creates the GSI manager.
-  test('vendorized DistributedTable with a GSI synthesizes its GSI-manager Lambdas', () => {
-    const tableDir = vendorizeWithoutDist('@aws-blocks/bb-distributed-table', 'bb-distributed-table');
+  // vendorized copy doesn't have. Any store with an index creates the GSI manager.
+  test('vendorized KVStore with a GSI synthesizes its GSI-manager Lambdas', () => {
+    // The tests above vendorized bb-kv-store: src/ only, no dist/.
+    const storeDir = join(VENDOR_DIR, 'bb-kv-store');
+    assert.ok(existsSync(join(storeDir, 'src/index.cdk.ts')));
+    assert.ok(!existsSync(join(storeDir, 'dist')), 'vendorize copies src/ only — no build output');
     const probe = synthProbe(
-      'distributed-table',
+      'kv-store',
       `import { Scope } from '@aws-blocks/blocks';
-import { DistributedTable } from '${join(tableDir, 'src/index.cdk.ts')}';
+import { KVStore } from '${join(storeDir, 'src/index.cdk.ts')}';
 import { z } from 'zod';
-const scope = new Scope('vendorized-table');
-new DistributedTable(scope, 'items', {
+const scope = new Scope('vendorized-store');
+new KVStore(scope, 'items', {
   schema: z.object({ pk: z.string(), sk: z.string(), ts: z.number() }),
   key: { partitionKey: 'pk', sortKey: 'sk' },
   indexes: { byTs: { partitionKey: 'pk', sortKey: 'ts' } },

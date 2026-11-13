@@ -195,7 +195,9 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 | `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
 | `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). If a new container starts with the previous deploy's config (no ARN) and its SSM read fails, it reloads the config once and switches to Secrets Manager |
 
-The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
+The connections table is provisioned by the nested `KVStore`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
+
+The record type, the schema and the store options of the connections table live in `src/connections.ts`. The CDK entry and the runtime entry both construct the store from `connectionsTableOptions`, so the table that synth provisions is the table that the runtime reads. The schema states the type of each field: `KVStore` reads the DynamoDB type of a key field and an index field from the schema, at synth and at run time, and a schema that accepts every value would make `connectionId` and `channel` number keys.
 
 ### Channel Path Mapping
 

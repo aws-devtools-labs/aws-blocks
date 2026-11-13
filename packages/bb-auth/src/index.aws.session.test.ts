@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import type { BlocksContext } from '@aws-blocks/core';
 import { isBlocksError } from '@aws-blocks/core';
 import { signSessionId } from './cookies.js';
@@ -111,6 +112,37 @@ describe('AWS session lookup (unexpired access token)', () => {
 		assert.deepStrictEqual(h.sent, []);
 	});
 
+	test('a cookie from before the upgrade (its row is only in the old `sessions` store) → signed out, cookie cleared, 401 on a guarded call', async () => {
+		const h = makeAwsAuth();
+		const b = new Browser();
+		const sid = await signInAs(h, b, 'alice');
+		const cookieValue = b.jar.get(h.cookieName);
+		assert.ok(cookieValue);
+		// What a deployment of the release before left: the row under the old child
+		// id `sessions`, and a cookie signed with the same secret. The session store
+		// (child id `session-store`) has no such row.
+		const record = await h.lookupSession(sid);
+		assert.ok(record);
+		const oldStore = new KVStore<unknown>(h.auth, 'sessions');
+		await oldStore.put(sid, record);
+		await h.deleteSession(sid);
+
+		assert.strictEqual(await b.request((ctx) => h.auth.getCurrentUser(ctx)), null);
+		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=0'));
+		assert.strictEqual(b.jar.get(h.cookieName), undefined);
+
+		const stale = new Browser();
+		stale.jar.set(h.cookieName, cookieValue);
+		assert.strictEqual(await stale.request((ctx) => h.auth.checkAuth(ctx)), false);
+		stale.jar.set(h.cookieName, cookieValue);
+		await assert.rejects(
+			() => stale.request((ctx) => h.auth.requireAuth(ctx)),
+			(e: Error & { status?: number }) => e.status === 401 && isBlocksError(e, AuthErrors.NotAuthenticated),
+		);
+		assert.deepStrictEqual(h.sent, [], 'no Cognito call: the old row is never read, so nothing is refreshed');
+		assert.deepStrictEqual(await oldStore.get(sid), record, 'the old row is not touched');
+	});
+
 	test('requireAuth with no session → 401 NotAuthenticatedException', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
@@ -162,9 +194,11 @@ describe('AWS session refresh (expired access token)', () => {
 				accessToken: fresh.AccessToken,
 				refreshToken: tokens.RefreshToken,
 				issuedAt,
+				// Sign-in wrote version 1; each later write stores the next one.
+				version: 2,
 			},
-			// Conditional on the row this request read, so a concurrent sign-out or refresh wins.
-			options: { ttlSeconds: DEFAULT_TTL, ifValueEquals: { ...tokensRow(tokens), issuedAt } },
+			// Conditional on the version of the row this request read, so a concurrent sign-out or refresh wins.
+			options: { ttlSeconds: DEFAULT_TTL, ifFieldEquals: { version: 1 } },
 		});
 	});
 
@@ -559,7 +593,8 @@ describe('AWS session cookie parse/verify — bad cookies mean signed-out, never
 
 describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', () => {
 	/** An SDK-shaped store failure whose text names an account and a table. */
-	const STORE_FAILURE = 'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
+	const STORE_FAILURE =
+		'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
 
 	/** Make the session store's deletes fail, as a transient DynamoDB fault would. */
 	function failSessionDeletes(h: ReturnType<typeof makeAwsAuth>): void {
@@ -593,7 +628,9 @@ describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', 
 		await signInAs(h, b, 'alice');
 		failSessionDeletes(h);
 		const state = await b.request((ctx) =>
-			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({ action: 'signOut' }),
+			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({
+				action: 'signOut',
+			}),
 		);
 		assert.strictEqual(state.state, 'signedOut');
 		assert.strictEqual(state.errorName, AuthErrors.SignOutIncomplete);

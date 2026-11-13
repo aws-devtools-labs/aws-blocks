@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, Auth, DistributedTable, Realtime, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, Realtime, FileBucket } from '@aws-blocks/blocks';
 import type { RealtimeChannel } from '@aws-blocks/blocks';
 export type { RealtimeChannel } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
@@ -22,7 +22,8 @@ const auth = new Auth(scope, 'auth', {
 
 const files = new FileBucket(scope, 'files', {});
 
-// DistributedTable: Use Zod schemas for type-safe tables with indexes.
+// KVStore with a schema and a key: Use Zod schemas for type-safe records with
+// indexes. A store fixes its key when you create it.
 // Per-user todos: the partition key is the owner's `userSub` (stable for the
 // user's lifetime), and every method below reads and writes only the caller's
 // partition, so one user can never list, read or change another user's todos.
@@ -46,7 +47,7 @@ interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userSub',
@@ -119,7 +120,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // DistributedTable example methods
+  // KVStore (todos) example methods
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
     const user = await auth.requireAuth(context);
     
@@ -134,7 +135,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now()
     };
-    await todos.put(todo);
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
     return todo;
   },
 
@@ -153,7 +154,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       ? todos.query({ index: indexMap[sortBy], where: { userSub: { equals: user.userSub } } })
       : todos.query({ where: { userSub: { equals: user.userSub } } });
     
-    return await Array.fromAsync(iterator);
+    return await Array.fromAsync(iterator, (entry) => entry.value);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
@@ -166,7 +167,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // signature doesn't declare, so spreading `updates` would let a caller rewrite
     // `userSub` / `todoId` and write into another user's partition.
     const { completed, priority, title } = updates ?? {};
-    await todos.put({
+    await todos.put({ userSub: user.userSub, todoId }, {
       ...existing,
       ...(completed !== undefined ? { completed } : {}),
       ...(priority !== undefined ? { priority } : {}),

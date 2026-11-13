@@ -4,14 +4,20 @@
 /**
  * `@aws-blocks/bb-auth` — `cdk` entry (synth).
  *
- * Provisions the same resources as `AuthCognito`, under the same construct
- * ids, so an existing `AuthCognito` deployment that switches to `Auth` keeps
- * its user pool, its app client and its signed-in sessions. The frozen
- * contract: child ids `pool`, `client`, `sessions`, `session-secret`,
- * `group-<name>`; `userPoolName: this.fullId`; no `GenerateSecret` on
- * `client`; the `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_*` config keys.
- * `resource-identity.cdk.test.ts` pins it against `AuthCognito`'s golden
- * fixture, and `property-snapshot.cdk.test.ts` compares the full templates.
+ * Provisions the user pool, the app client, the groups and the session secret
+ * of `AuthCognito` under the same construct ids, so an existing `AuthCognito`
+ * deployment that switches to `Auth` keeps its user pool, its app client and
+ * its users. The frozen contract: child ids `pool`, `client`,
+ * `session-secret`, `group-<name>`; `userPoolName: this.fullId`; no
+ * `GenerateSecret` on `client`; the `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_*`
+ * config keys. `resource-identity.cdk.test.ts` pins it against `AuthCognito`'s
+ * golden fixture, and `property-snapshot.cdk.test.ts` compares the full
+ * templates.
+ *
+ * The session store is the one resource that is not kept. It has its own
+ * child id, `session-store` (`SESSION_STORE_ID`; `AuthCognito`'s was
+ * `sessions`), so an upgrade creates a new table, removes the old one from
+ * the stack, and each user signs in once more. Both tests pin that too.
  *
  * Two deliberate differences from `AuthCognito`:
  * - **Durability:** the pool's removal policy and deletion protection follow the
@@ -82,6 +88,7 @@ import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
 import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { SESSION_STORE_ID } from './session-store-id.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -123,7 +130,7 @@ export type * from './types.js';
  *   Manager secret under `defaults.secretsStore: 'secrets-manager'` (the
  *   production preset); the `AppSetting(this, 'session-secret', { secret: true })`
  *   SSM SecureString under `'ssm'` (the sandbox preset).
- * - `KVStore(this, 'sessions', { ttl: true })` — the server-side session store.
+ * - `KVStore(this, 'session-store')` — the server-side session store (`SESSION_STORE_ID`). DynamoDB TTL is always on for it.
  *
  * Grants the shared execution role the client-facing `cognito-idp:*` actions on
  * the pool (and the `Admin*`/`List*` set only when `admin` is set).
@@ -205,7 +212,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		// than truncating (two long fullIds differing past 128 would collide).
 		// Checked even when no pool is provisioned, so enabling a pool-backed
 		// sign-in method later never forces a rename of the block — which would
-		// replace `sessions` and sign everyone out.
+		// replace the session store and sign everyone out.
 		if (this.fullId.length > 128) {
 			throw new Error(
 				`Auth: computed userPoolName '${this.fullId}' is ${this.fullId.length} chars; Cognito's limit is 128. Shorten the BB id or stack name.`,
@@ -318,7 +325,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 
 			// ── 2. Native app client — FROZEN: never set `generateSecret: true` ──
 			// (replace-only: it would replace `client` and invalidate every refresh
-			// token stored in `sessions`). Hosted-UI federation gets its own client.
+			// token in the session store). Hosted-UI federation gets its own client.
 			this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 				userPool: pool,
 				generateSecret: false,
@@ -417,13 +424,22 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		frameworkKey(this, 'session-secret');
 
 		// ── 5. Session store ─────────────────────────────────────────────────
-		// Durability options propagate; unset, KVStore follows the stack defaults.
-		// TTL on, so session records (which hold refresh tokens) expire.
-		new KVStore(this, 'sessions', {
-			removalPolicy: opts.removalPolicy,
-			deletionProtection: opts.deletionProtection,
-			ttl: true,
-		});
+		// Durability options propagate through the store's one `protection`
+		// setting; with neither option set, KVStore follows the stack defaults.
+		// Each option resolves against the stack default first, as for the pool:
+		// deletion protection on is 'locked' (the table is retained too), off with
+		// `retain` is 'retained', off with `destroy` is 'disposable'.
+		// DynamoDB TTL is always on for the store, so session records (which hold
+		// refresh tokens) expire.
+		const sessionProtection =
+			opts.removalPolicy === undefined && opts.deletionProtection === undefined
+				? undefined
+				: (opts.deletionProtection ?? this.defaults.deletionProtection)
+					? 'locked'
+					: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy) === cdk.RemovalPolicy.RETAIN
+						? 'retained'
+						: 'disposable';
+		new KVStore(this, SESSION_STORE_ID, { protection: sessionProtection });
 
 		// ── 6. Config + IAM — only when a pool exists ────────────────────────
 		// A pool-less configuration registers no `BLOCKS_AUTH_COGNITO_*` key; the

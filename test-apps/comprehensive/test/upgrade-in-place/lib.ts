@@ -284,8 +284,18 @@ export interface CfnTemplate {
 	[key: string]: unknown;
 }
 
-/** What a protected resource is to the auth block. */
-export type ProtectedRole = 'pool' | 'client' | 'group' | 'domain' | 'sessions' | 'session-secret';
+/**
+ * What a protected resource is to the auth block. `sessions` is the table of
+ * the earlier release (child id `sessions`): the upgrade removes it from the
+ * stack. `session-store` is `Auth`'s table (child id `session-store`): the
+ * upgrade adds it.
+ */
+export type ProtectedRole = 'pool' | 'client' | 'group' | 'domain' | 'sessions' | 'session-store' | 'session-secret';
+
+/** The child id of the sessions table of the earlier release, under the auth block. */
+export const LEGACY_SESSIONS_CHILD_ID = 'sessions';
+/** The child id of `Auth`'s session store, under the auth block. */
+export const SESSION_STORE_CHILD_ID = 'session-store';
 
 export interface ProtectedResource {
 	role: ProtectedRole;
@@ -297,8 +307,13 @@ export interface ProtectedResource {
 	physicalName: string | string[] | null;
 }
 
-/** Roles whose loss or duplication destroys users or signs them out. Every upgrade must keep exactly these. */
-export const REQUIRED_ROLES: readonly ProtectedRole[] = ['pool', 'client', 'sessions', 'session-secret'];
+/**
+ * Roles whose loss or duplication destroys users or changes the cookie secret.
+ * Every upgrade must keep exactly these. The sessions table is not one of
+ * them: the upgrade replaces it with the session store, and each user signs in
+ * once more.
+ */
+export const REQUIRED_ROLES: readonly ProtectedRole[] = ['pool', 'client', 'session-secret'];
 
 const ROLE_BY_COGNITO_TYPE: Record<string, ProtectedRole> = {
 	'AWS::Cognito::UserPool': 'pool',
@@ -327,13 +342,12 @@ export const SERVICE_IMMUTABLE_POOL_PROPERTIES = ['UsernameAttributes', 'AliasAt
  * Properties whose change makes CloudFormation replace the resource (create
  * new, delete old) — checked on every protected resource, beyond the physical
  * name. `GenerateSecret` on the client is the frozen-contract one: replacing
- * `client` invalidates every refresh token stored in `sessions`.
+ * `client` invalidates every refresh token in the session store.
  */
 export const REPLACE_ONLY_PROPERTIES: Record<string, readonly string[]> = {
 	'AWS::Cognito::UserPoolClient': ['UserPoolId', 'GenerateSecret'],
 	'AWS::Cognito::UserPoolGroup': ['UserPoolId'],
 	'AWS::Cognito::UserPoolDomain': ['UserPoolId'],
-	'AWS::DynamoDB::Table': ['KeySchema'],
 };
 
 /** The construct path below the stack name (`<stack>/a/b` → `a/b`). */
@@ -355,9 +369,14 @@ function sessionSecretParameterNames(resource: CfnResource): string[] {
 
 /**
  * The auth block's identity-bearing resources in a template: the Cognito pool,
- * client, groups and domain under `blockPath`; the `sessions` table; and the
- * `session-secret` SSM parameter (owned by the stack-level `BlocksSecretsBulk`
- * custom resource, or a plain `AWS::SSM::Parameter`).
+ * client, groups and domain under `blockPath`; the sessions table of the
+ * earlier release (child id `sessions`) or `Auth`'s session-store table (child
+ * id `session-store`); and the `session-secret` SSM parameter (owned by the
+ * stack-level `BlocksSecretsBulk` custom resource, or a plain
+ * `AWS::SSM::Parameter`). The secret is there under `secretsStore: 'ssm'`,
+ * which the harness app uses (`BlocksPresets.sandbox`). Under
+ * `'secrets-manager'` `Auth` keeps it in a Secrets Manager secret, which has
+ * no role here.
  */
 export function protectedResources(template: CfnTemplate, blockPath: string = AUTH_BLOCK_PATH): ProtectedResource[] {
 	const out: ProtectedResource[] = [];
@@ -371,8 +390,18 @@ export function protectedResources(template: CfnTemplate, blockPath: string = AU
 		let physicalName: string | string[] | null = null;
 		if (inBlock && ROLE_BY_COGNITO_TYPE[resource.Type]) {
 			role = ROLE_BY_COGNITO_TYPE[resource.Type];
-		} else if (inBlock && resource.Type === 'AWS::DynamoDB::Table' && below.startsWith(`${blockPath}/sessions/`)) {
+		} else if (
+			inBlock &&
+			resource.Type === 'AWS::DynamoDB::Table' &&
+			below.startsWith(`${blockPath}/${LEGACY_SESSIONS_CHILD_ID}/`)
+		) {
 			role = 'sessions';
+		} else if (
+			inBlock &&
+			resource.Type === 'AWS::DynamoDB::Table' &&
+			below.startsWith(`${blockPath}/${SESSION_STORE_CHILD_ID}/`)
+		) {
+			role = 'session-store';
 		} else if (
 			inBlock &&
 			resource.Type === 'AWS::SSM::Parameter' &&
@@ -419,8 +448,8 @@ export function legacyPackageProblem(manifest: unknown, revision: string): strin
  * Why the before/after template pair is not "an `AuthCognito` app, then the
  * same app on `Auth`" — the only pair the continuity proof means anything for —
  * or an empty list when it is. `AuthCognito` and `Auth` deliberately produce
- * the same pool, client, sessions and secret identity, so a before-template
- * that is secretly `Auth` would pass every other check vacuously. Here the
+ * the same pool, client and secret identity, so a before-template that is
+ * secretly `Auth` could pass those checks vacuously. Here the
  * BEFORE side must own a user pool and no `Auth` immutability guard, and the
  * AFTER side must have the guard.
  */
@@ -453,19 +482,32 @@ export interface ContinuityResult {
 	errors: string[];
 	/** Differences that are safe on update (informational). */
 	notes: string[];
+	/** The sessions table of the earlier release, as found in the before-template. The upgrade removes it. */
+	legacySessions?: ProtectedResource;
+	/** `Auth`'s session-store table, when the after-template has exactly one. The upgrade adds it. */
+	sessionStore?: ProtectedResource;
 }
 
 /**
  * Compare the pre-upgrade template (`AuthCognito`) with the post-upgrade one
- * (`Auth`) for resource continuity of the auth block: every protected resource
- * must keep its logical ID, resource type and physical name; no second pool,
- * client, sessions table or secret may appear; the pool's service-immutable
- * properties must be unchanged; and no replace-only property (the client's
- * `UserPoolId` / `GenerateSecret`, a group's `UserPoolId`, the table's
- * `KeySchema`) may change.
+ * (`Auth`) for the auth block.
  *
- * This is the offline equivalent of "`cdk diff` shows no replacement" plus the
- * one check `cdk diff` cannot make (the rollback-on-update properties).
+ * **Kept:** the pool, the client, the groups, the domain and the session
+ * secret must keep their logical ID, resource type and physical name; no
+ * second pool, client or secret may appear; the pool's service-immutable
+ * properties must be unchanged; and no replace-only property (the client's
+ * `UserPoolId` / `GenerateSecret`, a group's `UserPoolId`) may change.
+ *
+ * **Replaced:** the sessions table. The pre-upgrade template has it under the
+ * child id `sessions`. The post-upgrade template must not have that resource,
+ * and must have exactly one session-store table (child id `session-store`)
+ * with another physical name. A sessions table that stays is an error: its key
+ * attribute changes, and CloudFormation cannot replace a table that has a fixed
+ * name, so that deploy would fail.
+ *
+ * This is the offline equivalent of "`cdk diff` shows no replacement of what is
+ * kept" plus the one check `cdk diff` cannot make (the rollback-on-update
+ * properties).
  */
 export function compareContinuity(
 	before: CfnTemplate,
@@ -477,17 +519,44 @@ export function compareContinuity(
 	const beforeProtected = protectedResources(before, blockPath);
 	const afterProtected = protectedResources(after, blockPath);
 
-	for (const role of REQUIRED_ROLES) {
+	for (const role of [...REQUIRED_ROLES, 'sessions'] as const) {
 		if (!beforeProtected.some((r) => r.role === role)) {
 			errors.push(
 				`the pre-upgrade template has no '${role}' resource under '${blockPath}' — wrong app or block path?`,
 			);
 		}
 	}
+	for (const b of beforeProtected.filter((r) => r.role === 'session-store')) {
+		errors.push(
+			`the pre-upgrade template already has the session-store table ${b.logicalId}: it was synthesized by ` +
+				'this revision of Auth, not by the earlier release.',
+		);
+	}
+
+	const legacySessions = beforeProtected.find((r) => r.role === 'sessions');
+	const stores = afterProtected.filter((r) => r.role === 'session-store');
+	const sessionStore = stores.length === 1 ? stores[0] : undefined;
 
 	for (const b of beforeProtected) {
 		const a = after.Resources?.[b.logicalId];
 		const label = `${b.role} ${b.logicalId} (${b.type}, ${b.path || 'no path'})`;
+		if (b.role === 'sessions') {
+			if (a) {
+				errors.push(
+					`KEPT ${label} — the sessions table of the earlier release is still in the template. Its key ` +
+						'attribute changes, and CloudFormation cannot replace a table that has a fixed name: the ' +
+						`deploy would fail. Auth must build its session store under the child id '${SESSION_STORE_CHILD_ID}'.`,
+				);
+			} else {
+				const policy = before.Resources[b.logicalId].DeletionPolicy ?? '(unset: Delete)';
+				notes.push(
+					`REMOVED ${label} — expected: the session store is a new table. CloudFormation removes this ` +
+						`one from the stack (DeletionPolicy ${policy}).`,
+				);
+			}
+			continue;
+		}
+		if (b.role === 'session-store') continue;
 		if (!a) {
 			errors.push(`REMOVED ${label} — CloudFormation would DELETE it from every existing deployment.`);
 			continue;
@@ -512,7 +581,7 @@ export function compareContinuity(
 			const pa = stableStringify(a.Properties?.[key] ?? (key === 'GenerateSecret' ? false : null));
 			if (pa !== pb) {
 				const consequence =
-					key === 'GenerateSecret' ? ' and invalidate every refresh token stored in sessions' : '';
+					key === 'GenerateSecret' ? ' and invalidate every refresh token in the session store' : '';
 				errors.push(
 					`CHANGED ${label}: ${key} ${pb} → ${pa} — replace-only: CloudFormation would REPLACE it${consequence}.`,
 				);
@@ -538,7 +607,14 @@ export function compareContinuity(
 	for (const a of afterProtected) {
 		if (before.Resources?.[a.logicalId]) continue;
 		const label = `${a.role} ${a.logicalId} (${a.type}, ${a.path || 'no path'})`;
-		if (REQUIRED_ROLES.includes(a.role)) {
+		if (a.role === 'session-store') {
+			notes.push(`ADDED ${label} — expected: the session store, a new table named ${stableStringify(a.physicalName)}.`);
+		} else if (a.role === 'sessions') {
+			errors.push(
+				`ADDED ${label} — a table under the old child id '${LEGACY_SESSIONS_CHILD_ID}'. Auth must build its ` +
+					`session store under '${SESSION_STORE_CHILD_ID}'.`,
+			);
+		} else if (REQUIRED_ROLES.includes(a.role)) {
 			errors.push(
 				`ADDED ${label} — a second ${a.role} next to the existing one means a child construct id ` +
 					'changed: CloudFormation would create a new resource and delete the old one.',
@@ -548,7 +624,28 @@ export function compareContinuity(
 		}
 	}
 
-	return { before: beforeProtected, errors, notes };
+	if (stores.length !== 1) {
+		errors.push(
+			`the post-upgrade template has ${stores.length} session-store table(s) under ` +
+				`'${blockPath}/${SESSION_STORE_CHILD_ID}'; expected exactly one.`,
+		);
+	} else if (legacySessions) {
+		const [store] = stores;
+		if (stableStringify(store.physicalName) === stableStringify(legacySessions.physicalName)) {
+			errors.push(
+				`the session-store table has the name of the old sessions table (${stableStringify(store.physicalName)}): ` +
+					'CloudFormation would create it while the old table still has that name, and fail.',
+			);
+		}
+		if (typeof store.physicalName !== 'string' || !store.physicalName.endsWith(`-${SESSION_STORE_CHILD_ID}`)) {
+			errors.push(
+				`the session-store table name ${stableStringify(store.physicalName)} does not end with ` +
+					`'-${SESSION_STORE_CHILD_ID}'.`,
+			);
+		}
+	}
+
+	return { before: beforeProtected, errors, notes, legacySessions, sessionStore };
 }
 
 function comparePool(label: string, before: CfnResource, after: CfnResource, errors: string[]): void {
@@ -707,7 +804,7 @@ export function parseCdkDiff(text: string): CdkDiffResourceChange[] {
 export interface DiffProtection {
 	/** Resource types that must never be replaced, removed or duplicated. */
 	types: readonly string[];
-	/** Extra logical IDs to protect regardless of type (e.g. the sessions table, the secrets resource). */
+	/** Extra logical IDs to protect regardless of type (e.g. the secrets resource). */
 	logicalIds?: readonly string[];
 }
 
@@ -740,6 +837,38 @@ export function findDiffViolations(changes: readonly CdkDiffResourceChange[], pr
 			const props = c.replacingProperties.length > 0 ? ` via ${c.replacingProperties.join(', ')}` : '';
 			out.push(`would REPLACE ${where}${props} (${c.line})`);
 		}
+	}
+	return out;
+}
+
+/**
+ * What `cdk diff` must show for the session store: the sessions table of the
+ * earlier release leaves the stack (a `[-]` line, `destroy` or `orphan`), and
+ * the session-store table is added (a `[+]` line). One line per problem; empty
+ * = the diff shows the replacement as planned. A sessions table shown as
+ * updated or replaced in place is a problem: that deploy would fail.
+ */
+export function sessionStoreDiffErrors(
+	changes: readonly CdkDiffResourceChange[],
+	legacyLogicalId: string,
+	storeLogicalId: string,
+): string[] {
+	const out: string[] = [];
+	const legacy = changes.find((c) => c.logicalId === legacyLogicalId);
+	if (!legacy) {
+		out.push(`cdk diff shows no change for the old sessions table ${legacyLogicalId}; expected its removal.`);
+	} else if (legacy.action !== 'remove') {
+		out.push(
+			`cdk diff does not remove the old sessions table ${legacyLogicalId} (${legacy.line}); an in-place ` +
+				'change of its key would fail the deploy.',
+		);
+	}
+	const store = changes.find((c) => c.logicalId === storeLogicalId);
+	if (!store || store.action !== 'add') {
+		out.push(
+			`cdk diff does not add the session-store table ${storeLogicalId}${store ? ` (${store.line})` : ''}; ` +
+				'expected a new table.',
+		);
 	}
 	return out;
 }
@@ -870,38 +999,70 @@ export function formatUpdateFailureReport(report: UpdateFailureReport, stackName
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * What must be identical before and after the upgrade: the physical ids CloudFormation reports
+ * What the harness reads of the deployed auth block: the physical ids CloudFormation reports
  * (`ListStackResources`), plus the secret's parameter name from the template. Nothing here needs a
  * service-side read, so the harness runs with the CI e2e role's grants.
  *
- * Why physical ids suffice: replacing a user pool or app client mints a new id; the sessions table
- * and the secret are custom-named, and CloudFormation cannot replace a custom-named resource in place
- * under the same name (the update fails, and the harness requires `UPDATE_COMPLETE`). The secret's
- * value and the seeded user's `sub` are proven by the app instead: the pre-upgrade session cookie
- * still authenticates, and signing in through the upgraded app returns the same `userSub`.
+ * The pool id, the client id and the secret's parameter name must be identical before and after the
+ * upgrade: replacing a user pool or app client mints a new id. The table that holds the sessions must
+ * NOT be the same: before the upgrade it is the `sessions` table of the earlier release, after it is
+ * `Auth`'s session-store table, a new table with another name. The secret's value and the seeded
+ * user's `sub` are proven by the app instead: signing in through the upgraded app returns the same
+ * `userSub`, and the cookie it sets authenticates.
  */
 export interface DeployedIdentity {
 	userPoolId: string;
 	clientId: string;
+	/** The table that holds the sessions: the `sessions` table before the upgrade, the session-store table after. */
 	sessionsTableName: string;
 	sessionSecretParameterName: string;
 }
 
-/** Labels for the report. */
-const IDENTITY_LABELS: Record<keyof DeployedIdentity, string> = {
+/** The fields that must not change, with their labels for the report. */
+const KEPT_IDENTITY_LABELS = {
 	userPoolId: 'user pool id',
 	clientId: 'app client id',
-	sessionsTableName: 'sessions table name',
 	sessionSecretParameterName: 'session-secret SSM parameter name',
-};
+} as const satisfies Partial<Record<keyof DeployedIdentity, string>>;
 
-/** One line per field that changed across the upgrade. Empty = identity preserved. */
+/**
+ * One line per problem across the upgrade. Empty = the pool, the client and the secret kept their
+ * identity, and the sessions are in a new table whose name ends with `-session-store`.
+ */
 export function compareDeployedIdentity(before: DeployedIdentity, after: DeployedIdentity): string[] {
 	const out: string[] = [];
-	for (const key of Object.keys(IDENTITY_LABELS) as (keyof DeployedIdentity)[]) {
-		if (before[key] !== after[key]) out.push(`${IDENTITY_LABELS[key]} changed: ${before[key]} → ${after[key]}`);
+	for (const key of Object.keys(KEPT_IDENTITY_LABELS) as (keyof typeof KEPT_IDENTITY_LABELS)[]) {
+		if (before[key] !== after[key]) {
+			out.push(`${KEPT_IDENTITY_LABELS[key]} changed: ${before[key]} → ${after[key]}`);
+		}
+	}
+	if (before.sessionsTableName === after.sessionsTableName) {
+		out.push(
+			`the sessions are still in the table ${after.sessionsTableName}: expected a new table for the session store`,
+		);
+	}
+	if (!after.sessionsTableName.endsWith(`-${SESSION_STORE_CHILD_ID}`)) {
+		out.push(`the session-store table name ${after.sessionsTableName} does not end with -${SESSION_STORE_CHILD_ID}`);
 	}
 	return out;
+}
+
+/**
+ * How a resource left the stack, read from the stack events: `'deleted'` (a `DELETE_COMPLETE`
+ * event), `'retained'` (`DELETE_SKIPPED`: its `DeletionPolicy` is `Retain`, so it is still in the
+ * account), `'failed'` (`DELETE_FAILED`), or `'unknown'` when the events hold none of these for it.
+ */
+export function removalOutcome(
+	events: readonly StackEventLike[],
+	logicalId: string,
+): 'deleted' | 'retained' | 'failed' | 'unknown' {
+	const statuses = new Set(
+		events.filter((e) => e.LogicalResourceId === logicalId).map((e) => e.ResourceStatus ?? ''),
+	);
+	if (statuses.has('DELETE_COMPLETE')) return 'deleted';
+	if (statuses.has('DELETE_SKIPPED')) return 'retained';
+	if (statuses.has('DELETE_FAILED')) return 'failed';
+	return 'unknown';
 }
 
 /**
@@ -961,6 +1122,27 @@ export interface SessionCookie {
  * cookie that is not a deletion (`Max-Age<=0`, an `Expires` in the past, or an
  * empty value). `null` when the response sets none.
  */
+/** Whether a `Set-Cookie` line deletes its cookie: `Max-Age` not above zero, or an `Expires` in the past. */
+function deletesCookie(attrs: readonly string[], now: number): boolean {
+	for (const attr of attrs) {
+		const [k, ...v] = attr.split('=');
+		const key = k.trim().toLowerCase();
+		const val = v.join('=').trim();
+		if (key === 'max-age' && Number(val) <= 0) return true;
+		if (key === 'expires' && !Number.isNaN(Date.parse(val)) && Date.parse(val) <= now) return true;
+	}
+	return false;
+}
+
+/** Whether one of the `Set-Cookie` lines deletes the cookie `name` (what `Auth` sends with a signed-out answer). */
+export function clearsCookie(setCookies: readonly string[], name: string, now: number = Date.now()): boolean {
+	return setCookies.some((header) => {
+		const [pair, ...attrs] = header.split(';');
+		const eq = pair.indexOf('=');
+		return eq > 0 && pair.slice(0, eq).trim() === name && deletesCookie(attrs, now);
+	});
+}
+
 export function extractSessionCookie(
 	setCookies: readonly string[],
 	now: number = Date.now(),
@@ -973,15 +1155,7 @@ export function extractSessionCookie(
 		const name = pair.slice(0, eq).trim();
 		const value = pair.slice(eq + 1).trim();
 		if (!name.startsWith(namePrefix) || value === '') continue;
-		let deleted = false;
-		for (const attr of attrs) {
-			const [k, ...v] = attr.split('=');
-			const key = k.trim().toLowerCase();
-			const val = v.join('=').trim();
-			if (key === 'max-age' && Number(val) <= 0) deleted = true;
-			if (key === 'expires' && !Number.isNaN(Date.parse(val)) && Date.parse(val) <= now) deleted = true;
-		}
-		if (!deleted) return { name, value };
+		if (!deletesCookie(attrs, now)) return { name, value };
 	}
 	return null;
 }

@@ -5,7 +5,6 @@
     { "path": "packages/pipeline" },
     { "path": "packages/core" },
     { "path": "packages/bb-kv-store" },
-    { "path": "packages/bb-distributed-table" },
     { "path": "packages/bb-data" },
     { "path": "packages/bb-database" },
     { "path": "packages/bb-realtime" },

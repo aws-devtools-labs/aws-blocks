@@ -2,8 +2,8 @@
 
 A fuller example app on AWS Blocks. It wires together several Building Blocks in
 one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
-loose key/value data, and a `DistributedTable` for a sortable, per-user
-todo list. Vite + vanilla DOM frontend, no framework.
+loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
+sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
 
@@ -42,7 +42,9 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
-- **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
+- **KVStore with a `schema` and a `key`** — per-user todos, stored as records
+  you list or query as a collection (a store fixes its key when you create
+  it); `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
 - **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both

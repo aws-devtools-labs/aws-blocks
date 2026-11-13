@@ -4,7 +4,7 @@
 
 The OpenRPC spec generator describes a TypeScript tuple as a JSON array of positional elements, and a rest parameter typed as a tuple as one parameter per element.
 
-**Tuples.** A tuple such as `[number, number]`, like `DistributedTable`'s `where.between`, used to be described as an object with the properties `"0"`, `"1"`, `length` and every array method. The generator now uses JSON Schema's `prefixItems`:
+**Tuples.** A tuple such as `[number, number]`, like `KVStore`'s `where.between`, used to be described as an object with the properties `"0"`, `"1"`, `length` and every array method. The generator now uses JSON Schema's `prefixItems`:
 
 - **A fixed tuple** (`[A, B]`, `readonly [start: T, end: T]`) is `{ type: 'array', prefixItems: [A, B], minItems: 2, maxItems: 2 }`; `maxItems` closes it. An optional element (`[string, number?]`) counts in `maxItems` only and is nullable (`T | null`), as an optional property is. A named element type is a component, as it is anywhere else.
 - **A tuple with a rest element** (`[string, ...number[]]`) has no fixed shape. It is an array of the union of its element types, with `minItems` for its required elements.

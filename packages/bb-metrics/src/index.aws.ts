@@ -53,7 +53,7 @@ export type {
  *
  * **When NOT to use:** If you need structured log output only, use `Logging`.
  * If you need distributed request tracing, use `Tracing`. If you need to store
- * time-series data for querying, use `Database` or `DistributedTable`.
+ * time-series data for querying, use `Database` or `KVStore`.
  *
  * **Best practices:**
  * - Keep dimension cardinality low (avoid user IDs or request IDs as dimensions)

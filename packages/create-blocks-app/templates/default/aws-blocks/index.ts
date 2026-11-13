@@ -15,7 +15,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, KVStore, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -39,6 +39,8 @@ export const authApi = auth.createApi();
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 // Zod schema = runtime validation + TypeScript types + DynamoDB table shape.
+// The `key` names the fields that identify a todo. A store fixes its key when
+// you create it, so declare it up front for any records you list or query.
 const todoSchema = z.object({
   userSub: z.string(),      // partition key — the owner's stable id (per-user isolation)
   todoId: z.string(),       // sort key — unique within a user
@@ -49,7 +51,7 @@ const todoSchema = z.object({
   createdAt: z.number(),
 });
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: { partitionKey: 'userSub', sortKey: 'todoId' },
 });
@@ -88,7 +90,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       version: 1,
       createdAt: Date.now(),
     };
-    await todos.put(todo);
+    await todos.put({ userSub: user.userSub, todoId }, todo);
     await rt.publish('todos', todosChannel(user.userSub), { action: 'created' as const, todoId });
     return todo;
   },
@@ -97,7 +99,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async listTodos(sortBy?: 'priority' | 'title') {
     const user = await auth.requireAuth(context);
     const list = await Array.fromAsync(
-      todos.query({ where: { userSub: { equals: user.userSub } } })
+      todos.query({ where: { userSub: { equals: user.userSub } } }),
+      (entry) => entry.value,
     );
     // Sort in the API (not via a secondary index) — a per-user todo list is
     // small, so an in-memory sort is simpler and avoids provisioning GSIs.
@@ -117,6 +120,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const todo = await todos.get({ userSub: user.userSub, todoId });
     if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
+      { userSub: user.userSub, todoId },
       { ...todo, completed: !todo.completed, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );
@@ -130,6 +134,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const todo = await todos.get({ userSub: user.userSub, todoId });
     if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
+      { userSub: user.userSub, todoId },
       { ...todo, priority, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );

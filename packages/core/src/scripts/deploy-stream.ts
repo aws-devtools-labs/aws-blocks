@@ -214,7 +214,7 @@ export interface CdkResourceEvent {
 // than anchoring to the start. STATUS is an uppercase CloudFormation status
 // (a self-clearing transient the tracker ignores), TYPE is a CloudFormation
 // resource type — `AWS::x::y`, but also `Custom::x` (a custom resource such as
-// the DistributedTable GSI manager, which is exactly what a serialized-GSI
+// the KVStore GSI manager, which is exactly what a serialized-GSI
 // deploy sits on) — and LOGICALID is the first token after it. Purely
 // structural: no dependency on CDK's exact spacing or leading fragment.
 const CDK_EVENT_LINE = /\b([A-Z][A-Z0-9_]*(?:_IN_PROGRESS|_COMPLETE|_FAILED))\s*\|\s*([A-Za-z0-9]+::[A-Za-z0-9:]+)\s*\|\s*([^\s|]+)/;

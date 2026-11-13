@@ -5,7 +5,7 @@
  * @aws-blocks/bb-realtime — AWS runtime.
  *
  * Used inside Lambda (resolved via `aws-runtime` condition in package.json).
- * Server-side publish() queries the connections DistributedTable for channel
+ * Server-side publish() queries the connections KVStore for channel
  * subscribers and fans out via API Gateway Management API postToConnection.
  * Server-side subscribe() opens a real WebSocket connection to the API Gateway
  * endpoint for cross-invocation message delivery. getChannel() returns a
@@ -26,7 +26,8 @@ import {
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { type ConnectionRecord, connectionsTableOptions } from './connections.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
 	GetChannelOptions,
@@ -55,26 +56,6 @@ export type {
 	DisconnectReason,
 	RealtimeChannelDescriptor,
 } from './types.js';
-
-// ── Connection record type ──────────────────────────────────────────────────
-
-interface ConnectionRecord {
-	connectionId: string;
-	channel: string;
-	expiresAt: number;
-	connectedAt?: number;
-	lastTtlSweep?: number;
-}
-
-// ── Connections table schema (runtime validation — accepts anything) ────────
-
-const connectionsSchema: StandardSchemaV1<ConnectionRecord> = {
-	'~standard': {
-		version: 1,
-		vendor: 'blocks',
-		validate: (value: unknown) => ({ value: value as ConnectionRecord }),
-	},
-};
 
 // ── Constants (all values in seconds) ───────────────────────────────────────
 
@@ -137,12 +118,13 @@ function getApigw(endpoint?: string, customUserAgent?: [string, string][]): ApiG
 	return client;
 }
 
-// ── DistributedTable instance ───────────────────────────────────────────────
+// ── Connections KVStore instance ────────────────────────────────────────────
 
-let _connectionsTable: DistributedTable<
+let _connectionsTable: KVStore<
 	ConnectionRecord,
-	{ partitionKey: 'connectionId'; sortKey: 'channel' },
-	{ 'channel-index': { partitionKey: 'channel'; sortKey: 'connectionId' } }
+	ConnectionRecord,
+	(typeof connectionsTableOptions)['key'],
+	(typeof connectionsTableOptions)['indexes']
 > | null = null;
 
 function connectionsTable() {
@@ -186,7 +168,7 @@ function getTokenSecretOrNull(): Promise<string | null> {
 	return getTokenSecret().catch(() => null);
 }
 
-// ── DistributedTable helpers ────────────────────────────────────────────────
+// ── Connections table helpers ───────────────────────────────────────────────
 
 async function queryConnectionsByChannel(channel: string): Promise<string[]> {
 	const table = connectionsTable();
@@ -194,7 +176,7 @@ async function queryConnectionsByChannel(channel: string): Promise<string[]> {
 		index: 'channel-index',
 		where: { channel: { equals: channel } },
 	}));
-	return records.map(r => r.connectionId);
+	return records.map(r => r.key.connectionId);
 }
 
 async function deleteConnectionRecords(connectionId: string): Promise<void> {
@@ -202,7 +184,7 @@ async function deleteConnectionRecords(connectionId: string): Promise<void> {
 	const records = await Array.fromAsync(table.query({
 		where: { connectionId: { equals: connectionId } },
 	}));
-	const keys = records.map(r => ({ connectionId: r.connectionId, channel: r.channel }));
+	const keys = records.map(r => r.key);
 	if (keys.length > 0) {
 		await table.deleteBatch(keys);
 	}
@@ -223,7 +205,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		const secret = await getTokenSecret();
 		const valid = validateChannelToken(token, secret);
 		if (!valid) return { statusCode: 403 };
-		await table.put({ connectionId, channel: SENTINEL_SK, connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
+		await table.put({ connectionId, channel: SENTINEL_SK }, { connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
 		return { statusCode: 200 };
 	}
 
@@ -268,7 +250,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			}));
 			return { statusCode: 200 };
 		}
-		await table.put({ connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL });
+		await table.put({ connectionId, channel: msg.channel }, { expiresAt: now + CHANNEL_TTL });
 		await getApigw(callbackUrl).send(new PostToConnectionCommand({
 			ConnectionId: connectionId,
 			Data: JSON.stringify({ type: 'subscribe_success', channel: msg.channel }),
@@ -277,9 +259,10 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		await table.delete({ connectionId, channel: msg.channel });
 	} else if (msg.action === 'ping') {
 		// Get sentinel to read lastTtlSweep, then update TTL
-		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK });
+		const sentinelKey = { connectionId, channel: SENTINEL_SK };
+		const sentinel = await table.get(sentinelKey);
 		if (sentinel) {
-			await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL });
+			await table.put(sentinelKey, { ...sentinel, expiresAt: now + SENTINEL_TTL });
 			const lastSweep = sentinel.lastTtlSweep ?? 0;
 			if (now - lastSweep > SWEEP_INTERVAL) {
 				// Sweep: refresh TTLs on all channel subscriptions
@@ -287,12 +270,12 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 					where: { connectionId: { equals: connectionId } },
 				}));
 				const items = allRecords
-					.filter(r => r.channel !== SENTINEL_SK)
-					.map(r => ({ ...r, expiresAt: now + CHANNEL_TTL }));
+					.filter(r => r.key.channel !== SENTINEL_SK)
+					.map(r => ({ key: r.key, value: { ...r.value, expiresAt: now + CHANNEL_TTL } }));
 				if (items.length > 0) {
 					await table.putBatch(items);
 				}
-				await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
+				await table.put(sentinelKey, { ...sentinel, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
 			}
 		}
 	}
@@ -345,14 +328,9 @@ export const Realtime: {
 		const callbackUrl = process.env.BLOCKS_RT_CALLBACK_URL ?? '';
 		registerSdkIdentifiers(this.fullId, { wsUrl, callbackUrl });
 
-		// Initialize the DistributedTable for connection tracking (shared across instances)
+		// Initialize the connections KVStore for connection tracking (shared across instances)
 		if (!_connectionsTable) {
-			_connectionsTable = new DistributedTable(this, 'connections', {
-				schema: connectionsSchema,
-				key: { partitionKey: 'connectionId', sortKey: 'channel' } as const,
-				indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } } as const,
-				ttl: 'expiresAt',
-			});
+			_connectionsTable = new KVStore(this, 'connections', connectionsTableOptions);
 		}
 
 		// Initialize the token secret via frameworkKey (shared across instances).

@@ -106,7 +106,7 @@ export interface DatabaseOptions {
    *
    * **Why this is a flat ARN** (rather than the `encryption:
    * 'aws-managed' | 'customer-managed' | fromKmsKey(arn)` shape used by
-   * `bb-distributed-table` / `bb-kv-store`): `Database` resolves to a runtime
+   * `bb-kv-store`): `Database` resolves to a runtime
    * entry point that must not import `aws-cdk-lib`, so it cannot expose the
    * CDK-helper `fromKmsKey()` form, and the Data-API access model means there is
    * no per-table managed-key choice to model — storage is either AWS-managed

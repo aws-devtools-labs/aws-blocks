@@ -4,7 +4,7 @@ A single application configuration value backed by SSM Parameter Store.
 
 **When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
 
-**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
+**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 

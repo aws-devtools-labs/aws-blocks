@@ -17,6 +17,7 @@ import { encryptAutoSignInPayload, signSessionId } from './cookies.js';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import { resolveOptions } from './resolve-options.js';
+import { SESSION_STORE_ID } from './session-store-id.js';
 import { SessionStore } from './sessions.js';
 import {
 	Browser,
@@ -237,10 +238,10 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 		});
 	}
 
-	test('an old AuthOIDC row in the same table, reached by a verified cookie → signed-out, cleared, row untouched', async () => {
+	test('a row in another shape (an old AuthOIDC row) in the session store, reached by a verified cookie → signed-out, cleared, row untouched', async () => {
 		const h = makeAuth();
 		const { KVStore } = await import('@aws-blocks/bb-kv-store');
-		const table = new KVStore<unknown>(h.auth, 'sessions');
+		const table = new KVStore<unknown>(h.auth, SESSION_STORE_ID);
 		const oidcRow = {
 			userId: 'https://idp.example.com:sub-1',
 			refreshToken: 'r',
@@ -251,7 +252,7 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 		await table.put('oidc-session-id', oidcRow);
 		const fresh = makeAuth(undefined, { rootId: h.auth.parent.id });
 		await expectSignedOut(fresh, `${fresh.cookieName}=${signSessionId('oidc-session-id', TEST_SECRET)}`, true);
-		const reread = new KVStore<unknown>(fresh.auth, 'sessions');
+		const reread = new KVStore<unknown>(fresh.auth, SESSION_STORE_ID);
 		assert.deepStrictEqual(await reread.get('oidc-session-id'), oidcRow, 'a foreign row is never deleted');
 	});
 
@@ -268,7 +269,7 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 		test(`${label} → signed-out`, async () => {
 			const h = makeAuth();
 			const { KVStore } = await import('@aws-blocks/bb-kv-store');
-			await new KVStore<unknown>(h.auth, 'sessions').put('bad', row);
+			await new KVStore<unknown>(h.auth, SESSION_STORE_ID).put('bad', row);
 			const fresh = makeAuth(undefined, { rootId: h.auth.parent.id });
 			await expectSignedOut(fresh, `${fresh.cookieName}=${signSessionId('bad', TEST_SECRET)}`, true);
 		});

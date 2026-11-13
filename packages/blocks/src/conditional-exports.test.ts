@@ -250,7 +250,6 @@ test('discovery sanity check', () => {
 	assert.ok(packages.length >= 8, `Expected ≥8 BB packages, found ${packages.length}: ${packages.join(', ')}`);
 	for (const expected of [
 		'@aws-blocks/bb-kv-store',
-		'@aws-blocks/bb-distributed-table',
 		'@aws-blocks/bb-data',
 		'@aws-blocks/auth-common',
 	]) {

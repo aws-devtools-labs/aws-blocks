@@ -51,8 +51,10 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
   public, methods })`: its `methods` run only after the session check, with the
   signed-in `user`, and a signed-out call to anything but a `public` method
   (`ping`, `getLastCode`) gets 401 `NotAuthenticatedException`.
-- **DistributedTable** — per-user todos keyed by `userSub` (stable for the
-  user's lifetime), in `auth.protect`'s `methods`.
+- **KVStore** — per-user todos keyed by `userSub` (stable for the
+  user's lifetime), in `auth.protect`'s `methods`. A `KVStore` with a `schema`
+  and a `key` stores records you list or query as a collection; a store fixes
+  its key when you create it.
 
 ⚠️ Decide `users.signInWith`, `users.caseSensitive`, required attributes and custom attributes before
 your first deploy: Cognito can't change them on an existing user pool. Full

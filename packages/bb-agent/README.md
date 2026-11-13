@@ -1350,17 +1350,17 @@ The Agent BB composes several internal Building Blocks automatically:
 | BB | AWS Resource | Purpose |
 |----|-------------|---------|
 | `FileBucket` | S3 | Session snapshot storage (Strands agent state between turns) |
-| `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
+| `KVStore` × 2 | DynamoDB | Conversations table + messages table |
 | `Realtime` | API Gateway WebSocket | Streaming chunks to connected clients |
 
 The streaming loop itself runs on a **Bedrock AgentCore Runtime** (provisioned by `AgentCoreRuntime` — not a composed BB). It's invoked via `InvokeAgentRuntime`, runs the loop for the length of the session (up to 8h), and publishes chunks over the Realtime BB above.
 
-When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
+When `inferenceOnly: true`, the two `KVStore`s are skipped (no conversation persistence).
 
 ## Scaling & Cost (AWS)
 
 - **Model:** Bedrock pay-per-token pricing. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
-- **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
+- **Persistence:** DynamoDB (KVStore) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
 - **Loop compute:** Bedrock AgentCore Runtime — consumption-based (vCPU + memory while a session is active). See [AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/).
 - **Streaming:** API Gateway WebSocket (Realtime) — per-message + per-connection-minute pricing.

@@ -879,7 +879,7 @@ describe('LocalDataProvider', () => {
 		};
 
 		const todos = {
-			type: 'DistributedTable',
+			type: 'KVStore',
 			id: 'todos',
 			fullId: 'my-app-todos',
 			category: 'data' as const,
@@ -1120,7 +1120,7 @@ describe('LocalDataProvider', () => {
 
 		/** Carries a keySchema: the local writer needs it to address a record. */
 		const todos = {
-			type: 'DistributedTable',
+			type: 'KVStore',
 			id: 'todos',
 			fullId: 'my-app-todos',
 			category: 'data' as const,

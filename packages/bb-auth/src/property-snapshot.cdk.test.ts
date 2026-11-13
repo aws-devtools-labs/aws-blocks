@@ -14,6 +14,8 @@
  * `UpdateUserPool` rejects it and the stack rolls back. So this test compares
  * the pool and client `Properties` exactly, and then the **whole template**
  * (IAM policy, session table, secret, groups, everything), for each pair below.
+ * One resource is not kept, the sessions table: `Auth` has a new table for its
+ * session store, pinned by {@link SESSION_STORE}.
  *
  * The `Auth` side is synthesized live under `--conditions=cdk` in the harness
  * stack. The `AuthCognito` side was synthesized the same way, in the same
@@ -42,8 +44,9 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
 /**
  * THE ALLOWLIST — the only differences `Auth` may have from `AuthCognito`, and
  * only on the `AWS::Cognito::UserPool` resource. Nothing else is tolerated —
- * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST})
- * and the password-reset grant ({@link withoutResetGrant}).
+ * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST}),
+ * the password-reset grant ({@link withoutResetGrant}) and the session store
+ * ({@link SESSION_STORE}).
  *
  * The pool honours the stack defaults when `removalPolicy` /
  * `deletionProtection` are unset. `AuthCognito` hard-codes `DESTROY` unless
@@ -100,8 +103,9 @@ function stripAllowlistedProperties(
  * - **New resources only**, all at the stack root under `BlocksAuthPoolGuard*`
  *   (a Lambda + role + policy + log group, its `cr.Provider`, and one
  *   `Custom::BlocksAuthPoolGuard`). None is under the block's subtree, so no
- *   existing logical id — `pool`, `client`, `sessions`, `session-secret`,
- *   `group-<name>` — moves or changes; the tests below check that.
+ *   existing logical id — `pool`, `client`, `session-secret`,
+ *   `group-<name>` — moves or changes; the tests below check that. (The
+ *   sessions table is the one resource that goes: {@link SESSION_STORE}.)
  * - **One `DependsOn` entry on the pool**: `BlocksAuthPoolGuard`. That is the
  *   ordering that makes CloudFormation run the guard *before* the pool update.
  *   `DependsOn` is template metadata: adding it updates no property of the
@@ -128,6 +132,95 @@ function withoutResetGrant(template: CfnTemplateJson): void {
 		const doc = resource.Properties?.PolicyDocument as { Statement: { Action: unknown }[] } | undefined;
 		if (doc) doc.Statement = doc.Statement.filter((s) => JSON.stringify(s.Action) !== reset);
 	}
+}
+
+/**
+ * THE SESSION STORE — the one resource of `AuthCognito` that `Auth` does not
+ * keep. `AuthCognito` kept its sessions in a table under the child id
+ * `sessions`. `Auth` builds its session store under the child id
+ * `session-store`, with the item layout of the `KVStore` of this release, so
+ * an upgrade creates a new table and removes the old one from the stack.
+ * Nothing reads the old table, and each user signs in once more.
+ *
+ * The promise for this one resource, pinned by the tests below:
+ *
+ * - `Auth` has no resource under the logical id of the old sessions table.
+ * - `Auth` has exactly one `AWS::DynamoDB::Table`: the session store, at the
+ *   path and with the table name given here.
+ * - Its `Properties` are the old table's with three changes: the new name, the
+ *   key attribute `_bkv_pk` (was `pk`), and the TTL attribute `_bkv_ttl` (was
+ *   `ttl`).
+ * - Its removal attributes follow the `protection` mapping: a table whose
+ *   deletion protection is on is retained (`'locked'`); any other table has
+ *   the policy of the old table.
+ * - The shared role grants on the session store what it granted on the old
+ *   table, plus `dynamodb:Query` on `<table arn>/index/*`, which the store
+ *   grants with or without indexes.
+ *
+ * Everything else in the template must still equal `AuthCognito`'s. For the
+ * whole-template comparison the two tables are taken out, the index grant is
+ * taken out in its exact form, and a reference to the session store reads as a
+ * reference to the old table. Nothing else is adjusted.
+ */
+const SESSION_STORE = {
+	/** The logical id of `AuthCognito`'s sessions table (child id `sessions`). */
+	legacyLogicalId: 'authsessionstable46C26735',
+	/** The construct path of `Auth`'s session store table (child id `session-store`). */
+	path: 'TestStack/auth/session-store/table/Resource',
+	/** Its table name: `<fullId>-session-store`. */
+	tableName: 'TestStack-auth-session-store',
+	/** The item layout of the `KVStore` of this release. */
+	layout: {
+		KeySchema: [{ AttributeName: '_bkv_pk', KeyType: 'HASH' }],
+		AttributeDefinitions: [{ AttributeName: '_bkv_pk', AttributeType: 'S' }],
+		TimeToLiveSpecification: { AttributeName: '_bkv_ttl', Enabled: true },
+	},
+	/** The one IAM action the store adds, on `<table arn>/index/*`. */
+	indexAction: 'dynamodb:Query',
+} as const;
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** `Auth`'s session store table: the one DynamoDB table of the template. */
+function sessionStoreOf(auth: CfnTemplateJson): [string, CfnResourceJson] {
+	const tables = Object.entries(auth.Resources).filter(([, r]) => r.Type === 'AWS::DynamoDB::Table');
+	assert.strictEqual(
+		tables.length,
+		1,
+		`Auth must synthesize exactly one DynamoDB table (the session store), found ${tables.length}`,
+	);
+	return tables[0];
+}
+
+/**
+ * Take the session store out of the whole-template comparison, as
+ * {@link SESSION_STORE} describes: both tables go, the index grant goes in its
+ * exact form, and what still names the session store names the old table.
+ * Returns `Auth`'s template in that form; `cognito` is changed in place.
+ */
+function withoutSessionStore(cognito: CfnTemplateJson, auth: CfnTemplateJson): CfnTemplateJson {
+	const legacyId = SESSION_STORE.legacyLogicalId;
+	assert.strictEqual(
+		cognito.Resources[legacyId]?.Type,
+		'AWS::DynamoDB::Table',
+		'the frozen AuthCognito template has the sessions table',
+	);
+	assert.strictEqual(auth.Resources[legacyId], undefined, 'Auth has no resource under the old logical id');
+	const [storeId] = sessionStoreOf(auth);
+	delete cognito.Resources[legacyId];
+	delete auth.Resources[storeId];
+	const indexArn = { 'Fn::Join': ['', [{ 'Fn::GetAtt': [storeId, 'Arn'] }, '/index/*']] };
+	const isIndexGrant = (statement: Record<string, unknown>): boolean =>
+		Object.keys(statement).length === 3 &&
+		statement.Action === SESSION_STORE.indexAction &&
+		statement.Effect === 'Allow' &&
+		sameJson(statement.Resource, indexArn);
+	for (const resource of Object.values(auth.Resources)) {
+		if (resource.Type !== 'AWS::IAM::Policy') continue;
+		const doc = resource.Properties?.PolicyDocument as { Statement: Record<string, unknown>[] } | undefined;
+		if (doc) doc.Statement = doc.Statement.filter((statement) => !isIndexGrant(statement));
+	}
+	return JSON.parse(JSON.stringify(auth).replaceAll(JSON.stringify(storeId), JSON.stringify(legacyId)));
 }
 
 function isGuardResource(resource: CfnResourceJson): boolean {
@@ -195,8 +288,9 @@ function withoutAllowlisted(
 	authTemplate: CfnTemplateJson,
 ): [CfnTemplateJson, CfnTemplateJson] {
 	const cognito = structuredClone(cognitoTemplate);
-	const auth = structuredClone(authTemplate);
+	let auth = structuredClone(authTemplate);
 	withoutResetGrant(auth);
+	auth = withoutSessionStore(cognito, auth);
 	const cognitoPool = resourceOfType(cognito, 'AWS::Cognito::UserPool');
 	const authPool = resourceOfType(auth, 'AWS::Cognito::UserPool');
 	if (authPool?.[1].Properties) {
@@ -339,8 +433,13 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					assert.ok(!path.startsWith('TestStack/auth/'), `${id} must not sit under the block (${path})`);
 				}
 				assert.deepStrictEqual(authPool[1].DependsOn, [GUARD_ALLOWLIST.poolDependsOn]);
-				// Every non-guard resource keeps its logical id and Type.
+				// Every non-guard resource keeps its logical id and Type, except the
+				// sessions table, which `Auth` does not have (SESSION_STORE).
 				for (const [id, r] of Object.entries(cognito.Resources)) {
+					if (id === SESSION_STORE.legacyLogicalId) {
+						assert.strictEqual(auth.Resources[id], undefined, `${id} is gone`);
+						continue;
+					}
 					assert.strictEqual(auth.Resources[id]?.Type, r.Type, `${id} kept`);
 				}
 			});
@@ -366,6 +465,53 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 				),
 				['PASSWORD'],
 			);
+		});
+	});
+
+	describe('the session store is one new table; the AuthCognito sessions table is gone', () => {
+		for (const preset of PRESETS) {
+			for (const [name, pair] of Object.entries(PAIRS)) {
+				test(`${preset} preset — pair "${name}"`, () => {
+					const cognito = authCognito(name, preset).template;
+					const auth = synth(pair.auth, preset).template;
+					const legacy = cognito.Resources[SESSION_STORE.legacyLogicalId];
+					assert.strictEqual(
+						legacy?.Type,
+						'AWS::DynamoDB::Table',
+						'the frozen AuthCognito template has the sessions table',
+					);
+					assert.strictEqual(
+						auth.Resources[SESSION_STORE.legacyLogicalId],
+						undefined,
+						'Auth has no resource under the logical id of the old sessions table',
+					);
+					const [storeId, store] = sessionStoreOf(auth);
+					assert.notStrictEqual(storeId, SESSION_STORE.legacyLogicalId);
+					assert.strictEqual(store.Metadata?.['aws:cdk:path'], SESSION_STORE.path);
+					// The old table's properties, with the new name and the layout of this KVStore.
+					assertSame(
+						{ ...legacy.Properties, TableName: SESSION_STORE.tableName, ...SESSION_STORE.layout },
+						store.Properties,
+						'session store Properties',
+					);
+					// The protection mapping: a protected table is retained; any other keeps the old policy.
+					const expectedPolicy =
+						legacy.Properties?.DeletionProtectionEnabled === true ? 'Retain' : legacy.DeletionPolicy;
+					assert.strictEqual(store.DeletionPolicy, expectedPolicy, 'DeletionPolicy');
+					assert.strictEqual(store.UpdateReplacePolicy, expectedPolicy, 'UpdateReplacePolicy');
+				});
+			}
+		}
+
+		test("removalPolicy: 'destroy' under defaults that protect: the session store is 'locked' (retained and protected)", () => {
+			// The one pair that sets `removalPolicy: 'destroy'`, under the production preset.
+			const legacy = authCognito('everything').template.Resources[SESSION_STORE.legacyLogicalId];
+			const [, store] = sessionStoreOf(synth(PAIRS.everything.auth).template);
+			assert.strictEqual(legacy?.DeletionPolicy, 'Delete');
+			assert.strictEqual(legacy?.Properties?.DeletionProtectionEnabled, true);
+			assert.strictEqual(store.DeletionPolicy, 'Retain');
+			assert.strictEqual(store.UpdateReplacePolicy, 'Retain');
+			assert.strictEqual(store.Properties?.DeletionProtectionEnabled, true);
 		});
 	});
 

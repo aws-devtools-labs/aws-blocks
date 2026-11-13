@@ -3,7 +3,7 @@
 
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -13,7 +13,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
 import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
-import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { type messageSchema, type conversationSchema, agentStreamChunkSchema, conversationsTableOptions, messagesTableOptions } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, ToolHandlerArgs, CannedToolHints } from './types.js';
 import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolError, wrapUntrustedToolOutput } from './untrusted.js';
@@ -195,7 +195,7 @@ async function createConversationManager(config?: ConversationManagerConfig) {
  *
  * Creates internal BBs depending on mode:
  * - FileBucket: session snapshot storage for Strands SessionManager (always)
- * - DistributedTable: frontend message history (when inferenceOnly = false)
+ * - KVStore: frontend message history (when inferenceOnly = false)
  * - Realtime: streaming chunks to browser (always)
  *
  * The agent loop runs via {@link dispatchTurn}: in-process locally (mock), and on the
@@ -208,9 +208,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Tools resolved from the `tools` callback into a name→tool map (name = Record key). */
 	private toolMap: Map<string, AgentTool<TContext>>;
 	/** Conversation metadata table. */
-	private conversations?: DistributedTable<z.infer<typeof conversationSchema>, { partitionKey: 'userId'; sortKey: 'conversationId' }>;
+	private conversations?: KVStore<
+		z.input<typeof conversationSchema>,
+		z.infer<typeof conversationSchema>,
+		(typeof conversationsTableOptions)['key']
+	>;
 	/** Message history table. */
-	private messages?: DistributedTable<z.infer<typeof messageSchema>, { partitionKey: 'conversationId'; sortKey: 'messageId' }>;
+	private messages?: KVStore<
+		z.input<typeof messageSchema>,
+		z.infer<typeof messageSchema>,
+		(typeof messagesTableOptions)['key']
+	>;
 	/** Realtime pub/sub — streams chunks to browser. */
 	private rt: InstanceType<typeof Realtime>;
 	/** Which model provider to use. */
@@ -246,14 +254,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
-			this.conversations = new DistributedTable(this, 'convos', {
-				schema: conversationSchema,
-				key: { partitionKey: 'userId', sortKey: 'conversationId' },
-			});
-			this.messages = new DistributedTable(this, 'messages', {
-				schema: messageSchema,
-				key: { partitionKey: 'conversationId', sortKey: 'messageId' },
-			});
+			this.conversations = new KVStore(this, 'convos', conversationsTableOptions);
+			this.messages = new KVStore(this, 'messages', messagesTableOptions);
 		}
 
 		this.rt = new Realtime(this, 'rt', {
@@ -340,7 +342,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
-					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
+					await this.saveMessage({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
 				}
 			} catch (persistErr) {
 				this.log.error('Failed to persist error to history', { error: persistErr });
@@ -479,7 +481,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// Only persist user message on initial path (not resume)
 		if (!interruptResponses && conversationId && this.messages) {
-			await this.messages.put({ conversationId, messageId: ulid(), role: 'user' as const, content: message, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: '{}' });
+			await this.saveMessage({ conversationId, messageId: ulid(), role: 'user' as const, content: message, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: '{}' });
 		}
 
 		let fullText = '';
@@ -514,12 +516,12 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				} else if (event instanceof BeforeToolCallEvent) {
 					await this.rt.publish('chunks', channelId, { type: 'tool-call', toolName: event.toolUse.name, input: event.toolUse.input });
 					if (conversationId && this.messages) {
-						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-call' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolInput: event.toolUse.input }) });
+						await this.saveMessage({ conversationId, messageId: ulid(), role: 'tool-call' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolInput: event.toolUse.input }) });
 					}
 				} else if (event instanceof AfterToolCallEvent) {
 					await this.rt.publish('chunks', channelId, { type: 'tool-result', toolName: event.toolUse.name });
 					if (conversationId && this.messages) {
-						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-result' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolOutput: event.result?.content }) });
+						await this.saveMessage({ conversationId, messageId: ulid(), role: 'tool-result' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolOutput: event.result?.content }) });
 					}
 				} else if (event instanceof AgentResultEvent) {
 					const u = event.result.metrics?.toJSON()?.accumulatedUsage;
@@ -540,7 +542,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						});
 						// Persist interrupt to DynamoDB for reload/audit
 						if (conversationId && this.messages) {
-							await this.messages.put({ conversationId, messageId: ulid(), role: 'interrupt' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interrupts: pendingInterrupts }) });
+							await this.saveMessage({ conversationId, messageId: ulid(), role: 'interrupt' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interrupts: pendingInterrupts }) });
 						}
 					}
 				}
@@ -579,7 +581,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				// AfterToolCallEvent for a call cancelled via `event.cancel` (carrying the
 				// cancellation as the result), which the loop above persists as
 				// 'tool-result', so no dangling tool_use is left behind for the next turn.
-				await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
+				await this.saveMessage({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
 			}
 			await this.rt.publish('chunks', channelId, { type: 'error', error: stoppedError });
 			return;
@@ -589,14 +591,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (interrupted) return;
 
 		if (conversationId && this.messages) {
-			await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ usage, latencyMs }) });
+			await this.saveMessage({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ usage, latencyMs }) });
 		}
 
-		// TODO: use partial update when DistributedTable supports it (DynamoDB UpdateItem)
+		// TODO: use partial update when KVStore supports it (DynamoDB UpdateItem)
 		if (conversationId && this.conversations) {
 			const existing = await this.conversations.get({ userId, conversationId });
 			if (existing) {
-				await this.conversations.put({ ...existing, updatedAt: Date.now() });
+				await this.conversations.put({ userId, conversationId }, { ...existing, updatedAt: Date.now() });
 			}
 		}
 
@@ -852,7 +854,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (conversationId && this.messages) {
 			for (const r of responses) {
 				const content = r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no';
-				await this.messages.put({ conversationId, messageId: ulid(), role: 'approval' as const, content, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interruptId: r.interruptId, approved: r.approved, trust: r.trust ?? false, response: r.response, toolName: r.toolName, input: r.input }) });
+				await this.saveMessage({ conversationId, messageId: ulid(), role: 'approval' as const, content, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interruptId: r.interruptId, approved: r.approved, trust: r.trust ?? false, response: r.response, toolName: r.toolName, input: r.input }) });
 			}
 		}
 		// Translate to format for Strands — use response directly if provided, otherwise translate from approved/trust
@@ -999,7 +1001,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (!this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'createConversationId() requires persistence. Set inferenceOnly: false (default).');
 		const conversationId = crypto.randomUUID();
 		const now = Date.now();
-		await this.conversations.put({ userId, conversationId, name: conversationId, createdAt: now, updatedAt: now });
+		await this.conversations.put({ userId, conversationId }, { name: conversationId, createdAt: now, updatedAt: now });
 		return conversationId;
 	}
 
@@ -1039,7 +1041,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
 		let lastInterrupt: any = null;
-		for await (const msg of this.messages.query({ where: { conversationId: { equals: conversationId } }, order: 'desc' })) {
+		for await (const { value: msg } of this.messages.query({ where: { conversationId: { equals: conversationId } }, order: 'desc' })) {
 			if (msg.role === 'approval') {
 				approvedIds.add(JSON.parse(msg.metadata).interruptId);
 			} else if (msg.role === 'interrupt') {
@@ -1058,7 +1060,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	async listConversations(userId: string): Promise<Conversation[]> {
 		if (!this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'listConversations() requires persistence. Set inferenceOnly: false (default).');
 		const result: Conversation[] = [];
-		for await (const item of this.conversations.query({ where: { userId: { equals: userId } } })) {
+		for await (const { value: item } of this.conversations.query({ where: { userId: { equals: userId } } })) {
 			result.push({ conversationId: item.conversationId, name: item.name, createdAt: item.createdAt, updatedAt: item.updatedAt });
 		}
 		return result.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1090,7 +1092,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// messages" so neither 0 nor a negative value is silently read as "no limit".
 		if (options?.limit !== undefined && options.limit <= 0) return [];
 		const result: Message[] = [];
-		for await (const item of this.messages.query({ where: { conversationId: { equals: id } }, order: 'desc' })) {
+		for await (const { value: item } of this.messages.query({ where: { conversationId: { equals: id } }, order: 'desc' })) {
 			result.push({
 				messageId: item.messageId,
 				role: item.role,
@@ -1118,11 +1120,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		await this.conversations.delete({ userId, conversationId: id });
 		// Delete all messages in batch
 		const toDelete: { conversationId: string; messageId: string }[] = [];
-		for await (const item of this.messages.query({ where: { conversationId: { equals: id } } })) {
-			toDelete.push({ conversationId: item.conversationId, messageId: item.messageId });
+		for await (const { key } of this.messages.query({ where: { conversationId: { equals: id } } })) {
+			toDelete.push(key);
 		}
 		if (toDelete.length > 0) await this.messages.deleteBatch(toDelete);
 		// Delete agent session data
 		await this.snapshotStorage.deleteSession({ sessionId: id });
+	}
+
+	/** Persist one message under its `{ conversationId, messageId }` key. A no-op without persistence. */
+	private async saveMessage(record: z.infer<typeof messageSchema>): Promise<void> {
+		if (!this.messages) return;
+		await this.messages.put({ conversationId: record.conversationId, messageId: record.messageId }, record);
 	}
 }

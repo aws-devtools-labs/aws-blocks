@@ -360,6 +360,8 @@ describe('isAncillaryStoreName', () => {
 		for (const name of [
 			'myapp-codes',
 			'myapp-sessions',
+			'myapp-auth-session-store',
+			'MyApp-Session-Store',
 			'myapp-tokens',
 			'myapp-challenges',
 			'myapp-cache',

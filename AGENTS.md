@@ -98,7 +98,7 @@ await api.addNote('hello');
 
 | Your BB is… | Reference | Note |
 |---|---|---|
-| key/value or single-table | `bb-kv-store` / `bb-distributed-table` | the typical file skeleton below |
+| key/value, documents, or single-table | `bb-kv-store` | the typical file skeleton below |
 | relational / SQL | `bb-data` (`Database`) / `bb-distributed-data` (`DistributedDatabase`) | `migrationsPath` + ordered `.sql` |
 | auth, or composed from other BBs | `bb-auth` | composes `KVStore` (`sessions`) + `AppSetting` (`session-secret`) in every layer (see `index.cdk.ts`, `sessions.ts`); a base class + injected engines (`auth-base.ts`, `engines/`); exposes `createApi()`. A new sign-in method is an `Auth` option, not a new auth BB |
 | background work (SQS + event source) | `bb-async-job` | `submit()` + a job handler |

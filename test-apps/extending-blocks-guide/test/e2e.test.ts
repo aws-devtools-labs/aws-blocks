@@ -59,7 +59,7 @@ describe('extending-blocks-guide e2e', () => {
     assert.strictEqual(got.value, 'hello-from-pattern-2');
   });
 
-  test('Pattern 2b: DistributedTable.fromExisting put + get', async () => {
+  test('Pattern 2b: KVStore.fromExisting with a declared key put + get', async () => {
     const user = {
       userId: `user-${Date.now()}`,
       email: 'pattern-2b@example.com',

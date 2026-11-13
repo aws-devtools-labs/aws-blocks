@@ -106,8 +106,8 @@ export class Database extends BuildingBlockScope {
       // Provisioning-only options don't apply to an external database — we never
       // emit an Aurora cluster to attach them to. Surface that at synth so a
       // `storageEncryptionKeyArn` or `pointInTimeRecovery` on what looks like a
-      // managed database isn't a silent no-op (mirrors DT's
-      // bb-distributed-table:IgnoredOptionsForExistingTable).
+      // managed database isn't a silent no-op (mirrors KVStore's
+      // bb-kv-store:IgnoredOptionsForExistingTable).
       const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn'] as const).filter(
         (key) => options[key] !== undefined,
       );
@@ -167,8 +167,8 @@ export class Database extends BuildingBlockScope {
     if (typeof pitrSetting === 'object' && pitrSetting !== null) {
       // `{ retentionDays: n }` — enable backups and pin the window. Aurora
       // requires an integer 1–35; warn and fall back to the enabled default on an
-      // out-of-range value rather than failing the deploy (mirrors DT's
-      // bb-distributed-table:InvalidPitrDays handling).
+      // out-of-range value rather than failing the deploy (mirrors KVStore's
+      // bb-kv-store:InvalidPitrDays handling).
       const days = pitrSetting.retentionDays;
       if (!Number.isInteger(days) || days < 1 || days > 35) {
         cdk.Annotations.of(this).addWarningV2(

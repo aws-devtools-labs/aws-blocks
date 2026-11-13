@@ -64,14 +64,14 @@ Blocks compose. Here's the same API gated behind authentication and backed by a 
 
 ```typescript
 // aws-blocks/index.ts
-import { Scope, ApiNamespace, Auth, DistributedTable } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, Auth, KVStore } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 const auth = new Auth(scope, 'auth', { emailPassword: { passwordPolicy: { minLength: 8 } } });
 
-const notes = new DistributedTable(scope, 'notes', {
+const notes = new KVStore(scope, 'notes', {
   schema: z.object({ userId: z.string(), noteId: z.string(), text: z.string() }),
   key: { partitionKey: 'userId', sortKey: 'noteId' },
 });
@@ -83,12 +83,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async addNote(text: string) {
     const user = await auth.requireAuth(context);          // 401s if not signed in
     const noteId = crypto.randomUUID();
-    await notes.put({ userId: user.userSub, noteId, text });
+    await notes.put({ userId: user.userSub, noteId }, { text });
     return { noteId };
   },
   async listNotes() {
     const user = await auth.requireAuth(context);
-    return await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
+    const entries = await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
+    return entries.map((entry) => entry.value);
   },
 }));
 ```
@@ -114,8 +115,8 @@ A frontend served from another origin than the API signs in with a federated pro
 Start from what you need:
 
 - **Store data**
-  - Simple key → value (caches, flags, user prefs) → `KVStore` (bb-kv-store)
-  - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
+  - Values that you read by one key (caches, flags, user preferences) → `KVStore` (bb-kv-store) with no options
+  - Records that you list or query, with indexes → `KVStore` (bb-kv-store) with a `schema` and a `key` — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
   - A single config value → `AppSetting` (bb-app-setting)
@@ -142,7 +143,7 @@ Start from what you need:
 
 ### Choosing a data block
 
-Default to `DistributedTable` for your data models unless your domain specifically requires SQL engine capabilities.
+Default to `KVStore` for your data models unless your domain specifically requires SQL engine capabilities. Give a store a `schema` and a `key` for records that you list or query as a collection; use it with no options for values that you read by one key. Decide before you create the store: a store cannot change its key.
 
 Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
@@ -187,11 +188,10 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
 | bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
-| bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
 | bb-email-client | Transactional email sending via Amazon SES. | — |
 | bb-file-bucket | File storage backed by Amazon S3. | — |
 | bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
-| bb-kv-store | Simple key-value storage backed by DynamoDB. | — |
+| bb-kv-store | Key-value and document storage backed by DynamoDB, with optional secondary indexes. | — |
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
@@ -365,7 +365,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
-- **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
+- **`Database` when `KVStore` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations
@@ -409,7 +409,7 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 
 ## Reference
 
-- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
+- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-kv-store/README.md`. The catalog + decision tree live in `docs/README.md`.
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

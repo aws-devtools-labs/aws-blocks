@@ -67,7 +67,7 @@ Only the methods your handler's object defines are callable — its own properti
 
 The RPC endpoint dispatches `<exportName>.<method>` against your backend module's exports. Export **`ApiNamespace` values** for anything the client should call — and keep Building Block instances unexported (or reach them only through a gated method):
 
-- An exported **Building Block instance** (e.g. `export const todos = new DistributedTable(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
+- An exported **Building Block instance** (e.g. `export const todos = new KVStore(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
 - **`_`-prefixed exports** are private: they get no client proxy and are not dispatched.
 - **`secret()` / `config()` markers** are deferred values, not APIs: they get no client proxy and are not dispatched.
 - Only **callable methods** are dispatched; members inherited from `Object.prototype` (`toString`, `constructor`, `hasOwnProperty`, …) are never reachable.
@@ -542,8 +542,7 @@ Tear a preview sandbox down with `npm run sandbox:destroy`.
 
 Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):
 
-- `@aws-blocks/bb-kv-store` — Key-value storage
-- `@aws-blocks/bb-distributed-table` — Tables with Zod schemas and indexes
+- `@aws-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
 - `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
 - `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
 - `@aws-blocks/bb-data` — SQL database

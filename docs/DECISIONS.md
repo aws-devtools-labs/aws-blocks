@@ -106,7 +106,7 @@ The wire format now carries `name` (the BB-level error name) alongside `message`
 
 ### Amendment (2026-09-30, default): message forwarding for branded BB errors
 
-An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (`bb-kv-store` / `bb-distributed-table` item-too-large remaps, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
+An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (the `bb-kv-store` item-too-large remap, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
 
 ## D-004: Auth-first naming convention for auth Building Blocks
 
@@ -627,16 +627,16 @@ write-back/staging machinery.
   `packages/core/src/db-naming.ts`, `packages/core/src/scripts/ensure-secrets.ts`,
   `packages/bb-data/src/db-pull/generate.ts`.
 
-## D-015: `DistributedTable` reads default to `readValidation: 'coerce'` (not `'off'`)
+## D-015: `KVStore` reads default to `readValidation: 'coerce'` (not `'off'`)
 
 **Date**: 2026-08-03
 **Authors:** osama-rizk
 
 ### Context
 
-`DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
+`KVStore.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). (The decision was taken for `DistributedTable`, the schema-and-key table block; that block has since been folded into `KVStore`, whose `schema` + `key` form carries the same behaviour.) After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
 
-The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-10).
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-kv-store/DESIGN.md` and the "Reads and schema changes" section of `packages/bb-kv-store/README.md`.
 
 ### Decision
 
@@ -665,8 +665,8 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 ### References
 
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
-- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-10.
-- Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
+- Per-BB mechanics: `packages/bb-kv-store/DESIGN.md` (D-KV-10); user-facing modes in `packages/bb-kv-store/README.md` ("Reads and schema changes").
+- Code: `packages/bb-kv-store/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
 
 ## D-016: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
 
@@ -966,7 +966,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 - **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
 - **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
-- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids for the user pool, the app client and the session secret, its pool name and its session format, so an app that switches keeps its user pool and its users. Signed-in sessions do not carry over: the session store is a new table, so each user signs in once (`packages/bb-auth/MIGRATION.md`).
 - **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
 
 ### Rationale
