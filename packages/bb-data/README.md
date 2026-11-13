@@ -270,16 +270,19 @@ the transaction should continue.
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
-  encryption at rest is an **explicit choice**, made with the
-  `"@aws-blocks/bb-data:encryptStorageByDefault"` context flag in `cdk.json`, so a
-  dependency upgrade never changes the encryption of an existing cluster:
-  - `true` — encrypt the cluster storage with the account's AWS-managed `aws/rds`
-    key. New `create-blocks-app` projects already set this.
+  is **encrypted at rest by default**, with the account's AWS-managed `aws/rds`
+  key. The `"@aws-blocks/bb-data:encryptStorageByDefault"` context flag in
+  `cdk.json` is only needed to opt out:
+  - **not set** or `true` — encrypt the cluster storage (`StorageEncrypted: true`).
+    New `create-blocks-app` projects set `true` explicitly.
   - `false` — keep an existing unencrypted cluster exactly as it is (the
     `StorageEncrypted` property is left unset). Synth emits a
     `@aws-blocks/bb-data:StorageEncryptionDisabled` warning pointing at
     [Enabling storage encryption on an existing database](#enabling-storage-encryption-on-an-existing-database).
-  - **not set** — synth **fails** with an error asking you to choose.
+
+  An existing cluster created without encryption is **not** replaced silently:
+  the [pre-deploy storage-encryption check](#pre-deploy-storage-encryption-check)
+  stops the deploy first.
 
   The flag also accepts `1`/`0` and the strings `"true"`/`"false"`/`"1"`/`"0"`
   (case-insensitive, e.g. from `--context`); any other value fails synth. Passing a
@@ -336,15 +339,50 @@ the transaction should continue.
 > removing `storageEncryptionKeyArn`) on a project that already deployed encrypted
 > also changes the `StorageEncrypted` property, so it **likewise replaces the
 > cluster** (back to unencrypted) with the same new-empty-cluster / no-schema
-> outcome. Deleting the flag outright fails synth instead. Adding or changing the
+> outcome; the pre-deploy check does not cover this direction. Adding or changing the
 > KMS key also replaces the cluster's generated credentials secret (a new logical
 > id, hence a new generated password). Follow the steps below to carry data across.
 
+### Pre-deploy storage-encryption check
+
+`npm run deploy` and `npm run sandbox` run a check from this package before
+`cdk deploy` (declared as `aws-blocks.predeploy` in its `package.json`). It
+synthesizes the app and, for every managed `Database` cluster the template
+encrypts, reads the deployed stack from CloudFormation:
+
+- stack or cluster not deployed yet → pass (the cluster is new);
+- deployed cluster encrypted → pass;
+- deployed cluster **unencrypted** → the deploy **stops** before any change, naming
+  the cluster and its construct path, with the two options below.
+
+The check only reads (`cloudformation:DescribeStacks`,
+`cloudformation:DescribeStackResource`, `cloudformation:GetTemplate`) and uses the
+same Region and profile as the deploy. It **fails closed**: if a lookup fails
+(missing permission, throttling, any other error), the deploy stops with a message
+saying the cluster could not be checked. Grant those permissions and retry, or —
+after checking the cluster's encryption in the RDS console — set the flag to
+`false` to keep an unencrypted cluster, or set
+`BLOCKS_SKIP_STORAGE_ENCRYPTION_CHECK=1` for that deploy if it is already
+encrypted. A cluster with the flag set to `false` is not checked.
+
+Known gaps:
+
+- `npx cdk deploy` run directly does not run the check; use `npm run deploy` /
+  `npm run sandbox`, or run `npx cdk diff` first and look for an
+  `AWS::RDS::DBCluster` replacement.
+- `npm run sandbox` runs the check once, before its initial deploy. The
+  `cdk watch` iterations that follow do not run it.
+- The check needs a version of `@aws-blocks/core` whose `deploy` / `sandbox`
+  scripts run declared pre-deploy hooks.
+
 ### Enabling storage encryption on an existing database
 
-If your project was deployed before it set the
-`"@aws-blocks/bb-data:encryptStorageByDefault"` flag, its Aurora cluster is
-unencrypted and synth now fails until you choose. You have two options.
+If your project was deployed while its Aurora cluster was unencrypted (before
+storage encryption became the default, or with the
+`"@aws-blocks/bb-data:encryptStorageByDefault"` flag set to `false`), deploying
+with encryption on would replace the cluster, so the
+[pre-deploy check](#pre-deploy-storage-encryption-check) stops the deploy. You have
+two options.
 
 **Option 1 — keep the existing cluster as it is.** Set the flag to `false` in
 `cdk.json`. The cluster's template is unchanged (nothing is replaced) and synth
@@ -358,8 +396,8 @@ emits a warning that its storage is unencrypted. You can migrate later.
 }
 ```
 
-**Option 2 — move the data onto an encrypted cluster.** Setting the flag to `true`
-on an existing unencrypted cluster replaces it with a new, empty one (see above),
+**Option 2 — move the data onto an encrypted cluster.** Turning encryption on
+for an existing unencrypted cluster replaces it with a new, empty one (see above),
 so instead restore an encrypted copy yourself and point the block at it with
 `fromExisting()`. Start from Option 1 (flag `false`) so deploys stay safe while you
 migrate, and plan a **write freeze** from step 2 until the deploy in step 6
@@ -541,10 +579,9 @@ interface DatabaseOptions {
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
    * (also encrypts the auto-generated credentials secret). Supplying it turns
    * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
-   * context flag (and satisfies synth even when the flag is absent). When omitted,
-   * encryption follows that flag — on with the account's AWS-managed `aws/rds` key
-   * when `true`, left unset (with a synth warning) when `false`, and synth fails
-   * when the flag is not set. The key is
+   * context flag. When omitted, storage is encrypted by default with the
+   * account's AWS-managed `aws/rds` key; only setting that flag to `false` leaves
+   * it unset (with a synth warning). The key is
    * imported, so its policy must already grant the deploying principal
    * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
    * reading the credentials secret; it must be in the same account + region.

@@ -105,7 +105,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is an **explicit choice** via the `@aws-blocks/bb-data:encryptStorageByDefault` context flag: `true` emits `storageEncrypted: true` (new `create-blocks-app` projects set it), `false` leaves the `StorageEncrypted` property unset so an existing cluster is not replaced (with a synth warning), and an absent flag fails synth. A `storageEncryptionKeyArn` turns encryption on regardless of the flag. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage is **encrypted at rest by default** (`storageEncrypted: true`, AWS-managed `aws/rds` key). Setting the `@aws-blocks/bb-data:encryptStorageByDefault` context flag to `false` opts out: the `StorageEncrypted` property is left unset so an existing unencrypted cluster is not replaced (with a synth warning). A `storageEncryptionKeyArn` turns encryption on with that customer-managed key regardless of the flag |
 | VPC + private subnets | Network isolation |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
@@ -119,25 +119,47 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ### Security posture (Aurora)
 
-- **Encryption at rest is an explicit, fail-closed choice**, so a dependency
-  bump can never change `StorageEncrypted` on an existing cluster (a change
-  CloudFormation applies as a destructive replacement). The CDK layer normalizes
-  the `@aws-blocks/bb-data:encryptStorageByDefault` context flag (booleans, `1`/`0`,
+- **Encryption at rest is on by default.** The CDK layer normalizes the
+  `@aws-blocks/bb-data:encryptStorageByDefault` context flag (booleans, `1`/`0`,
   and the strings `true`/`false`/`1`/`0`, case-insensitive and trimmed) and then:
-  - `true` → emits `storageEncrypted: true` (the `create-blocks-app` templates set
-    it, so new projects are encrypted);
-  - `false` → leaves the `StorageEncrypted` property unset — the same template an
-    existing, implicitly-unencrypted cluster was deployed with — and emits a
-    `@aws-blocks/bb-data:StorageEncryptionDisabled` synth warning pointing at the
-    README migration steps. An explicit `StorageEncrypted: false` is never
-    emitted, because that too would be a template change on an existing cluster;
-  - absent → **fails synth** with an error explaining both choices;
+  - absent or `true` → emits `storageEncrypted: true` and marks the cluster
+    resource with `@aws-blocks/bb-data:database` metadata (the Database's full
+    id) for the pre-deploy check below;
+  - `false` → explicit opt-out: leaves the `StorageEncrypted` property unset — the
+    same template an existing, implicitly-unencrypted cluster was deployed with,
+    with no marker — and emits a `@aws-blocks/bb-data:StorageEncryptionDisabled`
+    synth warning pointing at the README migration steps. An explicit
+    `StorageEncrypted: false` is never emitted, because that too would be a
+    template change on an existing cluster;
   - any other value → fails synth, listing the accepted values.
 
-  A customer-managed KMS key, when supplied, is itself the decision: it encrypts
-  both the storage volume and the auto-generated credentials secret and forces
-  encryption on regardless of the flag. `fromExisting()` connections provision
-  nothing, so the flag is not read for them.
+  A customer-managed KMS key, when supplied, encrypts both the storage volume and
+  the auto-generated credentials secret and forces encryption on regardless of
+  the flag. `fromExisting()` connections provision nothing, so the flag is not
+  read for them.
+- **Pre-deploy storage-encryption check** (`src/predeploy.ts`, declared as
+  `aws-blocks.predeploy` in `package.json` for the `production` and `sandbox`
+  stages). Turning encryption on for a cluster that was deployed unencrypted is a
+  CloudFormation replacement (a new, empty cluster), so before `cdk deploy` the
+  hook takes the synthesized templates from `context.synth()`, finds every marked
+  `AWS::RDS::DBCluster` with `StorageEncrypted: true`, and per cluster:
+  `DescribeStacks` (stack missing → pass), `DescribeStackResource` on the logical
+  id (not found → pass: the cluster is created, not replaced), then `GetTemplate`
+  (original stage) and reads the deployed `StorageEncrypted`. `true` → pass;
+  unset/`false` → the hook returns a stop naming the cluster, its construct path,
+  and the two ways forward (flag `false`, or the README migration). The deployed
+  template is authoritative here because `StorageEncrypted` cannot change without
+  a replacement, so it is what the cluster was created with; reading it needs
+  only CloudFormation, which the deploy credentials already use. Any lookup
+  failure other than "does not exist" (AccessDenied, throttling, unparsable
+  template, an unreadable value) is a stop as well — the check fails closed.
+  `BLOCKS_SKIP_STORAGE_ENCRYPTION_CHECK=1` skips it for one deploy. Region and
+  profile come from core's `resolveDeploymentTarget`, the same resolution the
+  deploy uses. Known gaps: `npx cdk deploy` run directly skips the hook; the
+  sandbox runs it once before its initial deploy, not on `cdk watch` iterations;
+  the encrypted → unencrypted direction (flag set to `false` on an encrypted
+  cluster) is not checked; and the hook runs only with a core whose `deploy` /
+  `sandbox` scripts run declared pre-deploy hooks.
 - **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
   exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
   direct DB socket, so database-level IAM authentication does not apply to this
@@ -165,7 +187,7 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   `true` to `false` (or removing `storageEncryptionKeyArn`) on a project that
   already deployed encrypted also changes `StorageEncrypted` and so **likewise
   replaces the cluster** (back to unencrypted), with the same new-empty-cluster /
-  no-schema outcome; deleting the flag outright fails synth instead. The only safe
+  no-schema outcome (the pre-deploy check does not cover that direction). The only safe
   route is to snapshot the existing cluster, restore it with encryption enabled,
   then cut over to it with `connection: fromExisting(...)` — the README section
   "Enabling storage encryption on an existing database" has the exact steps,

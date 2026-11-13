@@ -131,13 +131,13 @@ class StubBlocksStack extends cdk.Stack {
 const ENCRYPT_FLAG = '@aws-blocks/bb-data:encryptStorageByDefault';
 
 /**
- * Build a stub Blocks stack for Database synth tests. `context` defaults to the
- * create-blocks-app baseline (`encryptStorageByDefault: true`), since an absent
- * flag fails synth; pass an explicit context (e.g. `{}`) to override it.
+ * Build a stub Blocks stack for Database synth tests. `context` defaults to none
+ * (no `encryptStorageByDefault` flag, so storage is encrypted by default); pass
+ * an explicit context to set the flag.
  */
 function setupDatabaseStack(
   defaults: BlocksDefaults = BlocksPresets.production,
-  context: Record<string, unknown> = { [ENCRYPT_FLAG]: true },
+  context: Record<string, unknown> = {},
 ): {
   stack: StubBlocksStack;
   parent: Scope;
@@ -150,8 +150,7 @@ function setupDatabaseStack(
 }
 
 test('Database: storageEncryptionKeyArn sets the cluster KmsKeyId to that ARN', () => {
-  // No encryptStorageByDefault flag: a CMK is itself the encryption decision, so
-  // synth must not fail and the cluster is encrypted with that key.
+  // No encryptStorageByDefault flag: the cluster is encrypted with that key.
   const { stack, parent } = setupDatabaseStack(BlocksPresets.production, {});
   const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
   new Database(parent, 'main', { storageEncryptionKeyArn: keyArn });
@@ -186,19 +185,20 @@ for (const preset of [
   { name: 'production', defaults: BlocksPresets.production },
   { name: 'sandbox', defaults: BlocksPresets.sandbox },
 ]) {
-  test(`Database (${preset.name}): an absent encryptStorageByDefault flag with no CMK fails synth`, () => {
-    const { parent } = setupDatabaseStack(preset.defaults, {});
-    assert.throws(
-      () => new Database(parent, 'main', {}),
-      (err: unknown) => {
-        assert.ok(err instanceof Error);
-        assert.match(err.message, /storage encryption must be acknowledged/);
-        assert.match(err.message, /set "@aws-blocks\/bb-data:encryptStorageByDefault": true/);
-        assert.match(err.message, /set the flag to false to keep the current cluster as-is/);
-        assert.match(err.message, /#enabling-storage-encryption-on-an-existing-database/);
-        return true;
-      },
-    );
+  test(`Database (${preset.name}): an absent encryptStorageByDefault flag encrypts storage by default`, () => {
+    const { stack, parent } = setupDatabaseStack(preset.defaults, {});
+    new Database(parent, 'main', {});
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::RDS::DBCluster', {
+      StorageEncrypted: true,
+      KmsKeyId: Match.absent(),
+    });
+    // The cluster carries the marker the pre-deploy storage-encryption check uses.
+    const clusters = template.findResources('AWS::RDS::DBCluster');
+    const metadata = Object.values(clusters)[0].Metadata;
+    // The value is the Database's full id (also used in the synth warnings).
+    assert.equal(metadata?.['@aws-blocks/bb-data:database'], 'TestStack-app-main');
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('storage-at-rest encryption is not enabled'));
   });
 
   for (const flag of [true, 'true', 'True', ' TRUE ', 1, '1']) {
@@ -226,6 +226,9 @@ for (const preset of [
       const clusters = template.findResources('AWS::RDS::DBCluster');
       const props = Object.values(clusters)[0].Properties;
       assert.ok(!('StorageEncrypted' in props), 'StorageEncrypted must be absent, not false');
+      // ...and no pre-deploy check marker, so the opted-out template is unchanged.
+      const metadata = Object.values(clusters)[0].Metadata ?? {};
+      assert.ok(!('@aws-blocks/bb-data:database' in metadata), 'no storage-encryption marker when opted out');
       Annotations.fromStack(stack).hasWarning(
         '*',
         Match.stringLikeRegexp('storage-at-rest encryption is not enabled.*#enabling-storage-encryption-on-an-existing-database'),
@@ -244,7 +247,7 @@ for (const preset of [
   }
 }
 
-test('Database: fromExisting() does not require the encryptStorageByDefault flag', () => {
+test('Database: fromExisting() provisions no cluster without the encryptStorageByDefault flag', () => {
   const { stack, parent } = setupDatabaseStack(BlocksPresets.production, {});
   new Database(parent, 'ext', {
     connection: {

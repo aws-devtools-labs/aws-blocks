@@ -57,7 +57,7 @@ export interface AuroraInfraConfig {
   storageEncryptionKey?: kms.IKey;
   /**
    * Whether to encrypt the cluster storage at rest. Two states, by design:
-   * - `true` → emit `storageEncrypted: true` (opt in).
+   * - `true` → emit `storageEncrypted: true` (the default).
    * - `undefined` → leave the property **unset** so an existing, implicitly
    *   unencrypted cluster is not forced into a destructive replacement by a
    *   template change.
@@ -67,9 +67,8 @@ export interface AuroraInfraConfig {
    * would itself be a template change that replaces an existing cluster. The CDK
    * layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
    * context flag; a supplied `storageEncryptionKey` forces encryption on.
-   * The CDK layer requires that choice to be explicit: flag `true` → `true`,
-   * flag `false` → `undefined` (plus a synth warning), and an absent flag with no
-   * key fails synth before this function is reached.
+   * The CDK layer encrypts by default: an absent flag or `true` → `true`, and
+   * only an explicit `false` → `undefined` (plus a synth warning).
    */
   storageEncrypted?: true;
   /**
@@ -233,8 +232,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
   // false, itself a template change that forces a cluster replacement on an
   // existing (implicitly-unencrypted) deployment; leaving the property unset
   // keeps those clusters untouched. A customer-managed key always forces
-  // encryption on; otherwise honor the caller-resolved opt-in (the CDK layer
-  // gates it behind the `@aws-blocks/bb-data:encryptStorageByDefault` flag).
+  // encryption on; otherwise honor the caller-resolved choice (the CDK layer
+  // encrypts by default and leaves it unset only when the
+  // `@aws-blocks/bb-data:encryptStorageByDefault` flag is `false`).
   const storageEncrypted = options.storageEncryptionKey || options.storageEncrypted ? true : undefined;
 
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
@@ -250,11 +250,11 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     defaultDatabaseName: databaseName,
     enableDataApi: true,
     // Storage encryption at rest. Resolved to `true` or left unset (never an
-    // explicit `false`): the CDK layer requires an explicit choice via the
-    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag (absent fails
-    // synth) so NEW projects are encrypted while EXISTING, implicitly-unencrypted
-    // clusters are never forced into a destructive replacement by a dependency
-    // bump — they keep the property unset only by setting the flag to `false`. A
+    // explicit `false`): the CDK layer encrypts by default and leaves it unset
+    // only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is
+    // `false`, so an EXISTING, implicitly-unencrypted cluster can be kept as-is.
+    // The block's pre-deploy check stops a deploy that would otherwise replace
+    // such a cluster because its template gained `StorageEncrypted: true`. A
     // customer-managed `storageEncryptionKey` always forces it on. When a key is
     // given the cluster uses it; otherwise `true` uses the account's AWS-managed
     // `aws/rds` key.

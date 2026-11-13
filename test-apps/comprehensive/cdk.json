@@ -1,6 +1,3 @@
 {
-  "app": "npx tsx -C cdk aws-blocks/index.cdk.ts",
-  "context": {
-    "@aws-blocks/bb-data:encryptStorageByDefault": true
-  }
+  "app": "npx tsx -C cdk aws-blocks/index.cdk.ts"
 }
