@@ -148,9 +148,9 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   rotation is in place (same secret ARN) and the runtime never reads the password
   (the Data API reads the secret for it), so a rotation needs no change or
   redeploy of the app. The RDS-managed master password
-  (`manageMasterUserPassword`) was rejected: on a cluster without a
-  customer-managed key it renders `MasterUsername` as a literal where today's
-  template uses a Secrets Manager dynamic reference, a text change CloudFormation
+  (`manageMasterUserPassword`) is not used: on a cluster without a
+  customer-managed key it renders `MasterUsername` as a literal where this
+  block's template uses a Secrets Manager dynamic reference, a text change CloudFormation
   applies as a cluster **replacement** (new, empty cluster), and on every cluster
   it moves the credentials to a new, RDS-owned secret with a different ARN. While
   rotation is on, CDK attaches a resource policy to the secret denying
@@ -208,8 +208,8 @@ and, in the Database's own VPC, on the Secrets Manager endpoint and the rule
 admitting the rotation Lambda on it: the rotation can connect, a password swap
 cannot fail a migration statement, and an endpoint whose ENIs are not ready
 cannot leave the rotation without a route (CloudFormation marks the schedule
-complete before the rotation runs, and on an in-place upgrade the unchanged
-writer no longer delays it). In a shared VPC the Database registers the schedule
+complete before the rotation runs, and on an in-place update the unchanged
+writer does not delay it). In a shared VPC the Database registers the schedule
 as an `endpointClientDependents` entry so `finalizeVpc` orders it the same way.
 The rotation app itself waits for none of them: it only has to exist before the
 schedule. Single-user rotation has a window in which the cluster already
@@ -225,7 +225,7 @@ and the cost is per statement rather than per request: measured against a client
 that always refuses, three sequential statements cost 9.0 s (the refusal ends the
 request) and three parallel ones 9.0 s (they overlap), while a handler that
 catches each refusal and continues costs 27.0 s and brings the 29 s ceiling into
-reach. Bounding it further was rejected: a per-process give-up counter small
+reach. Bounding it further does not work: a per-process give-up counter small
 enough to help would open inside the 16–18 s rotations measured above and fail
 calls the retry exists to carry, and the elapsed-budget guard the internal
 precedents use (give up rather than sleep past a known deadline) needs a request

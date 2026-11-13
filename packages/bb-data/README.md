@@ -356,7 +356,7 @@ key, that the key policy allows the account's principals.
   > region fails at synth with that message; an environment-agnostic stack (no
   > `env`) leaves the partition unresolved until deploy, so nothing catches it at
   > synth. The transform does not affect the sandbox dev loop: `npm run sandbox`
-  > hotswaps a handler change exactly as before, because hotswap reads the
+  > hotswaps a handler change as it does without rotation, because hotswap reads the
   > unexpanded template.
 - **Secrets Manager VPC endpoint** — in the Database's own VPC (isolated, no NAT)
   an interface endpoint gives the rotation Lambda its only path to the Secrets

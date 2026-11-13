@@ -147,7 +147,7 @@ export class DistributedDatabase extends BuildingBlockScope {
   /**
    * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
    * has no engine — queries run in the app Lambda against the deployed cluster.
-   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * `createKyselyAdapter()` does not call this eagerly, so reaching it means a
    * query ran at synth time (e.g. at module scope).
    */
   getEngine(): never {
