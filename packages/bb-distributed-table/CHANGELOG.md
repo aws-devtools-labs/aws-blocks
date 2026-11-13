@@ -1,5 +1,7 @@
 # @aws-blocks/bb-distributed-table
 
+<!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthOIDC block -->
+
 ## 0.3.0
 
 ### Minor Changes
