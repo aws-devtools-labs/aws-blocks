@@ -110,7 +110,7 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 void describe('generated IPX handler — SVG gate (executed, not string-matched)', () => {
   const silenced = <T>(fn: () => Promise<T>): Promise<T> => {
-    const write = process.stderr.write.bind(process.stderr);
+    const write = process.stderr.write;
     process.stderr.write = () => true;
     return fn().finally(() => { process.stderr.write = write; });
   };

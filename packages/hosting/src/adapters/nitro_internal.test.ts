@@ -193,7 +193,7 @@ void describe('patchNitroHandlerForApiGateway', () => {
     const original = fs.readFileSync(bundle, 'utf-8');
 
     const stderrChunks: string[] = [];
-    const writeOriginal = process.stderr.write.bind(process.stderr);
+    const writeOriginal = process.stderr.write;
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
       stderrChunks.push(chunk.toString());
       return true;
@@ -245,7 +245,7 @@ void describe('warnIfNitroOutOfRange', () => {
 
   const captureStderr = (): void => {
     stderrChunks = [];
-    const original = process.stderr.write.bind(process.stderr);
+    const original = process.stderr.write;
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
       stderrChunks.push(chunk.toString());
       return true;

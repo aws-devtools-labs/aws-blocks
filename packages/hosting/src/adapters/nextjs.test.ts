@@ -2048,9 +2048,7 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
     lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
     process.env.HOSTING_LENIENT_PATCHES = '1';
     stderrChunks = [];
-    const orig = process.stderr.write.bind(process.stderr) as (
-      s: string | Uint8Array,
-    ) => boolean;
+    const orig = process.stderr.write;
     process.stderr.write = ((s: string | Uint8Array) => {
       stderrChunks.push(typeof s === 'string' ? s : Buffer.from(s).toString());
       return true;
