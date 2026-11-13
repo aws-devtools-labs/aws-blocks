@@ -222,6 +222,28 @@ class OidcClientAuthDescriptorTest {
     }
 
     @Test
+    fun `signIn encodes the provider id as the backend mounts it`() = runTest {
+        val client = authClient(backend(), listOf("corp+eu", "a/b"))
+            .also { it.platformLauncher = RelayingLauncher() }
+
+        client.signIn("corp+eu")
+        requests.first() shouldBe "POST /aws-blocks/auth/authorize-params/corp%2Beu"
+
+        requests.clear()
+        client.signIn("a/b")
+        requests.first() shouldBe "POST /aws-blocks/auth/authorize-params/a%2Fb"
+    }
+
+    @Test
+    fun `encodeUriComponent matches encodeURIComponent`() {
+        encodeUriComponent("google") shouldBe "google"
+        encodeUriComponent("corp+eu") shouldBe "corp%2Beu"
+        encodeUriComponent("a:b@c,d;e=f\$g&h") shouldBe "a%3Ab%40c%2Cd%3Be%3Df%24g%26h"
+        encodeUriComponent("-_.!~*'()") shouldBe "-_.!~*'()"
+        encodeUriComponent("a b/é") shouldBe "a%20b%2F%C3%A9"
+    }
+
+    @Test
     fun `rejects a provider the block does not serve`() = runTest {
         val client = authClient(backend(), listOf("google"))
             .also { it.platformLauncher = RelayingLauncher() }
