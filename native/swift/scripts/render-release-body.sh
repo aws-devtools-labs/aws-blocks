@@ -31,7 +31,7 @@ case "$TEMPLATE" in
 
 __CHANGELOG_ENTRY__
 
-On merge, this will be tagged `swift@__VERSION__` and synced to aws-blocks-swift.
+On merge, this will be tagged `swift@__VERSION__`. Then run the "Sync release from aws-blocks" workflow in aws-blocks-swift with version `__VERSION__` to open the release PR there: https://github.com/aws-devtools-labs/aws-blocks-swift/actions/workflows/sync-from-monorepo.yml
 EOF
 )
     ;;
@@ -41,7 +41,7 @@ EOF
 
 __CHANGELOG_ENTRY__
 
-Synced from aws-blocks monorepo branch `release/swift-__VERSION__`.
+Synced from aws-blocks tag `swift@__VERSION__`.
 
 On merge, a git tag `__VERSION__` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
 EOF

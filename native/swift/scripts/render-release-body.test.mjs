@@ -48,7 +48,7 @@ describe("render-release-body", () => {
 		const { status, output } = render("target", "1.2.3", "- Some change.");
 		assert.equal(status, 0, output);
 		assert.match(output, /## Release 1\.2\.3/);
-		assert.match(output, /release\/swift-1\.2\.3/);
+		assert.match(output, /aws-blocks tag `swift@1\.2\.3`/);
 		assert.match(output, /- Some change\./);
 		assert.doesNotMatch(output, /## Swift SDK Release/);
 		assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);

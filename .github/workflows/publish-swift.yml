@@ -15,11 +15,17 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: macos-26
+    # The build runs package plugins and codegen, so give it a read-only token
+    # and keep that token out of .git/config.
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: native/swift
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build
         run: swift build
@@ -44,8 +50,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Don't persist the PAT into .git/config. A dedicated "Configure git
+          # Don't persist the token into .git/config. A dedicated "Configure git
           # auth" step wires up the gh credential helper for the git operations
           # that need it, so the token is neither stored on disk nor placed in a
           # git command's argv.
@@ -53,11 +58,11 @@ jobs:
 
       - name: Configure git auth
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Registers `gh auth git-credential` as the credential helper in the
         # global git config. It stores no secret on disk and only returns the
-        # token to processes that already carry GH_TOKEN in their environment,
-        # so steps without GH_TOKEN stay unauthenticated. This keeps the
+        # token to processes that already carry GH_TOKEN or GITHUB_TOKEN in
+        # their environment, so steps without either stay unauthenticated. This keeps the
         # `origin` remote usable (so the remote-tracking ref `gh pr create`
         # needs still gets written) without persisting credentials.
         run: gh auth setup-git
@@ -77,7 +82,7 @@ jobs:
 
       - name: Run changeset version
         env:
-          GITHUB_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx changeset version
 
       # changeset version bumps package.json; regenerate the committed constant
@@ -94,11 +99,18 @@ jobs:
 
       - name: Guard against existing release branch
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if git ls-remote --heads origin "release/swift-${VERSION}" | grep -q .; then
+          # --exit-code returns 2 when no ref matches. Any other failure (network,
+          # auth) must stop the release instead of reading as "absent".
+          rc=0
+          git ls-remote --exit-code --heads origin "release/swift-${VERSION}" >/dev/null || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "::error::Release branch release/swift-${VERSION} already exists."
+            exit 1
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error::git ls-remote failed (exit $rc)."
             exit 1
           fi
 
@@ -118,9 +130,13 @@ jobs:
             echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
 
+      # This PR is opened with GITHUB_TOKEN, so its checks wait for a
+      # maintainer to approve the workflow runs on the PR. The aws-blocks-swift
+      # repo pulls the release from the swift@<version> tag after merge; see
+      # the PR body for that step.
       - name: Create monorepo release PR
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pass the changelog to the step as data via env rather than letting
           # the workflow expression expand into the script text, so the shell
           # treats the value as data and does not evaluate it.
@@ -152,86 +168,4 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --title "chore(swift): release ${VERSION}" \
-            --body "$BODY"
-
-      - name: Checkout aws-blocks-swift
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: aws-devtools-labs/aws-blocks-swift
-          path: target-repo
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Don't persist the PAT into .git/config; the gh credential helper
-          # configured earlier supplies the token to the push in the release-PR
-          # step below.
-          persist-credentials: false
-
-      - name: Sync files to aws-blocks-swift
-        run: |
-          # Remove synced content (preserve repo-only files)
-          find ../../target-repo -maxdepth 1 \
-            -not -name '.git' \
-            -not -name '.github' \
-            -not -name 'LICENSE' \
-            -not -name 'NOTICE' \
-            -not -name 'CODE_OF_CONDUCT.md' \
-            -not -name 'CONTRIBUTING.md' \
-            -not -name '.' \
-            -not -name '..' \
-            -exec rm -rf {} +
-
-          # Copy native/swift contents to target repo root.
-          # Anchor the root package.json/package-lock.json excludes with a
-          # leading '/' so they only skip native/swift's changeset-tooling
-          # manifests. Unanchored patterns match at every depth and would also
-          # drop Demo/typescript-demo/package.json + package-lock.json, which
-          # the demo needs (and which carry the dependency/security fixes).
-          rsync -a --exclude='.changeset' \
-                   --exclude='node_modules' \
-                   --exclude='.build' \
-                   --exclude='/package.json' \
-                   --exclude='/package-lock.json' \
-                   --exclude='Demo/typescript-demo/node_modules' \
-                   ./ ../../target-repo/
-
-      - name: Create aws-blocks-swift release PR
-        working-directory: target-repo
-        env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
-          # Pass the changelog to the step as data via env rather than letting
-          # the workflow expression expand into the script text (see the
-          # monorepo step), so the shell treats the value as data.
-          CHANGELOG_ENTRY: ${{ steps.changelog.outputs.entry }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          BRANCH="release/swift-${VERSION}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git checkout -b "$BRANCH"
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "::error::No changes to sync"
-            exit 1
-          fi
-
-          git commit -m "chore: release ${VERSION}"
-          # Credentials come from the gh credential helper configured in
-          # "Configure git auth"; `origin` here is aws-blocks-swift (set by that
-          # repo's checkout). The token stays out of argv and the
-          # remote-tracking ref `gh pr create --head` needs gets written.
-          git push origin "$BRANCH"
-
-          # The PR body is rendered by the tested script in the monorepo
-          # checkout. This step runs in target-repo (a sibling of the monorepo
-          # root at ../target-repo, per the rsync '../../target-repo'), so the
-          # swift script sits at ../native/swift/scripts. The changelog entry is
-          # piped in on stdin (never argv) and kept literal.
-          BODY=$(printf '%s' "$CHANGELOG_ENTRY" | ../native/swift/scripts/render-release-body.sh target "$VERSION")
-
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "chore: release ${VERSION}" \
             --body "$BODY"
