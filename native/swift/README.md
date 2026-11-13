@@ -44,13 +44,13 @@ import BlocksRuntime
 let blocks = Blocks()
 
 // Sign in
-let state = try await blocks.authApi.setAuthState(input: .signIn(AuthApi.SetAuthState.SignIn(
+let state = try await blocks.authApi.setAuthState(input: .signIn(AuthActionInput.SignIn(
     password: "P@ss1",
     username: "alice"
 )))
 
 // Open-shape sign-up with custom attributes, sent flat beside username and password
-_ = try await blocks.authApi.setAuthState(input: .signUp(AuthApi.SetAuthState.SignUp(
+_ = try await blocks.authApi.setAuthState(input: .signUp(AuthActionInput.SignUp(
     password: "P@ss1",
     username: "alice",
     attributes: ["email": "alice@example.com", "custom:department": "platform"]
@@ -74,7 +74,7 @@ Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a
 - **One input type for every Auth block.** A union parameter the spec names (`x-blocks-type-name`, which the backend writes for a TypeScript type alias like the `Auth` block's `AuthActionInput`) is declared once at the top level, with its variants nested inside it (`AuthActionInput.SignIn`). Every namespace whose parameter has that shape takes the same type, so one sign-in screen serves two Auth blocks: `try await blocks.authApi.setAuthState(input: input)` and `try await blocks.adminAuthApi.setAuthState(input: input)`. The names each operation declared before (`AuthApi.SetAuthState.Input`, `AuthApi.SetAuthState.SignIn`) stay as deprecated typealiases. A parameter whose name another type already has, or whose shape differs from the first one's, keeps its own nested `Input`.
 - **`Sendable` models.** Generated structs, enums and unions are `Sendable` when everything they store is, so a Swift 6 actor can keep or return an `AuthState`. A type that stores a `RealtimeChannel`, or a declared native binding's type, isn't `Sendable`, and neither is a type that stores one of those.
 - **Default values** from the spec become Swift initializer defaults.
-- **Public initializers.** Every generated struct has a `public init` with its properties in declaration order; optional and nullable properties default to `nil`. You can construct models and operation inputs from another module, a test target or a SwiftUI preview: `Note(id: "n1", title: "Hello")`.
+- **Public initializers.** Every generated struct has a `public init` with its properties sorted by name (`SignIn(password:username:)`, `AuthUser(attributes:displayName:...)`), not in the order the backend declares them; optional and nullable properties default to `nil`. Dart and Kotlin keep declaration order; Swift keeps sorted labels so code written against earlier releases still compiles. You can construct models and operation inputs from another module, a test target or a SwiftUI preview: `Note(id: "n1", title: "Hello")`.
 - **Transferables anywhere.** A realtime channel, a file handle or an OIDC client can sit in any of your types, at any depth (a property, an array, a dictionary, an optional). `RealtimeChannel`, `FileDownloadHandle`, `FileUploadHandle` and `OIDCClient` are `Codable`: they decode from the server's `{ "__blocks": … }` descriptor and encode back to it. An `OIDCClient` needs the `BlocksClient` that fetched it, so decode a type holding one with `client.makeDecoder()`; generated operations do this for you. A union alternative that is a transferable (`RealtimeChannel<Note> | { error: string }`) carries it: `case result_Variant0(RealtimeChannel<Note>)`.
 - **Schema-ref reuse.** A `oneOf` variant referencing a component schema reuses that named type instead of inventing a duplicate struct.
 - **Unbound transferables.** A direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of a raw `Data?` that did not type-check. Only bare direct results are covered.
