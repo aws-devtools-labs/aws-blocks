@@ -27,9 +27,10 @@ package com.aws.blocks.kotlin
  *   directory, which reads as the user being signed out.
  *
  *   On desktop the stored session is encrypted with a key the host OS holds or protects where it
- *   can — the Keychain on macOS, the Data Protection API on Windows — so a backup or copy of the
- *   directory cannot be decrypted elsewhere. Where no OS store can be used the key is kept in a
- *   file beside the entries instead, and that at-rest protection is absent. Neither arrangement
+ *   can — the Keychain on macOS, the Secret Service on Linux, the Data Protection API on Windows —
+ *   so a backup or copy of the directory cannot be decrypted elsewhere. Where no OS store can be
+ *   used, which on Linux is the normal case outside a desktop session, the key is kept in a file
+ *   beside the entries instead and that at-rest protection is absent. Neither arrangement
  *   protects the session from another process running as the same OS user; leave this unset to keep
  *   the session in memory only.
  */
