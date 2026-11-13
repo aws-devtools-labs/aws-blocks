@@ -99,8 +99,12 @@ export const log = {
 	},
 };
 
-/** Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`). */
-const CLOSED_OUTPUT_CODES: Readonly<Record<string, true>> = { EPIPE: true, EIO: true, ERR_STREAM_DESTROYED: true };
+/**
+ * Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`).
+ * The `cdk-blocks` CLI keeps its own copy, because it must not load this entry on every command; a test of
+ * `@aws-blocks/blocks` fails when the two differ.
+ */
+export const CLOSED_OUTPUT_CODES: readonly string[] = ['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED'];
 
 const guardedStreams = new WeakSet<NodeJS.EventEmitter>();
 
@@ -124,7 +128,7 @@ export function ignoreClosedOutput(
 		if (guardedStreams.has(stream)) continue;
 		guardedStreams.add(stream);
 		stream.on('error', (error: NodeJS.ErrnoException) => {
-			if (!Object.hasOwn(CLOSED_OUTPUT_CODES, error.code ?? '')) throw error;
+			if (!CLOSED_OUTPUT_CODES.includes(error.code ?? '')) throw error;
 		});
 	}
 }

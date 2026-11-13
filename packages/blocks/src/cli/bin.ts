@@ -4,6 +4,7 @@
 
 /** The `blocks` and `cdk-blocks` bins of `@aws-blocks/blocks`. */
 
+import { CLI_CLOSED_OUTPUT_CODES } from './closed-output.js';
 import { coreMismatchError } from './core-load.js';
 import { formatError } from './errors.js';
 
@@ -24,10 +25,10 @@ try {
 // A closed terminal or pipe (`cdk-blocks sandbox | tee log` after a Ctrl-C, `blocks … | head`)
 // must not kill this parent while its runner still works: drop the write error, as core's
 // ignoreClosedOutput() does for the runners. Not imported from `@aws-blocks/core/scripts`:
-// loading that entry takes about 0.6 s, on every command.
+// loading that entry takes about 0.6 s, on every command (see CLI_CLOSED_OUTPUT_CODES).
 for (const stream of [process.stdout, process.stderr]) {
 	stream.on('error', (error: NodeJS.ErrnoException) => {
-		if (error.code !== 'EPIPE' && error.code !== 'EIO' && error.code !== 'ERR_STREAM_DESTROYED') throw error;
+		if (!CLI_CLOSED_OUTPUT_CODES.includes(error.code ?? '')) throw error;
 	});
 }
 
