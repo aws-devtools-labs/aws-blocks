@@ -89,13 +89,31 @@ internal class EncryptedFileKeyValueStore(
     /** Which custody this store ended up with. For tests: nothing acts on it at runtime. */
     internal val keyTier: KeyTier get() = custody.tier
 
-    private val secretKey: SecretKey by lazy {
+    /**
+     * The one attempt this store makes to reach its key, successful or not.
+     *
+     * A failure is memoized as deliberately as a success, because asking the custody again cannot
+     * help and is not free. A Keychain item this process is not allowed to read prompts the user on
+     * every attempt, and the jar calls [get] and [put] for every request, so retrying would put a
+     * dialog in front of the user indefinitely. `by lazy` alone does not do this: it caches the
+     * value a successful block returned and re-runs the block after one that threw. Wrapping the
+     * attempt in a [Result] makes the failure the cached value.
+     *
+     * [runCatching] takes [Throwable] rather than [Exception] for the same reason the self-test
+     * does: an unloadable native library arrives as an [Error], on the first call rather than at
+     * construction. Retrying that is equally hopeless.
+     */
+    private val keyAttempt: Result<SecretKey> by lazy { runCatching { resolveKey() } }
+
+    private val secretKey: SecretKey get() = keyAttempt.getOrThrow()
+
+    private fun resolveKey(): SecretKey {
         val held = custody.load(alias)
-        if (held != null) return@lazy SecretKeySpec(held, "AES")
+        if (held != null) return SecretKeySpec(held, "AES")
         val fresh = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
         val installed = custody.storeIfAbsent(alias, fresh)
         if (installed.contentEquals(fresh)) discardEntriesWrittenUnderAnOlderKey()
-        SecretKeySpec(installed, "AES")
+        return SecretKeySpec(installed, "AES")
     }
 
     /**
@@ -169,8 +187,8 @@ internal class EncryptedFileKeyValueStore(
         val stored = try {
             Files.readString(path)
         } catch (_: NoSuchFileException) {
-            // The sweep in [secretKey]'s lazy init could delete this file between the
-            // [Files.exists] check and this read on a concurrent reader. Treat as absent.
+            // The sweep in [resolveKey] could delete this file between the [Files.exists] check
+            // and this read on a concurrent reader. Treat as absent.
             return@withContext null
         }
         val envelope = runCatching { Base64.getDecoder().decode(stored) }.getOrNull()
