@@ -46,6 +46,7 @@ import {
 	validateFederationOptions,
 } from './federation-providers.js';
 import { keepProviderLogGroupsOwned } from './owned-log-group.js';
+import { endUserWriteAttributes } from './mappers.js';
 
 /**
  * Config key core's `Hosting` registers with the public origin the app is
@@ -327,6 +328,13 @@ export function provisionHostedUiFederation(
 		// sign-in goes through the native client, never the hosted UI).
 		supportedIdentityProviders: registrations.map((r) =>
 			cognito.UserPoolClientIdentityProvider.custom(r.providerName),
+		),
+		// What end users may set, plus every attribute a provider maps (Cognito requires a
+		// mapped attribute to be writable by this client). Cognito's default is every
+		// attribute. Updates in place.
+		writeAttributes: endUserWriteAttributes(
+			options.users?.attributes,
+			registrations.flatMap((r) => Object.keys(r.attributeMapping)),
 		),
 	});
 	// Cognito rejects a client that lists a provider the pool does not have yet.

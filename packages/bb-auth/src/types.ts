@@ -1274,8 +1274,8 @@ export interface UserAttribute {
 	 * `confirmSignIn`. @default true
 	 *
 	 * Set `false` for any attribute your app uses for authorization (a role,
-	 * a tenant id, a plan tier). The app client then leaves it out of its
-	 * write attributes, so Cognito refuses an end-user write, and `Auth`
+	 * a tenant id, a plan tier). The block's app clients then leave it out of
+	 * their write attributes, so Cognito refuses an end-user write, and `Auth`
 	 * rejects one with `NotAuthorizedException` before calling Cognito,
 	 * locally too. Set it server-side instead (`admin.createUser`, or
 	 * Cognito's `AdminUpdateUserAttributes`). Can't be combined with
