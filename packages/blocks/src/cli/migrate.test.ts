@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -47,7 +48,7 @@ const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/template
  * Fixtures from before create-blocks-app wrote `.blocks/config.json` (f42c604b,
  * #51); every later app has one with a stackId, which the tests add.
  */
-const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
+const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50', 'amplify@0.1.0'];
 
 /**
  * The git these tests and `cdk-blocks migrate` run reads no system or user config,
@@ -785,8 +786,44 @@ describe('cdk-blocks migrate', () => {
 		assert.strictEqual(pkg.scripts['blocks:dev'], 'cdk-blocks dev');
 		assert.strictEqual(pkg.scripts['blocks:stop'], 'cdk-blocks dev stop');
 		assert.match(pkg.scripts['blocks:generate-client'], /tsx aws-blocks\/scripts\/generate-client\.ts$/);
-		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } });
+		// generateClient: false keeps the overlay's own client.js under the dev server
+		// (the Cognito token and the amplify_outputs.json API URL).
+		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		const json = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: writeApp('amplify@0ab6b047') });
+		assert.deepStrictEqual(JSON.parse(json.stdout).devConfig, { port: 3001, frontend: false, generateClient: false });
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
+	});
+
+	it('gives an amplify overlay without a server.ts the overlay dev config', async () => {
+		// Overlays 0.1.0-0.1.15 ship no server.ts, so no generated server.ts gives the dev config,
+		// but `cdk-blocks dev` would still replace the overlay's own client.js. Their generated
+		// generate-client.ts tells migrate that the app is the overlay.
+		const root = writeApp('amplify@0.1.0');
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.scriptsRewritten['blocks:dev'], {
+			from: 'tsx watch aws-blocks/scripts/server.ts',
+			to: 'cdk-blocks dev',
+		});
+		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false, generateClient: false });
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts', 'sandbox-id.ts']);
+
+		// An existing blocks.dev is the app's own choice, as with a generated server.ts.
+		const configured = writeApp('amplify@0.1.0', (app) => {
+			app.packageJson.blocks = { dev: { port: 4001 } };
+		});
+		const kept = await runCli(['migrate', '--force', '--output', 'json'], { cwd: configured });
+		assert.strictEqual(JSON.parse(kept.stdout).devConfig, null);
+		assert.deepStrictEqual(readPkg(configured).blocks, { dev: { port: 4001 } });
+
+		// --query checks its path against the declared result shape, which has generateClient.
+		const query = await runCli(['migrate', '--dry-run', '--query', 'devConfig.generateClient'], {
+			cwd: writeApp('amplify@0.1.0'),
+		});
+		assert.strictEqual(query.code, 0, query.stderr);
+		assert.strictEqual(query.stdout.trim(), 'false');
 	});
 
 	it('keeps the amplify stop.ts and blocks:stop when server.ts is customized', async () => {
@@ -1164,6 +1201,58 @@ describe('cdk-blocks migrate', () => {
 		});
 		rmSync(dir, { recursive: true, force: true });
 		removeIfEmpty(dir);
+	});
+
+	it('deletes every wrapper it can after the package.json rewrite, names the ones it cannot, and a rerun deletes them', {
+		skip:
+			(process.platform === 'win32' && 'POSIX permissions') ||
+			(process.getuid?.() === 0 && 'root deletes from a read-only directory'),
+	}, async (t) => {
+		const root = writeApp('default@0ab6b047');
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const planned = JSON.parse((await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root })).stdout);
+		assert.strictEqual(planned.removed.length, 10);
+		const dir = join(root, 'aws-blocks', 'scripts');
+		chmodSync(dir, 0o555);
+		t.after(() => existsSync(dir) && chmodSync(dir, 0o755));
+
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(
+			run.stderr,
+			[
+				'Error: package.json was rewritten, but 10 wrappers could not be deleted.',
+				...planned.removed.map((file: string) => `  ${file}: EACCES`),
+				'Try: fix the permissions, then "cdk-blocks migrate --force" to delete them',
+				'',
+			].join('\n'),
+		);
+		// The scripts no longer run the wrappers, so the ones left behind are harmless.
+		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { frontendPort: 3100 } });
+		assert.strictEqual(scriptsDir(root).length, 10);
+
+		// Run again with the directory still read-only: package.json is already migrated, and the error says so.
+		const json = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message: '10 wrappers could not be deleted.',
+				hint: 'fix the permissions, then "cdk-blocks migrate --force" to delete them',
+			},
+		});
+
+		chmodSync(dir, 0o755);
+		// The tree now holds the first run's changes, so a run without --force refuses, as the hint expects.
+		const plain = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(plain.code, 1);
+		assert.match(plain.stderr, /^Error: the git working tree has uncommitted changes/);
+		const rerun = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(rerun.code, 0, rerun.stderr);
+		assert.deepStrictEqual(JSON.parse(rerun.stdout).removed, planned.removed);
+		assert.ok(!existsSync(dir), 'the emptied scripts directory is removed');
 	});
 
 	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {

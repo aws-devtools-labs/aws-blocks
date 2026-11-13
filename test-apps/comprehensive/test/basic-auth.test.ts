@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
@@ -25,11 +25,7 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
 
 /** Resolve the API origin from the sandbox config (same source the client uses). */
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 interface RpcResponse {
   result?: unknown;

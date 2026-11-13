@@ -23,7 +23,9 @@
  * 1 when kept items remain for the user to finish by hand (a report, not a
  * crash: everything that could be migrated was migrated), or when migrate
  * refused and wrote nothing, which `--output json` tells apart by printing
- * `{"error": {"message", "hint"}}` instead of the result; 2 for a usage error.
+ * `{"error": {"message", "hint"}}` instead of the result (as it does when
+ * wrappers could not be deleted after the `package.json` rewrite, which the
+ * message says); 2 for a usage error.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -97,16 +99,23 @@ export const GENERATED_WRAPPERS: Readonly<Record<WrapperFile, readonly string[]>
 	'typegen.ts': ['80a25e1754a7d2607f440d306aeea970a59b9480eefa7b1e17b73c88b2b4cdbe'],
 };
 
-/** The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`. */
-export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'>;
+/**
+ * The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`.
+ * `generateClient` is read by the dev server in `@aws-blocks/core`, not by the CLI.
+ */
+export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'> & {
+	generateClient?: false;
+};
 
 /**
  * The `startDevServer` options of each generated `server.ts`, as `package.json#blocks.dev`.
  * A backend-only `server.ts` passed no frontend, so it ran none whatever the app installed:
- * `"frontend": false` keeps that.
+ * `"frontend": false` keeps that. The Amplify overlay's `server.ts` (the first entry) also
+ * gets `"generateClient": false`: its app commits its own `aws-blocks/client.js` (the Cognito
+ * token and the `amplify_outputs.json` API URL), which the dev server would otherwise replace.
  */
 export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
-	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false },
+	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false, generateClient: false },
 	'08368ac37a213cd51b519c6e36f31b0c278185661c2d72cc7ebe1255f8ac5ec7': { port: 3001, frontend: false },
 	dec68f268cc8295cae77c9a3fa073dff55e429dbfb5aeeee60facf081edb8b21: {
 		frontendCommand: 'npx vite --port 3100 --strictPort',
@@ -125,6 +134,26 @@ export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
 		frontendPort: 3100,
 	},
 };
+
+/** The hash of the Amplify overlay's generated `server.ts`, whose dev config every overlay app gets. */
+const AMPLIFY_SERVER = '89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415';
+
+/**
+ * SHA-256, after {@link normalizeSource}, of every `aws-blocks/scripts/generate-client.ts` that the
+ * Amplify overlay of a public create-blocks-app release generated: 0.1.0-0.1.15, which shipped no
+ * `server.ts`, and 0.1.18-0.3.0. Migrate leaves the file alone; it only tells an overlay app apart
+ * when no generated `server.ts` does.
+ */
+const AMPLIFY_CLIENT_GENERATORS: readonly string[] = [
+	'abb003e623cf19bc58a7cdd0eada2fb3308e01d88e86eea04c82ff5885f2d413',
+	'31bde1264d310c54c68a3105dd3a78cd506b48970ffb98767898102334c7625e',
+];
+
+/** True when the app has the generated client generator of the Amplify overlay. */
+function isAmplifyOverlay(root: string): boolean {
+	const text = unlessGone(() => readFileSync(join(root, SCRIPTS_DIR, 'generate-client.ts'), 'utf-8'));
+	return text !== undefined && AMPLIFY_CLIENT_GENERATORS.includes(sourceHash(text));
+}
 
 /** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one. */
 export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: WrapperFile }>> = {
@@ -663,6 +692,8 @@ function gitRepoFiles(root: string): RepoFiles[] {
 	let [top = '', prefix = ''] = where.stdout.split('\n');
 	// At the top of its work tree, gitFiles lists the project's files already.
 	const repos: RepoFiles[] = prefix === '' ? [] : [{ top, prefix, files: filesAbove(top, prefix) }];
+	// Each superproject is a strict ancestor of the work tree before it, so `top` gets shorter on every hop
+	// and the loop ends at the filesystem root at the latest; it needs no depth cap.
 	for (;;) {
 		// Outside a submodule git prints nothing; a git too old for the option, or a superproject it does not read, ends the search too.
 		const sup = spawnSync('git', ['rev-parse', '--show-superproject-working-tree'], { cwd: top, encoding: 'utf-8' });
@@ -806,6 +837,10 @@ export function planMigration(
 				? detectFrontend(root)?.command(options.frontendPort)
 				: undefined;
 		result.devConfig = frontendCommand !== undefined && frontendCommand === detected ? rest : options;
+	} else if (server === undefined && pkg.blocks?.dev === undefined && isAmplifyOverlay(root)) {
+		// The overlays from before it shipped a server.ts (0.1.0-0.1.15) need the same config:
+		// without it, `cdk-blocks dev` would replace the overlay's own client.js.
+		result.devConfig = { ...SERVER_DEV_OPTIONS[AMPLIFY_SERVER] };
 	}
 
 	// Delete generated wrappers that nothing references after the rewrite. A
@@ -986,7 +1021,13 @@ function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
  * Another run (or the user) may have deleted a wrapper since the plan was
  * made: the result is the same.
  *
- * @throws {CliError} The refusal.
+ * The rewrite comes first because a wrapper left behind is harmless, while
+ * deleting the wrappers and then failing to write `package.json` would leave
+ * scripts that run deleted files. A wrapper that cannot be deleted (EACCES)
+ * does not stop the others; the error names every one, and a rerun, which
+ * plans them as unused, deletes them.
+ *
+ * @throws {CliError} The refusal, or the wrappers that could not be deleted.
  */
 export function applyMigration(root: string, plan: MigrationPlan): void {
 	const { result, pkg, pkgText } = plan;
@@ -998,16 +1039,35 @@ export function applyMigration(root: string, plan: MigrationPlan): void {
 		});
 	}
 	if (result.changed.includes('package.json')) writePackageJson(root, pkg, pkgText, result.devConfig);
-	for (const file of result.removed) rmSync(join(root, file), { force: true });
-	if (result.removed.length > 0) removeIfEmpty(join(root, SCRIPTS_DIR));
+	const failed: string[] = [];
+	for (const file of result.removed) {
+		try {
+			rmSync(join(root, file), { force: true });
+		} catch (error) {
+			failed.push(`${file}: ${(error as NodeJS.ErrnoException).code ?? String(error)}`);
+		}
+	}
+	if (result.removed.length > failed.length) removeIfEmpty(join(root, SCRIPTS_DIR));
+	if (failed.length > 0) {
+		const wrappers = `${failed.length} wrapper${failed.length === 1 ? '' : 's'} could not be deleted`;
+		throw new CliError(
+			result.changed.includes('package.json') ? `package.json was rewritten, but ${wrappers}.` : `${wrappers}.`,
+			{
+				where: failed,
+				// The tree now holds this run's changes, which a run without --force refuses.
+				hint: 'fix the permissions, then "cdk-blocks migrate --force" to delete them',
+			},
+		);
+	}
 }
 
 /**
  * `error`, after printing it as `{"error": {"message", "hint"}}` under
  * `--output json` when it is a refusal: a JSON consumer tells a refusal
- * (nothing written) from kept items (also exit 1) by this document. `--query`
- * prints one field of the result, which a refusal does not have: the error
- * goes to stderr only.
+ * (nothing written; or, for wrappers that could not be deleted, `package.json`
+ * rewritten, as the message says) from kept items (also exit 1) by this
+ * document. `--query` prints one field of the result, which a refusal does not
+ * have: the error goes to stderr only.
  */
 function refusal(ctx: Context, error: unknown): unknown {
 	if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {

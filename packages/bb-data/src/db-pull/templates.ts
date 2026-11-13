@@ -353,7 +353,7 @@ npm run deploy
 
 ### 6. Verify production
 
-When deploy finishes it prints your live **API URL** and frontend URL (also written to \`.blocks-sandbox/config.json\`). Open the app, sign in, and call an API method — you should see RLS-filtered results, the same as local.
+When deploy finishes it prints your live **API URL** and frontend URL (the API URL is also recorded in \`.blocks-sandbox/config.production.json\`). Open the app, sign in, and call an API method — you should see RLS-filtered results, the same as local.
 
 **Rotating the database password:** update \`SUPABASE_DB_URL\` in \`.env.production\` and re-run \`npm run deploy\`. The declared value is written to SSM and wins over any manual, out-of-band edit.
 

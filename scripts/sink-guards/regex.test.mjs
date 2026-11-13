@@ -46,7 +46,7 @@ const ALLOWLIST = [
 		reason: 'Built one character at a time: every character in REGEX_SPECIAL is escaped and `{` `}` `*` are parsed as params and the wildcard.',
 	},
 	{
-		at: 'packages/core/src/scripts/cdk-output.ts:451',
+		at: 'packages/core/src/scripts/cdk-output.ts:470',
 		reason: 'Joins the `.source` of a fixed array of regex literals written in this file.',
 	},
 	{

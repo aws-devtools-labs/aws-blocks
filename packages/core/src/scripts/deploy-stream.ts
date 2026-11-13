@@ -57,6 +57,9 @@ export interface DeploySignalResponse {
 /** Signals whose delivery we take over while a deploy is in flight. */
 export const DEPLOY_SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
 
+/** The long-running CDK operation {@link runStreaming} keeps alive across a stray signal. */
+export type CdkOperation = 'deploy' | 'destroy';
+
 /** Default gap (ms) of silence after which the runner prints a progress heartbeat. */
 export const DEFAULT_HEARTBEAT_MS = 30_000;
 
@@ -116,24 +119,27 @@ export const SIGNAL_COALESCE_MS = 2_000;
  *   separately, so a deferred SIGHUP never consumes the SIGTERM abort budget
  *   (and a repeated SIGHUP is deduped the same way a repeated SIGTERM is).
  * @param coalesceWindowMs - see {@link SIGNAL_COALESCE_MS}.
+ * @param operation - what is running, for the messages: a `deploy` (default) or a `destroy`.
  */
 export function decideSignalResponse(
   signal: NodeJS.Signals,
   msSinceFirstDeferral: number | null,
   coalesceWindowMs: number = SIGNAL_COALESCE_MS,
+  operation: CdkOperation = 'deploy',
 ): DeploySignalResponse {
+  const pending = operation === 'destroy' ? 'the stack deletion' : 'the change set';
   if (signal === 'SIGINT') {
     return {
       action: 'abort',
       message:
-        '\n🛑 Interrupted. Stopping the CDK CLI — CloudFormation may keep applying the change set server-side.',
+        `\n🛑 Interrupted. Stopping the CDK CLI — CloudFormation may keep applying ${pending} server-side.`,
     };
   }
   if (signal === 'SIGHUP') {
     return {
       action: 'defer',
       message:
-        '⚠️  Ignoring SIGHUP: the deploy is still running and CloudFormation is still converging. Streaming continues; send SIGTERM twice to abort.',
+        `⚠️  Ignoring SIGHUP: the ${operation} is still running and CloudFormation is still converging. Streaming continues; send SIGTERM twice to abort.`,
       coalesced: msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs,
     };
   }
@@ -141,12 +147,12 @@ export function decideSignalResponse(
     return {
       action: 'defer',
       message:
-        '⚠️  Ignoring SIGTERM: the deploy is still running and CloudFormation is still converging. Send SIGTERM again to abort (the stack update continues server-side either way).',
+        `⚠️  Ignoring SIGTERM: the ${operation} is still running and CloudFormation is still converging. Send SIGTERM again to abort (the stack ${operation === 'destroy' ? 'deletion' : 'update'} continues server-side either way).`,
     };
   }
   if (signal === 'SIGTERM' && msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs) {
     // Same signal reaching us twice (process group + a wrapper's relay), not a
-    // second request — keep deploying and stay quiet about the duplicate.
+    // second request — keep going and stay quiet about the duplicate.
     return {
       action: 'defer',
       message: '',
@@ -155,7 +161,7 @@ export function decideSignalResponse(
   }
   return {
     action: 'abort',
-    message: `\n🛑 Received ${signal} while deploying. Stopping the CDK CLI — CloudFormation may keep applying the change set server-side.`,
+    message: `\n🛑 Received ${signal} while ${operation === 'destroy' ? 'destroying' : 'deploying'}. Stopping the CDK CLI — CloudFormation may keep applying ${pending} server-side.`,
   };
 }
 
@@ -449,6 +455,8 @@ export interface RunStreamingOptions {
    * except `quiet`/`normal`), output is relayed exactly as before.
    */
   curated?: CuratedStreams;
+  /** What is running, for the signal notices (see {@link decideSignalResponse}). Defaults to `deploy`. */
+  operation?: CdkOperation;
 }
 
 /** Raised when the child exits non-zero, is killed, or the operator aborts. */
@@ -456,16 +464,28 @@ export class DeployProcessError extends Error {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly aborted: boolean;
+  /**
+   * The signal this process received that aborted the run (`SIGTERM` or
+   * `SIGINT`), when `aborted`: a caller exits 128 + its number, like a process
+   * that signal killed, and not 1, which reports a failed deploy.
+   */
+  readonly operatorSignal: NodeJS.Signals | null;
 
   constructor(
     message: string,
-    details: { exitCode?: number | null; signal?: NodeJS.Signals | null; aborted?: boolean } = {},
+    details: {
+      exitCode?: number | null;
+      signal?: NodeJS.Signals | null;
+      aborted?: boolean;
+      operatorSignal?: NodeJS.Signals | null;
+    } = {},
   ) {
     super(message);
     this.name = 'DeployProcessError';
     this.exitCode = details.exitCode ?? null;
     this.signal = details.signal ?? null;
     this.aborted = details.aborted ?? false;
+    this.operatorSignal = details.operatorSignal ?? null;
   }
 }
 
@@ -515,18 +535,20 @@ export async function runStreaming(
     env,
     label = 'deploy',
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
-    // BLOCKS_LOG_STREAM=stderr (the blocks CLI): the relayed CloudFormation events are progress.
+    // BLOCKS_LOG_STREAM=stderr (the cdk-blocks CLI): the relayed CloudFormation events are progress.
     stdout = progressToStderr() ? process.stderr : process.stdout,
     stderr = process.stderr,
     now = Date.now,
     signalTarget = process,
     onHostingUrl,
     curated,
+    operation = 'deploy',
   } = options;
 
   const startedAt = now();
   let lastOutputAt = startedAt;
-  let aborting = false;
+  /** The signal that aborted the run, once one has (see {@link decideSignalResponse}). */
+  let abortedBy: NodeJS.Signals | null = null;
   let exitObserved = false;
   // Tracks the resource CloudFormation is currently converging, so the
   // heartbeat can name it instead of printing a bare tick.
@@ -637,6 +659,8 @@ export async function runStreaming(
       const { action, message, coalesced } = decideSignalResponse(
         signal,
         openedAt === undefined ? null : now() - openedAt,
+        SIGNAL_COALESCE_MS,
+        operation,
       );
       if (action === 'defer') {
         // A coalesced duplicate is the same signal arriving twice (process group
@@ -651,8 +675,8 @@ export async function runStreaming(
         }
         return;
       }
-      if (aborting) return; // already tearing down; a repeat signal is a no-op
-      aborting = true;
+      if (abortedBy) return; // already tearing down; a repeat signal is a no-op
+      abortedBy = signal;
       if (curated) curated.status(message, 'signal');
       else stdout.write(`${message}\n`);
       // Reap the whole tree (npx → cdk → node), not just the npx parent, so an
@@ -669,10 +693,10 @@ export async function runStreaming(
     // Let the pipes drain so a caller reading our stdout sees the child's final
     // lines (CDK's summary / failure reason) before the terminal status.
     await Promise.race([streamsEnded, delay(STREAM_FLUSH_GRACE_MS)]);
-    if (aborting) {
+    if (abortedBy) {
       throw new DeployProcessError(
-        `${command} was aborted by an operator signal after ${formatElapsed(now() - startedAt)}`,
-        { exitCode: code, signal, aborted: true },
+        `${command} was aborted by an operator signal (${abortedBy}) after ${formatElapsed(now() - startedAt)}`,
+        { exitCode: code, signal, aborted: true, operatorSignal: abortedBy },
       );
     }
     if (signal) {

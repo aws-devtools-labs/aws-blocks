@@ -106,7 +106,7 @@ function EndpointNotice({
 				) : (
 					<>
 						, which the dashboard resolves when the call is made (the stack's output first, the deploy-time{' '}
-						<code className="font-mono">.blocks-sandbox/config.json</code> only as a fallback)
+						<code className="font-mono">.blocks-sandbox/config.{stage}.json</code> only as a fallback)
 					</>
 				)}
 				. Switch the environment in the header above to target a different one.

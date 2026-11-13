@@ -9,6 +9,7 @@
 
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry, markAddedChildrenBlocksOwned } from '@aws-blocks/core/cdk/internal';
+import { copyMigrationsCommand } from '@aws-blocks/data-common/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -108,8 +109,9 @@ export class DistributedDatabase extends BuildingBlockScope {
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
+          // Single-quoted for `sh`: a project path may contain a space, `"` or `$`.
           afterBundling: (_inputDir: string, outputDir: string) => resolvedMigrationsPath
-            ? [`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`]
+            ? [copyMigrationsCommand(resolvedMigrationsPath, `${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`)]
             : [],
         },
       }),

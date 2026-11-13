@@ -186,12 +186,16 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 The generated client does not hardcode the API URL; it resolves one at first call, in this order:
 
-1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute).
+1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute, and by `npm run dev` on the frontend command it runs).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
-3. Node.js 22.3 or later only: the file `.blocks-sandbox/config.json`, read from the **process working directory**. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
+3. Node.js 22.3 or later only: the file `.blocks-sandbox/config.json`, read from the **process working directory**. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
 4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
 
-Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and `npm run sandbox` sets `BLOCKS_API_URL` on the dev server it spawns. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+
+A deploy never rewrites `.blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs. It records its API URL in a file of its own, which only code that means to target that stage reads: `.blocks-sandbox/config.sandbox.json` for a sandbox deploy, `.blocks-sandbox/config.production.json` for `npm run deploy`. The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
+
+An app deployed with an older version still has the deploy's URL in `config.json`. The client refuses that file, with an error, and never calls the stack it names: start the dev server, which rewrites it, or set `BLOCKS_API_URL` to call that stack on purpose. The next deploy or destroy moves it to `config.<stage>.json`.
 
 Two things about that path burn time when debugging:
 
@@ -205,10 +209,11 @@ What you should see instead, per environment:
 curl http://localhost:3000/.blocks-sandbox/config.json
 # → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
 
-# After a deploy: written by the deploy script and uploaded to the origin
-cat .blocks-sandbox/config.json
+# After a deploy: the URL the deploy recorded (never config.json), and the config uploaded to the origin
+cat .blocks-sandbox/config.production.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
 #   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
+curl https://<your-cloudfront-domain>/.blocks-sandbox/config.json
 ```
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
@@ -602,6 +607,12 @@ You can also set the host with `npm run dev -- --host <host>` or `"host"` in `pa
 - Behind a **reverse proxy or a port-forwarding tunnel** that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
+
+At startup the dev server regenerates `aws-blocks/client.js` from your backend. An app that ships its own client turns that off with `"generateClient": false` in `package.json#blocks.dev`, or with `startDevServer({ generateClient: false })`. The Amplify overlay needs this: its `client.js` reads the API URL from `amplify_outputs.json` and adds the Cognito token. For example:
+
+```json
+{ "blocks": { "dev": { "port": 3001, "frontend": false, "generateClient": false } } }
+```
 
 ## Script output (`BLOCKS_LOG_LEVEL`)
 

@@ -18,7 +18,7 @@
  *   report as warnings.
  *
  * The level is read from the environment on every call, so a caller (the
- * `blocks` CLI) can set it at any point before invoking a script, and spawned
+ * `cdk-blocks` CLI) can set it at any point before invoking a script, and spawned
  * children inherit it.
  */
 export type BlocksLogLevel = 'legacy' | 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -51,7 +51,7 @@ export function isCuratedLevel(level: BlocksLogLevel): boolean {
 export const BLOCKS_LOG_STREAM_ENV = 'BLOCKS_LOG_STREAM';
 
 /**
- * True when progress goes to stderr. The `blocks` CLI sets `BLOCKS_LOG_STREAM=stderr`
+ * True when progress goes to stderr. The `cdk-blocks` CLI sets `BLOCKS_LOG_STREAM=stderr`
  * so that stdout carries only results; without it the legacy streams are unchanged.
  * Results (`BLOCKS_DEPLOYED`, final URLs, the deployment target) stay on stdout either way.
  */
@@ -98,3 +98,37 @@ export const log = {
 		console.error(stack ?? String(error));
 	},
 };
+
+/**
+ * Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`).
+ * The `cdk-blocks` CLI keeps its own copy, because it must not load this entry on every command; a test of
+ * `@aws-blocks/blocks` fails when the two differ.
+ */
+export const CLOSED_OUTPUT_CODES: readonly string[] = ['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED'];
+
+const guardedStreams = new WeakSet<NodeJS.EventEmitter>();
+
+/**
+ * Keep running when stdout or stderr loses its reader: `… | tee log` after a
+ * Ctrl-C (tee exits with the process group), `cmd | head`, a background job
+ * whose pipe closed, or a closed terminal (SIGHUP, then `EIO`). Node reports
+ * the failed write as an `'error'` event on the stream, and with no listener
+ * that event kills the process — before a runner reaps its detached children
+ * (`cdk watch`, the dev server) or records a deploy that is still running.
+ *
+ * Installs one listener per stream that drops those errors, so later output is
+ * discarded instead. Any other stream error is rethrown, as without a listener.
+ * Idempotent. Every long-running script (deploy, destroy, sandbox, dev server)
+ * calls it first.
+ */
+export function ignoreClosedOutput(
+	streams: readonly NodeJS.EventEmitter[] = [process.stdout, process.stderr],
+): void {
+	for (const stream of streams) {
+		if (guardedStreams.has(stream)) continue;
+		guardedStreams.add(stream);
+		stream.on('error', (error: NodeJS.ErrnoException) => {
+			if (!CLOSED_OUTPUT_CODES.includes(error.code ?? '')) throw error;
+		});
+	}
+}
