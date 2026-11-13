@@ -29,6 +29,17 @@ export function distributedTableTests(getApi: () => typeof apiType) {
         assert.strictEqual(await getApi().tableGet({ pk: 'nope', sk: 'nope' }), null);
       });
 
+      test('mutating an input after put does not change the stored item', async () => {
+        const api = getApi();
+        const item = { pk: uid(), sk: 'snapshot', data: 'saved', timestamp: 1000 };
+        try {
+          assert.deepStrictEqual(await api.tablePutThenMutate(item), item);
+          assert.deepStrictEqual(await api.tableGet({ pk: item.pk, sk: item.sk }), item);
+        } finally {
+          await api.tableDelete({ pk: item.pk, sk: item.sk });
+        }
+      });
+
       test('put overwrites existing item', async () => {
         const api = getApi();
         const pk = uid();
