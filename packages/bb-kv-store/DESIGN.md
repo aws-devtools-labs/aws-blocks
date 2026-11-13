@@ -71,7 +71,7 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 |------------|--------|------------|
 | No throughput limits | Code that would be throttled in AWS succeeds locally | Document the gap; recommend sandbox testing for throughput-sensitive flows |
 | No item size limit enforcement beyond 400 KB check | Edge cases around DynamoDB marshalling overhead | Mock validates serialized JSON size, which is a close approximation |
-| Immediate consistency (vs eventual) | Reads always reflect the latest write locally | No mitigation — eventual consistency is inherently non-deterministic |
+| Immediate consistency (vs eventual) | Reads always reflect the latest write locally; on AWS a `get` right after a `put` can miss it | Callers that read back a just-written value pass `get(key, { consistentRead: true })`, which sets DynamoDB `ConsistentRead`. The mock accepts and ignores the option. The mock cannot simulate eventual consistency, so a missing option only shows up on AWS |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | Disk I/O vs DynamoDB latency | Local ops are faster and never timeout | No mitigation needed — latency differences don't affect correctness |
 | TTL deletion is immediate on read (vs up to 48 h in DynamoDB) | An expired item's storage is reclaimed sooner locally | Both layers hide expired items from `get`/`scan`, so observable behavior matches; only physical deletion timing differs |

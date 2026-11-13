@@ -27,9 +27,10 @@ export type {
 	ExternalTableRef,
 	ExternalKmsKeyRef,
 	ScanOptions,
+	GetOptions,
 } from './types.js';
 
-import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
+import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions, GetOptions } from './types.js';
 import { KVStoreErrors } from './errors.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
@@ -135,10 +136,16 @@ export class KVStore<T = string> extends Scope {
 	 * Items whose TTL has passed are treated as absent, mirroring DynamoDB TTL
 	 * (whose reaper is asynchronous, so reads must filter regardless).
 	 *
+	 * On AWS a read is eventually consistent by default; pass
+	 * `{ consistentRead: true }` when the read must reflect a write that just
+	 * succeeded (costs twice the read capacity). The mock is always strongly
+	 * consistent, so it accepts the option and reads the same way either way.
+	 *
 	 * @param key - The key to retrieve.
+	 * @param _options - Optional read options (`consistentRead`).
 	 * @returns The value, or `null` if the key does not exist or has expired.
 	 */
-	async get(key: string): Promise<T | null> {
+	async get(key: string, _options?: GetOptions): Promise<T | null> {
 		const entry = this.data.get(key);
 		if (entry === undefined) return null;
 		if (isExpired(entry.ttl)) {

@@ -383,3 +383,33 @@ describe('conditional-delete composition (AWS DeleteCommand shape)', () => {
 		});
 	});
 });
+
+// Read consistency. DynamoDB GetItem is eventually consistent unless the
+// request sets ConsistentRead, so a read right after a write can miss it on
+// AWS. The mock is always consistent and must accept the same option.
+
+describe('get consistentRead option', () => {
+	test('AWS sends ConsistentRead: true when consistentRead is set', async () => {
+		const { store, items } = captureAws('consistent-read-aws', () => ({
+			Item: { pk: 'k', value: JSON.stringify('v') },
+		}));
+		assert.strictEqual(await store.get('k', { consistentRead: true }), 'v');
+		assert.strictEqual(items()[0].ConsistentRead, true);
+	});
+
+	test('AWS leaves ConsistentRead unset by default and when false', async () => {
+		const { store, items } = captureAws('eventual-read-aws');
+		await store.get('k');
+		await store.get('k', { consistentRead: false });
+		assert.ok(!('ConsistentRead' in items()[0]));
+		assert.ok(!('ConsistentRead' in items()[1]));
+	});
+
+	test('mock accepts consistentRead and returns the latest write', async () => {
+		const mock = new KVStore({ id: 'root' } as any, 'consistent-read-mock');
+		await mock.put('k', 'v1');
+		await mock.put('k', 'v2');
+		assert.strictEqual(await mock.get('k', { consistentRead: true }), 'v2');
+		assert.strictEqual(await mock.get('missing', { consistentRead: true }), null);
+	});
+});
