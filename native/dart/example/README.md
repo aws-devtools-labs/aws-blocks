@@ -98,7 +98,7 @@ dart run bin/auth_cold_start.dart sign-in alice 'Passw0rd!'
 
 The `pubspec_overrides.yaml` files point both packages at the in-repo
 runtime, as `run-e2e.sh` and CI do. The session is saved in
-`.dart_tool/auth_cold_start_session.json`; set `BLOCKS_SESSION_FILE` to use
+`.dart_tool/auth_cold_start_session.json`; set `SESSION_FILE` to use
 another file, or delete it to start over.
 
 Confirming the code doesn't sign the user in by itself: the state it returns

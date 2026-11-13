@@ -57,7 +57,7 @@ echo ""
 echo "🔍 Step 3: Verify generated client compiles"
 cd "$DART_SDK/example"
 $DART pub get --no-precompile 2>/dev/null
-$DART analyze lib/blocks_client.dart
+$DART analyze lib/blocks_client.dart bin/auth_cold_start.dart
 echo "   ✅ No compile errors"
 
 if [ -z "$BLOCKS_URL" ]; then
