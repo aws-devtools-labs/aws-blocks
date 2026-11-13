@@ -55,15 +55,17 @@ When `enabled: false` is passed, `registerTracer` is not called — that Tracer 
 
 ## Mock Implementation
 
-- `startSegment` captures timing (start/end timestamps via `Date.now()`) and manages a segment hierarchy via a stack (`segmentStack: TraceRecord[]`).
-- Nested `startSegment` calls push child records onto the stack; child records are added to the parent's `children` array.
+- `startSegment` captures timing (start/end timestamps via `Date.now()`) and uses an instance-local `AsyncLocalStorage` context to track the current segment and its root trace state.
+- Nested calls inherit their caller's segment as their parent. Parallel children remain siblings, and independent concurrent roots have separate IDs, root annotations, metadata, and sampling decisions.
+- Contexts are marked closed on completion or error, including unsampled contexts. Deferred work falls back to the nearest still-open ancestor; after the root closes it starts a new trace with a fresh sampling decision. This prevents timers and local jobs from appending to an already-persisted trace.
 - Annotations and metadata are stored on each `MockSegment` instance and copied to the `TraceRecord` on segment close.
 - On top-level segment close, the complete segment tree is persisted to `.bb-data/{fullId}/traces.json`.
 - Traces are also logged to console as structured JSON (`_type: 'trace'`).
 - File persists a rolling window of the last 100 traces (older traces are dropped).
-- `getTraceId()` returns a lazily-generated `randomUUID()` trace ID, reused across the same request.
+- `getTraceId()` returns a lazily-generated `randomUUID()` trace ID, shared by a root segment and its descendants.
+- IDs, annotations, and metadata set outside `startSegment` are staged for the next root. That state is consumed when the root starts, even if unsampled, so it cannot be changed by or leak into another in-flight root. Outside a segment there is no automatic request-level isolation; set request-specific data inside the root callback.
 - When `enabled` is `false`, all operations are no-ops (the `NO_OP_SEGMENT` singleton is used).
-- `shouldSample()` uses `Math.random() < samplingRate` for probabilistic local sampling.
+- `shouldSample()` uses `Math.random() < samplingRate` once per root for probabilistic local sampling. Descendants inherit that decision through their async context, including unsampled traces.
 
 ### Mock vs AWS Behavior Differences
 

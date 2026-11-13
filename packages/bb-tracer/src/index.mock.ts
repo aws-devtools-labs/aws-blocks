@@ -7,6 +7,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { TracerOptions, Segment as ISegment, AnnotationValue } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -32,6 +33,25 @@ interface TraceRecord {
 	children: TraceRecord[];
 	rootAnnotations?: Record<string, AnnotationValue>;
 	rootMetadata?: Record<string, unknown>;
+}
+
+interface TraceState {
+	traceId: string | null;
+	rootAnnotations: Record<string, AnnotationValue>;
+	rootMetadata: Record<string, unknown>;
+	closed: boolean;
+}
+
+interface TraceContext {
+	trace: TraceState;
+	sampled: boolean;
+	record?: TraceRecord;
+	parent?: TraceContext;
+	closed: boolean;
+}
+
+function createTraceState(): TraceState {
+	return { traceId: null, rootAnnotations: {}, rootMetadata: {}, closed: false };
 }
 
 // ── Mock Segment ────────────────────────────────────────────────────────────
@@ -87,17 +107,10 @@ export class Tracer extends Scope {
 	private enabled: boolean;
 	private samplingRate: number;
 	private tracesFilePath: string;
-	private currentTraceId: string | null = null;
-	private rootAnnotations: Record<string, AnnotationValue> = {};
-	private rootMetadata: Record<string, unknown> = {};
-	private segmentStack: TraceRecord[] = [];
-	/**
-	 * Depth tracker for an in-flight *unsampled* trace. The sampled path tracks
-	 * nesting via `segmentStack`, but an unsampled root pushes nothing, so a
-	 * counter is needed to keep its subsegments unsampled too (rather than
-	 * letting them re-roll and spawn their own root traces).
-	 */
-	private unsampledDepth = 0;
+	private context = new AsyncLocalStorage<TraceContext>();
+	// Preserve annotations and IDs set before startSegment, without sharing
+	// this staging state with a root that has already started.
+	private pendingTrace = createTraceState();
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -128,33 +141,30 @@ export class Tracer extends Scope {
 			return fn(NO_OP_SEGMENT);
 		}
 
-		// Sampling is a per-trace decision: roll it once at the root segment and
-		// have every subsegment inherit it, so a trace is recorded whole or not
-		// at all. Rolling per subsegment (the previous behavior) would randomly
-		// drop children from a sampled trace, or promote a subsegment of an
-		// unsampled trace into its own orphan root trace.
-		const inActiveTrace = this.segmentStack.length > 0 || this.unsampledDepth > 0;
-		const sampled = inActiveTrace ? this.unsampledDepth === 0 : this.shouldSample();
+		const parent = this.getActiveContext();
+		const trace = parent?.trace ?? this.pendingTrace;
+		if (!parent) this.pendingTrace = createTraceState();
+		// Sample once per root, including unsampled roots, and inherit only
+		// through that root's async context rather than other in-flight work.
+		const sampled = parent ? parent.sampled : this.shouldSample();
+		const context: TraceContext = { trace, sampled, parent, closed: false };
 		if (!sampled) {
-			this.unsampledDepth++;
-			try {
-				return await fn(NO_OP_SEGMENT);
-			} finally {
-				this.unsampledDepth--;
-			}
+			return this.context.run(context, async () => {
+				try {
+					return await fn(NO_OP_SEGMENT);
+				} finally {
+					context.closed = true;
+					if (!parent) trace.closed = true;
+				}
+			});
 		}
-
-		if (!this.currentTraceId) {
-			this.currentTraceId = randomUUID();
-		}
+		trace.traceId ??= randomUUID();
 
 		const segment = new MockSegment();
 		const startTime = Date.now();
-		const isTopLevel = this.segmentStack.length === 0;
 
-		// Create a placeholder record and push onto stack
 		const record: TraceRecord = {
-			traceId: this.currentTraceId!,
+			traceId: trace.traceId,
 			segment: name,
 			startTime,
 			endTime: 0,
@@ -164,50 +174,27 @@ export class Tracer extends Scope {
 			children: [],
 		};
 
-		// If there's a parent on the stack, add this as a child
-		if (!isTopLevel) {
-			this.segmentStack[this.segmentStack.length - 1].children.push(record);
-		}
+		parent?.record?.children.push(record);
+		context.record = record;
 
-		this.segmentStack.push(record);
-
-		try {
-			const result = await fn(segment);
-			const endTime = Date.now();
-
-			this.finalizeRecord(record, endTime, segment);
-			this.segmentStack.pop();
-
-			if (isTopLevel) {
-				record.rootAnnotations = { ...this.rootAnnotations };
-				record.rootMetadata = { ...this.rootMetadata };
-				this.persistTrace(record);
-				this.logTrace(record);
-				this.currentTraceId = null;
-				this.rootAnnotations = {};
-				this.rootMetadata = {};
+		return this.context.run(context, async () => {
+			try {
+				return await fn(segment);
+			} catch (error) {
+				segment.addError(error as Error);
+				throw error;
+			} finally {
+				context.closed = true;
+				if (!parent) trace.closed = true;
+				this.finalizeRecord(record, Date.now(), segment);
+				if (!parent) {
+					record.rootAnnotations = { ...trace.rootAnnotations };
+					record.rootMetadata = { ...trace.rootMetadata };
+					this.persistTrace(record);
+					this.logTrace(record);
+				}
 			}
-
-			return result;
-		} catch (error) {
-			const endTime = Date.now();
-			segment.addError(error as Error);
-
-			this.finalizeRecord(record, endTime, segment);
-			this.segmentStack.pop();
-
-			if (isTopLevel) {
-				record.rootAnnotations = { ...this.rootAnnotations };
-				record.rootMetadata = { ...this.rootMetadata };
-				this.persistTrace(record);
-				this.logTrace(record);
-				this.currentTraceId = null;
-				this.rootAnnotations = {};
-				this.rootMetadata = {};
-			}
-
-			throw error;
-		}
+		});
 	}
 
 	/**
@@ -220,7 +207,8 @@ export class Tracer extends Scope {
 	 */
 	addAnnotation(key: string, value: AnnotationValue): void {
 		if (!this.enabled) return;
-		this.rootAnnotations[key] = value;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
+		trace.rootAnnotations[key] = value;
 	}
 
 	/**
@@ -231,7 +219,8 @@ export class Tracer extends Scope {
 	 */
 	addMetadata(key: string, value: unknown): void {
 		if (!this.enabled) return;
-		this.rootMetadata[key] = value;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
+		trace.rootMetadata[key] = value;
 	}
 
 	/**
@@ -243,13 +232,21 @@ export class Tracer extends Scope {
 	 */
 	getTraceId(): string | null {
 		if (!this.enabled) return null;
-		if (!this.currentTraceId) {
-			this.currentTraceId = randomUUID();
-		}
-		return this.currentTraceId;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
+		trace.traceId ??= randomUUID();
+		return trace.traceId;
 	}
 
 	// ── Private helpers ─────────────────────────────────────────────────────
+
+	private getActiveContext(): TraceContext | undefined {
+		let context = this.context.getStore();
+		// Timers retain their async store after the originating segment closes.
+		// A closed root invalidates even descendants that are still running.
+		if (context?.trace.closed) return undefined;
+		while (context?.closed) context = context.parent;
+		return context;
+	}
 
 	private shouldSample(): boolean {
 		return Math.random() < this.samplingRate;
