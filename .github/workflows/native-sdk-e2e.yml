@@ -65,7 +65,8 @@ jobs:
             dart=$shared; swift=$shared; kotlin=$shared
             if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
             if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
-            if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
+            # The emulator action is used by the Kotlin Android legs only.
+            if echo "$CHANGED" | grep -qE '^native/kotlin/|^\.github/actions/android-emulator/'; then kotlin=true; fi
             fixtures=false
             if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/generate-spec|^native/codegen-fixtures/'; then
               fixtures=true
@@ -239,6 +240,13 @@ jobs:
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
             timeout: 20
+          # The Android leg runs the same commonTest suite on a booted emulator.
+          # 30 covers npm install, the emulator's system-image download and cold
+          # boot, then the suite (~5 min of that).
+          - label: Android
+            runs-on: ubuntu-latest
+            gradle-task: connectedAndroidDeviceTest
+            timeout: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,14 +288,38 @@ jobs:
           done
 
       - name: Run E2E tests
+        if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
           BLOCKS_URL: http://localhost:3001/aws-blocks/api
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # `adb reverse` forwards the device's own localhost:3001 to the runner's,
+      # so the suite reaches the dev server at the same BLOCKS_URL every other
+      # leg uses. (The emulator's 10.0.2.2 host alias would work for plain RPC,
+      # but the OIDC relay URL is derived from the configured server, and the
+      # examples standardise on forwarding for that reason.)
+      - name: Run E2E tests on an Android emulator
+        if: matrix.label == 'Android'
+        uses: ./.github/actions/android-emulator
+        with:
+          working-directory: native/kotlin/e2e
+          blocks-url: http://localhost:3001/aws-blocks/api
+          script: |
+            adb reverse tcp:3001 tcp:3001
+            ./gradlew ${{ matrix.gradle-task }}
+
       - name: Show native-bindings server log
         if: failure()
         run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
+
+      - name: Upload Android test report
+        if: failure() && matrix.label == 'Android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-android-e2e-report
+          path: native/kotlin/e2e/build/reports/androidTests/
+          if-no-files-found: ignore
 
   swift-e2e:
     name: Swift E2E
@@ -772,6 +804,14 @@ jobs:
             # Drops to 30 after 10 green runs with sandboxMode on, by the rule
             # in #986.
             timeout: 45
+          - label: Android
+            suffix: android
+            runs-on: ubuntu-latest
+            gradle-task: connectedAndroidDeviceTest
+            # The deploy dominates, as on the JVM leg; the emulator adds its
+            # system-image download and boot on top. Drops to 30 after 10 green
+            # runs with sandboxMode on, by the rule in #986.
+            timeout: 45
     env:
       # Unique per run, as in dart-e2e-sandbox: PR number (d<run number> for
       # manual runs, d-prefixed so it can't match a PR number), run number,
@@ -779,6 +819,8 @@ jobs:
       # with the run id the derived bucket name
       # `bb-test-nb-<suffix>-native-bindings-files` would exceed S3's 63-character
       # limit on the Kotlin legs and fall back to FileBucket's hashed short form.
+      # The Android leg's longer `suffix` can still cross the limit on a
+      # high-numbered run; the hashed name works, it is only harder to read.
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
       # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
       # the sandbox" above. Empty unless the repository sets both variables.
@@ -788,8 +830,10 @@ jobs:
       # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
-      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native)
-      # hasn't been run against a deployed stub yet, so it keeps the real-IdP gate.
+      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native) and
+      # Android have not been run against a deployed stub yet, so they keep the
+      # real-IdP gate; both drive the flow through the same launcher stand-in the
+      # JVM leg does, so the gate is about evidence, not capability.
       RUN_OIDC: ${{ (matrix.suffix == 'jvm' || (vars.NATIVE_E2E_OIDC_ISSUER != '' && vars.NATIVE_E2E_OIDC_CLIENT_ID != '')) && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -874,10 +918,30 @@ jobs:
         run: ./gradlew awsBlocksCodegen
 
       - name: Run Kotlin E2E against sandbox
+        if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
+
+      # The sandbox endpoint is reachable from the emulator's own network, so
+      # this leg needs no port forwarding — only the device.
+      - name: Run Kotlin E2E against sandbox on an Android emulator
+        if: matrix.label == 'Android'
+        uses: ./.github/actions/android-emulator
+        with:
+          working-directory: native/kotlin/e2e
+          blocks-url: ${{ steps.url.outputs.blocks_url }}
+          run-oidc: ${{ env.RUN_OIDC }}
+          script: ./gradlew ${{ matrix.gradle-task }}
+
+      - name: Upload Android test report
+        if: failure() && matrix.label == 'Android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-android-e2e-sandbox-report
+          path: native/kotlin/e2e/build/reports/androidTests/
+          if-no-files-found: ignore
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, a deploy:sandbox could otherwise submit its stack after the
