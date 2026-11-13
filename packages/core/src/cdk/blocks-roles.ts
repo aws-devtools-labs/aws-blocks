@@ -319,7 +319,7 @@ export function snapshotForHosting(hosting: Construct): HostingSnapshot {
  * reached at finalize. No-op without an owning root.
  *
  * @returns the separate stacks Hosting added for the app (the us-east-1 support
- *   stack, the Lambda@Edge stack), so `defaults.app` can tag them as the app's;
+ *   stack, the Lambda@Edge stack), so `defaults.appIdentity` can tag them as the app's;
  *   empty without an owning root.
  */
 export function coverHosting(
@@ -342,7 +342,7 @@ export function coverHosting(
 	for (const helper of helperStacks) coverScope(coverage, helper);
 
 	// The edge stack is CDK's `edge-lambda-stack-<hash>`, or `<app id>-edge` under
-	// `defaults.app`. `EdgeFunction` keeps the real function in its private
+	// `defaults.appIdentity`. `EdgeFunction` keeps the real function in its private
 	// `_edgeFunction`, so that function's own stack is the edge stack exactly;
 	// if a CDK version drops the field, fall back to a dependency holding a child
 	// with the edge function's id.

@@ -1417,7 +1417,7 @@ export class Hosting extends Construct {
         : {}),
     };
 
-    // On a shared app platform (`defaults.app` on the fronted backend), name the
+    // On a shared app platform (`defaults.appIdentity` on the fronted backend), name the
     // us-east-1 Lambda@Edge stack after the app, so the platform's deploy guard
     // and execution policy treat it as the app's own stack.
     const appIdentity = resolveAppIdentity(isBlocksBackendRoot(props.api) ? props.api : this);

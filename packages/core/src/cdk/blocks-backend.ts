@@ -268,7 +268,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
 	addServicePrincipalTrustCheck(scope);
-	// Opt-in app identity on a shared app platform (`defaults.app`): the `app`
+	// Opt-in app identity on a shared app platform (`defaults.appIdentity`): the `app`
 	// tag on every resource and role; the report lists isolation violations.
 	applyAppIdentity(scope);
 	const owningStack = cdk.Stack.of(scope);

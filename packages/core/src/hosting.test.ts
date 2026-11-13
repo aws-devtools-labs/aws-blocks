@@ -2659,11 +2659,11 @@ describe('Hosting', () => {
       );
     });
 
-    it('defaults.app: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
+    it('defaults.appIdentity: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
       const app = new App();
       const stack = new Stack(app, 'appa', { env: { account: '123456789012', region: 'eu-west-1' } });
       const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
-      (backend as unknown as { defaults: Record<string, unknown> }).defaults.app = { id: 'appa' };
+      (backend as unknown as { defaults: Record<string, unknown> }).defaults.appIdentity = { id: 'appa' };
       applyAppIdentity(backend as unknown as Construct);
       const stacks = buildOffRegionEdgeHosting(app, stack, backend);
       const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');

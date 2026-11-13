@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `defaults.app` — an app's identity on a shared app platform (see the field doc
+ * `defaults.appIdentity` — an app's identity on a shared app platform (see the field doc
  * on `BlocksDefaults.app`). This module validates the identity, stamps the `app`
  * tag on everything AWS Blocks creates, and collects the app-isolation
  * violations the IAM report lists (rules in `app-isolation-rules.ts`).
@@ -39,18 +39,18 @@ const APP_TAG_PRIORITY = 1000;
 
 /**
  * The app identity of the backend root that owns `scope`, validated, or
- * `undefined` when `defaults.app` is unset. **The single resolution point** —
- * nothing else reads `defaults.app`.
+ * `undefined` when `defaults.appIdentity` is unset. **The single resolution point** —
+ * nothing else reads `defaults.appIdentity`.
  *
- * @throws Error when `defaults.app.id` isn't a valid app id, or is reserved (see
+ * @throws Error when `defaults.appIdentity.id` isn't a valid app id, or is reserved (see
  *   `RESERVED_APP_IDS` / `RESERVED_APP_ID_PREFIXES` in `app-isolation-rules.ts`).
  */
 export function resolveAppIdentity(scope: Construct): BlocksAppIdentity | undefined {
 	const root = findBackendRoot(scope);
-	const app = (root as { defaults?: BlocksDefaults } | undefined)?.defaults?.app;
+	const app = (root as { defaults?: BlocksDefaults } | undefined)?.defaults?.appIdentity;
 	if (app === undefined) return undefined;
 	const problem = appIdProblem(app?.id);
-	if (problem || !app) throw new Error(`Invalid defaults.app.id: ${problem}`);
+	if (problem || !app) throw new Error(`Invalid defaults.appIdentity.id: ${problem}`);
 	return app;
 }
 
@@ -58,7 +58,7 @@ export function resolveAppIdentity(scope: Construct): BlocksAppIdentity | undefi
  * Stamp `app=<id>` on every resource under `root` and on every IAM role AWS
  * Blocks creates for it (including roles in helper stacks, through the shared
  * role visitor), and warn when no permissions boundary is set. No-op when
- * `defaults.app` is unset. Called from `setupBlocksInfra`.
+ * `defaults.appIdentity` is unset. Called from `setupBlocksInfra`.
  */
 export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined {
 	const app = resolveAppIdentity(root);
@@ -70,7 +70,7 @@ export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined
 	if (!resolvePermissionsBoundary(root)) {
 		cdk.Annotations.of(root).addWarningV2(
 			'blocks:app:noPermissionsBoundary',
-			`defaults.app is set ("${app.id}") but defaults.permissionsBoundary isn't. On a shared account, the ` +
+			`defaults.appIdentity is set ("${app.id}") but defaults.permissionsBoundary isn't. On a shared account, the ` +
 				"boundary is what stops this app's roles from reaching another app's resources. Set " +
 				"defaults.permissionsBoundary to the platform's boundary policy (see the core README section " +
 				'"Running many apps in one AWS account").',

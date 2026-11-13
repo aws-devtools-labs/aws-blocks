@@ -40,9 +40,11 @@ after(() => {
 	for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
+// `strict: false` so these tests can read the report of an app with violations;
+// the strict default is pinned by its own test below.
 const appDefaults = (extra: Partial<BlocksDefaults> = {}): BlocksDefaults => ({
 	...BlocksPresets.production,
-	app: { id: 'appa' },
+	appIdentity: { id: 'appa', strict: false },
 	permissionsBoundary: 'apps-boundary',
 	...extra,
 });
@@ -66,7 +68,7 @@ const readReport = (dir: string, stack: cdk.Stack): Report =>
 type Tagged = { Properties?: { Tags?: { Key: string; Value: unknown }[] } };
 const appTag = (r: Tagged) => r.Properties?.Tags?.find((t) => t.Key === 'app')?.Value;
 
-describe('defaults.app — tags', () => {
+describe('defaults.appIdentity — tags', () => {
 	test('unset: no resource gets an app tag, and the report has no app section', async () => {
 		const dir = outdir();
 		const app = new cdk.App({ outdir: dir, context: QUALIFIER });
@@ -107,7 +109,7 @@ describe('defaults.app — tags', () => {
 
 	test("set: CloudFront Functions and KeyValueStores CDK named are renamed <id>-<region>-…; a name the app chose is kept", async () => {
 		const app = new cdk.App({ context: QUALIFIER });
-		const stack = await makeStack(app, 'appa', { ...appDefaults(), app: { id: 'appa' } });
+		const stack = await makeStack(app, 'appa', { ...appDefaults(), appIdentity: { id: 'appa', strict: false } });
 		const code = cloudfront.FunctionCode.fromInline('function handler(event) { return event.request; }');
 		new cloudfront.Function(stack, 'Router', { code, runtime: cloudfront.FunctionRuntime.JS_2_0 });
 		new cloudfront.Function(stack, 'VeryLongRouterFunctionNameThatOverflowsTheShortFormOfCdkGeneratedNames', {
@@ -181,11 +183,11 @@ describe('defaults.app — tags', () => {
 	});
 });
 
-describe('defaults.app — validation and violations', () => {
+describe('defaults.appIdentity — validation and violations', () => {
 	for (const bad of ['', 'App', 'app-a', '1app', 'a'.repeat(11)]) {
 		test(`rejects the app id ${JSON.stringify(bad)}`, async () => {
 			const app = new cdk.App({ context: QUALIFIER });
-			await assert.rejects(makeStack(app, 'appa', appDefaults({ app: { id: bad } })), /Invalid defaults\.app\.id/);
+			await assert.rejects(makeStack(app, 'appa', appDefaults({ appIdentity: { id: bad } })), /Invalid defaults\.appIdentity\.id/);
 		});
 	}
 
@@ -193,8 +195,8 @@ describe('defaults.app — validation and violations', () => {
 		test(`rejects the reserved app id ${JSON.stringify(reserved)}, saying why`, async () => {
 			const app = new cdk.App({ context: QUALIFIER });
 			await assert.rejects(
-				makeStack(app, `${reserved}-x`, appDefaults({ app: { id: reserved } })),
-				/Invalid defaults\.app\.id: .*reserved/,
+				makeStack(app, `${reserved}-x`, appDefaults({ appIdentity: { id: reserved } })),
+				/Invalid defaults\.appIdentity\.id: .*reserved/,
 			);
 		});
 	}
@@ -254,13 +256,25 @@ describe('defaults.app — validation and violations', () => {
 
 	test('strict: synth fails and lists every violation', async () => {
 		const app = new cdk.App({ outdir: outdir(), context: QUALIFIER });
-		await makeStack(app, 'appa', appDefaults({ app: { id: 'appa', strict: true } }), violatingBackend);
-		assert.throws(() => app.synth(), /defaults\.app\.strict: \d+ app-isolation violation[\s\S]*grant-outside-app/);
+		await makeStack(app, 'appa', appDefaults({ appIdentity: { id: 'appa', strict: true } }), violatingBackend);
+		assert.throws(() => app.synth(), /defaults\.appIdentity\.strict: \d+ app-isolation violation[\s\S]*grant-outside-app/);
+	});
+
+	test('strict by default: the report says so, and a violation fails synth', async () => {
+		const app = new cdk.App({ outdir: outdir(), context: QUALIFIER });
+		await makeStack(app, 'appa', appDefaults({ appIdentity: { id: 'appa' } }), violatingBackend);
+		assert.throws(() => app.synth(), /defaults\.appIdentity\.strict: \d+ app-isolation violation/);
+
+		const dir = outdir();
+		const clean = new cdk.App({ outdir: dir, context: QUALIFIER });
+		const stack = await makeStack(clean, 'appa', appDefaults({ appIdentity: { id: 'appa' } }));
+		clean.synth();
+		assert.strictEqual(readReport(dir, stack).app?.strict, true);
 	});
 
 	test('strict on a well-behaved app synthesizes', async () => {
 		const app = new cdk.App({ outdir: outdir(), context: QUALIFIER });
-		await makeStack(app, 'appa', appDefaults({ app: { id: 'appa', strict: true } }));
+		await makeStack(app, 'appa', appDefaults({ appIdentity: { id: 'appa', strict: true } }));
 		assert.doesNotThrow(() => app.synth());
 	});
 });

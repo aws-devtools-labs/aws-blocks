@@ -204,7 +204,7 @@ function buildReport(root: Construct, role: iam.Role) {
 		};
 	});
 	const executionRoleProps = renderedProperties(roleCfn);
-	// `defaults.app` set: who the app is, and what reaches outside it.
+	// `defaults.appIdentity` set: who the app is, and what reaches outside it.
 	const app = resolveAppIdentity(root);
 	const appSection = app
 		? {
@@ -212,7 +212,7 @@ function buildReport(root: Construct, role: iam.Role) {
 					id: app.id,
 					tagKey: BLOCKS_APP_TAG_KEY,
 					namePrefix: `${app.id}-`,
-					strict: app.strict === true,
+					strict: app.strict !== false,
 					stackName: stack.stackName,
 					bootstrapQualifier: (root.node.tryGetContext('@aws-cdk/core:bootstrapQualifier') as string | undefined) ?? null,
 				},
@@ -239,7 +239,7 @@ function buildReport(root: Construct, role: iam.Role) {
 /** The error a `strict` app's synth fails with, listing every violation. */
 function strictViolationsError(file: string, violations: readonly AppViolation[]): Error {
 	return new Error(
-		`[Blocks] defaults.app.strict: ${violations.length} app-isolation violation(s) (full list in ${file}):\n` +
+		`[Blocks] defaults.appIdentity.strict: ${violations.length} app-isolation violation(s) (full list in ${file}):\n` +
 			violations.map((v) => `  • [${v.rule}] ${v.message}`).join('\n'),
 	);
 }

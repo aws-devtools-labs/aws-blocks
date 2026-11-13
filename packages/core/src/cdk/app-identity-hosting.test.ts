@@ -32,7 +32,7 @@ after(() => {
 
 const appDefaults: BlocksDefaults = {
 	...BlocksPresets.production,
-	app: { id: 'appa', strict: true },
+	appIdentity: { id: 'appa', strict: true },
 	permissionsBoundary: 'apps-boundary',
 };
 
@@ -45,12 +45,12 @@ type Resources = Record<
 >;
 const readJson = <T>(dir: string, file: string): T => JSON.parse(readFileSync(join(dir, file), 'utf8'));
 
-describe('defaults.app — Hosting (stackId = app id)', () => {
+describe('defaults.appIdentity — Hosting (stackId = app id)', () => {
 	const root = mkdtempSync(join(tmpdir(), 'blocks-app-identity-hosting-'));
 	dirs.push(root);
 	const cwd = process.cwd();
 	before(() => {
-		// The convention under defaults.app: `.blocks/config.json` names the stackId after the app id,
+		// The convention under defaults.appIdentity: `.blocks/config.json` names the stackId after the app id,
 		// so Hosting's secret()/config() values live under blocks/<id>/.
 		mkdirSync(join(root, '.blocks'), { recursive: true });
 		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'appa' }));

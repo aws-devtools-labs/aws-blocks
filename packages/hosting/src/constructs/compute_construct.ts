@@ -98,7 +98,7 @@ export type ComputeConstructProps = {
    * Construct id (and so the name) of the `us-east-1` stack an edge compute is
    * hoisted into when the stack is in another region. Default: CDK's
    * `edge-lambda-stack-<hash>`. AWS Blocks sets `<app id>-edge` for an app with
-   * `defaults.app`, so the edge stack carries the app's name prefix.
+   * `defaults.appIdentity`, so the edge stack carries the app's name prefix.
    */
   edgeStackId?: string;
 };

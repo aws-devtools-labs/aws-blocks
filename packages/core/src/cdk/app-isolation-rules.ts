@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The app-isolation rules behind `defaults.app`: pure functions over
+ * The app-isolation rules behind `defaults.appIdentity`: pure functions over
  * CloudFormation-resolved JSON (no `aws-cdk-lib`), which the synth-time IAM
  * report applies to the roles, policies and resource policies AWS Blocks
  * renders for the app's templates (its `violations` list, and `strict`).
@@ -28,7 +28,7 @@
 export const APP_TAG_KEY = 'app';
 
 /**
- * `defaults.app.id`: lowercase letters and digits, starting with a letter, 1–10
+ * `defaults.appIdentity.id`: lowercase letters and digits, starting with a letter, 1–10
  * characters. Ten is CDK's limit for a bootstrap qualifier, so the app id can be
  * the app's qualifier as-is: one bootstrap per app, and no two apps can end up
  * sharing one through truncation.
@@ -67,7 +67,7 @@ export const RESERVED_APP_IDS: Readonly<Record<string, string>> = {
 	sagemaker: "SageMaker's default buckets (`sagemaker-<region>-<account>`)",
 	// CDK names a CloudFront Function `<region><construct id>` (`us-east-1MyStack…`)
 	// when no name is given: `function/${id}-*` would match every such function in
-	// the region group's regions, including an app's own from before it set `defaults.app`.
+	// the region group's regions, including an app's own from before it set `defaults.appIdentity`.
 	af: 'a region prefix: CDK names CloudFront Functions `<region>…` (`af-south-1…`)',
 	ap: 'a region prefix: CDK names CloudFront Functions `<region>…` (`ap-southeast-2…`)',
 	ca: 'a region prefix: CDK names CloudFront Functions `<region>…` (`ca-central-1…`)',
@@ -99,7 +99,7 @@ export const RESERVED_APP_ID_PREFIXES: Readonly<Record<string, string>> = {
 
 /**
  * Why `id` can't be an app id, or `undefined` when it can: the one check every
- * place that takes an app id uses (`defaults.app.id`, through
+ * place that takes an app id uses (`defaults.appIdentity.id`, through
  * `resolveAppIdentity`, which fails synth with this message).
  */
 export function appIdProblem(id: unknown): string | undefined {

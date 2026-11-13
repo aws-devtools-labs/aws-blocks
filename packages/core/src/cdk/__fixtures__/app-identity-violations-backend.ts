@@ -3,7 +3,7 @@
 
 /**
  * Test fixture: an app whose code (as an AI coding agent might write it)
- * reaches outside itself in every way the `defaults.app` rules catch — a grant
+ * reaches outside itself in every way the `defaults.appIdentity` rules catch — a grant
  * on another app's parameter, a wildcard grant on a data service, an AWS
  * managed policy that reaches every app, and its own `Tags.of(...)` call
  * claiming to be another app.

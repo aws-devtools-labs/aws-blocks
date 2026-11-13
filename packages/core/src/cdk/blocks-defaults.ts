@@ -390,7 +390,7 @@ export interface BlocksDefaults {
 	 *   can't resolve, a resource policy that opens up another app's resource, a
 	 *   role that trusts anything but an AWS service, a broad AWS managed policy, the
 	 *   CDK asset bucket of another bootstrap, or a name outside the app's prefix;
-	 * - with `strict: true`, fails synth on any violation.
+	 * - fails synth on any violation, unless `strict: false`.
 	 *
 	 * The report and `strict` are fast feedback, not the security boundary: the
 	 * app's own code runs at synth. The boundary is IAM, enforced by AWS — a
@@ -410,20 +410,20 @@ export interface BlocksDefaults {
 	 *   backendCDKPath: join(__dirname, 'index.ts'),
 	 *   defaults: {
 	 *     ...BlocksPresets.production,
-	 *     app: { id: process.env.APP_ID! },
+	 *     appIdentity: { id: process.env.APP_ID! },
 	 *     permissionsBoundary: 'apps-boundary',
 	 *   },
 	 * });
 	 * ```
 	 */
-	app?: BlocksAppIdentity;
+	appIdentity?: BlocksAppIdentity;
 }
 
 /** The tag key AWS Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
 export const BLOCKS_APP_TAG_KEY = 'app';
 
 /**
- * An app's identity on a shared app platform. See {@link BlocksDefaults.app}.
+ * An app's identity on a shared app platform. See {@link BlocksDefaults.appIdentity}.
  */
 export interface BlocksAppIdentity {
 	/**
@@ -452,9 +452,10 @@ export interface BlocksAppIdentity {
 	id: string;
 
 	/**
-	 * Fail synth when the IAM report lists any violation, instead of only writing
-	 * them to the report and printing a summary.
-	 * @default false
+	 * Fail synth when the IAM report lists any violation. Set `false` to only
+	 * write them to the report and print a summary, for example while adopting
+	 * `appIdentity` in an existing app.
+	 * @default true
 	 */
 	strict?: boolean;
 }

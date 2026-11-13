@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Test fixture: a well-behaved app for the `defaults.app` tests. Its one block
+ * Test fixture: a well-behaved app for the `defaults.appIdentity` tests. Its one block
  * creates the kinds of resource and role a real Building Block does — a table
  * named from its `fullId` and granted to the shared execution role, a parameter
  * named from its `fullId` (as AppSetting names its default parameter) and
