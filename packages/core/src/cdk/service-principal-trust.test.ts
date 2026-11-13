@@ -340,6 +340,7 @@ describe('service-principal trust check', () => {
 			['Negated', { StringNotEquals: { 'aws:SourceAccount': '999999999999' } }],
 			['WildcardOnly', { ArnLike: { 'aws:SourceArn': '*' } }],
 			['WildcardAccount', { ArnLike: { 'aws:SourceArn': `${rules}:*:rule/*` } }],
+			['LiteralLedShortJoin', { StringLike: { 'aws:SourceArn': `arn:${stack.partition}:events:*` } }],
 		];
 		for (const [id, conditions] of cases) {
 			const role = new iam.Role(stack, id, {
@@ -640,6 +641,7 @@ describe('KMS key-policy check', () => {
 			['ArnNotLike', { ArnNotLike: { 'aws:SourceArn': alarms('999999999999') } }],
 			['Wildcard', { ArnLike: { 'aws:SourceArn': '*' } }],
 			['WildcardAccountArn', { ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:*:*:alarm:*` } }],
+			['LiteralLedShortJoin', { StringLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:*` } }],
 			['EmptyAccountArn', { ArnLike: { 'aws:SourceArn': alarms('') } }],
 			['WildcardSourceAccount', { StringLike: { 'aws:SourceAccount': '?*' } }],
 			['OneOpenValue', { StringLike: { 'aws:SourceAccount': [stack.account, '*'] } }],

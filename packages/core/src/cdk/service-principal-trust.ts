@@ -396,10 +396,12 @@ const ARN_KEYS: ReadonlySet<string> = new Set(['aws:sourcearn', 'kms:encryptionc
  * wildcard. An `Fn::Join` is read by its literal parts ({@link renderedText}),
  * so `arn:${stack.partition}:…:*:…` is still caught while an intrinsic in the
  * account segment (the stack account of an environment-agnostic stack) counts.
- * An `Fn::Join` whose text has fewer than five `:` fields, such as
- * `${topic.topicArn}/*`, counts too: an intrinsic in it stands for a whole ARN
- * of unknown fields, so there is no literal account segment to check. Any other
- * intrinsic counts.
+ * An `Fn::Join` that starts with an intrinsic and whose text has fewer than
+ * five `:` fields, such as `${topic.topicArn}/*`, counts too: the leading
+ * intrinsic stands for a whole ARN of unknown fields, so there is no literal
+ * account segment to check. A join that starts with literal text and has fewer
+ * than five fields, such as `arn:${stack.partition}:cloudwatch:*`, is checked
+ * like a plain string and doesn't count. Any other intrinsic counts.
  */
 function pinsAccount(key: string, rendered: unknown): boolean {
 	const value = renderedText(rendered);
@@ -408,11 +410,23 @@ function pinsAccount(key: string, rendered: unknown): boolean {
 	if (key === 'aws:sourceaccount') return !/[*?]/.test(value);
 	if (ARN_KEYS.has(key)) {
 		const fields = value.split(':');
-		if (typeof rendered !== 'string' && fields.length < 5) return true;
+		if (fields.length < 5 && startsWithIntrinsic(rendered)) return true;
 		const account = fields[4];
 		return account !== undefined && account !== '' && !/[*?]/.test(account);
 	}
 	return true;
+}
+
+/**
+ * Whether `rendered` is an `Fn::Join` whose first non-empty part is an
+ * intrinsic (`Fn::GetAtt`, `Fn::ImportValue`, a `Ref`, …) rather than literal text.
+ */
+function startsWithIntrinsic(rendered: unknown): boolean {
+	if (!isObject(rendered)) return false;
+	const join = rendered['Fn::Join'];
+	if (!Array.isArray(join) || !Array.isArray(join[1])) return false;
+	const first = join[1].find((part: unknown) => part !== '');
+	return first !== undefined && typeof first !== 'string';
 }
 
 /** Whether every value of condition `key` (lowercased) pins an account ({@link pinsAccount}). */
