@@ -373,7 +373,10 @@ function sessionSecretParameterNames(resource: CfnResource): string[] {
  * earlier release (child id `sessions`) or `Auth`'s session-store table (child
  * id `session-store`); and the `session-secret` SSM parameter (owned by the
  * stack-level `BlocksSecretsBulk` custom resource, or a plain
- * `AWS::SSM::Parameter`).
+ * `AWS::SSM::Parameter`). The secret is there under `secretsStore: 'ssm'`,
+ * which the harness app uses (`BlocksPresets.sandbox`). Under
+ * `'secrets-manager'` `Auth` keeps it in a Secrets Manager secret, which has
+ * no role here.
  */
 export function protectedResources(template: CfnTemplate, blockPath: string = AUTH_BLOCK_PATH): ProtectedResource[] {
 	const out: ProtectedResource[] = [];

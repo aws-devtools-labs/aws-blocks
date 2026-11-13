@@ -60,7 +60,11 @@
  *    from the stack events (what `cdk diff` cannot show).
  * 5. Asserts:
  *    - the pool id, the client id and the secret's parameter name are unchanged
- *      (a replaced pool or client gets a new id);
+ *      (a replaced pool or client gets a new id). The secret is an SSM
+ *      parameter on both sides because the app deploys with
+ *      `BlocksPresets.sandbox`, whose `secretsStore` is `'ssm'`. Under
+ *      `'secrets-manager'` `Auth` keeps the secret in Secrets Manager; this
+ *      harness does not cover that move;
  *    - the sessions are in a NEW physical table, named `…-session-store`;
  *    - the old `sessions` table is no longer a resource of the stack, and the
  *      stack events show it deleted. The app deploys with

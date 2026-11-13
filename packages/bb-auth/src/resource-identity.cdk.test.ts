@@ -222,7 +222,6 @@ describe('Auth — deployed resource identity equals AuthCognito (golden fixture
 
 describe("Auth: production preset with secretsStore 'secrets-manager'", () => {
 	const SM = synthIdentity("new Auth(stack, 'auth')", 'production', [], 'secrets-manager');
-	const expected = fixture.variants.default;
 
 	test('the session secret is a generated Secrets Manager secret, deleted with the stack, no fixed name', () => {
 		const secrets = Object.entries(SM.template.Resources).filter(
@@ -246,7 +245,10 @@ describe("Auth: production preset with secretsStore 'secrets-manager'", () => {
 		assert.strictEqual(SM.identity.resources.BlocksSecretsBulk, undefined);
 	});
 
-	test('every other AuthCognito resource keeps its logical ID, type, path and physical name', () => {
+	test('every other AuthCognito resource keeps its logical ID, type, path and physical name, except the session store', () => {
+		// As in the comparisons above, `Auth` has its session store in place of
+		// the sessions table that the fixture pins (see `expectedAuthIdentity`).
+		const expected = expectedAuthIdentity(fixture.variants.default, SM.identity);
 		const { BlocksSecretsBulk: _bulk, ...expectedRest } = expected.resources;
 		const actualRest = Object.fromEntries(
 			Object.entries(SM.identity.resources).filter(([, r]) => r.Type !== 'AWS::SecretsManager::Secret'),
