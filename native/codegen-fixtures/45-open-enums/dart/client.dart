@@ -215,6 +215,239 @@ final class NodeKindUnknown implements NodeKind {
 }
 
 
+sealed class Kind {
+  static const kind = KindKnown.kind;
+  static const other = KindKnown.other;
+  static const values = KindKnown.values;
+  static final Map<String, KindKnown> _byJson = KindKnown.values.asNameMap();
+
+  String toJson();
+  static Kind fromJson(String json) => _byJson[json] ?? KindUnknown(json);
+}
+
+enum KindKnown implements Kind {
+  kind,
+  other
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `Kind` value this client was generated without.
+final class KindUnknown implements Kind {
+  /// The value as the server sent it.
+  final String value;
+
+  const KindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is KindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'KindUnknown' '($value)';
+}
+
+
+sealed class LabelsSpelling {
+  static const unknown = LabelsSpellingKnown.unknown;
+  static const unKnown = LabelsSpellingKnown.unKnown;
+  static const values = LabelsSpellingKnown.values;
+
+  String toJson();
+  static LabelsSpelling fromJson(String json) => LabelsSpellingKnown._jsonMap[json] ?? LabelsSpellingUnknown(json);
+}
+
+enum LabelsSpellingKnown implements LabelsSpelling {
+  unknown,
+  unKnown
+;
+
+  static const _jsonMap = <String, LabelsSpellingKnown>{
+    'unknown': unknown,
+    'un-known': unKnown,
+  };
+  static const _toJsonMap = <LabelsSpellingKnown, String>{
+    unknown: 'unknown',
+    unKnown: 'un-known',
+  };
+  @override
+  String toJson() => _toJsonMap[this]!;
+}
+
+/// A `LabelsSpelling` value this client was generated without.
+final class LabelsSpellingUnknown implements LabelsSpelling {
+  /// The value as the server sent it.
+  final String value;
+
+  const LabelsSpellingUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LabelsSpellingUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LabelsSpellingUnknown' '($value)';
+}
+
+
+sealed class LabelsCase {
+  static const fooBar$ = LabelsCaseKnown.fooBar$;
+  static const foo_bar = LabelsCaseKnown.foo_bar;
+  static const fooBar = LabelsCaseKnown.fooBar;
+  static const FOO_BAR = LabelsCaseKnown.FOO_BAR;
+  static const fooBar$$ = LabelsCaseKnown.fooBar$$;
+  static const values = LabelsCaseKnown.values;
+
+  String toJson();
+  static LabelsCase fromJson(String json) => LabelsCaseKnown._jsonMap[json] ?? LabelsCaseUnknown(json);
+}
+
+enum LabelsCaseKnown implements LabelsCase {
+  fooBar$,
+  foo_bar,
+  fooBar,
+  FOO_BAR,
+  fooBar$$
+;
+
+  static const _jsonMap = <String, LabelsCaseKnown>{
+    'foo-bar': fooBar$,
+    'foo_bar': foo_bar,
+    'fooBar': fooBar,
+    'FOO_BAR': FOO_BAR,
+    'foo bar': fooBar$$,
+  };
+  static const _toJsonMap = <LabelsCaseKnown, String>{
+    fooBar$: 'foo-bar',
+    foo_bar: 'foo_bar',
+    fooBar: 'fooBar',
+    FOO_BAR: 'FOO_BAR',
+    fooBar$$: 'foo bar',
+  };
+  @override
+  String toJson() => _toJsonMap[this]!;
+}
+
+/// A `LabelsCase` value this client was generated without.
+final class LabelsCaseUnknown implements LabelsCase {
+  /// The value as the server sent it.
+  final String value;
+
+  const LabelsCaseUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LabelsCaseUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LabelsCaseUnknown' '($value)';
+}
+
+
+sealed class LabelsFallback {
+  static const unknown = LabelsFallbackKnown.unknown;
+  static const unknownValue = LabelsFallbackKnown.unknownValue;
+  static const UnknownValue = LabelsFallbackKnown.UnknownValue;
+  static const values = LabelsFallbackKnown.values;
+  static final Map<String, LabelsFallbackKnown> _byJson = LabelsFallbackKnown.values.asNameMap();
+
+  String toJson();
+  static LabelsFallback fromJson(String json) => _byJson[json] ?? LabelsFallbackUnknown(json);
+}
+
+enum LabelsFallbackKnown implements LabelsFallback {
+  unknown,
+  unknownValue,
+  UnknownValue
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `LabelsFallback` value this client was generated without.
+final class LabelsFallbackUnknown implements LabelsFallback {
+  /// The value as the server sent it.
+  final String value;
+
+  const LabelsFallbackUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LabelsFallbackUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LabelsFallbackUnknown' '($value)';
+}
+
+
+sealed class LabelsMaybe {
+  static const yes = LabelsMaybeKnown.yes;
+  static const no = LabelsMaybeKnown.no;
+  static const values = LabelsMaybeKnown.values;
+  static final Map<String, LabelsMaybeKnown> _byJson = LabelsMaybeKnown.values.asNameMap();
+
+  String toJson();
+  static LabelsMaybe fromJson(String json) => _byJson[json] ?? LabelsMaybeUnknown(json);
+}
+
+enum LabelsMaybeKnown implements LabelsMaybe {
+  yes,
+  no
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `LabelsMaybe` value this client was generated without.
+final class LabelsMaybeUnknown implements LabelsMaybe {
+  /// The value as the server sent it.
+  final String value;
+
+  const LabelsMaybeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LabelsMaybeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LabelsMaybeUnknown' '($value)';
+}
+
+
 sealed class FlaggedGetEventResultSeverity {
   static const low = FlaggedGetEventResultSeverityKnown.low;
   static const high = FlaggedGetEventResultSeverityKnown.high;
@@ -623,6 +856,59 @@ class Node {
 }
 
 
+class Labels {
+  final Kind kind;
+  final LabelsSpelling spelling;
+  final LabelsCase case$;
+  final LabelsFallback fallback;
+  final LabelsMaybe? maybe;
+
+  const Labels({
+    required this.kind,
+    required this.spelling,
+    required this.case$,
+    required this.fallback,
+    required this.maybe,
+  });
+
+  factory Labels.fromJson(Map<String, dynamic> json) {
+    return Labels(
+      kind: Kind.fromJson(json['kind'] as String),
+      spelling: LabelsSpelling.fromJson(json['spelling'] as String),
+      case$: LabelsCase.fromJson(json['case'] as String),
+      fallback: LabelsFallback.fromJson(json['fallback'] as String),
+      maybe: json['maybe'] != null ? LabelsMaybe.fromJson(json['maybe'] as String) : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'kind': kind.toJson(),
+      'spelling': spelling.toJson(),
+      'case': case$.toJson(),
+      'fallback': fallback.toJson(),
+      'maybe': maybe?.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Labels &&
+          kind == other.kind &&
+          spelling == other.spelling &&
+          case$ == other.case$ &&
+          fallback == other.fallback &&
+          maybe == other.maybe;
+
+  @override
+  int get hashCode => Object.hash(kind, spelling, case$, fallback, maybe);
+
+  @override
+  String toString() => 'Labels(kind: $kind, spelling: $spelling, case\$: ${case$}, fallback: $fallback, maybe: $maybe)';
+}
+
+
 enum ApiUpdateTaskSort {
   newest,
   oldest
@@ -885,6 +1171,11 @@ class ApiApi {
   Future<(Size, GetRangeResult)> getRange() async {
     final result = await _client.call('api.getRange', const <dynamic>[]);
     return (Size.fromJson((result as List<dynamic>)[0] as String), GetRangeResult.fromJson((result as List<dynamic>)[1] as String));
+  }
+
+  Future<Labels> getLabels() async {
+    final result = await _client.call('api.getLabels', const <dynamic>[]);
+    return Labels.fromJson(result as Map<String, dynamic>);
   }
 }
 

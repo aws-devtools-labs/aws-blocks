@@ -21,7 +21,7 @@ final class OpenEnumTests: XCTestCase {
     }
 
     func testResultEnumsAreOpen() throws {
-        let output = try generate(fixture: "43-open-enums")
+        let output = try generate(fixture: "45-open-enums")
         for name in ["Status", "LabelsValue", "Priority", "Source"] {
             XCTAssertTrue(
                 output.models.contains("public nonisolated enum \(name): RawRepresentable, Codable, Hashable {"), name
@@ -34,7 +34,7 @@ final class OpenEnumTests: XCTestCase {
     }
 
     func testParameterOnlyEnumStaysClosed() throws {
-        let output = try generate(fixture: "43-open-enums")
+        let output = try generate(fixture: "45-open-enums")
         XCTAssertTrue(output.api.contains("public enum Sort: String, Codable {"))
         // 05: the parameter's `SetStatus.Status` stays closed, the result's `SetStatus.Result.Status` opens.
         let enums = try generate(fixture: "05-enums").api
@@ -49,27 +49,27 @@ final class OpenEnumTests: XCTestCase {
     }
 
     func testSpecValueNamedUnknownKeepsItsName() throws {
-        let output = try generate(fixture: "43-open-enums")
+        let output = try generate(fixture: "45-open-enums")
         XCTAssertTrue(output.models.contains("    case unknown\n"))
         XCTAssertTrue(output.models.contains("    case unknownValue(String)"))
         XCTAssertTrue(output.models.contains("    default: self = .unknownValue(rawValue)"))
     }
 
     func testComponentOnlyAParameterUsesStaysClosedBesideAnInlineResultEnumOfItsName() throws {
-        let output = try generate(fixture: "43-open-enums")
+        let output = try generate(fixture: "45-open-enums")
         XCTAssertTrue(output.models.contains("public nonisolated enum Mode: String, Codable {"))
         XCTAssertTrue(output.api.contains("public enum Mode: RawRepresentable, Codable, Hashable {"))
     }
 
     func testOpenEnumArmOfAUnionWithoutDiscriminatorAcceptsOnlyKnownValues() throws {
-        let api = try generate(fixture: "43-open-enums").api
+        let api = try generate(fixture: "45-open-enums").api
         XCTAssertTrue(api.contains(#"if let value = try? Color(from: decoder), ["red", "blue"].contains(value.rawValue) {"#))
         XCTAssertTrue(api.contains(#"if let value = try? Size(from: decoder), ["small", "large"].contains(value.rawValue) {"#))
     }
 
     #if os(macOS)
     func testUnknownValuesDecodeAndRoundTrip() throws {
-        let output = try generate(fixture: "43-open-enums")
+        let output = try generate(fixture: "45-open-enums")
         let auth = try generate(fixture: "18-hybrid-arm")
         // Each fixture builds as its own module, since their type names would clash in one.
         let main = #"""

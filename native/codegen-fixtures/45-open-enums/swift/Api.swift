@@ -95,6 +95,14 @@ public final nonisolated class Api: Sendable {
         return try JSONDecoder().decode(GetRange.Result.self, from: result)
     }
 
+    /// Calls `api.getLabels`.
+    public func getLabels() async throws -> Labels {
+        let request = BlocksRequest(method: "api.getLabels", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getLabels") }
+        return try JSONDecoder().decode(Labels.self, from: result)
+    }
+
     public enum UpdateTask {
 
         public enum Sort: String, Codable {

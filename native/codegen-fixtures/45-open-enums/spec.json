@@ -249,6 +249,16 @@
           "maxItems": 2
         }
       }
+    },
+    {
+      "name": "api.getLabels",
+      "params": [],
+      "result": {
+        "name": "GetLabelsResult",
+        "schema": {
+          "$ref": "#/components/schemas/Labels"
+        }
+      }
     }
   ],
   "components": {
@@ -356,6 +366,67 @@
         "required": [
           "kind",
           "children"
+        ]
+      },
+      "Kind": {
+        "type": "string",
+        "enum": [
+          "kind",
+          "other"
+        ]
+      },
+      "Labels": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "spelling": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "un-known"
+            ]
+          },
+          "case": {
+            "type": "string",
+            "enum": [
+              "foo-bar",
+              "foo_bar",
+              "fooBar",
+              "FOO_BAR",
+              "foo bar"
+            ]
+          },
+          "fallback": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "unknownValue",
+              "UnknownValue"
+            ]
+          },
+          "maybe": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "yes",
+                  "no"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "spelling",
+          "case",
+          "fallback",
+          "maybe"
         ]
       }
     }

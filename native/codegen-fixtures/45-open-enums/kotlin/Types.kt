@@ -61,6 +61,55 @@ public sealed class Color {
   }
 }
 
+/**
+ * A string enum that keeps a value this client was generated without as [Unknown].
+ */
+@Serializable(with = Kind.Serializer::class)
+public sealed class Kind {
+  /**
+   * The value as it is sent on the wire.
+   */
+  public abstract val `value`: String
+
+  public data object KindValue : Kind() {
+    override val `value`: String = "kind"
+  }
+
+  public data object Other : Kind() {
+    override val `value`: String = "other"
+  }
+
+  /**
+   * A value this client was generated without, as the server sent it.
+   */
+  public data class Unknown(
+    override val `value`: String,
+  ) : Kind()
+
+  public companion object {
+    /**
+     * The known values, in the spec's order.
+     */
+    public val entries: List<Kind> by lazy { listOf(KindValue, Other) }
+
+    /**
+     * The case for [value]: a known one, else [Unknown].
+     */
+    public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
+  }
+
+  public object Serializer : KSerializer<Kind> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("com.example.app.Kind", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, `value`: Kind) {
+      encoder.encodeString(value.value)
+    }
+
+    override fun deserialize(decoder: Decoder): Kind = fromValue(decoder.decodeString())
+  }
+}
+
 @Serializable
 public enum class Mode {
   @SerialName("auto")
@@ -168,6 +217,227 @@ public sealed class Status {
     }
 
     override fun deserialize(decoder: Decoder): Status = fromValue(decoder.decodeString())
+  }
+}
+
+@Serializable
+public data class Labels(
+  public val kind: Kind,
+  public val spelling: Spelling,
+  public val case: Case,
+  public val fallback: Fallback,
+  public val maybe: Maybe?,
+) {
+  /**
+   * A string enum that keeps a value this client was generated without as [Unknown].
+   */
+  @Serializable(with = Case.Serializer::class)
+  public sealed class Case {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object FooBar : Case() {
+      override val `value`: String = "foo-bar"
+    }
+
+    public data object FooBar2 : Case() {
+      override val `value`: String = "foo_bar"
+    }
+
+    public data object FooBar3 : Case() {
+      override val `value`: String = "fooBar"
+    }
+
+    public data object FooBar4 : Case() {
+      override val `value`: String = "FOO_BAR"
+    }
+
+    public data object FooBar5 : Case() {
+      override val `value`: String = "foo bar"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class Unknown(
+      override val `value`: String,
+    ) : Case()
+
+    public companion object {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<Case> by lazy { listOf(FooBar, FooBar2, FooBar3, FooBar4, FooBar5) }
+
+      /**
+       * The case for [value]: a known one, else [Unknown].
+       */
+      public fun fromValue(`value`: String): Case = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Case> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Case", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Case) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Case = fromValue(decoder.decodeString())
+    }
+  }
+
+  /**
+   * A string enum that keeps a value this client was generated without as [UnknownValue3].
+   */
+  @Serializable(with = Fallback.Serializer::class)
+  public sealed class Fallback {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object Unknown : Fallback() {
+      override val `value`: String = "unknown"
+    }
+
+    public data object UnknownValue : Fallback() {
+      override val `value`: String = "unknownValue"
+    }
+
+    public data object UnknownValue2 : Fallback() {
+      override val `value`: String = "UnknownValue"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class UnknownValue3(
+      override val `value`: String,
+    ) : Fallback()
+
+    public companion object {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<Fallback> by lazy { listOf(Unknown, UnknownValue, UnknownValue2) }
+
+      /**
+       * The case for [value]: a known one, else [UnknownValue3].
+       */
+      public fun fromValue(`value`: String): Fallback = entries.firstOrNull { it.value == value } ?: UnknownValue3(value)
+    }
+
+    public object Serializer : KSerializer<Fallback> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Fallback", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Fallback) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Fallback = fromValue(decoder.decodeString())
+    }
+  }
+
+  /**
+   * A string enum that keeps a value this client was generated without as [Unknown].
+   */
+  @Serializable(with = Maybe.Serializer::class)
+  public sealed class Maybe {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object Yes : Maybe() {
+      override val `value`: String = "yes"
+    }
+
+    public data object No : Maybe() {
+      override val `value`: String = "no"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class Unknown(
+      override val `value`: String,
+    ) : Maybe()
+
+    public companion object {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<Maybe> by lazy { listOf(Yes, No) }
+
+      /**
+       * The case for [value]: a known one, else [Unknown].
+       */
+      public fun fromValue(`value`: String): Maybe = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Maybe> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Maybe", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Maybe) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Maybe = fromValue(decoder.decodeString())
+    }
+  }
+
+  /**
+   * A string enum that keeps a value this client was generated without as [UnknownValue].
+   */
+  @Serializable(with = Spelling.Serializer::class)
+  public sealed class Spelling {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object Unknown : Spelling() {
+      override val `value`: String = "unknown"
+    }
+
+    public data object UnKnown2 : Spelling() {
+      override val `value`: String = "un-known"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class UnknownValue(
+      override val `value`: String,
+    ) : Spelling()
+
+    public companion object {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<Spelling> by lazy { listOf(Unknown, UnKnown2) }
+
+      /**
+       * The case for [value]: a known one, else [UnknownValue].
+       */
+      public fun fromValue(`value`: String): Spelling = entries.firstOrNull { it.value == value } ?: UnknownValue(value)
+    }
+
+    public object Serializer : KSerializer<Spelling> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Spelling", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Spelling) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Spelling = fromValue(decoder.decodeString())
+    }
   }
 }
 

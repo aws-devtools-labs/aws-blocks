@@ -47,12 +47,172 @@ public nonisolated enum Color: RawRepresentable, Codable, Hashable {
     }
 }
 
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
+    case kind
+    case other
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "kind": self = .kind
+        case "other": self = .other
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .kind: return "kind"
+        case .other: return "other"
+        case .unknown(let value): return value
+        }
+    }
+}
+
+public nonisolated enum Case: RawRepresentable, Codable, Hashable {
+    case fooBar_2
+    case foo_Bar
+    case fooBar
+    case fooBar_3
+    case foo_bar
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "foo-bar": self = .fooBar_2
+        case "foo_bar": self = .foo_Bar
+        case "fooBar": self = .fooBar
+        case "FOO_BAR": self = .fooBar_3
+        case "foo bar": self = .foo_bar
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .fooBar_2: return "foo-bar"
+        case .foo_Bar: return "foo_bar"
+        case .fooBar: return "fooBar"
+        case .fooBar_3: return "FOO_BAR"
+        case .foo_bar: return "foo bar"
+        case .unknown(let value): return value
+        }
+    }
+}
+
+public nonisolated enum Fallback: RawRepresentable, Codable, Hashable {
+    case unknown
+    case unknownValue
+    case unknownValue_2
+    /// A value this client was generated without, as the server sent it.
+    case unknownValue2(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "unknown": self = .unknown
+        case "unknownValue": self = .unknownValue
+        case "UnknownValue": self = .unknownValue_2
+        default: self = .unknownValue2(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .unknownValue: return "unknownValue"
+        case .unknownValue_2: return "UnknownValue"
+        case .unknownValue2(let value): return value
+        }
+    }
+}
+
+public nonisolated enum Maybe: RawRepresentable, Codable, Hashable {
+    case yes
+    case no
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "yes": self = .yes
+        case "no": self = .no
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .yes: return "yes"
+        case .no: return "no"
+        case .unknown(let value): return value
+        }
+    }
+}
+
+public nonisolated enum Spelling: RawRepresentable, Codable, Hashable {
+    case unknown
+    case unKnown
+    /// A value this client was generated without, as the server sent it.
+    case unknownValue(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "unknown": self = .unknown
+        case "un-known": self = .unKnown
+        default: self = .unknownValue(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .unKnown: return "un-known"
+        case .unknownValue(let value): return value
+        }
+    }
+}
+
+public nonisolated struct Labels: Codable {
+    public let `case`: Case
+    public let fallback: Fallback
+    public let kind: Kind
+    public let maybe: Maybe?
+    public let spelling: Spelling
+
+    enum CodingKeys: String, CodingKey {
+        case `case` = "case"
+        case fallback
+        case kind
+        case maybe
+        case spelling
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(self.`case`, forKey: .`case`)
+        try c.encode(self.fallback, forKey: .fallback)
+        try c.encode(self.kind, forKey: .kind)
+        try c.encodeIfPresent(self.maybe, forKey: .maybe)
+        try c.encode(self.spelling, forKey: .spelling)
+    }
+
+    public init(`case`: Case, fallback: Fallback, kind: Kind, maybe: Maybe? = nil, spelling: Spelling) {
+        self.`case` = `case`
+        self.fallback = fallback
+        self.kind = kind
+        self.maybe = maybe
+        self.spelling = spelling
+    }
+}
+
 public nonisolated enum Mode: String, Codable {
     case auto
     case manual
 }
 
-public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
+public nonisolated enum NodeKind: RawRepresentable, Codable, Hashable {
     case leaf
     case branch
     /// A value this client was generated without, as the server sent it.
@@ -77,9 +237,9 @@ public nonisolated enum Kind: RawRepresentable, Codable, Hashable {
 
 public nonisolated struct Node: Codable {
     public let children: [Node]
-    public let kind: Kind
+    public let kind: NodeKind
 
-    public init(children: [Node], kind: Kind) {
+    public init(children: [Node], kind: NodeKind) {
         self.children = children
         self.kind = kind
     }

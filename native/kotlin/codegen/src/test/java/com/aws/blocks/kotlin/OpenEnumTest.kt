@@ -41,7 +41,7 @@ private fun resultEnumSpec(vararg values: String): String = """
 class OpenEnumTest : FunSpec({
 
     test("a result enum is a sealed class with an Unknown case and a string serializer") {
-        val source = fixture("43-open-enums")
+        val source = fixture("45-open-enums")
         source shouldContain "@Serializable(with = Status.Serializer::class)\npublic sealed class Status {"
         source shouldContain "public data object InProgress : Status() {\n    override val `value`: String = \"in-progress\""
         source shouldContain "public data class Unknown(\n    override val `value`: String,\n  ) : Status()"
@@ -51,14 +51,14 @@ class OpenEnumTest : FunSpec({
     }
 
     test("enums in lists, maps, optionals, union arms and channel payloads are open") {
-        val source = fixture("43-open-enums")
+        val source = fixture("45-open-enums")
         for (name in listOf("Labels", "Priority", "Source", "Severity", "Change")) {
             source shouldContain "public sealed class $name {"
         }
     }
 
     test("an enum only parameters use stays a closed enum class") {
-        fixture("43-open-enums") shouldContain "public enum class Sort {"
+        fixture("45-open-enums") shouldContain "public enum class Sort {"
         val enums = fixture("05-enums")
         enums shouldContain "    @Serializable\n    public enum class Status {"
         enums shouldContain "      public sealed class Status {"
@@ -76,7 +76,7 @@ class OpenEnumTest : FunSpec({
     }
 
     test("a component only a parameter uses stays closed beside an inline result enum of its name") {
-        val source = fixture("43-open-enums")
+        val source = fixture("45-open-enums")
         source shouldContain "@Serializable\npublic enum class Mode {"
         source shouldContain "public sealed class Mode {"
     }
@@ -92,5 +92,18 @@ class OpenEnumTest : FunSpec({
         source shouldContain "public data object Serializer : Mode() {"
         source shouldContain "@Serializable(with = Mode.Serializer2::class)"
         source shouldContain "public object Serializer2 : KSerializer<Mode> {"
+    }
+
+    test("a constant named like its enum takes a Value suffix") {
+        val source = generate(resultEnumSpec("mode", "other"))
+        source shouldContain "public data object ModeValue : Mode() {"
+        source shouldNotContain "public data object Mode : Mode()"
+    }
+
+    test("constants that differ only in case are numbered, as are the fallback names") {
+        val source = generate(resultEnumSpec("unknown", "un-known"))
+        source shouldContain "public data object Unknown : Mode() {"
+        source shouldContain "public data object UnKnown2 : Mode() {"
+        source shouldContain "public data class UnknownValue(\n"
     }
 })

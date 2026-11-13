@@ -991,7 +991,12 @@ class KotlinCodeGenerator(
         values: List<String>,
     ): TypeSpec {
         if (openEnums) {
-            return OpenEnumGenerator.generate(name, enumConstantNames(values), "$packageName.$name", ::kotlinStringLiteral)
+            return OpenEnumGenerator.generate(
+                name,
+                enumConstantNames(values, owner = name, ignoreCase = true),
+                "$packageName.$name",
+                ::kotlinStringLiteral,
+            )
         }
         val enumBuilder = TypeSpec
             .enumBuilder(name)
@@ -1024,16 +1029,27 @@ class KotlinCodeGenerator(
      *
      * A repeated value is emitted once, and a name another value already took is numbered, since
      * two constants of one name don't compile.
+     *
+     * An open enum's constants are classes nested in a class named [owner], so they compare with
+     * [ignoreCase]: on a case-insensitive file system `Unknown` and `UnKnown` would be one class
+     * file. A constant named like its [owner] (`Kind` in `Kind`) can't extend it, so it takes
+     * a `Value` suffix (`KindValue`).
      */
-    private fun enumConstantNames(values: List<String>): List<Pair<String, String>> {
+    private fun enumConstantNames(
+        values: List<String>,
+        owner: String? = null,
+        ignoreCase: Boolean = false,
+    ): List<Pair<String, String>> {
         val taken = mutableSetOf<String>()
+        fun key(name: String) = if (ignoreCase) name.lowercase() else name
         val constants = mutableListOf<Pair<String, String>>()
         for (literal in values.distinct()) {
             val pascal = toPascalCase(literal)
-            val base = if (canNameConstant(pascal)) pascal else synthesizeConstantName(literal)
+            var base = if (canNameConstant(pascal)) pascal else synthesizeConstantName(literal)
+            if (owner != null && key(base) == key(owner)) base = "${base}Value"
             var name = base
             var attempt = 2
-            while (!taken.add(name)) {
+            while (!taken.add(key(name))) {
                 name = "$base$attempt"
                 attempt++
             }
