@@ -5,6 +5,7 @@ import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.CLOSED_MESSAGE
 import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.exceptions.BlocksException
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
@@ -68,7 +69,7 @@ class OidcClient<P : OidcProvider> internal constructor(
      * cannot tell from its own, so report the closed state instead.
      */
     private fun ensureOpen() {
-        if (!httpClient.isActive) throw BlocksException(CLOSED_MESSAGE)
+        if (!httpClient.isActive) throw ClientClosedException(CLOSED_MESSAGE)
     }
 
     /**

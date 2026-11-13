@@ -13,6 +13,7 @@ import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.exceptions.isBlocksError
 import kotlinx.coroutines.test.runTest
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 
@@ -70,7 +71,6 @@ class BlocksClientTest {
         ),
     )
 
-
     private val unauthenticatedBody =
         """{"jsonrpc":"2.0","error":{"code":401,"message":"Authentication required","data":{"name":"NotAuthenticatedException"}},"id":1}"""
 
@@ -125,7 +125,7 @@ class BlocksClientTest {
     }
 
     @Test
-    fun `a named error thrown without a status is a 500 that still matches by name`() = runTest {
+    fun `a 500 with a name still matches by name`() = runTest {
         val body =
             """{"jsonrpc":"2.0","error":{"code":500,"message":"Batch contains 150 payloads","data":{"name":"ValidationFailedException"}},"id":1}"""
         val e = assertFailsWith<ApiException> {
@@ -172,6 +172,30 @@ class BlocksClientTest {
         }
         e.statusCode shouldBe 200
         e.message shouldBe "Missing result field in JSON-RPC response"
+    }
+
+    @Test
+    fun `a 2xx response that is not JSON is a TransportException`() = runTest {
+        val e = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.OK, "<html>captive portal</html>")
+                .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        }
+        e.statusCode shouldBe 200
+        e.message shouldBe "Missing result field in JSON-RPC response"
+    }
+
+    @Test
+    fun `a cancellation is not turned into a TransportException`() = runTest {
+        val client = BlocksClient(
+            BlocksServer("local", "http://localhost:3000/aws-blocks/api"),
+            defaultHttpClient(
+                MockEngine { throw CancellationException("cancelled") },
+                cookiesStorage = AcceptAllCookiesStorage(),
+            ),
+        )
+        assertFailsWith<CancellationException> {
+            client.execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        }
     }
 
     @Test

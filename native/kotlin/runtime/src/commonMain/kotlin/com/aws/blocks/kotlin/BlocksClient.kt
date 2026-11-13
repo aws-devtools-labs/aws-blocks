@@ -55,18 +55,30 @@ class BlocksClient internal constructor(
 
         val json = Json.encodeToString(request)
 
-        // A failure before a response is a transport failure: wrap the engine's own
-        // exception so no Ktor type crosses the public surface.
-        val (response, responseBody) = try {
-            val r = httpClient.post(rpcUrl(server.url.toString(), request.method)) {
+        // Wrap the engine's own exceptions so no Ktor type crosses the public surface. No
+        // response at all carries no status; a response whose body could not be read carries
+        // the status it arrived with.
+        val response = try {
+            httpClient.post(rpcUrl(server.url.toString(), request.method)) {
                 contentType(ContentType.Application.Json)
                 setBody(json)
             }
-            r to r.bodyAsText()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             throw TransportException(e.message ?: "The request failed", null, e)
+        }
+
+        val responseBody = try {
+            response.bodyAsText()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw TransportException(
+                e.message ?: "Reading the response failed",
+                response.status.value,
+                e,
+            )
         }
 
         val responseJson = try {
