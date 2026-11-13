@@ -82,6 +82,7 @@ const dartKeywords = {
 const referencedNames = {
   'ArgumentError',
   'BlocksClient',
+  'BlocksConfig',
   'FileDownloadHandle',
   'FileUploadHandle',
   'Future',

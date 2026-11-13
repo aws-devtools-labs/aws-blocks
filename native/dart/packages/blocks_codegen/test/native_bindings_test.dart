@@ -71,7 +71,7 @@ void main() {
         "import 'package:blocks_runtime/blocks_runtime.dart';",
         "import 'package:example_iot_native/example_iot_native.dart' "
             'show DeviceLink;',
-        "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksConfig, BlocksRpcException, SessionStore, InMemorySessionStore, rewriteLocalhost;",
         "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;",
       ]);
     });

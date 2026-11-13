@@ -34,7 +34,7 @@ class DartCodeGenerator {
       buf.writeln(directive);
     }
     buf.writeln(
-      "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
+      "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksConfig, BlocksRpcException, SessionStore, InMemorySessionStore, rewriteLocalhost;",
     );
 
     // Export transferable types for consumer convenience. A transferable
@@ -772,9 +772,10 @@ class DartCodeGenerator {
     Set<String> declared,
   ) {
     final buf = StringBuffer();
+    // A field may not share a name with the `fromConfig` constructor.
     final ids = _identifiers(
       namespaces.map((ns) => ns.name),
-      reserved: _objectMembers,
+      reserved: {..._objectMembers, 'fromConfig'},
       declared: declared,
     );
     // A namespace's field is public API, and so are the constructor's
@@ -782,7 +783,7 @@ class DartCodeGenerator {
     // `client` local isn't public, so it yields to a field of the same name.
     final fields = ids.values.toSet();
     final client = _freeName('client', fields);
-    const ctorParams = {'baseUrl', 'sessionStore'};
+    const ctorParams = {'config', 'sessionStore'};
     buf.writeln('// --- Blocks Client ---');
     buf.writeln();
     buf.writeln('class Blocks {');
@@ -796,18 +797,25 @@ class DartCodeGenerator {
         ? 'Servers.${_serverIdentifiers(servers, declared)[servers.first.name]}'
         : null;
     if (hasDefault) {
-      buf.writeln('  Blocks({String? baseUrl, SessionStore? sessionStore}) {');
+      buf.writeln('  Blocks({String? baseUrl, SessionStore? sessionStore})');
       buf.writeln(
-        '    final $client = BlocksClient(baseUrl: baseUrl ?? $defaultExpr, sessionStore: sessionStore);',
+        '    : this.fromConfig(BlocksConfig(baseUrl: baseUrl ?? $defaultExpr), sessionStore: sessionStore);',
       );
     } else {
       buf.writeln(
-        '  Blocks({required String baseUrl, SessionStore? sessionStore}) {',
+        '  Blocks({required String baseUrl, SessionStore? sessionStore})',
       );
       buf.writeln(
-        '    final $client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);',
+        '    : this.fromConfig(BlocksConfig(baseUrl: baseUrl), sessionStore: sessionStore);',
       );
     }
+    buf.writeln();
+    buf.writeln(
+      '  Blocks.fromConfig(BlocksConfig config, {SessionStore? sessionStore}) {',
+    );
+    buf.writeln(
+      '    final $client = BlocksClient.fromConfig(config, sessionStore: sessionStore);',
+    );
     for (final ns in namespaces) {
       final ident = ids[ns.name]!;
       final target = ctorParams.contains(ident) ? 'this.$ident' : ident;

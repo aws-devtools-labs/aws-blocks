@@ -5,7 +5,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksConfig, BlocksRpcException, SessionStore, InMemorySessionStore, rewriteLocalhost;
 
 // --- Models ---
 
@@ -305,8 +305,11 @@ class Blocks {
   late final ApiApi api;
   late final NsApi ns;
 
-  Blocks({String? baseUrl, SessionStore? sessionStore}) {
-    final client = BlocksClient(baseUrl: baseUrl ?? Servers.mainValX1, sessionStore: sessionStore);
+  Blocks({String? baseUrl, SessionStore? sessionStore})
+    : this.fromConfig(BlocksConfig(baseUrl: baseUrl ?? Servers.mainValX1), sessionStore: sessionStore);
+
+  Blocks.fromConfig(BlocksConfig config, {SessionStore? sessionStore}) {
+    final client = BlocksClient.fromConfig(config, sessionStore: sessionStore);
     api = ApiApi(client);
     ns = NsApi(client);
   }
