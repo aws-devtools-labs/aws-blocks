@@ -1,0 +1,62 @@
+name: Android emulator
+description: >-
+  Runs a script against a booted Android emulator on a Linux runner. Enables
+  KVM first — without it the emulator falls back to software CPU emulation and
+  the boot alone outlasts most job timeouts. Used by the Kotlin Android E2E legs
+  (native-sdk-e2e.yml), which need a real device: the Kotlin runtime's Android
+  source set (EncryptedSharedPreferences-backed storage, the cookie jar built on
+  it, androidx.startup context wiring) has no host-JVM equivalent to run on.
+inputs:
+  api-level:
+    description: >-
+      Android API level to boot. The runtime's minSdk is 23 and its compileSdk
+      is 36; this is the level the suite is exercised at, not the range it
+      supports.
+    required: false
+    default: '36'
+  working-directory:
+    description: Directory the script runs in
+    required: true
+  script:
+    description: >-
+      Shell script to run once the emulator has booted. `adb` is on PATH and the
+      device is already connected, so a script may set up port forwarding before
+      it runs its tests.
+    required: true
+  blocks-url:
+    description: BLOCKS_URL for the test suite, exported to the script
+    required: true
+  run-oidc:
+    description: RUN_OIDC for the test suite ('1' to run the OIDC suite), exported to the script
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    # The udev rule is what the emulator-runner's own README prescribes: the
+    # hosted runner ships /dev/kvm owned by a group the job's user is not in.
+    - name: Enable KVM
+      shell: bash
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Run script on an emulator
+      uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+      env:
+        BLOCKS_URL: ${{ inputs.blocks-url }}
+        RUN_OIDC: ${{ inputs.run-oidc }}
+      with:
+        api-level: ${{ inputs.api-level }}
+        # google_apis images are published for every recent level; the plain
+        # `default` images are not, and nothing here needs Play services.
+        target: google_apis
+        arch: x86_64
+        # No display, no audio and no camera on a CI runner; swiftshader_indirect
+        # is the software renderer the action documents for headless runs.
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+        disable-animations: true
+        working-directory: ${{ inputs.working-directory }}
+        script: ${{ inputs.script }}
