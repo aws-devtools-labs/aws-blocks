@@ -1349,11 +1349,11 @@ describe('users.attributes: userWritable', () => {
 		}
 	});
 
-	test('`userWritable: false` with `required: true` is refused at construction: users could not sign up', () => {
+	test('`userWritable: false` with `required: true` is refused at construction: the pair contradicts itself', () => {
 		const options = { users: { attributes: [{ name: 'role', required: true, userWritable: false }] } };
 		assert.throws(
 			() => assertKnownAuthOptions('auth', options),
-			/'role' can't be both `required: true` and `userWritable: false`/,
+			/'role' can't be both `required: true` and `userWritable: false`: `required` has no effect on a custom attribute, and the pair contradicts itself/,
 		);
 		assert.throws(() => new Auth(root(), 'auth', untyped(options)), /can't be both/);
 	});

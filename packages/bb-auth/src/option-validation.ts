@@ -1013,13 +1013,13 @@ function assertConsistentOptions(id: string, options: unknown): void {
 			`Auth '${id}': passkeys requires \`users.authFlow: 'USER_AUTH'\`. Passkeys ride on the USER_AUTH choice-based flow.`,
 		);
 	}
-	// The sign-up form asks for a required attribute, which a `userWritable: false` one refuses.
+	// `required` has no effect on a custom attribute (Cognito cannot make one required), and the pair contradicts itself.
 	const attributes = field(field(options, 'users'), 'attributes');
 	for (const attr of Array.isArray(attributes) ? attributes : []) {
 		if (field(attr, 'required') === true && field(attr, 'userWritable') === false) {
 			throw new Error(
 				`Auth '${id}': users.attributes '${String(field(attr, 'name'))}' can't be both \`required: true\` and \`userWritable: false\`: ` +
-					'users could not sign up. Drop `required`, and set the attribute server-side with `admin.createUser`.',
+					'`required` has no effect on a custom attribute, and the pair contradicts itself. Drop `required`, and set the attribute server-side with `admin.createUser`.',
 			);
 		}
 	}

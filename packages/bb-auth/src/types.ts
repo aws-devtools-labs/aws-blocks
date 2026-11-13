@@ -1279,7 +1279,11 @@ export interface UserAttribute {
 	 * rejects one with `NotAuthorizedException` before calling Cognito,
 	 * locally too. Set it server-side instead (`admin.createUser`, or
 	 * Cognito's `AdminUpdateUserAttributes`). Can't be combined with
-	 * `required: true`, which the sign-up form asks the user for.
+	 * `required: true`, which has no effect on a custom attribute.
+	 *
+	 * A provider's `attributeMapping` onto it writes the provider's claim on
+	 * every federated sign-in, replacing a value set server-side, so map one
+	 * only from a provider you control. Refused while self sign-up is on.
 	 */
 	userWritable?: boolean;
 }
