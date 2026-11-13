@@ -31,6 +31,7 @@
     "docs",
     "src",
     "README.md",
+    "IMPORTS.md",
     "TROUBLESHOOTING.md",
     "VPC.md",
     "VPC-DESIGN.md",
@@ -78,7 +79,7 @@
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
     "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/conditional-exports.test.js dist/mock-aws-parity.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/branded-message-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js dist/test-client.test.js dist/totp.test.js dist/utils-exports.test.js dist/docs-pointers.test.js dist/doc-snippets.test.js dist/cli/*.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
+    "test": "node --test dist/conditional-exports.test.js dist/mock-aws-parity.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/branded-message-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js dist/test-client.test.js dist/totp.test.js dist/utils-exports.test.js dist/docs-pointers.test.js dist/doc-snippets.test.js dist/imports-reference.test.js dist/cli/*.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.8.0",
