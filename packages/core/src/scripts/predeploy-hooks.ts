@@ -12,10 +12,12 @@
  *
  * The module exports `predeploy(context)`. The `deploy` and `sandbox` scripts
  * discover every `@aws-blocks/*` package the app depends on (directly, or
- * through `@aws-blocks/blocks`), run the hooks declared for the stage, print
- * their notes, and abort the deploy when any hook returns a stop. A hook that
- * needs the synthesized templates calls `context.synth()`; the app is
- * synthesized at most once per deploy, however many hooks ask.
+ * through `@aws-blocks/blocks`), run the hooks declared for the stage, print their
+ * notes and warnings, and abort the deploy when any hook returns a stop or
+ * throws. A hook that needs the synthesized templates calls `context.synth()`;
+ * the app is synthesized at most once per deploy, however many hooks ask. The
+ * `deploy` and `sandbox` scripts run the hooks after their own synth, so
+ * `context.synth()` returns the stacks of the assembly they are about to deploy.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -23,14 +25,49 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import spawn from 'cross-spawn';
+import type { AccountPlanType } from './account-metadata.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import {
+	type NestedStackTemplateReader,
+	nestedStackTemplateReader,
+	type StackTemplate,
+	stackTemplates,
+} from './cloud-assembly.js';
+import { log as scriptsLog } from './log.js';
 
 export type DeployStage = 'sandbox' | 'production';
+
+/** A CDK `NestedStack` of a synthesized stack, with its template read from the cloud assembly. */
+export interface SynthesizedNestedStack {
+	template: Record<string, unknown>;
+	/** This nested stack's own nested stacks, by the logical ID of their `AWS::CloudFormation::Stack` resource in `template`. */
+	nestedStacks: Record<string, SynthesizedNestedStack>;
+}
 
 /** One synthesized CloudFormation stack. */
 export interface SynthesizedStack {
 	stackName: string;
 	template: Record<string, unknown>;
+	/**
+	 * The account the stack names in its environment (`env.account`), which CDK
+	 * deploys to through that account's bootstrap roles. Unset for an
+	 * environment-agnostic stack, which deploys to the credentials' own account.
+	 */
+	account?: string;
+	/**
+	 * The CDK nested stacks whose templates are in the assembly, by the logical ID
+	 * of their `AWS::CloudFormation::Stack` resource in `template`. A nested stack
+	 * deploys in its parent's account.
+	 */
+	nestedStacks?: Record<string, SynthesizedNestedStack>;
+}
+
+/** The AWS account the deploy's credential check verified before the hooks run. */
+export interface PredeployAccount {
+	/** The account ID STS returned; `null` when it was not verified. */
+	id: string | null;
+	/** The account's plan; `null` when it was not read or is unavailable. */
+	plan: AccountPlanType | null;
 }
 
 /** What a hook receives. */
@@ -38,14 +75,24 @@ export interface PredeployContext {
 	stage: DeployStage;
 	/** The app's root: where `package.json` and `cdk.json` live. */
 	projectRoot: string;
-	/** Synthesize the app and return every stack's template. Cached across hooks. */
+	/**
+	 * Synthesize the app and return every stack's template. Cached across hooks.
+	 * In `deploy` and `sandbox` these are the stacks of the assembly they are
+	 * about to deploy, synthesized once before the hooks run.
+	 */
 	synth(): Promise<SynthesizedStack[]>;
+	/** How the user ran the deploy, for messages (for example `npm run deploy`). Set by `deploy` and `sandbox`. */
+	invocation?: string;
+	/** The account the credential check verified, and its plan. Set by `deploy` and `sandbox`. */
+	account?: PredeployAccount;
 }
 
-/** What a hook returns. Any stop aborts the deploy; notes are printed. */
+/** What a hook returns. Any stop aborts the deploy; notes and warnings are printed. */
 export interface PredeployResult {
 	stops?: string[];
 	notes?: string[];
+	/** Printed as warnings (stderr; hidden at `BLOCKS_LOG_LEVEL=quiet`). The deploy continues. */
+	warnings?: string[];
 }
 
 export type PredeployHook = (context: PredeployContext) => Promise<PredeployResult | undefined>;
@@ -116,7 +163,11 @@ function candidatePackages(projectRoot: string): string[] {
 	return [...names];
 }
 
-/** Every pre-deploy hook declared by a block the app depends on. */
+/**
+ * Every pre-deploy hook declared by a package the app depends on, in the order
+ * the packages are found (see {@link candidatePackages}); the hooks run in this
+ * order. A declaration without `stages` runs in every stage.
+ */
 export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] {
 	const hooks: PredeployHookRef[] = [];
 	for (const packageName of candidatePackages(projectRoot)) {
@@ -130,6 +181,46 @@ export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] 
 		hooks.push({ packageName, module: resolve(dir, declared.module), stages });
 	}
 	return hooks;
+}
+
+/** The nested stacks of `template` whose templates are in the assembly, recursively; a template already on `seen` is skipped. */
+function readNestedStacks(
+	template: StackTemplate,
+	read: NestedStackTemplateReader,
+	seen: ReadonlySet<string>,
+): Record<string, SynthesizedNestedStack> {
+	const nested: Record<string, SynthesizedNestedStack> = {};
+	for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
+		const found = read(resource);
+		// A malformed assembly that names a template inside itself must not recurse forever.
+		if (!found || seen.has(found.file)) continue;
+		nested[logicalId] = {
+			template: found.template,
+			nestedStacks: readNestedStacks(found.template, read, new Set([...seen, found.file])),
+		};
+	}
+	return nested;
+}
+
+/**
+ * The stacks of the synthesized cloud assembly at `assemblyDir`: every
+ * top-level stack with its template and target account, and the templates of
+ * its CDK nested stacks. A stack whose template is missing or unreadable is
+ * left out.
+ *
+ * @throws {Error} When the directory holds no cloud assembly: a guard that cannot see the templates must not pass.
+ */
+export function readSynthesizedStacks(assemblyDir: string): SynthesizedStack[] {
+	if (!existsSync(join(assemblyDir, 'manifest.json'))) {
+		throw new Error(`No cloud assembly at ${assemblyDir}; the pre-deploy hooks could not run.`);
+	}
+	const read = nestedStackTemplateReader(assemblyDir);
+	return stackTemplates(assemblyDir).map(({ stack, account, template }) => ({
+		stackName: stack.stackName,
+		template,
+		...(account ? { account } : {}),
+		nestedStacks: readNestedStacks(template, read, new Set()),
+	}));
 }
 
 export interface SynthesizeOptions {
@@ -160,55 +251,74 @@ export function synthesizeApp(options: SynthesizeOptions): { stacks: Synthesized
 			`cdk synth failed (${result.error?.message ?? `exit ${result.status}`}); the pre-deploy hooks could not run.`,
 		);
 	}
-	const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf-8')) as {
-		artifacts?: Record<string, { type: string; properties?: { templateFile?: string; stackName?: string } }>;
-	};
-	const stacks: SynthesizedStack[] = [];
-	for (const [id, artifact] of Object.entries(manifest.artifacts ?? {})) {
-		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
-		stacks.push({
-			stackName: artifact.properties.stackName ?? id,
-			template: JSON.parse(readFileSync(join(out, artifact.properties.templateFile), 'utf-8')),
-		});
+	try {
+		return { stacks: readSynthesizedStacks(out), cleanup };
+	} catch (error) {
+		cleanup();
+		throw error;
 	}
-	return { stacks, cleanup };
 }
 
 export interface RunPredeployHooksOptions extends SynthesizeOptions {
-	/** Replaces `synthesizeApp` (tests). */
+	/**
+	 * The cloud assembly the deploy already synthesized (`cdk synth --output`),
+	 * absolute or relative to `projectRoot`. When set, `context.synth()` returns
+	 * its stacks instead of synthesizing the app again, so the hooks see exactly
+	 * what is about to be deployed.
+	 */
+	assemblyDir?: string;
+	/** Passed to the hooks as {@link PredeployContext.invocation}. */
+	invocation?: string;
+	/** Passed to the hooks as {@link PredeployContext.account}. */
+	account?: PredeployAccount;
+	/** Replaces `synthesizeApp` (tests). Ignored when `assemblyDir` is set. */
 	synthesize?: (options: SynthesizeOptions) => { stacks: SynthesizedStack[]; cleanup: () => void };
 	/** Where notes go. @default console.log */
 	log?: (line: string) => void;
+	/** Where warnings go. @default the scripts' `log.warn` (stderr, hidden at `BLOCKS_LOG_LEVEL=quiet`) */
+	warn?: (line: string) => void;
 }
 
 export interface RunPredeployHooksResult {
 	/** Packages whose hook ran for this stage. */
 	ran: string[];
 	notes: string[];
+	warnings: string[];
 }
 
 /**
- * Run every hook declared for the stage. Throws, with every stop message, when
- * a hook stops the deploy. A hook that throws aborts the deploy as well: a
- * guard that cannot run must not be mistaken for a guard that passed.
+ * Run every hook declared for the stage, one at a time, in discovery order (see
+ * {@link discoverPredeployHooks}). Throws, with every stop message, when a hook
+ * stops the deploy; the remaining hooks still run first, so one deploy reports
+ * every stop. A hook that throws aborts the deploy at once: a guard that cannot
+ * run must not be mistaken for a guard that passed.
  */
 export async function runPredeployHooks(options: RunPredeployHooksOptions): Promise<RunPredeployHooksResult> {
 	const log = options.log ?? ((line: string) => console.log(line));
+	const warn = options.warn ?? ((line: string) => scriptsLog.warn(line));
 	const hooks = discoverPredeployHooks(options.projectRoot).filter((h) => h.stages.includes(options.stage));
-	if (hooks.length === 0) return { ran: [], notes: [] };
+	if (hooks.length === 0) return { ran: [], notes: [], warnings: [] };
 
+	const { assemblyDir } = options;
+	const synthesize =
+		assemblyDir === undefined
+			? (options.synthesize ?? synthesizeApp)
+			: () => ({ stacks: readSynthesizedStacks(resolve(options.projectRoot, assemblyDir)), cleanup: () => {} });
 	let synthesized: { stacks: SynthesizedStack[]; cleanup: () => void } | undefined;
 	const context: PredeployContext = {
 		stage: options.stage,
 		projectRoot: options.projectRoot,
 		async synth() {
-			synthesized ??= (options.synthesize ?? synthesizeApp)(options);
+			synthesized ??= synthesize(options);
 			return synthesized.stacks;
 		},
+		...(options.invocation !== undefined ? { invocation: options.invocation } : {}),
+		...(options.account ? { account: options.account } : {}),
 	};
 
 	const stops: string[] = [];
 	const notes: string[] = [];
+	const warnings: string[] = [];
 	try {
 		for (const hook of hooks) {
 			if (!existsSync(hook.module)) {
@@ -216,6 +326,7 @@ export async function runPredeployHooks(options: RunPredeployHooksOptions): Prom
 					`${hook.packageName} declares a pre-deploy hook at ${hook.module}, which does not exist.`,
 				);
 			}
+			// The module path comes from the package's manifest, so it is known only at run time.
 			const mod = (await import(pathToFileURL(hook.module).href)) as { predeploy?: PredeployHook };
 			if (typeof mod.predeploy !== 'function') {
 				throw new Error(`${hook.packageName}'s pre-deploy module does not export a predeploy() function.`);
@@ -225,11 +336,15 @@ export async function runPredeployHooks(options: RunPredeployHooksOptions): Prom
 				notes.push(note);
 				log(`[${hook.packageName}] ${note}`);
 			}
+			for (const warning of result.warnings ?? []) {
+				warnings.push(warning);
+				warn(`[${hook.packageName}] ${warning}`);
+			}
 			stops.push(...(result.stops ?? []).map((s) => `[${hook.packageName}] ${s}`));
 		}
 	} finally {
 		synthesized?.cleanup();
 	}
 	if (stops.length > 0) throw new Error(stops.join('\n\n'));
-	return { ran: hooks.map((h) => h.packageName), notes };
+	return { ran: hooks.map((h) => h.packageName), notes, warnings };
 }

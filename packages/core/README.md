@@ -608,6 +608,34 @@ At `quiet` and `normal` the scripts keep the last 500 lines of the hidden CDK ou
 
 In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-call]` / `[rpc-ok]` lines but keep the `[rpc-err]` and `RawRoute Error:` lines (name, message and `cause`); the stack trace prints when `BLOCKS_LOG_LEVEL` is unset or `debug`. `BLOCKS_DEV_QUIET=1` still hides all of those lines at every level.
 
+## Pre-deploy hooks (for Building Block authors)
+
+A Building Block that needs a step before `cdk deploy`, such as a deploy guard or host-side migrations, declares it in its own `package.json`:
+
+```json
+"aws-blocks": { "predeploy": { "module": "./dist/predeploy.js", "stages": ["production"] } }
+```
+
+and exports `predeploy(context)` from that module (ship it through `files`). The `deploy` and `startSandbox` scripts find every hook among the `@aws-blocks/*` packages in the app's `dependencies` and `devDependencies` and, when the app depends on `@aws-blocks/blocks`, among that package's dependencies. They synthesize the app, run the hooks for their stage (`production` or `sandbox`) one at a time in that order, then deploy the same assembly. A declaration without `stages` runs in both stages.
+
+```ts
+import type { PredeployContext, PredeployResult } from '@aws-blocks/core/scripts';
+
+export async function predeploy(context: PredeployContext): Promise<PredeployResult> {
+	const stacks = await context.synth(); // the synthesized stacks, read once and shared by every hook
+	const tooBig = stacks.filter((stack) => JSON.stringify(stack.template).length > 1_000_000);
+	return tooBig.length > 0 ? { stops: [`Templates too large: ${tooBig.map((s) => s.stackName).join(', ')}`] } : {};
+}
+```
+
+The context carries `stage`, `projectRoot`, `synth()`, `invocation` (how the user ran the command, such as `npm run deploy`, for messages) and `account` (the account ID the credential check verified, and its plan, `FREE`, `PAID` or `null`). Each stack has `stackName`, `template`, the `account` it names in its environment (unset for an environment-agnostic stack), and `nestedStacks`: the templates of its CDK nested stacks, by the logical ID of their `AWS::CloudFormation::Stack` resource. A hook returns:
+
+- `notes`: printed, prefixed with the package name.
+- `warnings`: printed to stderr, prefixed with the package name; hidden at `BLOCKS_LOG_LEVEL=quiet`. The deploy continues.
+- `stops`: every hook still runs, then the command throws one error with all the stops, before any stack changes, and exits non-zero.
+
+A hook that throws, a declared module that is missing, or a module without a `predeploy` export stops the deploy at once with that error: a guard that cannot run must not pass as a guard that passed. Changes that `npm run sandbox` later deploys through `cdk watch` do not run the hooks.
+
 ## CORS Configuration
 
 By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).

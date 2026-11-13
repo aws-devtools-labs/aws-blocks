@@ -6,9 +6,9 @@ import { describe, it, mock } from 'node:test';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
+import type { AssemblyStack } from './cloud-assembly.js';
 import { productionDestroyDeps } from './destroy.js';
 import {
-	type AssemblyStack,
 	destroyWasThrottled,
 	emptySandboxBuckets,
 	isThrottleReason,

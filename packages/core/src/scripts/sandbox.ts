@@ -5,7 +5,7 @@ import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
-import { assertAwsCredentials } from './preflight-credentials.js';
+import { assertAwsCredentials, type AwsPreflightResult } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { runPredeployHooks } from './predeploy-hooks.js';
@@ -23,6 +23,7 @@ import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
 import { createDeployRecorder } from './deploy-history.js';
+import { type AssemblyStack, stackTemplates, topLevelStacks } from './cloud-assembly.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -415,8 +416,10 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   // error. Unlike deploy(), startSandbox isn't wrapped in trackCommand, so emit the
   // FAIL event manually (mirroring the CDK-deploy failure path below) before
   // rethrowing — otherwise a no-creds abort sends no telemetry.
+  // The pre-deploy hooks below receive the verified account and its plan.
+  let preflight: AwsPreflightResult;
   try {
-    await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
+    preflight = await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -442,14 +445,6 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   // Apply external-database migrations to the sandbox database before
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   await applyExternalMigrations({ stage: 'sandbox' });
-
-  // Pre-deploy hooks the installed blocks declare in their package.json
-  // (`aws-blocks.predeploy`) for the sandbox stage. A stop aborts here.
-  await runPredeployHooks({
-    stage: 'sandbox',
-    projectRoot: process.cwd(),
-    app: `npm exec tsx -- -C cdk ${backendPath}`,
-  });
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the
@@ -502,13 +497,56 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
+  const deployFailed = (error: unknown): unknown => {
+    registerFrameworkFromSink(frameworkSink);
+    history.fail(error);
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
+    });
+    cdkOutput.printRetained();
+    console.error("\n❌ Deployment failed.");
+    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
+    return error;
+  };
+
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
     await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
+  } catch (error) {
+    throw deployFailed(error);
+  }
 
+  // Pre-deploy hooks the installed blocks declare in their package.json
+  // (`aws-blocks.predeploy`) for the sandbox stage, on the assembly just
+  // synthesized. Before any stack changes, so a stop leaves nothing to recover:
+  // no failure banner and no destroy hint. Changes that `cdk watch` deploys later
+  // are not checked.
+  try {
+    await runPredeployHooks({
+      stage: 'sandbox',
+      projectRoot: process.cwd(),
+      assemblyDir,
+      invocation,
+      account: { id: preflight.account, plan: preflight.accountPlan },
+    });
+  } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
+    throw error;
+  }
+
+  try {
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
     // deployed has one and already exists — or can't be inspected (fail closed).
@@ -528,18 +566,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
       { env: cdkEnv },
     );
   } catch (error) {
-    registerFrameworkFromSink(frameworkSink);
-    history.fail(error);
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
-    });
-    cdkOutput.printRetained();
-    console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
-    throw error;
+    throw deployFailed(error);
   }
 
   registerFrameworkFromSink(frameworkSink);
@@ -712,78 +739,17 @@ export async function listStackBucketNames(cfn: CloudFormationClient, stackName:
  */
 export const EXPRESS_UNSAFE_RESOURCE_TYPES: ReadonlySet<string> = new Set(['AWS::Lambda::WebFunctionEndpoint']);
 
-/** A stack in a synthesized cloud assembly. `region` is unset for environment-agnostic stacks. */
-export interface AssemblyStack {
-	stackName: string;
-	region?: string;
-}
-
-/** A stack artifact in a cloud assembly's `manifest.json`. */
-type StackArtifact = {
-	type?: string;
-	environment?: string;
-	displayName?: string;
-	properties?: { templateFile?: string; stackName?: string };
-};
-
-/**
- * The stack artifacts listed in `manifest.json` of the synthesized assembly at
- * `assemblyDir`, as `[artifactId, artifact]`: the top-level stacks (a stack
- * inside a CDK `Stage` lives in a nested assembly and is not listed). [] if the
- * assembly can't be read.
- */
-function readStackArtifacts(assemblyDir: string): Array<[string, StackArtifact]> {
-	let artifacts: Record<string, StackArtifact>;
-	try {
-		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, StackArtifact> })
-			.artifacts ?? {};
-	} catch {
-		return [];
-	}
-	return Object.entries(artifacts).filter(([, artifact]) => artifact.type === 'aws:cloudformation:stack');
-}
-
-/** The CloudFormation stack name and Region of a stack artifact. */
-function toAssemblyStack(id: string, artifact: StackArtifact): AssemblyStack {
-	const region = artifact.environment?.split('/')[3];
-	return {
-		stackName: artifact.properties?.stackName ?? id,
-		region: region && region !== 'unknown-region' ? region : undefined,
-	};
-}
-
-/**
- * The top-level stacks of the synthesized assembly at `assemblyDir`, by
- * CloudFormation stack name and Region: the stacks `cdk deploy --all` and
- * `cdk destroy --all` select. Unlike `cdk ls`, which prints construct paths
- * (`Parent/Nested`) and also lists stacks inside a CDK `Stage`, these are the
- * names CloudFormation knows, each with its own Region (a Lambda@Edge
- * `edge-lambda-stack-*` is always in us-east-1). [] if the assembly can't be read.
- */
-export function topLevelStacks(assemblyDir: string): AssemblyStack[] {
-	return readStackArtifacts(assemblyDir).map(([id, artifact]) => toAssemblyStack(id, artifact));
-}
-
 /**
  * The stacks in the synthesized assembly at `assemblyDir` whose template
  * contains a resource in {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Reads
  * `manifest.json` + each stack's template; [] if the assembly can't be read.
  */
 export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyStack[] {
-	const stacks: AssemblyStack[] = [];
-	for (const [id, artifact] of readStackArtifacts(assemblyDir)) {
-		if (!artifact.properties?.templateFile) continue;
-		let template: { Resources?: Record<string, { Type?: string }> };
-		try {
-			template = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8'));
-		} catch {
-			continue;
-		}
-		const hasUnsafe = Object.values(template.Resources ?? {}).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type ?? ''));
-		if (!hasUnsafe) continue;
-		stacks.push(toAssemblyStack(id, artifact));
-	}
-	return stacks;
+	return stackTemplates(assemblyDir)
+		.filter(({ template }) =>
+			Object.values(template.Resources ?? {}).some((r) => typeof r.Type === 'string' && EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type)),
+		)
+		.map(({ stack }) => stack);
 }
 
 /**

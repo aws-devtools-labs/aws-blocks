@@ -9,6 +9,7 @@ export {
 	classifyError,
 	trackCommand,
 } from '../telemetry/index.js';
+export type { AccountPlanType } from './account-metadata.js';
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
 export {
@@ -52,9 +53,11 @@ export {
 } from './native-catalogs.js';
 export {
 	type DeployStage,
+	type PredeployAccount,
 	type PredeployContext,
 	type PredeployResult,
 	runPredeployHooks,
+	type SynthesizedNestedStack,
 	type SynthesizedStack,
 } from './predeploy-hooks.js';
 export {
