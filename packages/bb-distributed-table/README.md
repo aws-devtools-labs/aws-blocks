@@ -128,6 +128,8 @@ for await (const order of orders.query({
 | `limit` | `number` | No | Maximum number of items to return. |
 | `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`. |
 
+**Paging:** `query()` has no cursor or offset option. To page through results, sort on a unique, stable sort key (add a tie-breaker to a timestamp), pass the last key you returned as the bound in `where` (`{ greaterThan: cursor }` ascending, `{ lessThan: cursor }` with `order: 'desc'`), and request `limit: pageSize + 1` to learn whether another page exists.
+
 ### Conditional Operations
 
 Both `put` and `delete` accept optional conditions:
@@ -222,7 +224,7 @@ try {
 
 ### Basic CRUD
 
-> The examples use Zod, but `schema` accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). Install your chosen library, e.g. `npm install zod`.
+> The examples use Zod, but `schema` accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). Install your chosen library, e.g. `npm install zod`. A hand-written validator's `~standard.validate` returns `{ value }` on success or `{ issues }` on failure, not Zod's `{ success, data }`.
 
 ```typescript
 import { z } from 'zod';
