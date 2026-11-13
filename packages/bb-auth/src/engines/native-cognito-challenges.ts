@@ -316,7 +316,7 @@ export function buildChallengeResponses(
 	username: string,
 	response: string,
 	userAttributes: Partial<Record<string, string>> | undefined,
-	adminOnly: ReadonlySet<string> = new Set(),
+	adminOnly: ReadonlySet<string>,
 ): Record<string, string> {
 	switch (challengeName) {
 		case 'SMS_MFA':

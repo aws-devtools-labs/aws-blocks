@@ -110,8 +110,8 @@ export function cognitoAdminEngine(deps: CognitoAdminDeps): NativeAdminEngine {
 		// ── lifecycle ────────────────────────────────────────────────────────
 		async createUser(username, init) {
 			// The schema-independent rules, before the SDK call; an
-			// administrator may write the verified flags.
-			checkAttributeValues(init.attributes, 'adminCreateUser');
+			// administrator may write the verified flags and the admin-only attributes.
+			checkAttributeValues(init.attributes, 'adminCreateUser', new Set());
 			const attributes = Object.entries(init.attributes).map(([Name, Value]) => ({ Name, Value }));
 			const resp = await deps.client().send(
 				new AdminCreateUserCommand({

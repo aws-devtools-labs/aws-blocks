@@ -160,7 +160,7 @@ export function immutableAttributeError(name: string): Error {
 export function checkAttributeValues(
 	attributes: Readonly<Record<string, unknown>>,
 	write: AttributeWrite,
-	adminOnly: ReadonlySet<string> = new Set(),
+	adminOnly: ReadonlySet<string>,
 ): void {
 	const values: [name: string, value: string][] = [];
 	// 1. The wire shape: every value a string.
