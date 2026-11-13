@@ -85,9 +85,12 @@ export interface DatabaseOptions {
   /**
    * ARN of an existing customer-managed KMS key to use for the Aurora cluster's
    * storage-at-rest encryption. The same key also encrypts the cluster's
-   * auto-generated credentials secret. When omitted, storage is still encrypted,
-   * but with the account's AWS-managed `aws/rds` key — storage encryption is
-   * always on regardless of this option.
+   * auto-generated credentials secret. Supplying it turns storage encryption on
+   * regardless of the `@aws-blocks/bb-data:encryptStorageByDefault` context flag
+   * (and satisfies synth even when the flag is absent). When omitted, encryption
+   * follows that flag: `true` encrypts with the account's AWS-managed `aws/rds`
+   * key, `false` leaves an existing unencrypted cluster as-is (with a synth
+   * warning), and an absent flag fails synth so the choice is always explicit.
    *
    * Referenced by **ARN** (a plain string) rather than a `kms.IKey` for the same
    * reason as `subnets`: the `Database` constructor resolves to a runtime entry

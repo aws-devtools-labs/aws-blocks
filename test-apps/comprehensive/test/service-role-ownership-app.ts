@@ -28,7 +28,8 @@ interface TrustStatement {
   Principal?: { Service?: string | string[] };
 }
 
-const app = new cdk.App({ context: { sandboxMode: 'true' } });
+// `tsx` does not read cdk.json, so set the context it carries (storage-encryption flag included) here.
+const app = new cdk.App({ context: { sandboxMode: 'true', '@aws-blocks/bb-data:encryptStorageByDefault': true } });
 const stack = await BlocksStack.create(app, 'bb-test-role-ownership', {
   backendHandlerPath: join(__dirname, '..', 'aws-blocks', 'index.handler.ts'),
   backendCDKPath: join(__dirname, '..', 'aws-blocks', 'index.ts'),

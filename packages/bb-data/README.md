@@ -278,16 +278,22 @@ key, that the key policy allows the account's principals.
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
-  encryption at rest is **opt-in via a context flag** so new projects are secure by
-  default without replacing an existing cluster. New `create-blocks-app` projects
-  set `"@aws-blocks/bb-data:encryptStorageByDefault": true` in `cdk.json`, which
-  turns on encryption with the account's AWS-managed `aws/rds` key. Passing a
-  `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) also turns
+  encryption at rest is an **explicit choice**, made with the
+  `"@aws-blocks/bb-data:encryptStorageByDefault"` context flag in `cdk.json`, so a
+  dependency upgrade never changes the encryption of an existing cluster:
+  - `true` — encrypt the cluster storage with the account's AWS-managed `aws/rds`
+    key. New `create-blocks-app` projects already set this.
+  - `false` — keep an existing unencrypted cluster exactly as it is (the
+    `StorageEncrypted` property is left unset). Synth emits a
+    `@aws-blocks/bb-data:StorageEncryptionDisabled` warning pointing at
+    [Enabling storage encryption on an existing database](#enabling-storage-encryption-on-an-existing-database).
+  - **not set** — synth **fails** with an error asking you to choose.
+
+  The flag also accepts `1`/`0` and the strings `"true"`/`"false"`/`"1"`/`"0"`
+  (case-insensitive, e.g. from `--context`); any other value fails synth. Passing a
+  `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) turns
   encryption on regardless of the flag and uses that key instead (it also encrypts
-  the generated credentials secret). When neither the flag nor a key is set, the
-  cluster is synthesized without the `StorageEncrypted` property (an existing,
-  unencrypted cluster is left untouched) and a synth warning explains how to opt
-  in. The key is **imported** (Blocks can't modify its policy), so its policy
+  the generated credentials secret). The key is **imported** (Blocks can't modify its policy), so its policy
   must allow the account's IAM principals to use it (the default key policy does,
   through the account root; a policy that enumerates principals must name the
   deploying principal, the app runtime's role, the migration Lambda's role and
@@ -402,22 +408,129 @@ key, that the key policy allows the account's principals.
 >   delete of the old cluster may fail and leave it in place; this cleanup path is
 >   unverified on a real deploy.
 >
-> **The replacement is symmetric.** Turning encryption back **off** — removing the
-> flag (or `storageEncryptionKeyArn`) from a project that already deployed
-> encrypted, whether by deleting the `cdk.json` line or by a merge that drops it —
+> **The replacement is symmetric.** Flipping the flag from `true` to `false` (or
+> removing `storageEncryptionKeyArn`) on a project that already deployed encrypted
 > also changes the `StorageEncrypted` property, so it **likewise replaces the
 > cluster** (back to unencrypted) with the same new-empty-cluster / no-schema
-> outcome described above. Review the diff and snapshot before removing the flag
-> too, not only before adding it.
->
-> The only safe route is to carry the data across yourself: **snapshot** the
-> existing cluster, **restore** that snapshot into a new cluster with encryption
-> enabled, then cut over to it. Review the CloudFormation diff and take a snapshot
-> before deploying this change to any cluster whose data you need. Adding or
-> changing the KMS key also replaces the cluster's generated credentials secret (a
-> new logical id, hence a new generated password), so record the existing
-> credentials — or reset the master password on the old cluster — if you still
-> need access to the orphaned cluster.
+> outcome. Deleting the flag outright fails synth instead. Adding or changing the
+> KMS key also replaces the cluster's generated credentials secret (a new logical
+> id, hence a new generated password). Follow the steps below to carry data across.
+
+### Enabling storage encryption on an existing database
+
+If your project was deployed before it set the
+`"@aws-blocks/bb-data:encryptStorageByDefault"` flag, its Aurora cluster is
+unencrypted and synth now fails until you choose. You have two options.
+
+**Option 1 — keep the existing cluster as it is.** Set the flag to `false` in
+`cdk.json`. The cluster's template is unchanged (nothing is replaced) and synth
+emits a warning that its storage is unencrypted. You can migrate later.
+
+```json
+{
+  "context": {
+    "@aws-blocks/bb-data:encryptStorageByDefault": false
+  }
+}
+```
+
+**Option 2 — move the data onto an encrypted cluster.** Setting the flag to `true`
+on an existing unencrypted cluster replaces it with a new, empty one (see above),
+so instead restore an encrypted copy yourself and point the block at it with
+`fromExisting()`. Start from Option 1 (flag `false`) so deploys stay safe while you
+migrate, and plan a **write freeze** from step 2 until the deploy in step 6
+completes — writes made after the snapshot are not carried across.
+
+1. **Check what a deploy would do.** `npm run deploy` runs `cdk deploy` with
+   `--require-approval never`, so it will **not** prompt before replacing a
+   cluster. Run `npx cdk diff` yourself before any deploy that touches the
+   encryption settings and look for `AWS::RDS::DBCluster` marked as a replacement
+   (`[-] AWS::RDS::DBCluster ... replace` / `may be replaced`). Find the current
+   cluster identifier and credentials secret ARN from the stack:
+
+   ```bash
+   aws cloudformation describe-stack-resources --stack-name <stack> \
+     --query "StackResources[?ResourceType=='AWS::RDS::DBCluster' || ResourceType=='AWS::SecretsManager::Secret'].[ResourceType,PhysicalResourceId]"
+   ```
+
+2. **Snapshot the existing cluster.**
+
+   ```bash
+   aws rds create-db-cluster-snapshot \
+     --db-cluster-identifier <old-cluster-id> \
+     --db-cluster-snapshot-identifier <old-cluster-id>-pre-encrypt
+   aws rds wait db-cluster-snapshot-available \
+     --db-cluster-snapshot-identifier <old-cluster-id>-pre-encrypt
+   ```
+
+3. **Restore the snapshot into a new, encrypted cluster.** Passing `--kms-key-id`
+   restores an unencrypted snapshot as encrypted. Use `alias/aws/rds` or your
+   customer-managed key ARN, the same engine version and capacity as the current
+   cluster (`aws rds describe-db-clusters --db-cluster-identifier <old-cluster-id>`
+   shows them), and a DB subnet group and security group **you own outside this
+   stack**: once the managed `Database` leaves the template, CloudFormation removes
+   the Blocks-created VPC, subnets and security group. The cluster is reached over
+   the RDS Data API, so the security group needs no ingress rules.
+
+   ```bash
+   aws rds restore-db-cluster-from-snapshot \
+     --db-cluster-identifier <new-cluster-id> \
+     --snapshot-identifier <old-cluster-id>-pre-encrypt \
+     --engine aurora-postgresql --engine-version <engine-version> \
+     --kms-key-id alias/aws/rds \
+     --db-subnet-group-name <your-db-subnet-group> \
+     --vpc-security-group-ids <your-security-group-id> \
+     --serverless-v2-scaling-configuration MinCapacity=0.5,MaxCapacity=2 \
+     --deletion-protection
+   ```
+
+4. **Add a Serverless v2 writer and enable the Data API.**
+
+   ```bash
+   aws rds create-db-instance \
+     --db-instance-identifier <new-cluster-id>-writer \
+     --db-cluster-identifier <new-cluster-id> \
+     --db-instance-class db.serverless --engine aurora-postgresql
+   aws rds wait db-instance-available --db-instance-identifier <new-cluster-id>-writer
+   aws rds enable-http-endpoint --resource-arn <new-cluster-arn>
+   ```
+
+5. **Copy the credentials into a secret you own — before switching.** The
+   Blocks-managed credentials secret has `DeletionPolicy: Delete` (even under the
+   production preset), so it is **deleted** as soon as the managed cluster leaves
+   the template. The restored cluster keeps the snapshot's master password, so
+   without a copy you lose its credentials.
+
+   ```bash
+   aws secretsmanager create-secret --name <app>/database-credentials \
+     --secret-string "$(aws secretsmanager get-secret-value \
+       --secret-id <managed-secret-arn> --query SecretString --output text)"
+   ```
+
+   Pass `--kms-key-id <your-key-arn>` too if you use a customer-managed key.
+
+6. **Point the block at the restored cluster.** `host` is the cluster **ARN** (the
+   Data API resource) and `secretArn` is the **complete** ARN of the secret from
+   step 5 (including its random suffix). Remove `migrationsPath` — it can't be
+   combined with `fromExisting()`, and the restored cluster already carries the
+   schema. Then `npx cdk diff`, and deploy.
+
+   ```typescript
+   import { Database, fromExisting } from '@aws-blocks/bb-data';
+
+   const db = new Database(scope, 'main', {
+     connection: fromExisting({
+       host: 'arn:aws:rds:<region>:<account>:cluster:<new-cluster-id>',
+       database: '<database-name>',
+       secretArn: 'arn:aws:secretsmanager:<region>:<account>:secret:<app>/database-credentials-AbCdEf',
+     }),
+   });
+   ```
+
+   The `encryptStorageByDefault` flag no longer affects this `Database` (nothing is
+   provisioned for a `fromExisting()` connection). Under the production preset the
+   old cluster is retained (with deletion protection on) — delete it once you've
+   verified the new one. Under sandbox it is deleted by this deploy.
 
 ## Local Development
 
@@ -504,8 +617,10 @@ interface DatabaseOptions {
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
    * (also encrypts the auto-generated credentials secret). Supplying it turns
    * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
-   * context flag. When omitted, encryption follows that flag — on with the
-   * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
+   * context flag (and satisfies synth even when the flag is absent). When omitted,
+   * encryption follows that flag — on with the account's AWS-managed `aws/rds` key
+   * when `true`, left unset (with a synth warning) when `false`, and synth fails
+   * when the flag is not set. The key is
    * imported, so its policy must allow the account's IAM principals to use it
    * (the default key policy does): the deploying principal needs `kms:CreateGrant`
    * + `kms:DescribeKey`, and Blocks grants `kms:Decrypt` to the principals reading

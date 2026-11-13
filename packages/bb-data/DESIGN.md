@@ -105,7 +105,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is an **explicit choice** via the `@aws-blocks/bb-data:encryptStorageByDefault` context flag: `true` emits `storageEncrypted: true` (new `create-blocks-app` projects set it), `false` leaves the `StorageEncrypted` property unset so an existing cluster is not replaced (with a synth warning), and an absent flag fails synth. A `storageEncryptionKeyArn` turns encryption on regardless of the flag. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
 | Security groups | The cluster security group admits only the rotation Lambda's security group on the PostgreSQL port (no ingress at all with `secretRotation: false`); the app reaches the cluster over the RDS Data API (HTTPS), not a socket. The Database's own VPC adds an endpoint security group admitting 443 from the rotation Lambda's security group only. The rotation Lambda's own group is closed outbound and egresses only to the cluster's port and to 443 on the Secrets Manager endpoint, so the credential it holds has no route to the internet even where the VPC has a NAT; with `provisionEndpoints: false` the endpoint is the customer's and cannot be named, so that rule is 443 to any address |
 | Secrets Manager secret + rotation | Auto-generated credentials, rotated in place every 30 days under the `production` preset and not at all under `sandbox` (`secretRotation`) by the rotation Lambda (AWS's PostgreSQL single-user rotation function, a Serverless Application Repository app) in the cluster VPC; encrypted with `storageEncryptionKeyArn` when one is supplied |
@@ -121,18 +121,25 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ### Security posture (Aurora)
 
-- **Encryption at rest** is **opt-in**, gated so new projects are secure by
-  default without replacing an existing cluster. The CDK layer emits
-  `storageEncrypted: true` only when the `@aws-blocks/bb-data:encryptStorageByDefault`
-  context flag is set (the `create-blocks-app` templates set it) or a
-  customer-managed key is supplied; otherwise it leaves the `StorageEncrypted`
-  property unset — CloudFormation renders no key, and an explicit `false` is never
-  emitted, because either would be a template change that forces a destructive
-  replacement of an existing, implicitly-unencrypted cluster. A synth warning
-  (`@aws-blocks/bb-data:StorageEncryptionOptIn`) fires when neither is set. A
-  customer-managed KMS key, when supplied, encrypts both the storage volume and
-  the auto-generated credentials secret and forces encryption on regardless of the
-  flag.
+- **Encryption at rest is an explicit, fail-closed choice**, so a dependency
+  bump can never change `StorageEncrypted` on an existing cluster (a change
+  CloudFormation applies as a destructive replacement). The CDK layer normalizes
+  the `@aws-blocks/bb-data:encryptStorageByDefault` context flag (booleans, `1`/`0`,
+  and the strings `true`/`false`/`1`/`0`, case-insensitive and trimmed) and then:
+  - `true` → emits `storageEncrypted: true` (the `create-blocks-app` templates set
+    it, so new projects are encrypted);
+  - `false` → leaves the `StorageEncrypted` property unset — the same template an
+    existing, implicitly-unencrypted cluster was deployed with — and emits a
+    `@aws-blocks/bb-data:StorageEncryptionDisabled` synth warning pointing at the
+    README migration steps. An explicit `StorageEncrypted: false` is never
+    emitted, because that too would be a template change on an existing cluster;
+  - absent → **fails synth** with an error explaining both choices;
+  - any other value → fails synth, listing the accepted values.
+
+  A customer-managed KMS key, when supplied, is itself the decision: it encrypts
+  both the storage volume and the auto-generated credentials secret and forces
+  encryption on regardless of the flag. `fromExisting()` connections provision
+  nothing, so the flag is not read for them.
 - **`iamAuthentication` is intentionally NOT enabled.** The app reaches the
   cluster exclusively over the RDS Data API (HTTPS + Secrets Manager
   credentials), never a direct DB socket, so database-level IAM authentication
@@ -191,13 +198,19 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   production's `deletionProtection: true` the follow-up delete may fail and leave
   it in place (this cleanup path is unverified on a real deploy). Adding or
   changing the key also replaces the generated credentials secret (new logical id,
-  new generated password). The replacement is symmetric: removing the flag (or
-  `storageEncryptionKeyArn`) from a project that already deployed encrypted —
-  deleting the `cdk.json` line, a merge dropping it — also changes
-  `StorageEncrypted` and so **likewise replaces the cluster** (back to
-  unencrypted), with the same new-empty-cluster / no-schema outcome. The only safe
+  new generated password). The replacement is symmetric: flipping the flag from
+  `true` to `false` (or removing `storageEncryptionKeyArn`) on a project that
+  already deployed encrypted also changes `StorageEncrypted` and so **likewise
+  replaces the cluster** (back to unencrypted), with the same new-empty-cluster /
+  no-schema outcome; deleting the flag outright fails synth instead. The only safe
   route is to snapshot the existing cluster, restore it with encryption enabled,
-  then cut over. Review the diff and snapshot first.
+  then cut over to it with `connection: fromExisting(...)` — the README section
+  "Enabling storage encryption on an existing database" has the exact steps,
+  including copying the managed credentials secret (which has
+  `DeletionPolicy: Delete`) before switching. `npm run deploy` runs with
+  `--require-approval never`, so run `npx cdk diff` first. A `snapshotIdentifier`
+  option that would let the stack restore the data itself is a possible
+  follow-up.
 
 ### Rotation on deploy (Aurora)
 

@@ -85,7 +85,9 @@ function synth(testEnv: string | undefined): ProbeResult {
 	const dir = mkdtempSync(join(tmpdir(), 'test-support-synth-'));
 	try {
 		const out = join(dir, 'probe.json');
-		const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', CDK_CONTEXT_JSON: JSON.stringify({ sandboxMode: 'true' }) };
+		// `tsx` does not read cdk.json, so pass the context it sets (storage-encryption flag included) explicitly.
+		const context = { sandboxMode: 'true', '@aws-blocks/bb-data:encryptStorageByDefault': true };
+		const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', CDK_CONTEXT_JSON: JSON.stringify(context) };
 		delete env.BLOCKS_TEST_ENV;
 		delete env.BLOCKS_TEST_SUPPORT_SECRET;
 		delete env.E2E_FROM_EMAIL;
