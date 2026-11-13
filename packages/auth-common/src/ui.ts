@@ -10,9 +10,9 @@ export { injectTheme, THEME_CSS, THEME_STYLE_ID } from './theme.js';
  * Typed payload map for `setAuthState` — discriminated on the action
  * name emitted by each BB's state machine.
  *
- * Covers the universal action vocabulary shared by `Auth` and the blocks it
- * replaced (`AuthBasic`, `AuthCognito`). Individual BBs MAY emit additional
- * actions (e.g. Cognito's `confirmSignIn`, `resendSignUpCode`) — these keys exist on
+ * Covers the universal action vocabulary of the auth state machine.
+ * Individual BBs MAY emit additional actions (e.g. Cognito's `confirmSignIn`,
+ * `resendSignUpCode`) — these keys exist on
  * the map with their BB-specific payload shape. A BB that doesn't
  * support an action will return a "Unknown action" error at runtime
  * even though the call typechecks, because the map is a union across
@@ -43,7 +43,7 @@ export interface AuthActionPayloadMap {
 	 * Complete the auto-sign-in bridge after `confirmSignUp` returned
 	 * `nextStep.signUpStep === 'COMPLETE_AUTO_SIGN_IN'`. Username travels
 	 * as an echo for the UI; the BB redeems the encrypted bridging cookie
-	 * server-side. See `Auth.autoSignIn` (formerly `AuthCognito.autoSignIn`) for the underlying API.
+	 * server-side. See `Auth.autoSignIn` for the underlying API.
 	 */
 	autoSignIn: { username: string };
 	confirmSignIn:
@@ -567,7 +567,7 @@ function subscribe(api: AuthStateApi, listener: ((state: AuthState) => void) | S
  *
  * `api.setAuthState()` is a plain RPC: it changes the server-side session (and
  * cookie) but notifies nothing on the client, so a custom UI that calls it
- * directly goes stale, notably on sign-out (issue #185). This helper:
+ * directly goes stale, notably on sign-out. This helper:
  *
  * 1. calls `api.setAuthState(input)` exactly once, with `input` unchanged;
  * 2. on a retriable failure (`retriable === true`) returns the state untouched:
@@ -798,7 +798,7 @@ function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
  * tags its broadcasts with the API's RPC namespace, and a message tagged with
  * another one is skipped. An untagged message (from {@link broadcastAuthChange},
  * or from a tab running an older `@aws-blocks/auth-common`) reaches every API's
- * listeners, as before.
+ * listeners.
  *
  * It also follows the shared store, so it ends where {@link subscribeAuthState}
  * does: a broadcast from another tab is delivered at once, and the store's
@@ -963,7 +963,7 @@ export function AuthenticatedContent<A extends AuthStateApi<never>>(
  * auth BB (or a hand-written state machine) can opt in without learning
  * Cognito's action / next-step names. BBs that want autocomplete-grade
  * typing (e.g. `bb-auth`) ship a wrapper helper from their own UI entry
- * point — see `authOverrides` (formerly `bb-auth-cognito`'s `cognitoOverrides`).
+ * point — see `authOverrides`.
  */
 export interface AuthFieldOverride {
 	/** Override the label / placeholder copy. */
@@ -1100,9 +1100,7 @@ export interface AuthenticatorOptions {
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
  *   For overrides with autocomplete-grade types, import
- *   `authOverrides` from `@aws-blocks/bb-auth/ui` (it replaces
- *   `cognitoOverrides` from the removed `@aws-blocks/bb-auth-cognito/ui`) and
- *   pass its result here.
+ *   `authOverrides` from `@aws-blocks/bb-auth/ui` and pass its result here.
  * @returns An HTMLElement that shows auth UI when signed out, signed-in state when authenticated
  *
  * @example

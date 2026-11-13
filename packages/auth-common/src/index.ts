@@ -74,8 +74,7 @@ export interface BlocksAuth {
 	 * @param context - The BlocksContext from the API handler.
 	 * @returns The authenticated user.
 	 * @throws {ApiError} 401 with name `NotAuthenticatedException` (`AuthErrors.NotAuthenticated`)
-	 * if not authenticated — the name `Auth` throws (as `AuthCognito` and `AuthOIDC` did; the removed
-	 * `AuthBasic` threw `SessionExpiredException`).
+	 * if not authenticated (code moving from `AuthBasic` must match this name, not `SessionExpiredException`).
 	 * Branch on `status === 401` to send users to sign-in; branch on the name only to
 	 * message a case differently.
 	 */
@@ -100,10 +99,8 @@ export interface BlocksAuth {
 	/**
 	 * Require an authenticated user who is a member of `role`.
 	 *
-	 * Required. Until the unified `Auth` Building Block replaced the
-	 * provider-specific auth BBs it was optional, because two of them (the
-	 * removed `AuthBasic` and `AuthOIDC`) had no roles; `Auth` implements it for
-	 * every configuration, so any `BlocksAuth` can now gate on a role.
+	 * Required: `Auth` implements it for every configuration, so any
+	 * `BlocksAuth` can gate on a role.
 	 *
 	 * Implementations may narrow `role` to the roles they were configured with
 	 * (e.g. `Auth`'s declared `users.groups`) — see the note on method
