@@ -4,6 +4,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { CLIENT_FETCH_STORE } from '@aws-blocks/core/bb-utils';
 
+let installed = false;
+
 /**
  * Installs a cookie jar on `global.fetch` so that `Set-Cookie` response
  * headers persist across requests. Node's native fetch doesn't do this.
@@ -24,8 +26,6 @@ import { CLIENT_FETCH_STORE } from '@aws-blocks/core/bb-utils';
  * const data = await api.listTodos();
  * ```
  */
-let installed = false;
-
 export function installCookieJar(): () => void {
   if (installed) throw new Error('Cookie jar is already installed.');
   installed = true;
