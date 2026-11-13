@@ -26,7 +26,9 @@
  * policy lets `cloudwatch.amazonaws.com` use it with no source condition:
  *
  * - `TRUST_CHECK_BLOCK_KEY` adds the key inside a block with an official `bbName`;
- * - `TRUST_CHECK_APP_KEY` adds it on the root, where the app owns it.
+ * - `TRUST_CHECK_APP_KEY` adds it on the root, where the app owns it;
+ * - `TRUST_CHECK_APP_STACK_KEY` adds it at stack scope of an embedded
+ *   `BlocksBackend` (a stack-level addition of the backend module, also the app's).
  */
 import * as cdk from 'aws-cdk-lib';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -106,6 +108,7 @@ export default function (root: Construct) {
 	const stack = cdk.Stack.of(root);
 	if (stack !== root) {
 		new iam.Role(stack, 'ModuleStackRole', { assumedBy: new iam.ServicePrincipal('glue.amazonaws.com') });
+		if (process.env.TRUST_CHECK_APP_STACK_KEY) unscopedServiceKey(stack, 'ModuleStackKey');
 	}
 	const machine = new sfn.StateMachine(root, 'UserSM', {
 		definitionBody: sfn.DefinitionBody.fromChainable(new sfn.Pass(root, 'Pass')),
