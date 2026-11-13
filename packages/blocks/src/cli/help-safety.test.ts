@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import * as realCore from '@aws-blocks/core/scripts';
 import { resolvePackageBin } from './commands.js';
 import type { SpawnSpec } from './context.js';
-import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
+import { fixtureApp, runCli } from './test-helpers.js';
 
 let server: Server;
 let requests: string[] = [];
@@ -90,6 +90,21 @@ beforeEach(() => {
 /** The real secret and config CLIs, instead of the test helpers' throwing fakes. */
 const REAL_VALUE_CLIS = { runSecretCli: realCore.runSecretCli, runConfigCli: realCore.runConfigCli };
 
+/**
+ * Run `fn`, collecting what it prints with console.log. The real secret and config CLIs print their
+ * results there, and this process's stdout carries `node --test`'s results.
+ */
+async function capturingConsoleLog<T>(fn: () => Promise<T>): Promise<{ result: T; stdout: string }> {
+	const lines: string[] = [];
+	const log = console.log;
+	console.log = (...args: unknown[]) => lines.push(args.join(' '));
+	try {
+		return { result: await fn(), stdout: lines.join('\n') };
+	} finally {
+		console.log = log;
+	}
+}
+
 /** Run each spawned child for real, collecting its output. */
 function realSpawn(outputs: string[]): (spec: SpawnSpec) => { code: number | null } {
 	return (spec) => {
@@ -101,7 +116,9 @@ function realSpawn(outputs: string[]): (spec: SpawnSpec) => { code: number | nul
 
 describe('help never runs a passthrough tool with the user arguments', () => {
 	it('the harness sees a real side effect: "config remove KEY" reaches the store', async () => {
-		const run = await runCli(['config', 'remove', 'FLAG'], { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
+		const { result: run } = await capturingConsoleLog(() =>
+			runCli(['config', 'remove', 'FLAG'], { cwd: fixtureApp(), core: REAL_VALUE_CLIS }),
+		);
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(requests, ['AmazonSSM.DeleteParameter']);
 	});
@@ -115,17 +132,11 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		['secret', 'set', 'API_KEY', '--value-stdin', '--help'],
 	]) {
 		it(`cdk-blocks ${argv.join(' ')}: exit 0, usage, no store request`, async () => {
-			const stdout: string[] = [];
-			const log = console.log;
-			console.log = (...args: unknown[]) => stdout.push(args.join(' '));
-			let run: FakeRun;
-			try {
-				run = await runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
-			} finally {
-				console.log = log;
-			}
+			const { result: run, stdout } = await capturingConsoleLog(() =>
+				runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS }),
+			);
 			assert.strictEqual(run.code, 0, run.stderr);
-			assert.match(stdout.join('\n'), /^Usage: cdk-blocks (secret|config) (remove|set) /);
+			assert.match(stdout, /^Usage: cdk-blocks (secret|config) (remove|set) /);
 			assert.deepStrictEqual(requests, []);
 		});
 	}
@@ -217,7 +228,9 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			['secret', 'remove', 'API_KEY', '--force', '--yes'],
 		]) {
 			requests = [];
-			const run = await runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
+			const { result: run } = await capturingConsoleLog(() =>
+				runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS }),
+			);
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
 			// A forced delete first checks that the secret exists.
 			assert.deepStrictEqual(
