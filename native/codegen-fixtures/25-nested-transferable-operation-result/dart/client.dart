@@ -171,7 +171,7 @@ class MessageGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'message',
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -205,7 +205,7 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'presence',
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -241,7 +241,7 @@ class GetSessionResultInner {
 
   Map<String, dynamic> toJson() {
     return {
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -290,11 +290,11 @@ class GetSessionResult {
   Map<String, dynamic> toJson() {
     return {
       'sessionId': sessionId,
-      'channel': channel.toJson(),
+      'channel': channel,
       'inner': inner.toJson(),
       'event': event.toJson(),
-      'stringValues': stringValues.toJson(),
-      'integerValues': integerValues.toJson(),
+      'stringValues': stringValues,
+      'integerValues': integerValues,
     };
   }
 

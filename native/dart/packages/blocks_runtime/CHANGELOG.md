@@ -36,13 +36,6 @@
 - Add `blocksDeepEquals` and `blocksDeepHash`, value equality for lists and
   maps (recursively, with a map's key order ignored). Generated models use
   them to compare their list and map fields.
-- Add `toJson()` to `RealtimeChannel`, `FileDownloadHandle`,
-  `FileUploadHandle`, `OidcClient` and `UnknownTransferable`. It returns the
-  `{"__blocks": …}` descriptor the value was hydrated from, unchanged (keys
-  this runtime doesn't read included), as a copy. An `OidcClient` built with
-  its constructor describes its providers and paths, in the shape
-  `OidcClient.fromJson` reads. Generated clients send a transferable this way
-  when a call passes one back to the server, and `jsonEncode` calls it too.
 - **Breaking:** `SessionStore` gains `cookieHeaderFor(Uri)` and an optional
   `requestUri` argument on `setCookies`; custom implementations must add both.
   `InMemorySessionStore` and `PersistentSessionStore` now parse and enforce the
