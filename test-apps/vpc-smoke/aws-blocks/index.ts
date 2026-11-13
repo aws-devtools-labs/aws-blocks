@@ -58,7 +58,10 @@ const rt = new Realtime(scope, 'events', {
 const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
-const db = new Database(scope, 'db');
+// `secretRotation: true` because this app runs on the sandbox preset, which
+// leaves rotation off: the lane exists to prove the rotation Lambda reaches the
+// shared VPC's Secrets Manager endpoint, which needs rotation actually on.
+const db = new Database(scope, 'db', { secretRotation: true });
 
 const logger = new Logger(scope, 'log', { level: 'info' });
 const metrics = new Metrics(scope, 'metrics', { namespace: 'vpc-smoke' });

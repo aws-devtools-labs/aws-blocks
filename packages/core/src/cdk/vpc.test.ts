@@ -4,7 +4,7 @@
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import {
@@ -171,6 +171,267 @@ describe('finalizeVpc — endpoint provisioning', () => {
 		assert.equal(https.length, 1, 'exactly one 443 ingress rule');
 		// Must NOT be open to a CIDR (that would be the broad default we're avoiding).
 		assert.equal(https[0].CidrIp, undefined, '443 ingress is SG-sourced, not CIDR-open');
+	});
+
+	it('admits registered client SGs on 443 beside the Lambda SG, once each', () => {
+		// A BB registers its compute SG after construction, once the SG exists;
+		// registering the same SG twice must not add a second rule.
+		const template = synthWith((scope) => {
+			const db = new FakeBB(scope, 'Db', {
+				interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+			});
+			const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+			const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', { vpc });
+			registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+			registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+		});
+		const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+			Properties: { GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only' },
+		});
+		assert.equal(Object.keys(sgs).length, 1, 'exactly one dedicated endpoint SG');
+		const sg = Object.values(sgs)[0] as {
+			Properties: {
+				SecurityGroupIngress: Array<{
+					FromPort?: number;
+					ToPort?: number;
+					CidrIp?: string;
+					SourceSecurityGroupId?: unknown;
+					Description?: string;
+				}>;
+			};
+		};
+		const ingress = sg.Properties.SecurityGroupIngress ?? [];
+		const inline = ingress.filter((r) => r.FromPort === 443 && r.ToPort === 443);
+		assert.equal(inline.length, 1, "only the Lambda SG's rule is inline on the group");
+		// A client's rule is a standalone resource, not inline: a literal peer
+		// would be inlined into both groups and make them reference each other.
+		const client = Object.values(
+			template.findResources('AWS::EC2::SecurityGroupIngress', {
+				Properties: { Description: 'HTTPS from Building Block compute' },
+			}),
+		) as Array<{ Properties: { CidrIp?: string; SourceSecurityGroupId?: unknown } }>;
+		assert.equal(client.length, 1, 'one rule for the SG registered twice');
+		assert.equal(client[0].Properties.CidrIp, undefined, 'client rule is SG-sourced, not CIDR-open');
+		const [rotationSgId] = Object.keys(
+			template.findResources('AWS::EC2::SecurityGroup', {
+				Properties: { GroupDescription: 'TestStack/RotationSg' },
+			}),
+		);
+		assert.ok(rotationSgId, 'rotation SG synthesized');
+		assert.deepEqual(client[0].Properties.SourceSecurityGroupId, {
+			'Fn::GetAtt': [rotationSgId, 'GroupId'],
+		});
+	});
+
+	it('gives a closed-outbound client SG egress to the endpoint SG, not an open CIDR', () => {
+		// A BB registers here because its compute must reach the endpoints. When
+		// that compute is closed outbound (a Database's rotation Lambda is), the
+		// admit rule alone leaves it with no route.
+		const template = synthWith((scope) => {
+			const db = new FakeBB(scope, 'Db', {
+				interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+			});
+			const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+			const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', {
+				vpc,
+				allowAllOutbound: false,
+			});
+			registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+		});
+		const [rotationSgId] = Object.keys(
+			template.findResources('AWS::EC2::SecurityGroup', {
+				Properties: { GroupDescription: 'TestStack/RotationSg' },
+			}),
+		);
+		const [endpointSgId] = Object.keys(
+			template.findResources('AWS::EC2::SecurityGroup', {
+				Properties: {
+					GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only',
+				},
+			}),
+		);
+		const egress = Object.values(
+			template.findResources('AWS::EC2::SecurityGroupEgress'),
+		) as Array<{ Properties: Record<string, unknown> }>;
+		const toEndpoint = egress.filter(
+			(r) => JSON.stringify(r.Properties.GroupId) === JSON.stringify({ 'Fn::GetAtt': [rotationSgId, 'GroupId'] }),
+		);
+		assert.equal(toEndpoint.length, 1, `one egress rule on the client SG: ${JSON.stringify(egress)}`);
+		assert.deepEqual(toEndpoint[0].Properties.DestinationSecurityGroupId, {
+			'Fn::GetAtt': [endpointSgId, 'GroupId'],
+		});
+		assert.equal(toEndpoint[0].Properties.FromPort, 443);
+		assert.equal(toEndpoint[0].Properties.CidrIp, undefined, 'not an open CIDR');
+	});
+
+	it('falls back to any-IPv4 when the imported VPC has no CIDR', () => {
+		// `vpcCidrBlock` throws for a VPC imported without one, and nothing narrower
+		// than any address is expressible then.
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		const vpc = ec2.Vpc.fromVpcAttributes(stack, 'Imported', {
+			vpcId: 'vpc-12345',
+			availabilityZones: ['us-east-1a'],
+			privateSubnetIds: ['subnet-1'],
+		});
+		const options = { network: vpc, provisionEndpoints: false };
+		initializeVpc(stack, options);
+		const db = new FakeBB(stack, 'Db', {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+		});
+		const sg = new ec2.SecurityGroup(stack, 'RotationSg', { vpc, allowAllOutbound: false });
+		registerVpcRequirements(db, { endpointClientSecurityGroups: [sg] });
+		finalizeVpc(stack, options);
+		const [group] = Object.values(
+			Template.fromStack(stack).findResources('AWS::EC2::SecurityGroup', {
+				Properties: { GroupDescription: 'TestStack/RotationSg' },
+			}),
+		) as Array<{ Properties: { SecurityGroupEgress?: Array<Record<string, unknown>> } }>;
+		const egress = group.Properties.SecurityGroupEgress ?? [];
+		assert.equal(egress.length, 1);
+		assert.equal(egress[0].CidrIp, '0.0.0.0/0');
+		assert.equal(egress[0].FromPort, 443);
+	});
+
+	it('admits and orders two closed-outbound clients without a dependency cycle', () => {
+		// Two Databases in one shared VPC each register a group and a dependent. The
+		// endpoint SG references both groups, so a rule inlined on either side would
+		// make them reference each other.
+		const template = synthWith((scope) => {
+			const db = new FakeBB(scope, 'Db', {
+				interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+			});
+			const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+			for (const id of ['RotA', 'RotB']) {
+				const sg = new ec2.SecurityGroup(scope, id, { vpc, allowAllOutbound: false });
+				const dependent = new ec2.SecurityGroup(scope, `${id}Dependent`, { vpc });
+				registerVpcRequirements(db, {
+					endpointClientSecurityGroups: [sg],
+					endpointClientDependents: [dependent],
+				});
+			}
+		});
+		// One admit rule and one egress rule per client, not two or none.
+		assert.equal(
+			Object.keys(
+				template.findResources('AWS::EC2::SecurityGroupIngress', {
+					Properties: { Description: 'HTTPS from Building Block compute' },
+				}),
+			).length,
+			2,
+		);
+		assert.equal(Object.keys(template.findResources('AWS::EC2::SecurityGroupEgress')).length, 2);
+		for (const id of ['RotADependent', 'RotBDependent']) {
+			const [dependent] = Object.values(
+				template.findResources('AWS::EC2::SecurityGroup', {
+					Properties: { GroupDescription: `TestStack/${id}` },
+				}),
+			) as Array<{ DependsOn?: string[] }>;
+			assert.ok((dependent.DependsOn ?? []).length > 0, `${id} is ordered after the endpoints`);
+		}
+	});
+
+	it('gives a closed-outbound client SG 443 egress when provisionEndpoints is false', () => {
+		// The endpoint is the customer's, so its SG cannot be named here; without
+		// a rule the client has no route and every call fails silently.
+		const template = synthWith(
+			(scope) => {
+				const db = new FakeBB(scope, 'Db', {
+					interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+				});
+				const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+				const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', {
+					vpc,
+					allowAllOutbound: false,
+				});
+				registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+			},
+			{ provisionEndpoints: false },
+		);
+		// A CIDR peer is inlined on the group rather than emitted as its own
+		// resource, so read it there.
+		const sg = Object.values(
+			template.findResources('AWS::EC2::SecurityGroup', {
+				Properties: { GroupDescription: 'TestStack/RotationSg' },
+			}),
+		)[0] as { Properties: { SecurityGroupEgress?: Array<Record<string, unknown>> } };
+		const egress = sg.Properties.SecurityGroupEgress ?? [];
+		assert.equal(egress.length, 1, `one egress rule: ${JSON.stringify(egress)}`);
+		assert.equal(egress[0].FromPort, 443);
+		assert.equal(egress[0].ToPort, 443);
+		// Scoped to the VPC's CIDR, not any address: the endpoint's ENIs live there.
+		assert.deepEqual(egress[0].CidrIp, { 'Fn::GetAtt': ['Vpc8378EB38', 'CidrBlock'] });
+		assert.equal(egress[0].IpProtocol, 'tcp', 'not the all-protocols rule an open group carries');
+	});
+
+	it('orders a registered dependent after the endpoints and the admit rule', () => {
+		const template = synthWith((scope) => {
+			const db = new FakeBB(scope, 'Db', {
+				interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+			});
+			const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+			const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', { vpc });
+			const schedule = new cdk.CfnResource(scope, 'Schedule', { type: 'AWS::SecretsManager::RotationSchedule' });
+			registerVpcRequirements(db, {
+				endpointClientSecurityGroups: [rotationSg],
+				endpointClientDependents: [schedule],
+			});
+		});
+		const [scheduleResource] = Object.values(
+			template.findResources('AWS::SecretsManager::RotationSchedule'),
+		) as Array<{ DependsOn?: string[] }>;
+		const deps = scheduleResource.DependsOn ?? [];
+		assert.ok(
+			deps.some((d) => /^BlocksVpcEndpointSg/.test(d)),
+			`depends on the endpoint SG, whose children are the admit rules: ${deps}`,
+		);
+		assert.ok(deps.some((d) => /^VpcIf/.test(d)), `depends on the endpoint: ${deps}`);
+	});
+
+	it('warns once per client SG when provisionEndpoints is false', () => {
+		let stackRef: cdk.Stack | undefined;
+		const template = synthWith(
+			(scope) => {
+				stackRef = scope as cdk.Stack;
+				const db = new FakeBB(scope, 'Db', {
+					interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+				});
+				const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+				const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', { vpc });
+				registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+				registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+			},
+			{ provisionEndpoints: false },
+		);
+		template.resourceCountIs(IFACE, 0);
+		const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+			Properties: { GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only' },
+		});
+		assert.equal(Object.keys(sgs).length, 0, 'no endpoint SG, so nothing admits the client');
+		const warnings = Annotations.fromStack(stackRef as cdk.Stack).findWarning(
+			'*',
+			Match.stringLikeRegexp('^Db runs compute in security group'),
+		);
+		assert.equal(warnings.length, 1, 'exactly one warning per security group');
+		// The SG is named by construct path: its id is a deploy-time token.
+		Annotations.fromStack(stackRef as cdk.Stack).hasWarning(
+			'*',
+			Match.stringLikeRegexp(
+				"security group 'TestStack/RotationSg' .* 'provisionEndpoints: false' .* inbound 443",
+			),
+		);
+	});
+
+	it('does not warn when provisionEndpoints is false and no client SG is registered', () => {
+		let stackRef: cdk.Stack | undefined;
+		synthWith(
+			(scope) => {
+				stackRef = scope as cdk.Stack;
+				new FakeBB(scope, 'Kv', { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+			},
+			{ provisionEndpoints: false },
+		);
+		Annotations.fromStack(stackRef as cdk.Stack).hasNoWarning('*', Match.stringLikeRegexp('endpoint'));
 	});
 });
 
