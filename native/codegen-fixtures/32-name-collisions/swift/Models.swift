@@ -56,15 +56,15 @@ public nonisolated enum Kind: String, Codable {
     case y
 }
 
-public nonisolated enum Status: String, Codable {
+public nonisolated enum OrderStatus: String, Codable {
     case pending
     case shipped
 }
 
 public nonisolated struct Order: Codable {
-    public let status: Status
+    public let status: OrderStatus
 
-    public init(status: Status) {
+    public init(status: OrderStatus) {
         self.status = status
     }
 }
@@ -74,7 +74,7 @@ public nonisolated enum TicketKind: String, Codable {
     case task
 }
 
-public nonisolated enum Kinds: String, Codable {
+public nonisolated enum TicketKinds: String, Codable {
     case urgent
     case later
 }
@@ -95,7 +95,7 @@ public nonisolated struct Count: Codable {
     }
 }
 
-public nonisolated enum Payload: Codable {
+public nonisolated enum TicketPayload: Codable {
     case text(Text)
     case count(Count)
 
@@ -143,7 +143,7 @@ public nonisolated struct Rich: Codable {
     }
 }
 
-public nonisolated enum Payloads: Codable {
+public nonisolated enum TicketPayloads: Codable {
     case plain(Plain)
     case rich(Rich)
 
@@ -182,12 +182,12 @@ public nonisolated enum TicketStatus: String, Codable {
 
 public nonisolated struct Ticket: Codable {
     public let kind: TicketKind
-    public let kinds: [Kinds]
-    public let payload: Payload
-    public let payloads: [Payloads]
+    public let kinds: [TicketKinds]
+    public let payload: TicketPayload
+    public let payloads: [TicketPayloads]
     public let status: TicketStatus
 
-    public init(kind: TicketKind, kinds: [Kinds], payload: Payload, payloads: [Payloads], status: TicketStatus) {
+    public init(kind: TicketKind, kinds: [TicketKinds], payload: TicketPayload, payloads: [TicketPayloads], status: TicketStatus) {
         self.kind = kind
         self.kinds = kinds
         self.payload = payload

@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated enum Capability: String, Codable {
+public nonisolated enum AuthActionCapability: String, Codable {
     case webauthnGet = "webauthn-get"
     case webauthnCreate = "webauthn-create"
 }
@@ -12,7 +12,7 @@ public nonisolated enum AuthActionMethod: String, Codable {
 }
 
 public nonisolated struct AuthAction: Codable {
-    public let capability: Capability?
+    public let capability: AuthActionCapability?
     public let fields: [AuthField]
     public let label: String
     public let method: AuthActionMethod?
@@ -41,7 +41,7 @@ public nonisolated struct AuthAction: Codable {
         try c.encodeIfPresent(self.url, forKey: .url)
     }
 
-    public init(capability: Capability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, unavailable: String? = nil, url: String? = nil) {
+    public init(capability: AuthActionCapability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, unavailable: String? = nil, url: String? = nil) {
         self.capability = capability
         self.fields = fields
         self.label = label

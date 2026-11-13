@@ -127,9 +127,19 @@ public struct CodegenModelBuilder {
         return transform("\(candidate)_\(suffix)")
     }
 
-    /// The name an inline type registered at the top level takes, claimed for it in `names`. It keeps `name`
-    /// unless a component schema or another inline type that isn't the same type has it; then it's prefixed
-    /// with its schema's name (`Ticket.status` → `TicketStatus`), like a nested type that would shadow one.
+    /// The name a top-level enum or union is derived from. For an array property it's the property's own name, not
+    /// the element's singular (`AuthenticatedUser.groups: [enum]` → `AuthenticatedUserGroups`), as on Dart. A nested
+    /// type keeps the element's singular name (`Shipment.parcels: [{…}]` → `Shipment.Parcel`).
+    private func topLevelBaseName(_ name: String, origin: NameOrigin?) -> String {
+        guard let origin, origin.key.hasSuffix("[]") else { return specTypeName(name) }
+        return specTypeName(origin.alternate)
+    }
+
+    /// The name an inline type registered at the top level takes, claimed for it in `names`. It's prefixed with
+    /// its schema's name (`Ticket.status` → `TicketStatus`, `AuthAction.capability` → `AuthActionCapability`), so
+    /// a generated enum or union doesn't take a generic name (`Status`, `Kind`) an app declares too. A name that
+    /// already starts with the schema's name (`AuthFieldType`) isn't prefixed again. If another type has the
+    /// name, it gets a numeric suffix (`TicketStatus_2`).
     private func allocateTopLevelName(
         _ name: String,
         for typeRef: TypeRef,
@@ -143,15 +153,15 @@ public struct CodegenModelBuilder {
             }
             return names.inlineType(named: candidate).map { $0 == typeRef } ?? true
         }
-        var allocated = name
-        if !fits(allocated) {
-            let prefixed = (enclosing ?? "") + name
-            allocated = prefixed
-            var suffix = 2
-            while !fits(allocated) {
-                allocated = "\(prefixed)_\(suffix)"
-                suffix += 1
-            }
+        // The schema itself, and an inline type that is a same-named component schema, keep the name.
+        let isOwnSchema = enclosing == nil
+            || componentSchemas[name].map { $0 == typeRef || $0 == .nullable(inner: typeRef) } == true
+        let qualified = isOwnSchema || name.hasPrefix(enclosing ?? "") ? name : (enclosing ?? "") + name
+        var allocated = qualified
+        var suffix = 2
+        while !fits(allocated) {
+            allocated = "\(qualified)_\(suffix)"
+            suffix += 1
         }
         if componentSchemas[allocated] == nil { names.claim(allocated, for: typeRef) }
         return allocated
@@ -492,15 +502,17 @@ public struct CodegenModelBuilder {
                 // A union member, not declared on its own.
                 enumName = safeTypeName(specTypeName(name), parentName: parentName)
             } else {
+                // A top-level enum takes its schema's prefix, so a reserved name (`Group`) needs no other change.
+                let topLevel = inSchema && !nestsInSchema
                 let siblingName = allocateNestedName(
-                    specTypeName(name), origin: origin, siblingClaims: siblingClaims,
+                    topLevel ? topLevelBaseName(name, origin: origin) : specTypeName(name), origin: origin, siblingClaims: siblingClaims,
                     scope: currentParentId, inlineTypes: inlineTypes
                 ) { base in
                     nestsInSchema
                         ? nestedTypeName(base, enclosingId: currentParentId ?? "", componentSchemas: componentSchemas)
-                        : safeTypeName(base, parentName: parentName)
+                        : topLevel ? base : safeTypeName(base, parentName: parentName)
                 }
-                enumName = inSchema && !nestsInSchema
+                enumName = topLevel
                     ? allocateTopLevelName(
                         siblingName, for: typeRef, enclosing: parentSchemaName,
                         componentSchemas: componentSchemas, names: &declaredNames
@@ -654,7 +666,7 @@ public struct CodegenModelBuilder {
             unionName = specTypeName(name)
         } else {
             let siblingName = allocateNestedName(
-                specTypeName(name), origin: origin, siblingClaims: siblingClaims,
+                registersTopLevel ? topLevelBaseName(name, origin: origin) : specTypeName(name), origin: origin, siblingClaims: siblingClaims,
                 scope: currentParentId, inlineTypes: inlineTypes
             ) { base in
                 nestsInSchema

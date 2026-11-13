@@ -260,7 +260,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         }, "required": ["status", "geo"] } }
         """)
 
-        assertContains(output, "\npublic nonisolated enum Status: String, Codable {\n    case open\n    case closed\n}\n")
+        assertContains(output, "\npublic nonisolated enum HolderStatus: String, Codable {\n    case open\n    case closed\n}\n")
         assertContains(output, """
             public nonisolated struct Geo: Codable {
                 public let source: Source
