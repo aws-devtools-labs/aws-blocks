@@ -18,6 +18,15 @@ Pass `compute` to place everything created under a scope, and in its child
 scopes, on one `Compute` (`new Scope('reports', { parent: scope, compute })`);
 see the `@aws-blocks/bb-compute` README for what follows it.
 
+A block's resource names (its table, bucket or queue, and its local `.bb-data`
+directory) come from its `fullId`: the scope ids from the root down, joined with
+`-`. Two different scope paths that join to the same string, such as
+`'user-service' > 'sessions'` and `'user' > 'service-sessions'`, share those
+resources and overwrite each other's data. Constructing the second one logs a
+warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
+synth`); rename one of the scopes. A future release will reject the collision.
+Constructing the same path again is accepted.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
