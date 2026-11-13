@@ -81,6 +81,7 @@ class OidcClient implements AuthProvider {
   String _key(String name) => '$_keyPrefix$name';
 
   final _controller = StreamController<OidcAuthState>.broadcast();
+  OidcAuthState _authState = OidcLoading();
   Completer<void>? _refreshCompleter;
 
   OidcClient({
@@ -131,7 +132,35 @@ class OidcClient implements AuthProvider {
     return s;
   }
 
-  Stream<OidcAuthState> get authStateChanges => _controller.stream;
+  /// The sign-in state, starting with the current [authState] and then each
+  /// change, as Kotlin's `authState` flow does. Each listener gets the state
+  /// current when it subscribes first, so a listener added after [restore]
+  /// or a sign-in sees that state without waiting for the next change. The
+  /// stream can be listened to more than once.
+  Stream<OidcAuthState> get authStateChanges => Stream.multi((listener) {
+    listener.add(_authState);
+    final changes = _controller.stream.listen(
+      listener.add,
+      onError: listener.addError,
+      onDone: listener.close,
+    );
+    listener
+      ..onPause = changes.pause
+      ..onResume = changes.resume
+      ..onCancel = changes.cancel;
+  });
+
+  /// The current sign-in state: the state most recently added to
+  /// [authStateChanges], or [OidcLoading] before the first one. Reading it
+  /// needs no subscription, so an app can check the state once, such as on
+  /// launch after [restore].
+  OidcAuthState get authState => _authState;
+
+  /// Records [state] as [authState] and adds it to [authStateChanges].
+  void _emit(OidcAuthState state) {
+    _authState = state;
+    _controller.add(state);
+  }
 
   // --- PKCE ---
 
@@ -457,7 +486,7 @@ class OidcClient implements AuthProvider {
     }
 
     final user = OidcUser.fromJson(userJson as Map<String, dynamic>);
-    _controller.add(OidcSignedIn(user));
+    _emit(OidcSignedIn(user));
     return user;
   }
 
@@ -471,7 +500,7 @@ class OidcClient implements AuthProvider {
     try {
       final refreshToken = await tokenStore.get(_key('refresh_token'));
       if (refreshToken == null) {
-        _controller.add(OidcSignedOut());
+        _emit(OidcSignedOut());
         return;
       }
 
@@ -483,7 +512,7 @@ class OidcClient implements AuthProvider {
 
       if (response.statusCode != 200) {
         await _clearTokens();
-        _controller.add(OidcSignedOut());
+        _emit(OidcSignedOut());
         return;
       }
 
@@ -546,12 +575,12 @@ class OidcClient implements AuthProvider {
 
     final status = response.statusCode;
     if (status >= 200 && status < 300) {
-      _controller.add(OidcSignedOut());
+      _emit(OidcSignedOut());
       return _logoutUrl(response.body);
     }
     final name = _errorName(response);
     if (status == 503 && name == 'SignOutIncompleteException') {
-      _controller.add(OidcSignedOut());
+      _emit(OidcSignedOut());
       throw OidcRequestException(
         'Signed out locally, but the backend could not remove its session',
         statusCode: status,
@@ -648,11 +677,11 @@ class OidcClient implements AuthProvider {
             statusCode: 200,
           );
         }
-        _controller.add(OidcSignedIn(user));
+        _emit(OidcSignedIn(user));
         return user;
       case 401:
         await _clearTokens();
-        _controller.add(OidcSignedOut());
+        _emit(OidcSignedOut());
         return null;
       case 404:
         throw OidcRequestException(
@@ -701,7 +730,7 @@ class OidcClient implements AuthProvider {
       await refresh();
     } catch (_) {
       await _clearTokens();
-      _controller.add(OidcSignedOut());
+      _emit(OidcSignedOut());
     }
   }
 

@@ -22,6 +22,14 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- Add `OidcClient.authState`, the current sign-in state: the state most
+  recently added to `authStateChanges`, or `OidcLoading` before the first one.
+  An app can read it once, such as on launch after `restore()`, without
+  subscribing to the stream. This matches Kotlin's `authState.value`.
+- `OidcClient.authStateChanges` gives each new listener the current
+  `authState` first, then each change, as Kotlin's `authState` flow does. It
+  used to emit only the changes after the listener subscribed, so a listener
+  added after `restore()` saw nothing until the next sign-in or sign-out.
 - `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
   in its envelope before it reads an IdP `error`. A redirect to the app's
   scheme that didn't come from this sign-in now fails the state check

@@ -222,7 +222,8 @@ void main() {
       );
 
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
 
       await client.refresh();
       await Future.delayed(Duration.zero);
@@ -380,7 +381,8 @@ void main() {
           session: session,
         );
         final states = <OidcAuthState>[];
-        client.authStateChanges.listen(states.add);
+        // Skip the state a new listener gets first: these tests check changes.
+        client.authStateChanges.skip(1).listen(states.add);
 
         final user = await client.restore();
         await Future<void>.delayed(Duration.zero);
@@ -459,7 +461,8 @@ void main() {
           MockClient((_) async => http.Response(body, 200)),
         );
         final states = <OidcAuthState>[];
-        client.authStateChanges.listen(states.add);
+        // Skip the state a new listener gets first: these tests check changes.
+        client.authStateChanges.skip(1).listen(states.add);
         await expectLater(
           client.restore(),
           throwsA(
@@ -529,7 +532,8 @@ void main() {
         store: store,
       );
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
 
       expect(await client.restore(), isNull);
       await Future<void>.delayed(Duration.zero);
@@ -545,7 +549,8 @@ void main() {
         MockClient((_) async => http.Response('Not Found', 404)),
       );
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
 
       await expectLater(
         client.restore(),
@@ -572,7 +577,8 @@ void main() {
         store: store,
       );
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
 
       await expectLater(
         client.restore(),
@@ -592,7 +598,8 @@ void main() {
         MockClient((_) async => throw http.ClientException('offline')),
       );
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
 
       await expectLater(client.restore(), throwsA(isA<http.ClientException>()));
       await Future<void>.delayed(Duration.zero);
@@ -655,7 +662,8 @@ void main() {
         }),
       );
       final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
       return (
         client: client,
         store: store,

@@ -470,7 +470,8 @@ void main() {
 
         final client = buildClient(httpClient: httpClient, store: store);
         final states = <OidcAuthState>[];
-        client.authStateChanges.listen(states.add);
+        // Skip the state a new listener gets first: these tests check changes.
+        client.authStateChanges.skip(1).listen(states.add);
 
         final launcher = FakeLauncher(
           onLaunch: (authorizeUrl, scheme) {
