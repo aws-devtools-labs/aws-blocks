@@ -47,10 +47,10 @@ channel.subscribe().listen((cursor) {
 ```yaml
 # pubspec.yaml
 dependencies:
-  blocks_runtime: ^1.0.0
+  blocks_runtime: ^0.2.0
 
 dev_dependencies:
-  blocks_codegen: ^1.0.0
+  blocks_codegen: ^0.2.0
   build_runner: ^2.4.0
 ```
 
@@ -97,7 +97,7 @@ print(greeting.message); // "Hello, World!"
 
 **Realtime subscriptions** — if your backend has realtime channels (e.g., cursor tracking, live updates), the generated client gives you typed `Stream<T>` subscriptions over WebSocket.
 
-**Auth flows** — discriminated unions become sealed classes. The compiler ensures you handle every auth state variant.
+**Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is an enum, and its actions arrive at runtime, so render them by name and skip the ones you don't know.
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
