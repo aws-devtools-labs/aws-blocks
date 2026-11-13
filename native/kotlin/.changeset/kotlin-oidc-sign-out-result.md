@@ -2,6 +2,9 @@
 "aws-blocks-kotlin": minor
 ---
 
+**Behaviour change (pre-1.0):** `OidcClient.signOut()` can now throw. Wrap calls that relied on it
+always reporting signed out.
+
 `OidcClient.signOut()` now returns the identity provider's logout URL (`String?`), which an app
 can open to end the provider's own session. It asks the backend for JSON (`?format=json`) and
 throws `OidcSignOutException` when the backend answers with a failure status, where it used to

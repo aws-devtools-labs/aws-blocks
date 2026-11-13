@@ -375,12 +375,19 @@ class OidcClient<P : OidcProvider> internal constructor(
      *
      * The user is the one the backend reports, including its `userId`.
      *
+     * A [restore] still waiting on the backend when [signIn] or [signOut] settles [authState]
+     * overwrites it when it answers, so let it finish before either.
+     *
      * @return the signed-in user, which also becomes the value of [authState], or `null` when the
      *   backend has no session for this client, which sets [authState] to signed out.
      * @throws OidcSessionException if the backend answers with a failure status other than 401.
      *   A 404 means it serves no session route, which an `Auth` block with no federated providers
      *   does not. [authState] is left as it was, as it is for a request that fails to reach the
      *   backend.
+     * @throws kotlinx.serialization.SerializationException if the backend answers 200 with a
+     *   body that holds no user. [authState] is left as it was.
+     * @throws IllegalArgumentException if the backend answers 200 with JSON that is not an object
+     *   (`[]` or `null`, say). [authState] is left as it was.
      * @throws BlocksException if the Blocks instance this client came from has been closed.
      */
     suspend fun restore(): OidcUser? {
