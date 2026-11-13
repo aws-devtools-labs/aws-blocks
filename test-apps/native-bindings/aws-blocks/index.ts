@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Native-bindings test backend — exercises the blocks that native clients
-// (Swift, Kotlin, Dart) consume: auth (three `Auth` instances: email +
-// password, a Cognito-style configuration, and OIDC through the local stub
-// IdP), realtime, file storage, and key-value.
+// (Swift, Kotlin, Dart) consume: auth (four `Auth` instances: email +
+// password, a Cognito-style configuration, and two federated blocks through
+// the local stub IdP), realtime, file storage, and key-value.
 
 import {
   ApiNamespace,
@@ -114,12 +114,36 @@ const oidcAuth = new Auth(scope, 'auth-oidc', {
       e2eIdpIssuer && e2eIdpClientId
         ? { type: 'oidc', issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
         : stubIdp({ onAuthorize: (req) => req.users[0] }),
+    // A second provider, so the suites cover a block with more than one:
+    // `getAuthState()` lists one `signIn:<id>` action per provider. Always the
+    // stub, also when `google` federates a real IdP. It is an OIDC stub (ID
+    // token, logout URL), not the bare OAuth 2.0 `github()` provider.
+    github2: stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
     allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
   },
   onSignIn: async (user) => {
     lastOidcSignIn = { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider };
+  },
+});
+
+// --- Auth: a second federated block on its own routes ---------------------------
+// Two blocks with `providers` can't share sign-in routes, so this one moves them
+// under `/aws-blocks/auth/sso/`: the native clients must derive its exchange,
+// session and authorize-params paths from `callbackPath`, and sign out on
+// `signOutPath`. Its stub is keyed `corp`, because a stub IdP's routes are keyed
+// by provider key alone and `auth-oidc` already serves `google` and `github2`.
+// It shares `auth-oidc`'s relay origins, so one native app reaches both blocks.
+const ssoAuth = new Auth(scope, 'auth-sso', {
+  store: 'builtin',
+  providers: {
+    corp: stubIdp({ onAuthorize: (req) => req.users[0] }),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/sso/callback',
+    signOutPath: '/aws-blocks/auth/sso/signout',
+    allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
   },
 });
 
@@ -245,6 +269,7 @@ function oidcUserInfo(user: AuthenticatedUser): OidcUserInfo {
 export const authBasicApi = authBasic.createApi();
 export const authCognitoApi = authCognito.createApi();
 export const oidcAuthApi = oidcAuth.createApi();
+export const ssoAuthApi = ssoAuth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
@@ -458,6 +483,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async oidcGetLastSignIn() {
     return lastOidcSignIn;
+  },
+
+  // --------------------------------------------------------------------------
+  // Auth: the second federated block (`auth-sso`, routes under /aws-blocks/auth/sso/)
+  // --------------------------------------------------------------------------
+
+  async ssoRequireAuth(): Promise<OidcUserInfo> {
+    return oidcUserInfo(await ssoAuth.requireAuth(context));
+  },
+
+  async ssoGetCurrentUser(): Promise<OidcUserInfo | null> {
+    const user = await ssoAuth.getCurrentUser(context);
+    return user ? oidcUserInfo(user) : null;
   },
 
   // --------------------------------------------------------------------------

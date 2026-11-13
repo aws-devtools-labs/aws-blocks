@@ -9,7 +9,7 @@ let currentUser: { username: string } | null = null;
 let currentSort: 'priority' | 'createdAt' | undefined = undefined;
 
 // ============================================================================
-// Auth — three `Auth` blocks; the email + password one drives the todo list
+// Auth: four `Auth` blocks; the email + password one drives the todo list
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
