@@ -99,6 +99,10 @@ await store.delete('temp', { ifExists: true });
 await store.delete('lock', { ifValueEquals: expectedVal });
 ```
 
+Conditional writes are **atomic** per key: the condition check and the write happen as one operation, with no window for another writer in between. On AWS, each call is a single DynamoDB conditional write (one `PutItem` / `DeleteItem` carrying a `ConditionExpression`); in the local mock, the check and the in-memory write run synchronously in one event-loop turn, so concurrent requests cannot interleave between them. This is what makes the compare-and-swap / optimistic-locking patterns above safe under multiple concurrent writers.
+
+The guarantee is single-item only — KVStore offers no multi-key **transaction** (and no batch write at all), so two keys can never change together atomically. For multi-row ACID transactions, use the `transaction()` method of `Database` (`@aws-blocks/bb-data`) or `DistributedDatabase` (`@aws-blocks/bb-distributed-data`).
+
 All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), so `error.status === 409` on the client and `isBlocksError` still matches by name. A conflict is flagged **retriable** when a value check participated (a stale-value optimistic-lock conflict — re-read and retry may succeed). For `put`, `ifNotExists` and `ifValueEquals` compose with OR, so a failure whenever `ifValueEquals` was set — including the combined `ifNotExists`+`ifValueEquals` case — is the stale-value case and is retriable; a pure `ifNotExists` `put` conflict is **not** retriable. For `delete` (independent checks, not OR), a pure `ifExists` conflict — or a combined `ifExists`+`ifValueEquals` conflict — is **not** retriable; only a value-only `ifValueEquals` delete conflict is. A blind retry of a non-retriable conflict fails identically.
 
 ### Error Handling
