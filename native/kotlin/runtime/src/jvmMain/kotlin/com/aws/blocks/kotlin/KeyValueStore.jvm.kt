@@ -5,13 +5,10 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.FileAlreadyExistsException
-import java.nio.file.FileSystemException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
@@ -24,44 +21,40 @@ import javax.crypto.spec.SecretKeySpec
  * itself would put every Blocks application the user runs in one directory — the defect this
  * fallback exists instead of.
  */
-internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore =
-    applicationStorageDirectoryOrNull(applicationId)
-        ?.let { EncryptedFileKeyValueStore(name, it) }
-        ?: InMemoryKeyValueStore()
+internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore {
+    val directory = applicationStorageDirectoryOrNull(applicationId) ?: return InMemoryKeyValueStore()
+    // The alias uses the directory's name — the already-normalized id — rather than the id as
+    // supplied. Taking the raw id would leave `app`, ` app` and `.app` sharing one directory but
+    // aliased apart, so under an OS secret store each would mint its own key for the same entries.
+    return EncryptedFileKeyValueStore(name, directory, keyAlias(name, directory.name))
+}
 
 /**
- * Stores each entry as an AES-GCM encrypted file under `<[directory]>/<[name]>`, with the key in
- * `.key` in the same directory.
+ * Stores each entry as an AES-GCM encrypted file under `<[directory]>/<[name]>`, with the key held
+ * by [KeyCustody] — the host OS where it can be, and a file beside the entries where it cannot.
  *
  * [directory] is already private to the application that supplied it, so the store names its
- * entries directly within it rather than inserting a directory of its own. It is resolved on
- * first use, off the calling thread, so creating it is not the caller's concern.
+ * entries directly within it rather than inserting a directory of its own. It is resolved on first
+ * use, off the calling thread, so creating it is not the caller's concern.
  *
- * The key file sits unencrypted next to the entries it decrypts, and is protected only by file
- * permissions: on a POSIX filesystem the store directory is `rwx------` and the key and entry
- * files `rw-------`, which keeps other OS users out. Elsewhere the store falls back to the [File]
- * owner-only flags, which on Windows have no effect on who can read a file: there the key and
- * entries keep the access control list inherited from the user profile, which by default keeps
- * other standard users out but lets administrators and the system account read them. In every
- * case any process running as the same OS user can read the key and decrypt the entries, and so can anything with access to a backup or copy of the directory. The
- * encryption guards against casual inspection of the files, not against those readers. An
- * application that needs more than this should leave `applicationId` unset, so the session is held
- * in memory for the life of the process and never written to disk.
+ * [custodyFor] builds the custody for the resolved storage directory. It is a parameter so a test
+ * can supply one directly instead of taking whatever this machine offers. What that custody does
+ * and does not protect is documented on each implementation, because it differs between them: see
+ * [FileKeyCustody] for the arrangement a store falls back to.
+ *
+ * An application that wants nothing written to disk at all should leave `applicationId` unset, so
+ * the session is held in memory for the life of the process.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,
     private val directory: File,
+    private val alias: String,
+    private val custodyFor: (Path) -> KeyCustody = ::selectKeyCustody,
 ) : KeyValueStore {
 
     private companion object {
-        const val AES_KEY_SIZE = 32
         const val GCM_NONCE_SIZE = 12
         const val GCM_TAG_BITS = 128
-        const val KEY_FILE = ".key"
-
-        /** Attempts to read a key another process has created but not yet finished writing. */
-        const val KEY_READ_ATTEMPTS = 5
-        const val KEY_READ_RETRY_MILLIS = 20L
 
         /** Attempts to replace an entry a concurrent reader still has open. See [writeAtomically]. */
         const val MOVE_ATTEMPTS = 20
@@ -75,7 +68,67 @@ internal class EncryptedFileKeyValueStore(
         dir
     }
 
-    private val secretKey: SecretKey by lazy { loadOrCreateKey() }
+    private val custody: KeyCustody by lazy { custodyFor(storageDir) }
+
+    /** Which custody this store ended up with. For tests: nothing acts on it at runtime. */
+    internal val keyTier: KeyTier get() = custody.tier
+
+    /**
+     * Whether this instance was the one to mint the current key. Set during the lazy init below,
+     * read by [get] to decide whether an undecryptable entry is an orphan to discard or genuine
+     * corruption to surface. Read after a volatile write and before any volatile read of the same
+     * field is fine on the JVM memory model: [secretKey]'s lazy sets this before the volatile
+     * write that publishes the instance, so every consumer sees the final value.
+     */
+    @Volatile
+    private var mintedFreshKey: Boolean = false
+
+    private val secretKey: SecretKey by lazy {
+        val held = custody.load(alias)
+        if (held != null) return@lazy SecretKeySpec(held, "AES")
+        val fresh = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
+        val installed = custody.storeIfAbsent(alias, fresh)
+        if (installed.contentEquals(fresh)) {
+            mintedFreshKey = true
+            discardEntriesWrittenUnderAnOlderKey()
+        }
+        SecretKeySpec(installed, "AES")
+    }
+
+    /**
+     * Removes entries from a previous life of this directory, because this store just minted the
+     * key and anything already there was encrypted with a key nothing on the machine can get back.
+     *
+     * Leaving them would make every [get] throw until the directory is cleaned by hand: the jar
+     * treats a decrypt failure as temporary and declines to replace an entry it cannot read, so a
+     * fresh sign-in would stop reaching storage. The caller signalled we are the one that installed
+     * the key — not a loser of the race whose [storeIfAbsent] handed back someone else's bytes —
+     * by asking whether [installed] equals the bytes it supplied. With a random fresh key, nothing
+     * else can produce those bytes, so the equality is proof we minted.
+     *
+     * Reachable in two ways. On the OS tier, a key is lost between launches — a Keychain item
+     * deleted, a Secret Service keyring recreated after a password change, a directory restored
+     * onto a machine the old key is not on. On the file tier, a `.key` was deleted while entries
+     * were left (the restored-copy case without an OS custody to lose). Both leave the store
+     * holding entries only the lost key could read.
+     *
+     * Dot-prefixed files are this library's control files (`.key`, and the lock added in a later
+     * change). Entries are base64url-encoded names, which do not start with a dot, so the filter
+     * cleans exactly the entries without touching metadata. The whole sweep is best-effort: a
+     * failure here stops a sign-in from persisting, which is already the problem we are trying to
+     * clear, so it deserves the same temporary treatment the jar gives other write failures.
+     */
+    private fun discardEntriesWrittenUnderAnOlderKey() {
+        runCatching {
+            Files.newDirectoryStream(storageDir).use { entries ->
+                entries.forEach {
+                    if (!it.fileName.toString().startsWith(".")) {
+                        runCatching { Files.deleteIfExists(it) }
+                    }
+                }
+            }
+        }
+    }
 
     override suspend fun put(key: String, value: String) = withContext(Dispatchers.IO) {
         writeAtomically(pathFor(key), encrypt(value))
@@ -84,9 +137,24 @@ internal class EncryptedFileKeyValueStore(
     override suspend fun get(key: String): String? = withContext(Dispatchers.IO) {
         val path = pathFor(key)
         if (!Files.exists(path)) return@withContext null
-        // The entry is there, so a failed decrypt is a read failure and not an absent key.
-        decrypt(Files.readString(path))
-            ?: throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
+        val stored = try {
+            Files.readString(path)
+        } catch (_: NoSuchFileException) {
+            // The orphan sweep in [secretKey]'s lazy init could delete this file between the
+            // [Files.exists] check and this read on a concurrent reader. Treat as absent.
+            return@withContext null
+        }
+        val plaintext = decrypt(stored)
+        if (plaintext != null) return@withContext plaintext
+        // A decrypt failure means one of two things: real corruption with the key we hold, or an
+        // orphan written under a previous key that this instance replaced. If we minted the key
+        // this instance, nothing we hold was written by us — the sweep in [secretKey]'s lazy init
+        // has already removed the file, so later calls see it as absent, but this call read it
+        // just before the sweep. Return null so the caller overwrites rather than failing on an
+        // entry it will never be able to read. If we loaded the key, we are reading with the bytes
+        // that wrote the entry, so a failure is genuine corruption and the caller must know.
+        if (mintedFreshKey) return@withContext null
+        throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
     }
 
     /**
@@ -97,7 +165,9 @@ internal class EncryptedFileKeyValueStore(
     override suspend fun clear() {
         withContext(Dispatchers.IO) {
             Files.newDirectoryStream(storageDir).use { entries ->
-                entries.forEach { if (it.fileName.toString() != KEY_FILE) Files.deleteIfExists(it) }
+                entries.forEach {
+                    if (it.fileName.toString() != KeyFile.KEY_FILE) Files.deleteIfExists(it)
+                }
             }
         }
     }
@@ -145,96 +215,6 @@ internal class EncryptedFileKeyValueStore(
                 Thread.sleep(MOVE_RETRY_MILLIS)
             }
         }
-    }
-
-    /** Creates the key only when one is absent, otherwise adopts the one already there. */
-    private fun loadOrCreateKey(): SecretKey {
-        val keyPath = storageDir.resolve(KEY_FILE)
-        if (!Files.exists(keyPath)) {
-            val bytes = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
-            if (installKey(keyPath, bytes)) return SecretKeySpec(bytes, "AES")
-        }
-        return readKey(keyPath)
-    }
-
-    /**
-     * Publishes a new key, reporting whether this call is the one that installed it.
-     *
-     * The bytes are written to a temporary file and linked into place, because a link both fails
-     * when the target exists and only ever exposes a file that is already complete. Creating the
-     * key file first and writing to it afterwards leaves an empty key behind if the process stops
-     * in between, and an empty key can never be read: entries become undecryptable and every write
-     * fails until the file is deleted by hand.
-     */
-    private fun installKey(keyPath: Path, bytes: ByteArray): Boolean {
-        val encoded = Base64.getEncoder().encodeToString(bytes)
-        val temp = Files.createTempFile(storageDir, KEY_FILE, ".tmp")
-        try {
-            // The link shares this file's inode, and with it these permissions.
-            restrictToOwner(temp, directory = false)
-            Files.writeString(temp, encoded)
-            Files.createLink(keyPath, temp)
-            return true
-        } catch (_: FileAlreadyExistsException) {
-            // Another process installed a key first, and its key is the one that entries use. This
-            // clause has to precede the one below, which catches its supertype.
-            return false
-        } catch (_: FileSystemException) {
-            // A filesystem with no hard links (FAT, some network mounts) fails the link call
-            // itself rather than declining to offer the operation.
-            return createKeyInPlace(keyPath, encoded)
-        } catch (_: UnsupportedOperationException) {
-            // A provider that declines to offer links at all.
-            return createKeyInPlace(keyPath, encoded)
-        } finally {
-            Files.deleteIfExists(temp)
-        }
-    }
-
-    /**
-     * Creates the key file directly, for filesystems that cannot link. This reopens the window a
-     * link closes: the file exists before it holds anything, so a process that stops in between
-     * leaves a key that cannot be read.
-     */
-    private fun createKeyInPlace(keyPath: Path, encoded: String): Boolean = runCatching {
-        Files.newOutputStream(keyPath, StandardOpenOption.CREATE_NEW).use { out ->
-            out.write(encoded.toByteArray())
-        }
-        restrictToOwner(keyPath, directory = false)
-    }.isSuccess
-
-    /**
-     * Retries briefly rather than adopting a truncated key, which would make every entry written
-     * with it unreadable. A key installed by a link is complete the moment it appears; this covers
-     * the fallback path on a filesystem without links.
-     */
-    private fun readKey(keyPath: Path): SecretKey {
-        repeat(KEY_READ_ATTEMPTS) { attempt ->
-            val bytes = runCatching { Base64.getDecoder().decode(Files.readString(keyPath)) }.getOrNull()
-            if (bytes != null && bytes.size == AES_KEY_SIZE) return SecretKeySpec(bytes, "AES")
-            if (attempt < KEY_READ_ATTEMPTS - 1) Thread.sleep(KEY_READ_RETRY_MILLIS)
-        }
-        throw IllegalStateException("Could not read the encryption key at $keyPath")
-    }
-
-    /**
-     * Restricts access to the current user. POSIX permissions are unavailable on some
-     * filesystems, where the coarser [File] flags are the only option.
-     */
-    private fun restrictToOwner(path: Path, directory: Boolean) {
-        val permissions = if (directory) "rwx------" else "rw-------"
-        runCatching { Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(permissions)) }
-            .onFailure {
-                val file = path.toFile()
-                file.setReadable(false, false)
-                file.setReadable(true, true)
-                file.setWritable(false, false)
-                file.setWritable(true, true)
-                if (directory) {
-                    file.setExecutable(false, false)
-                    file.setExecutable(true, true)
-                }
-            }
     }
 
     private fun encrypt(plaintext: String): String {

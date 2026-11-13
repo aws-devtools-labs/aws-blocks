@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin
 
 import java.io.File
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -21,19 +22,38 @@ private val jarsByLocation = ConcurrentHashMap<String, PersistentCookiesStorage>
  * An instance with no application id gets a jar of its own: it persists nothing, so there is no
  * stored session for a second instance to agree with it about.
  */
-internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage =
-    applicationStorageDirectoryOrNull(applicationId)
-        ?.let { cookieJarIn(it) }
-        ?: PersistentCookiesStorage(InMemoryKeyValueStore())
+internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage {
+    val directory = applicationStorageDirectoryOrNull(applicationId)
+        ?: return PersistentCookiesStorage(InMemoryKeyValueStore())
+    return cookieJarIn(directory)
+}
 
 /**
  * The one jar persisting to [directory]. Separate from [cookieJar] so a test can name a disposable
  * directory and still go through the registry, which is the part that keeps two instances from
  * discarding each other's cookies.
+ *
+ * The alias names the key under the directory's already-normalized name rather than the raw id,
+ * so two spellings that reduce to the same directory share one key: without that, an OS secret
+ * store would mint a separate key for each spelling, and only one of them would decrypt what the
+ * directory already holds.
+ *
+ * [custodyFor] is where the key is kept. A test overrides it to stay on a file beside the entries,
+ * because the alternative is reaching the machine's real secret store on every run.
  */
-internal fun cookieJarIn(directory: File): PersistentCookiesStorage =
+internal fun cookieJarIn(
+    directory: File,
+    custodyFor: (Path) -> KeyCustody = ::selectKeyCustody,
+): PersistentCookiesStorage =
     jarsByLocation.computeIfAbsent(directory.absoluteFile.normalize().path) {
-        PersistentCookiesStorage(EncryptedFileKeyValueStore(COOKIE_STORE_NAME, directory))
+        PersistentCookiesStorage(
+            EncryptedFileKeyValueStore(
+                COOKIE_STORE_NAME,
+                directory,
+                keyAlias(COOKIE_STORE_NAME, directory.name),
+                custodyFor,
+            ),
+        )
     }
 
 /**
