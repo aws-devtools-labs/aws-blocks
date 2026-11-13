@@ -1028,8 +1028,7 @@ function assertConsistentOptions(id: string, options: unknown): void {
 	// that client also accepts a sign-up, so a mapped `userWritable: false` attribute would be
 	// end-user writable after all.
 	const ep = field(options, 'emailPassword');
-	const selfSignUp =
-		field(options, 'store') !== 'builtin' && ep !== false && field(ep, 'selfSignUp') !== false;
+	const selfSignUp = field(options, 'store') !== 'builtin' && ep !== false && field(ep, 'selfSignUp') !== false;
 	const adminOnly = new Set(
 		(Array.isArray(attributes) ? attributes : [])
 			.filter((attr) => field(attr, 'userWritable') === false)

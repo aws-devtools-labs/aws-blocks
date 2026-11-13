@@ -45,8 +45,8 @@ import {
 	validateDomainPrefix,
 	validateFederationOptions,
 } from './federation-providers.js';
-import { keepProviderLogGroupsOwned } from './owned-log-group.js';
 import { endUserWriteAttributes } from './mappers.js';
+import { keepProviderLogGroupsOwned } from './owned-log-group.js';
 
 /**
  * Config key core's `Hosting` registers with the public origin the app is

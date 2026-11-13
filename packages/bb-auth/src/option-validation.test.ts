@@ -1325,7 +1325,8 @@ describe('users.attributes: userWritable', () => {
 		const google = (attributeMapping: Record<string, string>) => ({
 			google: { type: 'google', clientId: 'g', clientSecret: secret, attributeMapping },
 		});
-		const refused = /provider 'google' maps '(custom:)?role', which is `userWritable: false`, while self sign-up is on/;
+		const refused =
+			/provider 'google' maps '(custom:)?role', which is `userWritable: false`, while self sign-up is on/;
 		// Bare and `custom:`-prefixed keys, with self sign-up on by default and when set explicitly.
 		for (const options of [
 			{ providers: google({ role: 'hd' }), users: { attributes } },
