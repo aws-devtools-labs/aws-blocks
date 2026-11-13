@@ -8,21 +8,25 @@ import java.nio.file.StandardOpenOption
 import java.util.Base64
 
 /**
- * The key bytes for one store, held in `.key` beside its entries.
+ * The key bytes for one store, held in a dot-prefixed file beside its entries.
  *
- * Holds no opinion on what the bytes mean: [FileKeyCustody] stores a raw AES key here and
- * [DpapiKeyCustody] stores a wrapped blob, which is longer. Validity is the caller's to judge,
- * which is why [read] takes a predicate.
+ * Holds no opinion on what the bytes mean: [FileKeyCustody] stores a raw AES key and
+ * [DpapiKeyCustody] a wrapped blob, which is longer. Validity is the caller's to judge, which is
+ * why [read] takes a predicate.
+ *
+ * [fileName] is a parameter because what the bytes mean has to be legible from the name. A tier
+ * that cannot read what another tier wrote must not find it under the name it looks in: a raw key
+ * where a wrapped blob is expected, or the reverse, is indistinguishable from a corrupt one, and a
+ * key nothing can read stops the store rather than being replaced. Every name starts with a dot,
+ * which is what marks it as this library's rather than an entry.
  */
-internal class KeyFile(private val directory: Path) {
+internal class KeyFile(
+    private val directory: Path,
+    private val fileName: String = KEY_FILE,
+) {
 
     companion object {
-        /**
-         * The name a key is stored under, and the one entry a store's `clear` must leave alone.
-         *
-         * Not private, because that store has to name the same file to know which entry to keep.
-         * Two independent spellings would mean a rename here silently deleted the key there.
-         */
+        /** The name a raw key is stored under — the arrangement from before OS custody existed. */
         internal const val KEY_FILE = ".key"
 
         /** Attempts to read a key another process has created but not yet finished writing. */
@@ -30,7 +34,7 @@ internal class KeyFile(private val directory: Path) {
         private const val READ_RETRY_MILLIS = 20L
     }
 
-    private val path: Path get() = directory.resolve(KEY_FILE)
+    private val path: Path get() = directory.resolve(fileName)
 
     /**
      * The stored bytes, or null when there are none or none that [isValid] accepts.
@@ -62,7 +66,7 @@ internal class KeyFile(private val directory: Path) {
      */
     fun installIfAbsent(bytes: ByteArray): Boolean {
         val encoded = Base64.getEncoder().encodeToString(bytes)
-        val temp = Files.createTempFile(directory, KEY_FILE, ".tmp")
+        val temp = Files.createTempFile(directory, fileName, ".tmp")
         try {
             // The link shares this file's inode, and with it these permissions.
             restrictToOwner(temp, directory = false)
