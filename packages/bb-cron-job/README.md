@@ -282,7 +282,8 @@ new CronJob<{ mode: string }>(scope, 'sync-daily', {
 
 In local dev mode, CronJob runs schedules in-process:
 
-- Rate schedules use `setInterval`
+- Rate schedules up to the timer limit (2^31-1 ms, about 24.8 days) use `setInterval`
+- Longer rate schedules wait in `setTimeout` steps toward an absolute fire time, fire, then schedule the first slot still in the future, so slots missed during a clock jump (for example sleep) are not run
 - Cron schedules calculate the next fire time with timezone support and use `setTimeout`
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
 - When `enabled: false`, the schedule does not run automatically
