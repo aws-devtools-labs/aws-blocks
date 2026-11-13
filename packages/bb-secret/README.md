@@ -86,6 +86,8 @@ const key = await stripeKey.get();
 if (key === null) throw new Error('Stripe key not configured');
 ```
 
+On AWS that `null` is cached like any other value, so a value set afterwards is seen once the cache entry expires (`cacheTtlSeconds`).
+
 ## Examples
 
 ### Auto-generated signing key (the app creates the value)
