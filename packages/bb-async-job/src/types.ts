@@ -87,7 +87,7 @@ export interface AsyncJobBaseOptions<T> {
  * from the `compute` argument itself, never spelled by hand (its type is
  * meaningless without the object). This keeps `T` the single, first-class
  * generic, so `new AsyncJob<Payload>(…)` with a container compute still compiles
- * — supplying `T` no longer forces a `ComputeProvider<'serverless'>` default.
+ * — supplying `T` does not force a `ComputeProvider<'serverless'>` default.
  */
 export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
 	(

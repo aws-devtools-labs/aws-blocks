@@ -25,9 +25,9 @@ const IMPORT_META_SHIM = {
  * `__dirname`, `__filename`) via an esbuild `--define` + `banner`. This is the same
  * approach esbuild blesses (defining `import.meta` also suppresses the warning) and
  * that Rollup applies by default, so:
- * - a handler that reads `import.meta.url` no longer crashes at load, and
- * - a bundled dependency that merely *contains* `import.meta` (even in dead code) no
- *   longer trips a build failure.
+ * - a handler that reads `import.meta.url` doesn't crash at load, and
+ * - a bundled dependency that merely *contains* `import.meta` (even in dead code)
+ *   doesn't trip a build failure.
  *
  * The value resolves to the **bundled output file** (esbuild flattens the module tree),
  * which is correct for the common cases — a value computed at synth (e.g. a

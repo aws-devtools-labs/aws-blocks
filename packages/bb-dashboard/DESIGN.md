@@ -10,7 +10,7 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 
 ### D-DB-1: Structural typing for observability BB composition
 
-**Decision:** `options.metrics` uses structural typing (`MetricsBBRef`: any object with `namespace` and optional `defaultDimensions`), not the Metrics BB class. (Logger/Tracer are no longer dashboard inputs — they attach to a compute, and the compute self-reports; see D-DB-8.)
+**Decision:** `options.metrics` uses structural typing (`MetricsBBRef`: any object with `namespace` and optional `defaultDimensions`), not the Metrics BB class. (Logger and Tracer are not dashboard inputs — they attach to a compute, and the compute self-reports; see D-DB-8.)
 
 **Rationale:**
 - **Loose coupling** — Dashboard doesn't depend on Logger, Metrics, or Tracer BB class definitions
@@ -79,9 +79,9 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 - **Composition guidance** — Health + logs render for every compute automatically; add a `Tracer` anywhere in the app for the traces sections, and pass Metrics source(s) to the dashboard. Use the `logs` / `traces` toggles to hide sections and `title` to distinguish dashboards across multi-stage deployments. (There is no public `computes` selector yet — the dashboard covers every compute; see D-DB-10.)
 - **Cost model** — CloudWatch Dashboards are free for up to 3 dashboards (50 metrics each); beyond that they cost $3/dashboard/month. There is no runtime cost — dashboards are read-only views over existing CloudWatch data. This is the concrete pricing behind D-DB-3's "zero runtime cost" claim.
 
-## Multi-Compute Dashboard (Implemented)
+## Multi-Compute Dashboard
 
-> **Status:** implemented; no compute selector is exposed yet. The dashboard is
+> No compute selector is exposed yet. The dashboard is
 > organized **by compute** — it renders each compute as a group (health always;
 > logs always; traces only when the app contains a `Tracer`) and app-wide metrics
 > sections after them, one per `MetricsSource`. It exposes `logs` / `traces`
@@ -177,13 +177,13 @@ finalize pass (see D-DB-11). It does expose `logs` / `traces` display toggles.
 - **Enables default-to-all.** With the body built at finalize, the no-arg "cover every compute" default enumerates `getComputes()` with no construction-order gap (see D-DB-10).
 - **Cost:** a Dashboard constructed outside `create()` (e.g. directly in a unit test) must call `finalizeDashboards(stack)` before synth — exactly how `config-registry.test.ts` drives `finalizeConfigRegistry`. A Dashboard constructed *after* `create()` has finalized (without a further `finalizeDashboards`) still gets its resource — created eagerly — so its URL/redirect never dangle; only its widget body is left empty.
 
-### Layout (as implemented, `widgets.ts`)
+### Layout (`widgets.ts`)
 
 Per compute (in the order given): `## 🔧 {label}` header (label = the compute's
 scope `id`), health rows always, then `### 🔍 Traces` and `### 📋 Logs` only when
 present in the section. Then one `## 📊 Metrics — {namespace}` section per
-`MetricsSource`. Single-compute apps render one group — the pre-multi-compute
-dashboard plus a header row.
+`MetricsSource`. Single-compute apps render one group: one header row followed by
+that compute's sections.
 
 ## Infrastructure (CDK)
 

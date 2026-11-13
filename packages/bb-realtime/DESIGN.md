@@ -219,11 +219,10 @@ Channel path:             my-app-collab/chat/room-123
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| Mock skips connect-time token auth (`?token=` query param) | A client can still *open* a WS locally, but can no longer *subscribe* without a valid channel token (enforced at subscribe time) | Recommend sandbox testing for connect-time auth-sensitive flows |
+| Mock skips connect-time token auth (`?token=` query param) | A client can still *open* a WS locally, but cannot *subscribe* without a valid channel token (enforced at subscribe time) | Recommend sandbox testing for connect-time auth-sensitive flows |
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
-| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (128 KiB logical message, not the 32 KB frame quota — API Gateway reassembles frames) are now enforced in both environments |
 | Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
@@ -325,7 +324,7 @@ Absent `refresh`, reconnect replays the stored tokens (correct for short/transie
 
 ## Channel Name Limits
 
-The previous AppSync Events implementation enforced a 5-segment × 50-character channel name limit. With the move to API Gateway WebSocket + DynamoDB, that restriction no longer applies.
+Channel names have no segment-count or per-segment length limit; the byte limits below are the only size limits.
 
 ### Enforced Limits
 
@@ -338,7 +337,7 @@ Both the mock (local dev) and AWS runtimes enforce these limits at `publish()`, 
 
 **Channel path** is the fully-qualified string `{fullId}/{namespace}/{channel}` stored as the DynamoDB sort key. The validation uses `Buffer.byteLength(fullChannel, 'utf8')` so multi-byte characters (emoji, CJK, etc.) are counted correctly.
 
-**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not "re-fix" this constant back to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
+**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not lower this constant to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
 
 ### Why Enforce in Both Environments
 
@@ -379,6 +378,6 @@ A 256-character user channel name, combined with a typical prefix (`myapp-rt/cur
 
 Longer names are technically possible but offer no benefit. They increase DynamoDB read/write unit consumption (items are billed in 4 KB read / 1 KB write increments) and make WebSocket messages larger for no functional gain.
 
-### Why AppSync Had 5×50
+### Why there is no per-segment limit
 
-AppSync Events used a hierarchical channel namespace (`/segment1/segment2/.../segment5`) with each segment limited to 50 characters. This was likely driven by AppSync's internal routing and subscription filtering architecture, not a fundamental WebSocket or DynamoDB constraint. Since we handle routing ourselves via DynamoDB GSI queries, we don't inherit that limitation.
+Routing is a DynamoDB GSI query (`channel-index`) on the full channel path, so the number of `/`-separated segments and the length of each segment do not matter to delivery. The only constraints on a channel name are the grammar rules (no empty, `.` or `..` segment) and the byte limits above.

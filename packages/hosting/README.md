@@ -329,9 +329,10 @@ npm install --save-dev @opennextjs/aws@~4.1.14
   Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
   `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
   for the Lambda@Edge function, so bootstrap `us-east-1` too
-  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
-  has more than one stack is tracked in
-  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  (`npx cdk bootstrap aws://<account>/us-east-1`). `npm run sandbox:destroy`
+  deletes every stack the sandbox deploys, the `us-east-1` support stack
+  included. `npm run destroy` passes no stack selection, so the CDK CLI refuses
+  to destroy an app with more than one top-level stack; that is tracked in
   [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
@@ -503,7 +504,7 @@ with `compute.type: 'web-function'` everything below, including the
   rate rule, since they all come from edge IPs and the distribution's own web
   ACL already rate-limits viewers. It follows `waf.enabled` because each web
   ACL costs money: a monthly charge, a charge per request it evaluates (every
-  uncached SSR request is now evaluated by two web ACLs), and the CloudWatch
+  uncached SSR request is evaluated by two web ACLs), and the CloudWatch
   Logs ingestion of the requests it blocks or counts. A `waf.webAclArn` of your
   own adds nothing to the stage.
 - **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
@@ -1214,7 +1215,7 @@ back, then expired by an S3 lifecycle rule.
 
 > **Cleanup caveat:** a build is tagged superseded only during a normal deploy
 > cutover (an `Update` that flips `meta.b`). Builds that become stale outside
-> that path — every build already present before upgrading to this version, or
+> that path — every build uploaded by a hosting release that didn't tag builds, or
 > builds left by an aborted/rolled-back deploy — are never tagged, so the
 > lifecycle rule never expires them and they accumulate until you remove them
 > manually. This is safe (nothing deletes the live build), just not
@@ -1275,15 +1276,15 @@ new HostingConstruct(stack, 'Hosting', {
 > `LoggingV2RegionUnresolved` warning instead. `skipRegionValidation` skips this
 > check along with the WAF, ACM and Lambda Web Adapter Region checks.
 
-> **Entry point:** `version`, `partitioning` and `format` are available on
-> `HostingConstruct` from `@aws-blocks/hosting`. The `Hosting` block in
-> `@aws-blocks/core` currently accepts only `logging.enabled` and
-> `logging.retentionDays`, so it always uses v1.
+> **Entry point:** `version`, `partitioning` and `format` are set through
+> `frontDoor.features.logging`, on `HostingConstruct` from `@aws-blocks/hosting`
+> and on the `Hosting` block in `@aws-blocks/core`. Core's deprecated top-level
+> `logging` prop accepts only `enabled` and `retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
 
-`frontDoor.features.ssrDefaultTtl` (CloudFront door; formerly
-`cdn.ssrDefaultTtl`) enables CloudFront edge caching of SSR responses that carry
+`frontDoor.features.ssrDefaultTtl` (CloudFront door; `cdn.ssrDefaultTtl` is its
+deprecated alias) enables CloudFront edge caching of SSR responses that carry
 no explicit `Cache-Control` header. Those responses are then shared at the edge,
 and the SSR cache key does **not** include `Authorization` or session cookies by
 default — so one cached entry would answer requests regardless of their
@@ -1505,8 +1506,9 @@ unique when several hosting constructs share a stage) pinned to
 > will never fire if the app deploys outside `us-east-1`. See D-016.
 
 Off-region placement is **always on**; there is no opt-out. The
-CloudFront 5xx alarm is the whole point of `monitoring`, and a
-silently-missing alarm is exactly the bug this fixes (#481).
+CloudFront 5xx alarm is the whole point of `monitoring`, and an alarm
+placed in a region where CloudFront metrics never arrive would silently
+never fire.
 
 Subscribe with endpoint subscriptions (`EmailSubscription` /
 `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):

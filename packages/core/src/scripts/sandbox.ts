@@ -350,12 +350,12 @@ interface SandboxHistory {
 /**
  * Starts a sandbox, recording the run in `.blocks/deploy-history.jsonl`.
  *
- * The recorder starts HERE, before any work, as `deploy()` does. It used to be
- * created just before the CDK deploy, after credential and bootstrap preflight,
- * secret provisioning, external migrations and client generation — so a sandbox
- * that failed in any of those left no record at all, and CloudFormation
- * backfill could not recover it either because nothing reached CloudFormation.
- * Those pre-CloudFormation failures are the reason first-party history exists.
+ * The recorder starts HERE, before any work, as `deploy()` does: credential and
+ * bootstrap preflight, secret provisioning, external migrations and client
+ * generation all run before the CDK deploy, and a sandbox that fails in any of
+ * them must still leave a record. CloudFormation backfill can't recover such a
+ * run, because nothing reached CloudFormation. Those pre-CloudFormation failures
+ * are the reason first-party history exists.
  *
  * Terminal states are recorded once: the recorder appends on every call, and
  * both the CDK-deploy catch and the guard here can reach `fail`. Recording

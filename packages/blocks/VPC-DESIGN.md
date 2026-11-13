@@ -1,6 +1,6 @@
 # VPC Support — Design
 
-> **Status:** Implemented (PR #286, branch `feat/vpc-pull-pattern`)
+> **Status:** Implemented
 
 ---
 
@@ -133,7 +133,7 @@ type itself. Registrations accumulate, so the second call adds to the first.
 
 > CloudWatch Logs is always provisioned by `finalizeVpc` regardless of BB
 > declarations (Lambda needs it for log delivery from within a VPC). The SSM
-> interface endpoint is no longer always-on — it flows from BB requirements
+> interface endpoint is not always-on: it flows from BB requirements
 > (AppSetting and `Auth`), so an app that uses neither gets no SSM
 > endpoint.
 
@@ -205,14 +205,14 @@ test-apps/vpc-smoke/
 
 ## Phased Implementation
 
-### Phase 1: CDK-level VPC (this PR)
+### Phase 1: CDK-level VPC (implemented)
 
 - `vpc` prop on `BlocksStack` / `BlocksBackend`
 - `VpcRequirements` passed into the `BuildingBlockScope` constructor, collected in a per-stack registry
 - Per-BB endpoint declarations in each BB's CDK constructor
 - Finalization: collect + deduplicate + provision endpoints
 - Lambda placement in private subnets + security group
-- `bb-data` refactor: use shared VPC when available
+- `bb-data` uses the shared VPC when available
 - `BlocksVpcOptions`: `{ vpc, subnets?, provisionEndpoints? }`
 
 ### Phase 2: Per-handler VPC (after configurable compute)

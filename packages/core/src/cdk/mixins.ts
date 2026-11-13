@@ -33,9 +33,9 @@ const DELETION_PROTECTION_PROPERTIES = ['deletionProtection', 'deletionProtectio
  *
  * @deprecated Prefer the stack-wide `defaults` prop on `BlocksStack`/`BlocksBackend`
  * (`defaults: BlocksPresets.sandbox` / `.production`, or `sandboxMode ? … : …`).
- * Amazon-authored Building Blocks now read removal policy + deletion protection
- * from `defaults`, so this mixin is no longer needed; it is retained only for
- * backward compatibility.
+ * Amazon-authored Building Blocks read removal policy + deletion protection
+ * from `defaults`, so they don't need this mixin; it remains for backward
+ * compatibility.
  *
  * @example
  * ```ts

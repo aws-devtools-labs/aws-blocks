@@ -352,8 +352,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	/**
 	 * Enables the privileged `auth.admin` handle and grants the matching
 	 * `Admin*`/`List*` IAM on the pool. Omit for the client-facing surface with
-	 * no admin grant — the default. Carried over from `AuthCognito`, where it is
-	 * already compiler-verified.
+	 * no admin grant — the default.
 	 */
 	admin?: AdminOptions;
 
@@ -1343,9 +1342,8 @@ export interface UserPoolOptions {
 	 * Ignored for `'USER_PASSWORD_AUTH'` (the classic flow has no factor
 	 * choice). The per-call override on `auth.signIn` takes precedence.
 	 *
-	 * @remarks Carried over from `AuthCognito`'s top-level `preferredChallenge`
-	 * (renamed: it sits next to `authFlow`). As there, `'EMAIL_OTP'` /
-	 * `'SMS_OTP'` also enable that factor in the pool's `USER_AUTH`
+	 * @remarks The equivalent of `AuthCognito`'s top-level `preferredChallenge`.
+	 * `'EMAIL_OTP'` / `'SMS_OTP'` also enable that factor in the pool's `USER_AUTH`
 	 * `AllowedFirstAuthFactors`, alongside the factors `mfa.types` lists.
 	 * Cognito sends the `'EMAIL_OTP'` code only through Amazon SES, so under
 	 * `'USER_AUTH'` it needs a pool with an SES sender: on a pool this block
@@ -2594,8 +2592,7 @@ export type AdminGrants<O extends AuthOptions, A extends AdminAction> = O extend
  *
  * This lives in a **parameter** position on individual methods (not as a
  * conditional over the surface *shape*), which is why it does not make
- * `Auth<O>` invariant — verified against the same call sites the earlier
- * shape-narrowing attempt regressed. It absorbs the trailing optional
+ * `Auth<O>` invariant (a conditional over the shape would). It absorbs the trailing optional
  * parameters for the same reason as {@link PasswordGate}: the diagnostic then
  * names the gate, not an optional argument. For the wide `AuthOptions` it
  * accepts both resolutions, so an instance whose `actions` withhold a group
@@ -2790,8 +2787,8 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
  *
  * The action gate lives in method **parameter** positions rather than as a
  * conditional over this surface's *shape*, so `Auth<O>` stays covariant
- * in `O` (an earlier shape-narrowing attempt made it invariant and regressed 14
- * call sites). `actions` therefore gates the methods AND scopes the CDK IAM
+ * in `O` (a conditional over the shape would make it invariant). `actions`
+ * therefore gates the methods AND scopes the CDK IAM
  * grant from the same source.
  */
 export type AdminSurface<O extends AuthOptions = AuthOptions> = GroupAdmin<O> & LifecycleAdmin<O>;
@@ -2912,8 +2909,7 @@ export type AdminOffOnBuiltin = [ERROR_auth_admin_needs_store_cognito: never];
  * - For the wide `AuthOptions` (a helper typed `(auth: Auth)`) it is the union
  *   of every branch: no member is reachable without narrowing — like the
  *   zero-config default — and every configured instance, admin-enabled or not
- *   (and of either store), stays assignable to the wide type. (`AuthCognito`'s gate made an
- *   admin-enabled instance unassignable to the wide type.) The disabled half
+ *   (and of either store), stays assignable to the wide type. The disabled half
  *   is {@link AdminDisabled} alone, whose `__adminNotEnabled` names both fixes
  *   ({@link AdminDisabledOnBuiltin} is assignable to it), so the error on a
  *   zero-config `new Auth(scope, 'auth')` does not depend on which union
@@ -3056,8 +3052,8 @@ export type MfaStepNameOf<M extends MfaFactor> =
 
 /**
  * Every challenge or continuation `signIn` can return, whatever the
- * configuration — the wide {@link SignInNextStep}. Carried over unchanged from
- * `AuthCognito`.
+ * configuration — the wide {@link SignInNextStep}. The same union as
+ * `AuthCognito`'s.
  */
 export type AnySignInNextStep =
 	| { name: 'CONFIRM_SIGN_IN_WITH_SMS_CODE'; session: string; codeDeliveryDetails: CodeDeliveryDetails }
@@ -3102,12 +3098,12 @@ export interface ResetPasswordResult {
  *
  * This is the gated surface, plus `confirmSignIn` / `autoSignIn`
  * (which the sign-in UI's state machine needs), plus the native account
- * surface carried over from `AuthCognito`: user attributes,
+ * surface: user attributes,
  * `deleteUser`, MFA ({@link MfaGate}), devices, passkeys ({@link PasskeyGate})
  * and the opt-in `auth.admin` handle ({@link AdminGetterOf}). The federated
  * exchange/refresh methods use the same gates.
  *
- * Renamed from `AuthCognito` (G14 — avoid `fetch`): `fetchAuthSession` →
+ * Method names avoid `fetch` (G14). Coming from `AuthCognito`: `fetchAuthSession` →
  * `getAuthSession`, `fetchUserAttributes` → `getUserAttributes`,
  * `fetchMFAPreference` → `getMfaPreference`, `fetchDevices` → `scanDevices`;
  * and `setUpTOTP` / `verifyTOTPSetup` / `updateMFAPreference` →
@@ -3132,7 +3128,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 * refreshes**, which happens once its access token expires: up to the
 	 * access-token lifetime (Cognito's default is one hour). `requireAuth` makes no
 	 * per-request call to the identity service to check that the user is still
-	 * active — `AuthCognito` has the same limitation. `requireRole` reads live group
+	 * active. `requireRole` reads live group
 	 * membership on every call, so it fails closed (403) for a *deleted* user
 	 * straight away; a *disabled* user keeps their memberships and is caught at the
 	 * refresh, like everywhere else.
@@ -3453,7 +3449,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 * ⚠️ Cognito's device-tracking flow needs the device key Cognito issues at
 	 * sign-in (`NewDeviceMetadata`) plus a client-derived device verifier. The
 	 * local mock implements a synthetic version (it mints a device key); on AWS
-	 * this throws a `501` — a known gap carried over from `AuthCognito`, see
+	 * this throws a `501` — a known gap, see
 	 * `DESIGN.md` ("Known gaps").
 	 */
 	rememberDevice(

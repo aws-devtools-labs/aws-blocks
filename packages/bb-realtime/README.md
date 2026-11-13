@@ -355,7 +355,7 @@ Channel names are scoped by the Realtime instance and namespace: `{fullId}/{name
 - Published messages (including the wire envelope with channel path) must fit within API Gateway's 128 KiB logical WebSocket message limit. API Gateway's separate 32 KB quota is a *frame* limit — the service reassembles fragmented frames, so it is not the per-message cap. This is enforced at runtime in both environments.
 - There is no enforced character limit on the user-facing channel name, but excessively long names increase DynamoDB item sizes (affecting read/write costs) and WebSocket message sizes (affecting delivery latency and billing, since messages are metered in 32 KB increments).
 
-The previous AppSync Events implementation had a 5-segment × 50-character channel name limit. That restriction no longer applies.
+There is no limit on the number of segments or on segment length.
 
 **Grammar:** `/` separates segments (`tenants/acme/billing`). `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a `channel` that isn't a string (`undefined`, `null`, an object). Any other characters are allowed. A number is accepted and validated as its string form.
 

@@ -6,7 +6,7 @@ A single application secret backed by AWS Secrets Manager.
 
 **When NOT to use:** For non-sensitive configuration (feature flags, API URLs, thresholds) use [`AppSetting`](../bb-app-setting/README.md) — it is free for standard values. For application state, use `KVStore` or `DistributedTable`.
 
-> **`Secret` is the recommended home for production secrets.** For any credential that protects a production app — a database connection string, API key, OAuth token, or private key — use `Secret`. It is purpose-built for secrets: a dedicated per-secret resource with its own access controls, cross-account sharing, version history, and (future) managed rotation. This mirrors [AWS's own guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) on where credentials belong.
+> **`Secret` is the recommended home for production secrets.** For any credential that protects a production app — a database connection string, API key, OAuth token, or private key — use `Secret`. It is purpose-built for secrets: a dedicated per-secret resource with its own access controls, cross-account sharing, and version history. This mirrors [AWS's own guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) on where credentials belong.
 >
 > `AppSetting` with `secret: true` also encrypts the value at rest and is free, so it is a reasonable choice for a *low-value* secret in a prototype, or when you want to avoid the per-secret cost. But for anything protecting a production app, reach for `Secret`.
 

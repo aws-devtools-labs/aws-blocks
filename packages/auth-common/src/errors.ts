@@ -17,10 +17,11 @@ import { isBlocksError } from '@aws-blocks/core';
  * are familiar and searchable; the federation (redirect-flow) names keep the
  * same `*Exception` suffix for consistency.
  *
- * `Auth` throws these names, as `AuthCognito` and `AuthOIDC` did. The removed
- * `AuthBasic` threw its own `AuthBasicErrors` names (for example
- * `SessionExpiredException` rather than `NotAuthenticatedException`); code moving
- * from it must switch to these names (see `@aws-blocks/bb-auth`'s `MIGRATION.md`).
+ * `Auth` throws these names; code written against `AuthCognito` or `AuthOIDC`
+ * matches them unchanged. The removed `AuthBasic`'s `AuthBasicErrors` names
+ * differ (for example `SessionExpiredException` rather than
+ * `NotAuthenticatedException`); code moving from it must switch to these
+ * names (see `@aws-blocks/bb-auth`'s `MIGRATION.md`).
  *
  * @example
  * ```typescript

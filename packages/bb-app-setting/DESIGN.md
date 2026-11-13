@@ -65,7 +65,7 @@ The table below shows the AWS runtime (SSM) representation:
 | `put()` store | `JSON.stringify(value)` |
 | `get()` retrieve | `JSON.parse(stored)` with fallback to raw value |
 
-**Tolerant reader:** `get()` wraps `JSON.parse()` in a try/catch. If parsing fails, the raw value is returned as-is. This fallback is load-bearing in two cases: (1) the CDK secret Lambda writes generated secrets as raw base64url strings (never JSON-stringified), and (2) legacy values written by older versions without `JSON.stringify`. Note: legacy values that happen to be valid JSON (e.g. `"123"`, `"true"`) will be parsed to their JSON type (number, boolean) — not returned as strings. All values written by `put()` going forward will round-trip correctly.
+**Tolerant reader:** `get()` wraps `JSON.parse()` in a try/catch. If parsing fails, the raw value is returned as-is. This fallback is load-bearing in two cases: (1) the CDK secret Lambda writes generated secrets as raw base64url strings (never JSON-stringified), and (2) legacy values written by older versions without `JSON.stringify`. Note: legacy values that happen to be valid JSON (e.g. `"123"`, `"true"`) will be parsed to their JSON type (number, boolean) — not returned as strings. Values written by `put()` round-trip correctly.
 
 When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod, Valibot, ArkType, etc.), the type parameter `T` is inferred from the schema and every `put()` validates the value at runtime before writing. Validation failures throw with `error.name = 'ValidationFailedException'`. When no schema is provided, `T` defaults to `string` with no runtime validation.
 

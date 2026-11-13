@@ -486,7 +486,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * refreshes**, which happens once its access token expires: up to the
 	 * access-token lifetime (Cognito's default is one hour). `requireAuth` makes no
 	 * per-request call to the identity service to check that the user is still
-	 * active — `AuthCognito` has the same limitation. `requireRole` reads live group
+	 * active. `requireRole` reads live group
 	 * membership on every call, so it fails closed (403) for a *deleted* user
 	 * straight away; a *disabled* user keeps their memberships and is caught at the
 	 * refresh, like everywhere else.
@@ -1371,7 +1371,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * ⚠️ Cognito's device-tracking flow needs the device key Cognito issues at
 	 * sign-in (`NewDeviceMetadata`) plus a client-derived device verifier. The
 	 * local mock implements a synthetic version (it mints a device key); on AWS
-	 * this throws a `501` — a known gap carried over from `AuthCognito`, see
+	 * this throws a `501` — a known gap, see
 	 * `DESIGN.md` ("Known gaps").
 	 */
 	async rememberDevice(
