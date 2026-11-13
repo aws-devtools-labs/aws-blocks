@@ -255,7 +255,10 @@ void main() {
         contains(r"      case 'a\$b': return A$bEvent.fromJson(json);"),
       );
       // `Event` is a result, so it is open: an unknown arm keeps the object.
-      expect(base, contains('      default: return EventUnknown(json);'));
+      expect(
+        base,
+        contains('      default: return EventUnknown(Map.unmodifiable(json));'),
+      );
       expect(
         _decl(output, 'EventUnknown'),
         contains(r"  String get discriminator => json['k\$ind'] as String;"),

@@ -131,7 +131,7 @@ sealed class GetNotificationResult {
     switch (json['type'] as String) {
       case 'email': return EmailGetNotificationResult.fromJson(json);
       case 'sms': return SmsGetNotificationResult.fromJson(json);
-      default: return GetNotificationResultUnknown(json);
+      default: return GetNotificationResultUnknown(Map.unmodifiable(json));
     }
   }
 }

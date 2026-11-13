@@ -247,7 +247,7 @@ sealed class TicketPayload {
     switch (json['type'] as String) {
       case 'text': return TextTicketPayload.fromJson(json);
       case 'count': return CountTicketPayload.fromJson(json);
-      default: return TicketPayloadUnknown(json);
+      default: return TicketPayloadUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -353,7 +353,7 @@ sealed class TicketPayloads {
     switch (json['format'] as String) {
       case 'plain': return PlainTicketPayloads.fromJson(json);
       case 'rich': return RichTicketPayloads.fromJson(json);
-      default: return TicketPayloadsUnknown(json);
+      default: return TicketPayloadsUnknown(Map.unmodifiable(json));
     }
   }
 }
@@ -887,7 +887,7 @@ sealed class ActResult {
     switch (json['action'] as String) {
       case 'pick': return PickActResult.fromJson(json);
       case 'skip': return SkipActResult.fromJson(json);
-      default: return ActResultUnknown(json);
+      default: return ActResultUnknown(Map.unmodifiable(json));
     }
   }
 }
