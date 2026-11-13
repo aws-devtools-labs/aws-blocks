@@ -21,7 +21,7 @@
  * monitoring on (a static site from a scratch build output): its alarm topic
  * key grants `cloudwatch.amazonaws.com`, which gives the key check a key to see.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +49,7 @@ const stack = await BlocksStack.create(app, 'bb-test-role-ownership', {
 
 // A minimal SPA build output for Hosting (never deployed).
 const site = mkdtempSync(join(tmpdir(), 'bb-role-ownership-site-'));
+process.on('exit', () => rmSync(site, { recursive: true, force: true }));
 mkdirSync(join(site, 'dist'));
 writeFileSync(join(site, 'dist', 'index.html'), '<!DOCTYPE html><html><body>ok</body></html>');
 writeFileSync(join(site, 'package.json'), JSON.stringify({ name: 'role-ownership-site', dependencies: {} }));
