@@ -26,10 +26,11 @@ package com.aws.blocks.kotlin
  *   Choose the value once and keep it: changing it later points the application at a different
  *   directory, which reads as the user being signed out.
  *
- *   On desktop the stored session is encrypted with a key kept in a file beside it, protected only
- *   by file permissions (owner-only on Linux and macOS; on Windows, the user profile's inherited
- *   access control list, which also lets administrators read it). That does not protect it from
- *   other processes running as the same OS user; leave this unset to keep the session in memory only.
+ *   On desktop the stored session is encrypted with a key the host OS holds where it can — the
+ *   Keychain on macOS — so a backup or copy of the directory cannot be decrypted elsewhere. Where
+ *   no OS store can be used the key is kept in a file beside the entries instead, and that at-rest
+ *   protection is absent. Neither arrangement protects the session from another process running as
+ *   the same OS user; leave this unset to keep the session in memory only.
  */
 data class BlocksConfig(
     val server: BlocksServer,
