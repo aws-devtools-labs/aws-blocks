@@ -207,7 +207,7 @@ final class OIDCClientTests: XCTestCase {
         let store = client.client.tokenStore
 
         // Subscribe before kicking off the exchange.
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -434,7 +434,7 @@ final class OIDCClientTests: XCTestCase {
         await store.set(tokenKey("refresh_token"), value: "rt")
         await store.set(tokenKey("expires_at"), value: "0")
 
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -457,7 +457,7 @@ final class OIDCClientTests: XCTestCase {
     func testRefreshWithoutTokenEmitsSignedOut() async throws {
         let client = makeClient(session: makeMockSession())
 
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -488,7 +488,7 @@ final class OIDCClientTests: XCTestCase {
         await store.set(tokenKey("access_token"), value: "at")
         await store.set(tokenKey("refresh_token"), value: "rt")
 
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -570,7 +570,7 @@ final class OIDCClientTests: XCTestCase {
         let client = makeClient(session: makeMockSession())
         let store = client.client.tokenStore
         await store.set(tokenKey("refresh_token"), value: "rt")
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -632,7 +632,7 @@ final class OIDCClientTests: XCTestCase {
 
     /// Subscribes to `client` and returns every state it emits in the next 50 ms after `body` runs.
     private func states(of client: OIDCClient<String>, during body: () async throws -> Void) async rethrows -> [OIDCAuthState] {
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         let collector = Task<[OIDCAuthState], Never> {
             var events: [OIDCAuthState] = []
             for await event in stream {
@@ -670,7 +670,7 @@ final class OIDCClientTests: XCTestCase {
 
     /// The first state `client` emits after `subscribe` returns, collected in the background.
     private func firstState(of client: OIDCClient<String>) async -> Task<OIDCAuthState?, Never> {
-        let stream = await client.authStateChanges()
+        let stream = await client.authStateChanges().dropFirst()
         return Task {
             for await event in stream {
                 return event
@@ -878,6 +878,112 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(token, "at-1")
     }
 
+    // MARK: - authState
+
+    /// A new subscriber receives the current state first, then each transition.
+    func testAuthStateChangesYieldsTheCurrentStateFirst() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let user = OIDCUser(userId: "u1", username: "alice", groups: [])
+
+        var fresh = await client.authStateChanges().makeAsyncIterator()
+        let initial = await fresh.next()
+        XCTAssertEqual(initial, .loading)
+
+        _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
+        let transition = await fresh.next()
+        XCTAssertEqual(transition, .signedIn(user))
+
+        var late = await client.authStateChanges().makeAsyncIterator()
+        let current = await late.next()
+        XCTAssertEqual(current, .signedIn(user), "a later subscriber starts at the current state")
+    }
+
+    func testAuthStateIsLoadingBeforeAnyStateIsEmitted() async {
+        let client = makeClient(session: makeMockSession())
+        let state = await client.authState
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testAuthStateIsTheStateMostRecentlyEmitted() async throws {
+        let client = makeClient(session: makeMockSession())
+        let user = OIDCUser(userId: "u1", username: "alice", groups: [])
+
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = [
+                "accessToken": "at", "refreshToken": "rt", "expiresIn": 3_600,
+                "user": ["userId": "u1", "username": "alice", "groups": [String]()]
+            ]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        var events = try await states(of: client) {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "myapp://callback", provider: "google", state: "s", nonce: "n"
+            )
+        }
+        var state = await client.authState
+        XCTAssertEqual(events, [.signedIn(user)])
+        XCTAssertEqual(state, events.last)
+
+        // A restore that fails emits nothing and leaves the state as it was.
+        OIDCMockURLProtocol.handler = { request in (errorResponse(for: request.url!, status: 500), Data("{}".utf8)) }
+        events = await states(of: client) {
+            _ = try? await client.restore()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [])
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in (okResponse(for: request.url!), Data("{}".utf8)) }
+        events = try await states(of: client) {
+            _ = try await client.signOut()
+        }
+        state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, events.last)
+    }
+
+    /// A client hydrated from a descriptor sets the state on the relay sign-in and on a restore that
+    /// finds no session.
+    func testAuthStateFollowsAHydratedClientsSignInAndRestore() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = try Self.authClient(on: blocksClient)
+
+        let user = try await client.signIn(provider: "google", relayTo: "myapp://auth", launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c"))
+        var state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "Not signed in", "name": "NotAuthenticatedException"]
+            return (errorResponse(for: request.url!, status: 401), try JSONSerialization.data(withJSONObject: body))
+        }
+        let restored = try await client.restore()
+        state = await client.authState
+        XCTAssertNil(restored)
+        XCTAssertEqual(state, .signedOut)
+    }
+
+    func testAuthStateIsSignedOutAfterAnIncompleteSignOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "The session could not be removed.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 503), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        await client.client.tokenStore.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            _ = try? await client.signOut()
+        }
+
+        let state = await client.authState
+        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(state, .signedOut)
+    }
+
     // MARK: - authStateChanges fan-out
 
     func testAuthStateChangesFanOutToMultipleSubscribers() async throws {
@@ -893,8 +999,8 @@ final class OIDCClientTests: XCTestCase {
 
         let client = makeClient(session: makeMockSession())
 
-        let stream1 = await client.authStateChanges()
-        let stream2 = await client.authStateChanges()
+        let stream1 = await client.authStateChanges().dropFirst()
+        let stream2 = await client.authStateChanges().dropFirst()
 
         let collector1 = Task<OIDCAuthState?, Never> {
             for await event in stream1 {

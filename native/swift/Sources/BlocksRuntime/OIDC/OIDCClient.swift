@@ -60,6 +60,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
+    /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
+    /// before the first one. Reading it needs no subscription, so an app can check the state once, such as on
+    /// launch after `restore()`: `if case .signedIn(let user) = await client.authState { ... }`.
+    public private(set) var authState: OIDCAuthState = .loading
+
     public init(
         exchangePath: String,
         refreshPath: String,
@@ -110,10 +115,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.sessionPath = sessionPath ?? "\(callback[..<(callback.lastIndex(of: "/") ?? callback.endIndex)])/session"
     }
 
-    /// Returns a fresh stream of auth-state transitions. Every active
-    /// subscriber receives every emitted state. Emits on sign-in and sign-out.
-    /// The client doesn't emit `.loading`: it is the state an app shows until
-    /// `restore()` returns.
+    /// Returns a fresh stream of auth states. It yields the current ``authState`` first, then every state
+    /// the client emits after it, as Kotlin's `StateFlow` does, so a subscriber never misses the state it
+    /// starts in. Every active subscriber receives every emitted state. The client emits on sign-in and
+    /// sign-out; it doesn't emit `.loading`, the state before the first sign-in or `restore()`.
     ///
     /// The async signature ensures the subscriber is registered with the
     /// actor *before* the call returns — callers can safely kick off an
@@ -121,7 +126,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// without missing the resulting state event.
     public func authStateChanges() -> AsyncStream<OIDCAuthState> {
         let id = UUID()
+        let current = authState
         let stream = AsyncStream<OIDCAuthState> { continuation in
+            continuation.yield(current)
             self.subscribers[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
@@ -136,6 +143,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     private func emit(_ state: OIDCAuthState) {
+        authState = state
         for continuation in subscribers.values {
             continuation.yield(state)
         }
