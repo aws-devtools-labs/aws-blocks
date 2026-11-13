@@ -3,8 +3,10 @@ package com.example.app.roundtrip
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.example.app.Api.GetEvent
 import com.example.app.Status
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
@@ -46,5 +48,13 @@ class OpenUnionRoundTripTest : FunSpec({
         val event = BlocksJson.decodeFromJsonElement(GetEvent.Result.serializer(), wire)
         event shouldBe GetEvent.Result.Moved(Status.Done)
         BlocksJson.encodeToJsonElement(GetEvent.Result.serializer(), event) shouldBe wire
+    }
+
+    test("an object without a string discriminator matches no arm") {
+        for (text in listOf("""{"by":"someone"}""", """{"kind":3}""", """{"kind":null}""")) {
+            shouldThrow<SerializationException> {
+                BlocksJson.decodeFromJsonElement(GetEvent.Result.serializer(), json(text))
+            }
+        }
     }
 })

@@ -107,7 +107,7 @@ public class Api(
               when (element["kind"]) {
                 JsonPrimitive("message") -> return input.json.decodeFromJsonElement(Message.serializer(), fields)
                 JsonPrimitive("presence") -> return input.json.decodeFromJsonElement(Presence.serializer(), fields)
-                else -> return Unknown(element)
+                else -> if ((element["kind"] as? JsonPrimitive)?.isString == true) return Unknown(element)
               }
             }
             throw SerializationException("No variant of Event matches this JSON value; expected an object with \"kind\": \"message\"; or an object with \"kind\": \"presence\"")
@@ -121,10 +121,11 @@ public class Api(
           public val json: JsonObject,
         ) : Event() {
           /**
-           * The discriminator value that names no known arm.
+           * The discriminator value that names no known arm. Decoding only makes this arm
+           * for an object whose discriminator is a string.
            */
-          public val discriminator: String?
-            get() = (json["kind"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+          public val discriminator: String
+            get() = (json.getValue("kind") as JsonPrimitive).content
         }
 
         @Serializable

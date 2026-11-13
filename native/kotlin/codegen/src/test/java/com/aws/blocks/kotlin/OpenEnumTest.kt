@@ -112,14 +112,15 @@ class OpenEnumTest : FunSpec({
         val source = fixture("45-open-enums")
         // An arm is tagged `unknown`, so the fallback is `UnknownValue`.
         source shouldContain "public data class UnknownValue(\n        public val json: JsonObject,\n      ) : Result()"
-        source shouldContain "else -> return UnknownValue(element)"
         source shouldContain "is UnknownValue -> value.json"
-        source shouldContain "get() = (json[\"kind\"] as? JsonPrimitive)?.takeIf { it.isString }?.content"
+        source shouldContain "public val discriminator: String\n"
+        source shouldContain "get() = (json.getValue(\"kind\") as JsonPrimitive).content"
+        source shouldContain "else -> if ((element[\"kind\"] as? JsonPrimitive)?.isString == true) return UnknownValue(element)"
     }
 
     test("a union only parameters use, or with a boolean discriminator, stays closed") {
         fixture("18-hybrid-arm") shouldNotContain "return Unknown(element)"
         // 24 has one union discriminated by the string `type` (open) and one by `isUpdated`.
-        fixture("24-nullable-discriminated-union").split("else -> return Unknown(element)").size shouldBe 2
+        fixture("24-nullable-discriminated-union").split("return Unknown(element)").size shouldBe 2
     }
 })

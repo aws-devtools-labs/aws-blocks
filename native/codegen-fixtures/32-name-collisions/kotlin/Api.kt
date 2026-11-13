@@ -166,7 +166,7 @@ public class Api(
             when (element["action"]) {
               JsonPrimitive("pick") -> return input.json.decodeFromJsonElement(Pick.serializer(), fields)
               JsonPrimitive("skip") -> return input.json.decodeFromJsonElement(Skip.serializer(), fields)
-              else -> return Unknown(element)
+              else -> if ((element["action"] as? JsonPrimitive)?.isString == true) return Unknown(element)
             }
           }
           throw SerializationException("No variant of Result matches this JSON value; expected an object with \"action\": \"pick\"; or an object with \"action\": \"skip\"")
@@ -180,10 +180,11 @@ public class Api(
         public val json: JsonObject,
       ) : Result() {
         /**
-         * The discriminator value that names no known arm.
+         * The discriminator value that names no known arm. Decoding only makes this arm
+         * for an object whose discriminator is a string.
          */
-        public val discriminator: String?
-          get() = (json["action"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        public val discriminator: String
+          get() = (json.getValue("action") as JsonPrimitive).content
       }
 
       @Serializable

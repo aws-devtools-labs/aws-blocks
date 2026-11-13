@@ -106,12 +106,15 @@ internal object UnionSerializerGenerator {
             .primaryConstructor(FunSpec.constructorBuilder().addParameter("json", jsonObjectClass).build())
             .addProperty(PropertySpec.builder("json", jsonObjectClass).initializer("json").build())
             .addProperty(
-                PropertySpec.builder("discriminator", STRING.copy(nullable = true))
-                    .addKdoc("The discriminator value that names no known arm.\n")
+                PropertySpec.builder("discriminator", STRING)
+                    .addKdoc(
+                        "The discriminator value that names no known arm. Decoding only makes this arm\n" +
+                            "for an object whose discriminator is a string.\n",
+                    )
                     .getter(
                         FunSpec.getterBuilder()
                             .addStatement(
-                                "return (json[%S] as? %T)?.takeIf { it.isString }?.content",
+                                "return (json.getValue(%S) as %T).content",
                                 discriminatorKey,
                                 ClassNames.jsonPrimitive,
                             )
@@ -331,7 +334,14 @@ internal object UnionSerializerGenerator {
                 }
             }
             if (unknown != null) {
-                body.addStatement("else -> return %N(element)", unknown)
+                // Only an object whose discriminator is a string falls back; one without it, or with
+                // another JSON type there, matches no arm and throws, as in Dart and Swift.
+                body.addStatement(
+                    "else -> if ((element[%S] as? %T)?.isString == true) return %N(element)",
+                    discriminator.fieldName,
+                    ClassNames.jsonPrimitive,
+                    unknown,
+                )
             } else {
                 body.addStatement("else -> {}")
             }
