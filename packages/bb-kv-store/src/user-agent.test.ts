@@ -24,10 +24,10 @@ function getCustomUserAgent(store: KVStore): [string, string][] {
 	return (store as any).docClient.config.customUserAgent;
 }
 
-/** A parent Building Block (simulates AuthBasic composing KVStore) */
+/** A parent Building Block (simulates Auth composing KVStore) */
 class ParentAuthBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
-		super(id, { parent, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		super(id, { parent, bbName: 'Auth', bbVersion: '1.0.1' });
 	}
 }
 
@@ -64,7 +64,7 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		]);
 	});
 
-	test('KVStore nested under AuthBasic includes parent BB in customUserAgent', () => {
+	test('KVStore nested under Auth includes parent BB in customUserAgent', () => {
 		const root = { id: 'my-app' };
 		const auth = new ParentAuthBB(root, 'auth');
 		const store = new KVStore(auth, 'session-store');
@@ -72,12 +72,12 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		const ua = getCustomUserAgent(store);
 		assert.deepStrictEqual(ua, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);
 	});
 
-	test('KVStore deeply nested under two official BBs (Agent > AuthBasic > KVStore) includes full chain', () => {
+	test('KVStore deeply nested under two official BBs (Agent > Auth > KVStore) includes full chain', () => {
 		const root = { id: 'my-app' };
 		const agent = new GrandparentAgentBB(root, 'agent');
 		const auth = new ParentAuthBB(agent, 'auth');
@@ -87,7 +87,7 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		assert.deepStrictEqual(ua, [
 			['aws-blocks', CORE_VERSION],
 			['bb', 'Agent/2.0.0'],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);
 	});
@@ -95,8 +95,8 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 	test('custom (non-official) ancestor BB is excluded from the user-agent chain', () => {
 		// buildUserAgentChain only reports BBs whose name is in OFFICIAL_BB_NAMES,
 		// so customer-chosen names never leak into user-agent telemetry. A custom
-		// "Platform" BB wraps an official AuthBasic which wraps KVStore — only the
-		// official BBs (AuthBasic, KVStore) should appear; "Platform" is dropped.
+		// "Platform" BB wraps an official Auth which wraps KVStore — only the
+		// official BBs (Auth, KVStore) should appear; "Platform" is dropped.
 		const root = { id: 'my-app' };
 		const custom = new GrandparentCustomBB(root, 'platform');
 		const auth = new ParentAuthBB(custom, 'auth');
@@ -105,7 +105,7 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		const ua = getCustomUserAgent(store);
 		assert.deepStrictEqual(ua, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);
 	});
@@ -131,7 +131,7 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		const ua = getCustomUserAgent(store);
 		assert.deepStrictEqual(ua, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);
 	});
@@ -168,10 +168,10 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		assert.deepStrictEqual(ua1[0], ['aws-blocks', CORE_VERSION]);
 		assert.deepStrictEqual(ua1[1], ['bb', `${BB_NAME}/${BB_VERSION}`]);
 
-		// Nested under AuthBasic: parent + self
+		// Nested under Auth: parent + self
 		assert.strictEqual(ua2.length, 3);
 		assert.deepStrictEqual(ua2[0], ['aws-blocks', CORE_VERSION]);
-		assert.deepStrictEqual(ua2[1], ['bb', 'AuthBasic/1.0.1']);
+		assert.deepStrictEqual(ua2[1], ['bb', 'Auth/1.0.1']);
 		assert.deepStrictEqual(ua2[2], ['bb', `${BB_NAME}/${BB_VERSION}`]);
 	});
 });
@@ -184,22 +184,29 @@ describe('KVStore forwards the native client user-agent on outgoing requests', (
 	const STORE_KEY = '__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__';
 
 	// Drive one GetItem, capture the built user-agent at the request handler,
-	// then abort before the network. Region and dummy creds let auth resolve.
-	async function capturedUserAgentFor(id: string, token: string | undefined): Promise<string | undefined> {
+	// then abort before the network. Region and dummy creds let auth resolve;
+	// AWS_PROFILE is cleared because a named profile makes the SDK ignore them.
+	async function capturedUserAgentFor(
+		id: string,
+		token: string | undefined,
+		scope: ScopeParent = { id: 'my-app' },
+	): Promise<string | undefined> {
 		const prevEnv: Record<string, string | undefined> = {
 			AWS_REGION: process.env.AWS_REGION,
 			AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
 			AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+			AWS_PROFILE: process.env.AWS_PROFILE,
 		};
 		process.env.AWS_REGION = 'us-east-1';
 		process.env.AWS_ACCESS_KEY_ID = 'AKIDTEST';
 		process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+		delete process.env.AWS_PROFILE;
 		const prevStore = (globalThis as any)[STORE_KEY];
 		const als = new AsyncLocalStorage<string | undefined>();
 		(globalThis as any)[STORE_KEY] = als;
 		let captured: string | undefined;
 		try {
-			const store = new KVStore({ id: 'my-app' }, id);
+			const store = new KVStore(scope, id);
 			(store as any).docClient.config.requestHandler = {
 				handle: async (req: any) => {
 					captured = req.headers['user-agent'] ?? req.headers['x-amz-user-agent'];
@@ -227,14 +234,32 @@ describe('KVStore forwards the native client user-agent on outgoing requests', (
 		return captured;
 	}
 
-	test('appends the request-scoped token to the outgoing user-agent header', async () => {
+	test('appends the request-scoped token and leaves the block chain intact', async () => {
 		const ua = await capturedUserAgentFor('ua-store', 'client/swift/9.9.9');
 		assert.match(ua ?? '', / client\/swift\/9\.9\.9$/);
+		assert.ok((ua ?? '').includes(`bb/${BB_NAME}-${BB_VERSION}`), `token replaced the chain: ${ua}`);
 	});
 
 	test('does not append a native token when none is set for the request', async () => {
 		const ua = await capturedUserAgentFor('ua-store-none', undefined);
 		assert.ok(ua && ua.length > 0, 'user-agent header should still be present');
 		assert.doesNotMatch(ua ?? '', /client\/[a-z]+\//);
+	});
+
+	// SDK escapes `/` to `-` in a pair value: renders as `bb/Name-version`.
+	test('renders the block chain into the outgoing user-agent header', async () => {
+		const ua = await capturedUserAgentFor('ua-store-chain', undefined);
+		assert.ok((ua ?? '').includes(`aws-blocks/${CORE_VERSION}`), `missing core token: ${ua}`);
+		assert.ok((ua ?? '').includes(`bb/${BB_NAME}-${BB_VERSION}`), `missing block token: ${ua}`);
+	});
+
+	test('renders every ancestor block root-to-leaf in the outgoing user-agent header', async () => {
+		const auth = new ParentAuthBB(new GrandparentAgentBB({ id: 'my-app' }, 'agent'), 'auth');
+		const ua = (await capturedUserAgentFor('ua-store-nested', undefined, auth)) ?? '';
+		const agentAt = ua.indexOf('bb/Agent-2.0.0');
+		const authAt = ua.indexOf('bb/Auth-1.0.1');
+		const selfAt = ua.indexOf(`bb/${BB_NAME}-${BB_VERSION}`);
+		assert.ok(agentAt >= 0 && authAt >= 0 && selfAt >= 0, `missing chain token: ${ua}`);
+		assert.ok(agentAt < authAt && authAt < selfAt, `chain out of root-to-leaf order: ${ua}`);
 	});
 });

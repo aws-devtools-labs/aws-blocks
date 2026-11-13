@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 /**
@@ -17,14 +18,23 @@ export interface AsyncJobContext {
 }
 
 /**
- * Configuration options for creating an AsyncJob.
+ * Configuration options for creating an AsyncJob — see {@link AsyncJobOptions}.
+ *
+ * This base carries every option that does not depend on the compute kind. The
+ * `compute` option and the container-only `maxConcurrencyPerCPU` knob live on
+ * {@link AsyncJobOptions}, which intersects this with a discriminated union on
+ * `compute` so the knob is a compile error unless `compute` is a container.
  */
-export interface AsyncJobOptions<T> {
+export interface AsyncJobBaseOptions<T> {
 	/** Async function that processes each job payload. */
 	handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	/** Optional schema for runtime payload validation on submit. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType, etc.). */
 	schema?: StandardSchemaV1<T>;
-	/** Maximum retry attempts before sending to the DLQ. Default: 3. */
+	/**
+	 * Maximum delivery attempts, including the first, before the job is sent to
+	 * the DLQ (the queue's `maxReceiveCount`). `3` means one attempt plus two
+	 * retries. Default: 3.
+	 */
 	maxRetries?: number;
 	/**
 	 * Number of messages the Lambda trigger receives per invocation. 1–10, or up
@@ -50,7 +60,79 @@ export interface AsyncJobOptions<T> {
 	trackStatus?: boolean;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+
+	/**
+	 * Wall-clock limit for one delivery, in seconds. A property of the work, not
+	 * the compute. On a container it is enforced by the runtime (the job's worker
+	 * is terminated at the deadline); on a serverless compute it is bounded by the
+	 * function timeout. Must fit under the compute's ceiling where one exists.
+	 */
+	timeoutSeconds?: number;
 }
+
+/**
+ * Options for creating an AsyncJob.
+ *
+ * This is {@link AsyncJobBaseOptions} intersected with a discriminated union on
+ * `compute`: a **container** compute carries the container-only
+ * `maxConcurrencyPerCPU` knob, while an explicit serverless compute or omitting
+ * `compute` forbids it (`maxConcurrencyPerCPU?: never`). Omitting `compute`
+ * still inherits the scope's compute at synth time; configuring the knob requires
+ * an explicit container compute even when the scope already uses one. Setting
+ * the knob without an explicit container compute is a **compile error**; synth
+ * also rejects it if the resolved compute is not a container, as a defense for
+ * callers who bypass the types.
+ *
+ * There is intentionally no `C` type parameter: the compute's kind is inferred
+ * from the `compute` argument itself, never spelled by hand (its type is
+ * meaningless without the object). This keeps `T` the single, first-class
+ * generic, so `new AsyncJob<Payload>(…)` with a container compute still compiles
+ * — supplying `T` no longer forces a `ComputeProvider<'serverless'>` default.
+ */
+export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
+	(
+		| {
+				/**
+				 * The compute this job's handler runs on. Pass a `Compute` block (or any
+				 * {@link ComputeProvider}) to place the handler on a different runtime than
+				 * the app default — e.g. a long-running or high-memory job that a container
+				 * (Fargate) can serve but a serverless compute cannot.
+				 *
+				 * Assigning a container-backed compute moves delivery from a native SQS
+				 * event source to an owner-matched poller the container self-starts; the
+				 * per-handler wall-clock limit comes from this job's `timeoutSeconds`. In
+				 * local dev, compute assignment is transparent — the handler runs in-process.
+				 */
+				compute: ComputeProvider<'container'>;
+				/**
+				 * How many deliveries of this job run at once per instance, expressed
+				 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
+				 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
+				 * Higher for IO-bound work that mostly awaits; explicitly set 1 for
+				 * CPU-bound work. When omitted, the poller allows five in-flight deliveries
+				 * per job per instance, regardless of the compute's vCPU count.
+				 * Container-only: exposed only with an explicit container `compute`;
+				 * setting it with a serverless compute (or omitting `compute`) is a compile
+				 * error. Synth also rejects it when the resolved compute is not a container.
+				 */
+				maxConcurrencyPerCPU?: number;
+		  }
+		| {
+				/**
+				 * The compute this job's handler runs on. When omitted, inherits the nearest
+				 * parent scope's compute, falling back to the backend's default compute
+				 * when none is assigned (normally serverless). Pass a serverless `Compute`
+				 * block (or any {@link ComputeProvider}) to assign one explicitly.
+				 */
+				compute?: ComputeProvider<'serverless'>;
+				/**
+				 * Container-only — not available on a serverless compute. See the container
+				 * arm of {@link AsyncJobOptions}. Typed `never` so setting it here is a
+				 * compile error.
+				 */
+				maxConcurrencyPerCPU?: never;
+		  }
+	);
 
 /**
  * Lifecycle state of a single job.

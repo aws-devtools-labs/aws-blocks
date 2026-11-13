@@ -1,0 +1,49 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import type { ContainerScaling, ContainerSize } from '@aws-blocks/core';
+import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
+
+/**
+ * Options for constructing an internal `ContainerCompute`.
+ *
+ * A `ContainerCompute` is never instantiated directly by a customer — the public
+ * `Compute` block builds one when the customer states `type: 'container'`. These
+ * are the container's own options plus the per-compute log-retention knob.
+ *
+ * @internal
+ */
+export interface ContainerComputeProps {
+	/** A valid vCPU + memory combination. Sizes the Fargate task. */
+	size?: ContainerSize;
+	/** Instance-count bounds and scaling strategy (Application Auto Scaling). */
+	scaling?: ContainerScaling;
+	/**
+	 * The container image to run, as a public or ECR registry URI, used verbatim
+	 * (remote pull — no local image build). The app code is delivered separately
+	 * as an S3 asset and fetched at boot, so the image only supplies the runtime
+	 * environment and must provide a Node 24 runtime on `PATH`. Defaults to a
+	 * stock public Node 24 image when omitted.
+	 *
+	 * ECS pulls the image at every task start, and the container runs with the
+	 * stack's shared execution role, so pin a custom image by digest
+	 * (`registry/repo@sha256:<digest>`) rather than a tag that can be
+	 * re-pushed. The default, `public.ecr.aws/docker/library/node:24-slim`, is
+	 * pinned by digest (`DEFAULT_CONTAINER_IMAGE`), so it doesn't change between
+	 * deploys.
+	 *
+	 * The default image runs as its unprivileged `node` user (uid/gid 1000) and
+	 * boots from `/home/node/app`. A custom image runs as its own default user
+	 * (Blocks sets no `user` for it) and boots from `/app`, so an image that
+	 * needs root keeps it; setting `image` to the stock Node image explicitly is
+	 * the opt-out for an app that needs root on the default image.
+	 */
+	image?: string;
+	/**
+	 * CloudWatch Logs retention for this container's log group. Logs are always
+	 * captured (the task's `awslogs` driver ships stdout/stderr here); this only
+	 * bounds how long they're kept. Per-compute override of the stack-wide
+	 * `defaults.logRetention` (used when omitted).
+	 */
+	logRetention?: RetentionDays;
+}

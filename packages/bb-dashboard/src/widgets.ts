@@ -8,17 +8,12 @@
 import { Duration } from 'aws-cdk-lib';
 import { GraphWidget, Metric, TextWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { blocksError } from '@aws-blocks/core';
 import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
 import type { ResolvedDashboardConfig, ResolvedMetricsSource, DashboardOptions, MetricConfig } from './types.js';
 import { DashboardErrors } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 function validateMetricConfig(metric: MetricConfig): void {
 	if (!metric.name || metric.name.trim().length === 0) {

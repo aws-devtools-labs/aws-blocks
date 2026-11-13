@@ -1,0 +1,78 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// What every scenario module gets from the harness (`compute-smoke.test.ts`).
+
+export const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
+export type FrontDoor = (typeof FRONT_DOORS)[number];
+
+/** JSON-RPC "method not found": what the bare endpoint answers for a placed namespace under strict placement. */
+export const METHOD_NOT_FOUND = -32601;
+
+export interface ComputeTestContext {
+  /** The front door this leg deployed (`COMPUTE_API_FRONT_DOOR`). */
+  readonly frontDoor: FrontDoor;
+  /**
+   * Whether this leg deployed with `defaults.strictNamespacePlacement`
+   * (`COMPUTE_STRICT_NAMESPACE_PLACEMENT=true`): the bare endpoint then refuses
+   * a namespace placed on its own compute.
+   */
+  readonly strictNamespacePlacement: boolean;
+  /** The client endpoint, the stack's `ApiUrl` output. Set once the harness has deployed. */
+  apiUrl(): string;
+  /**
+   * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
+   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * has deployed.
+   */
+  hostingUrl(): string;
+}
+
+export type RpcReply = { result?: unknown; error?: { code?: number; message?: string; data?: { name?: string } } };
+
+/**
+ * The `ctx.request.url` a handler reports for a call to `namespace` through the
+ * front door: the door's origin and the route path. The path never carries the API
+ * Gateway stage, so on the `apigateway` leg this is `ApiUrl` without its `/prod`.
+ */
+export function requestUrlFor(apiUrl: string, namespace: string): string {
+  return `${new URL(apiUrl).origin}/aws-blocks/api/${namespace}`;
+}
+
+/**
+ * POST one JSON-RPC call. `path` is appended to the endpoint (e.g. `'reports'`);
+ * without it the call goes to the bare endpoint, which serves every namespace
+ * unless the leg turned on `strictNamespacePlacement`.
+ */
+export async function rpcCall(apiUrl: string, method: string, params: unknown[] = [], path?: string): Promise<RpcReply> {
+  const res = await fetch(path ? `${apiUrl}/${path}` : apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
+  });
+  if (!res.ok) throw new Error(`RPC ${method} failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as RpcReply;
+}
+
+/** Call an `api` method and return its result; throws on a JSON-RPC error. */
+export async function apiRpc(ctx: ComputeTestContext, method: string, ...args: unknown[]): Promise<unknown> {
+  const reply = await rpcCall(ctx.apiUrl(), `api.${method}`, args);
+  if (reply.error) throw new Error(`RPC ${method} error: ${reply.error.message || JSON.stringify(reply.error)}`);
+  return reply.result;
+}
+
+/**
+ * Call `fetchOne` every `intervalMs` until it returns a value, or `budgetMs`
+ * runs out; returns the value, or null if it never came.
+ */
+export async function pollFor<T>(
+  fetchOne: () => Promise<T | null>,
+  { budgetMs, intervalMs = 10_000 }: { budgetMs: number; intervalMs?: number },
+): Promise<T | null> {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const value = await fetchOne();
+    if (value != null || Date.now() >= deadline) return value ?? null;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}

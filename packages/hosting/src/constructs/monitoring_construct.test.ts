@@ -23,7 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -34,6 +34,8 @@ import {
 } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+import { Topic } from 'aws-cdk-lib/aws-sns';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { MonitoringConstruct } from './monitoring_construct.js';
 
 const createStack = (): Stack => {
@@ -121,6 +123,122 @@ void describe('MonitoringConstruct', () => {
         Protocol: 'email',
         Endpoint: 'oncall@example.com',
       });
+    });
+
+    void it('warns at synth when enabled with an alarm but no subscriber (silent-delivery gap)', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      // An alarm exists but the topic has no subscriber, so it would deliver
+      // nowhere — warn loudly rather than leaving a green-but-undeliverable
+      // alarm. Anchor on the trailing `[ack: <id>]` tag addWarningV2 appends,
+      // not the message body: the id string also appears inside the message
+      // (the acknowledge remedy), so a body match would stay green even if the
+      // real warning id changed. The `$` pins it to the tag.
+      Annotations.fromStack(stack).hasWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when at least one subscriber is supplied', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+      });
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when a subscriber is added AFTER construction', () => {
+      const stack = createStack();
+      // Subscribing post-construction is a supported path (e.g. a Lambda/SQS
+      // target attached via `monitoring.alarmTopics`, which `subscriptions`
+      // cannot express). The check is deferred to a validation so it sees the
+      // synthesized CfnSubscription rather than only the constructor-time prop.
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      m.topic?.addSubscription(new subs.EmailSubscription('oncall@example.com'));
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when the subscriber lives in another stack', () => {
+      // LambdaSubscription / SqsSubscription synthesize their CfnSubscription
+      // in the TARGET's stack, so a stack-scoped search would miss it and warn
+      // spuriously. The check walks the whole app, so a cross-stack subscriber
+      // counts.
+      const app = new App();
+      const hostingStack = new Stack(app, 'TestStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const opsStack = new Stack(app, 'OpsStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const m = new MonitoringConstruct(hostingStack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(hostingStack, 'Ssr'),
+      });
+      const target = newLambda(opsStack, 'OncallFn');
+      m.topic?.addSubscription(new subs.LambdaSubscription(target));
+      Annotations.fromStack(hostingStack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when every alarm already routes to another action', () => {
+      // A caller who wires alarm actions themselves via `monitoring.alarms`
+      // (e.g. an SnsAction onto a topic they already subscribe) has handled
+      // delivery, so telling them to subscribe THIS topic would be wrong.
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      const otherTopic = new Topic(stack, 'OncallTopic');
+      otherTopic.addSubscription(new subs.EmailSubscription('oncall@x.com'));
+      for (const alarm of m.alarms) {
+        alarm.addAlarmAction(new SnsAction(otherTopic));
+      }
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when no alarm is wired (topic can never enter ALARM)', () => {
+      const stack = createStack();
+      // No distribution/ssrFunction/image/DLQ ⇒ no alarm. A topic with no alarm
+      // can never flip to ALARM, so the "delivers nowhere" warning would be
+      // spurious — the gate suppresses it.
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
     });
 
     void it('creates no alarms when no monitorable resources are supplied', () => {

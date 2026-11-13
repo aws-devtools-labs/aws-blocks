@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/data-common",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "keywords": [
     "aws-blocks",
     "database",
@@ -28,6 +28,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
     }
   },
   "scripts": {
@@ -35,11 +43,11 @@
     "test": "node --test 'dist/**/*.test.js'"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.2.0",
-    "kysely": "^0.28.12"
+    "@aws-blocks/bb-logger": "^0.3.0",
+    "kysely": "^0.29.7"
   }
 }

@@ -16,6 +16,12 @@ import {
 export type SecurityHeadersProps = {
   /** Custom Content-Security-Policy header value. If not set, a restrictive default is used. */
   contentSecurityPolicy?: string;
+  /**
+   * Origin response headers CloudFront removes before the response reaches the
+   * viewer. Unlike a viewer-response function, a response headers policy also
+   * applies to 4xx/5xx origin responses.
+   */
+  removeHeaders?: string[];
 };
 
 // ---- Factory function ----
@@ -241,8 +247,35 @@ export const createSecurityHeadersPolicy = (
 ): ResponseHeadersPolicy => {
   return new ResponseHeadersPolicy(scope, id, {
     securityHeadersBehavior: buildSecurityHeadersBehavior(props),
+    ...(props?.removeHeaders?.length ? { removeHeaders: props.removeHeaders } : {}),
   });
 };
+
+/**
+ * A ResponseHeadersPolicy with exactly the AWS-managed `SecurityHeadersPolicy`
+ * configuration (`ResponseHeadersPolicy.SECURITY_HEADERS`) plus
+ * `removeHeaders`. Managed policies can't be extended, so this is the way to
+ * strip an origin header while keeping the default security headers
+ * byte-for-byte — notably with NO Content-Security-Policy, unlike
+ * {@link createSecurityHeadersPolicy}. Counts against the account's response
+ * headers policy quota, so create it only when something must be removed.
+ */
+export const createManagedEquivalentSecurityHeadersPolicy = (
+  scope: Construct,
+  id: string,
+  removeHeaders: string[],
+): ResponseHeadersPolicy =>
+  new ResponseHeadersPolicy(scope, id, {
+    comment: 'Managed SecurityHeadersPolicy settings + removed origin headers',
+    securityHeadersBehavior: {
+      strictTransportSecurity: { accessControlMaxAge: Duration.seconds(31536000), override: false },
+      contentTypeOptions: { override: true },
+      frameOptions: { frameOption: HeadersFrameOption.SAMEORIGIN, override: false },
+      xssProtection: { protection: true, modeBlock: true, override: false },
+      referrerPolicy: { referrerPolicy: HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN, override: false },
+    },
+    removeHeaders,
+  });
 
 /**
  * Create a per-pattern ResponseHeadersPolicy that bundles the security

@@ -75,6 +75,15 @@ const WRAPPED_MISSING = `const c = new (
 const NAMESPACE_MISSING = `const c = new aws.BedrockClient({ customUserAgent });
 `;
 
+// A wrapper that builds the client itself, so there is no client to install on.
+const WRAPPER_CONFIG = `const c = new aws.BedrockClient({ modelId });
+const m = new Wrapper({ clientConfig: { customUserAgent } });
+`;
+
+// A real site sharing its line with a wrapper config, which must still count.
+const WRAPPER_CONFIG_SHARED_LINE = `const c = new DynamoDBClient({ customUserAgent: x }); const m = new W({ clientConfig: { customUserAgent } });
+`;
+
 describe("check-client-user-agent-consistency", () => {
 	it("passes when every customUserAgent site installs the middleware", () => {
 		withFixture({ "bb-kv-store/src/index.aws.ts": INSTALLED }, (dir) => {
@@ -124,6 +133,33 @@ describe("check-client-user-agent-consistency", () => {
 			const { code, output } = runGuard(dir);
 			assert.equal(code, 1);
 			assert.match(output, /2 customUserAgent site\(s\) but only 1/);
+		});
+	});
+
+	it("skips a customUserAgent handed to a wrapper via clientConfig", () => {
+		withFixture(
+			{ "bb-kv-store/src/index.aws.ts": INSTALLED, "bb-agent/src/model-factory.ts": WRAPPER_CONFIG },
+			(dir) => {
+				const { code, output } = runGuard(dir);
+				assert.equal(code, 0, output);
+				assert.match(output, /All 1 customUserAgent site\(s\)/);
+			},
+		);
+	});
+
+	it("still counts a direct customUserAgent in a file that also has a clientConfig", () => {
+		withFixture({ "bb-kv-store/src/index.aws.ts": WRAPPER_CONFIG + MISSING }, (dir) => {
+			const { code, output } = runGuard(dir);
+			assert.equal(code, 1);
+			assert.match(output, /1 customUserAgent site\(s\) but only 0/);
+		});
+	});
+
+	it("still counts a direct customUserAgent sharing its line with a clientConfig", () => {
+		withFixture({ "bb-kv-store/src/index.aws.ts": WRAPPER_CONFIG_SHARED_LINE }, (dir) => {
+			const { code, output } = runGuard(dir);
+			assert.equal(code, 1);
+			assert.match(output, /1 customUserAgent site\(s\) but only 0/);
 		});
 	});
 });

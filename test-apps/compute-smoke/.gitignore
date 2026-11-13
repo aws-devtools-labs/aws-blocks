@@ -1,0 +1,6 @@
+.blocks-sandbox/
+cdk.out/
+node_modules/
+dist/
+.env
+.bb-data/

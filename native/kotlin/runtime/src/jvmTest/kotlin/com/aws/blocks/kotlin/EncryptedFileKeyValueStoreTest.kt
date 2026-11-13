@@ -2,6 +2,7 @@ package com.aws.blocks.kotlin
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -23,7 +24,7 @@ class EncryptedFileKeyValueStoreTest {
 
     private fun store() = EncryptedFileKeyValueStore("cookies", root)
 
-    private val storageDir get() = File(root, ".blocks/cookies")
+    private val storageDir get() = File(root, "cookies")
 
     @AfterTest
     fun cleanUp() {
@@ -203,6 +204,15 @@ class EncryptedFileKeyValueStoreTest {
                 PosixFilePermissions.fromString("rwx------")
             Files.getPosixFilePermissions(File(storageDir, ".key").toPath()) shouldBe
                 PosixFilePermissions.fromString("rw-------")
+            // Entries are created through Files.createTempFile, which is rw------- on POSIX, and
+            // renamed into place. This pins the outcome; it does not on its own exercise
+            // restrictToOwner, since the temporary file already has these permissions.
+            val entries = storageDir.listFiles { file -> file.name != ".key" }!!.toList()
+            entries.shouldNotBeEmpty()
+            entries.forEach { entry ->
+                Files.getPosixFilePermissions(entry.toPath()) shouldBe
+                    PosixFilePermissions.fromString("rw-------")
+            }
         }
     }
 }

@@ -1,11 +1,16 @@
 import Foundation
 import BlocksRuntime
 
-public class Api {
+public final nonisolated class Api: Sendable {
     private let client: BlocksClient
 
-    public init(server: BlocksServer = Servers.local) {
-        self.client = BlocksClient(server: server)
+    public init(client: BlocksClient) {
+        self.client = client
+    }
+
+    @available(*, deprecated, message: "Use blocks.api from one Blocks() or Blocks(server:) you hold")
+    public convenience init(server: BlocksServer = Servers.local) {
+        self.init(client: BlocksClient(server: server))
     }
 
     /// Calls `api.getClass`.
@@ -62,6 +67,21 @@ public class Api {
                 case `var` = "var"
                 case when
             }
+
+            public init(`class`: String, `default`: String, `in`: String, `is`: Bool, `return`: Int, `self` self_: String, `super`: String, `switch`: String, `type`: String, val: String, `var`: String, when: String) {
+                self.`class` = `class`
+                self.`default` = `default`
+                self.`in` = `in`
+                self.`is` = `is`
+                self.`return` = `return`
+                self.`self` = self_
+                self.`super` = `super`
+                self.`switch` = `switch`
+                self.`type` = `type`
+                self.val = val
+                self.`var` = `var`
+                self.when = when
+            }
         }
     }
 
@@ -87,10 +107,25 @@ public class Api {
                 case `for` = "for"
                 case `while` = "while"
             }
+
+            public init(abstract: Bool, `do`: Bool, `else`: String, `enum`: String, extends: String, final: String, `for`: String, `while`: Int) {
+                self.abstract = abstract
+                self.`do` = `do`
+                self.`else` = `else`
+                self.`enum` = `enum`
+                self.extends = extends
+                self.final = final
+                self.`for` = `for`
+                self.`while` = `while`
+            }
         }
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 
@@ -118,13 +153,54 @@ public class Api {
                 case `throw` = "throw"
                 case `true` = "true"
             }
+
+            public init(`false`: Bool, `internal`: String, null: String, object: String, `operator`: String, package: String, this: String, `throw`: String, `true`: Bool) {
+                self.`false` = `false`
+                self.`internal` = `internal`
+                self.null = null
+                self.object = object
+                self.`operator` = `operator`
+                self.package = package
+                self.this = this
+                self.`throw` = `throw`
+                self.`true` = `true`
+            }
         }
     }
 }
 
 
+// MARK: - Blocks
+
+/// One BlocksClient, so one URLSession (RPC and OIDC calls) and one token store, for every namespace in this spec;
+/// file transfers and realtime use the shared runtime session. Hold one while the backend is in use: `let blocks = Blocks()`.
+public final nonisolated class Blocks: Sendable {
+    /// The server every API calls.
+    public let server: BlocksRuntime.BlocksServer
+    /// The client every API runs on.
+    public let client: BlocksRuntime.BlocksClient
+
+    public let api: Api
+
+    /// Defaults to the spec's first server; a `session` you pass stays yours.
+    public init(
+        server: BlocksRuntime.BlocksServer = Servers.local,
+        session: URLSession? = nil,
+        tokenStore: any BlocksRuntime.TokenStore = BlocksRuntime.InMemoryTokenStore()
+    ) {
+        self.server = server
+        self.client = BlocksRuntime.BlocksClient(server: server, session: session, tokenStore: tokenStore)
+        self.api = .init(client: client)
+    }
+
+    /// Later calls throw ClientClosedError; calls in flight finish, then the session this instance created is released.
+    public func close() {
+        client.close()
+    }
+}
+
 // MARK: - Servers
 
-public enum Servers {
+public nonisolated enum Servers {
     public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
 }

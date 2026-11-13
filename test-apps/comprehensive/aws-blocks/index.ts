@@ -4,21 +4,28 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { ApiNamespace, Compute, Scope, KVStore, getDeploymentType, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError, type BlocksContext } from '@aws-blocks/core';
+import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinProvider, type UserCandidate } from '@aws-blocks/bb-auth';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Secret } from '@aws-blocks/bb-secret';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
+import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
+import { type Generated, Kysely, sql as kyselySql } from 'kysely';
+import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
 
 
 const scope = new Scope('test-app');
@@ -29,6 +36,24 @@ const scope = new Scope('test-app');
 // In the deployed Lambda (`AWS_LAMBDA_FUNCTION_NAME` is set) this is a no-op so
 // codes never reach CloudWatch.
 const isDeployedLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+// ── e2e test support ────────────────────────────────────────────────────────
+//
+// The e2e harness builds this app with `BLOCKS_TEST_ENV` set: `local` for the
+// local e2e (`npm run test:local`, which starts the dev server with it), and
+// `sandbox` / `production` for the deployed e2e (`npm run test:sandbox` /
+// `test:production`). Only then does the app get the `testSupport` namespace at
+// the bottom of this file, the secret that guards it, and the `auth.admin`
+// grants it uses. `index.cdk.ts` forwards the flag to the deployed handler so
+// the Lambda builds the same namespace that synth saw. A normal build — `npm
+// run dev`, a plain synth or deploy — has none of it: no route, no secret, no
+// Admin* IAM (`test/test-support-synth.test.ts` proves it on the synthesized
+// template).
+const e2eBuild =
+  process.env.BLOCKS_TEST_ENV === 'local' ||
+  process.env.BLOCKS_TEST_ENV === 'sandbox' ||
+  process.env.BLOCKS_TEST_ENV === 'production';
+
 function logCodeLocally(message: string): void {
   if (!isDeployedLambda) console.log(message);
 }
@@ -90,16 +115,15 @@ const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSc
 // One small record per test user, overwritten when that user gets a new code
 // (resend, password reset). They do pile up: the mock store persists to
 // .bb-data/ between local runs, and a suite run leaves ~30 behind. CI throws the
-// whole table away at teardown, so sweep with `authPurgeDeliveredCodes()` when
-// that is not true — local dev, or a sandbox kept via BLOCKS_SANDBOX_KEEP.
+// whole table away at teardown, so sweep with `testSupport.authPurgeDeliveredCodes()`
+// when that is not true — local dev, or a sandbox kept via BLOCKS_SANDBOX_KEEP.
 
-type DeliveredCode = { username: string; code: string };
-type DeliveredCognitoCode = DeliveredCode & { purpose: string };
+type DeliveredCode = { username: string; code: string; purpose: string };
 
 const CODE_KEY_PREFIX = '__last-code';
 const codeKey = (channel: string, username: string) => `${CODE_KEY_PREFIX}:${channel}:${username}`;
 
-async function recordDeliveredCode(channel: string, value: DeliveredCode | DeliveredCognitoCode): Promise<void> {
+async function recordDeliveredCode(channel: string, value: DeliveredCode): Promise<void> {
   await store.put(codeKey(channel, value.username), JSON.stringify(value));
 }
 
@@ -108,77 +132,188 @@ async function readDeliveredCode<T extends DeliveredCode>(channel: string, usern
   return parseStoredRecord<T>(key, await store.get(key));
 }
 
-async function purgeDeliveredCodes(): Promise<number> {
+/** Every channel that records delivered codes (the `recordDeliveredCode` callers below). */
+const CODE_CHANNELS = ['auth', 'auth-same-origin', 'auth-cross-domain', 'authC', 'authCMfa', 'auth-gated'] as const;
+
+async function purgeDeliveredCodes(username?: string): Promise<number> {
   const keys: string[] = [];
-  for await (const entry of store.scan()) {
-    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+  if (username === undefined) {
+    for await (const entry of store.scan()) {
+      if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+    }
+  } else {
+    for (const channel of CODE_CHANNELS) {
+      const key = codeKey(channel, username);
+      if ((await store.get(key)) !== null) keys.push(key);
+    }
   }
   for (const key of keys) await store.delete(key);
   return keys.length;
 }
 
-// AuthBasic - Authentication
-const auth = new AuthBasic(scope, 'auth', {
-  sessionDuration: 86400,
-  passwordPolicy: { minLength: 6 },
-  codeDelivery: async (username, code) => {
-    await recordDeliveredCode('auth', { username, code });
-    // In a real app, connect this to email: await sendEmail(username, `Your code: ${code}`);
-    logCodeLocally(`[AuthBasic] Verification code for "${username}": ${code}`);
+// ── Auth instances ──────────────────────────────────────────────────────────
+//
+// Every instance is the unified `Auth` block. Each keeps the id it had under
+// the block it replaced (`AuthBasic`, `AuthCognito`, `AuthOIDC`): the id is
+// the deployed identity (it names the user pool, the session table and the
+// session cookie), so it must never change.
+
+// Deployed e2e pools send mail through SES, not Cognito's default sender
+// (50 emails a day per account, after which every `SignUp` fails). CI sets
+// `E2E_FROM_EMAIL` to a verified SES identity (the same one `EmailClient` sends
+// from); unset (local dev, forks), the pools keep the default sender. Only
+// instances that create a user pool take it: `Auth` refuses `email` at synth
+// on a configuration with no pool (the OIDC-only instances below).
+const e2eEmail = process.env.E2E_FROM_EMAIL ? { email: { fromAddress: process.env.E2E_FROM_EMAIL } } : {};
+
+// Email + password, formerly `AuthBasic`. Every sign-up confirms with an
+// emailed code (locally: `codeDelivery`, recorded for the e2e read-back). The
+// policy reproduces AuthBasic's: length only, no character classes.
+// `admin.lifecycle` lets `testSupport.provisionUser` create confirmed users
+// without a mailbox, which is how suites that only need *a* signed-in user (the
+// agent tests) work against a deployed sandbox too. Outside the e2e build the
+// list is empty, so no Admin* IAM action is granted on this pool.
+const auth = new Auth(scope, 'auth', {
+  ...e2eEmail,
+  emailPassword: {
+    passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
+  },
+  session: { ttlSeconds: 86400 },
+  admin: { actions: e2eBuild ? ['lifecycle'] : [] },
+  codeDelivery: async (username, code, purpose) => {
+    await recordDeliveredCode('auth', { username, code, purpose });
+    logCodeLocally(`[Auth] ${purpose} code for "${username}": ${code}`);
   },
 });
 
-// AuthBasic cookie-attribute convergence (D-007): default Lax vs the
-// crossDomain opt-in. No codeDelivery so signUp confirms immediately.
-const authSameOrigin = new AuthBasic(scope, 'auth-same-origin', {
-  passwordPolicy: { minLength: 6 },
+// Session-cookie attribute convergence (D-007): default Lax vs the
+// `session.crossDomain` opt-in. The cookie RPCs only sign in an existing user;
+// they create no account. The e2e creates that user first: locally by sign-up
+// plus the code `codeDelivery` records (`authCookieSignUp` & co. below), on a
+// deployed stack through the secret-gated `testSupport.provisionUser`. Only
+// the e2e build gets the admin lifecycle grant; otherwise the list is empty,
+// so no Admin* IAM action is granted on these pools.
+const sameOriginOptions = {
+  emailPassword: {
+    passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
+  },
+  admin: { actions: e2eBuild ? ['lifecycle'] : [] },
+  ...e2eEmail,
+} as const satisfies AuthOptions;
+const authSameOrigin = new Auth(scope, 'auth-same-origin', {
+  ...sameOriginOptions,
+  codeDelivery: async (username, code, purpose) => {
+    await recordDeliveredCode('auth-same-origin', { username, code, purpose });
+    logCodeLocally(`[Auth auth-same-origin] ${purpose} code for "${username}": ${code}`);
+  },
 });
-const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
-  passwordPolicy: { minLength: 6 },
-  crossDomain: true,
+const authCrossDomain = new Auth(scope, 'auth-cross-domain', {
+  ...sameOriginOptions,
+  session: { crossDomain: true },
+  codeDelivery: async (username, code, purpose) => {
+    await recordDeliveredCode('auth-cross-domain', { username, code, purpose });
+    logCodeLocally(`[Auth auth-cross-domain] ${purpose} code for "${username}": ${code}`);
+  },
 });
 
-// AuthCognito - username/password + MFA + groups (mock in local dev).
-// Tests confirm users via the verification-code flow (see auth-cognito.test.ts).
-// `mfa: 'off'` keeps the general suite simple — MFA-specific tests use the
-// `authCMfa` pool below.
-const authC = new AuthCognito(scope, 'authC', {
-  passwordPolicy: { minLength: 8, requireDigits: true },
-  userAttributes: [{ name: 'department' }],
-  groups: ['admins', 'readers'],
+// The cookie instances by id. The id doubles as the delivered-code channel.
+const cookieAuth = { 'auth-same-origin': authSameOrigin, 'auth-cross-domain': authCrossDomain };
+type CookieAuthId = keyof typeof cookieAuth;
+
+// An `Auth` block whose `codeDelivery` fails, to pin what a client sees when a
+// sign-up hits a backend fault. A `raw-` username throws the kind of error an
+// email provider SDK raises (message embeds an account id and ARN), which must
+// reach the client only as a generic message. An `api-` username throws an
+// ApiError, whose message is intentional and must reach the client unchanged.
+// Local only: deployed, Cognito sends the code and `codeDelivery` is not called.
+const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/e2e-role/x is not authorized to perform: ses:SendEmail';
+const authDeliveryFails = new Auth(scope, 'auth-delivery-fails', {
+  ...e2eEmail,
+  users: { signInWith: ['email'] },
+  emailPassword: {
+    passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
+  },
+  codeDelivery: async (username) => {
+    if (username.startsWith('api-')) {
+      throw new ApiError('That address cannot receive email', 400, { name: 'UndeliverableAddressException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
+});
+
+/** Narrow an over-the-wire instance id; anything else is a 400. */
+function cookieAuthFor(id: string): typeof authSameOrigin | typeof authCrossDomain {
+  if (!Object.hasOwn(cookieAuth, id)) throw new ApiError(`Unknown cookie auth instance "${id}"`, 400);
+  return id === 'auth-same-origin' ? authSameOrigin : authCrossDomain;
+}
+
+/** Sign an existing, confirmed user in. Creates no account. */
+async function signInExisting(
+  instance: typeof authSameOrigin | typeof authCrossDomain,
+  username: string,
+  password: string,
+  context: BlocksContext,
+): Promise<void> {
+  const result = await instance.signIn(username, password, context);
+  if (result.status !== 'signedIn') {
+    throw new ApiError(`Unexpected sign-in step: ${result.nextStep.name}`, 500);
+  }
+}
+
+// Formerly `AuthCognito` - username/password + groups + admin (mock in local
+// dev). Tests confirm users via the verification-code flow (see
+// auth-cognito.test.ts). MFA stays off here (`types` carried over verbatim) —
+// MFA-specific tests use the `authCMfa` pool below.
+const authC = new Auth(scope, 'authC', {
+  ...e2eEmail,
+  emailPassword: {
+    selfSignUp: true,
+    passwordPolicy: { minLength: 8, requireDigits: true },
+  },
+  users: {
+    attributes: [{ name: 'department' }],
+    groups: ['admins', 'readers'],
+  },
   // Enable the opt-in admin surface (auth.admin) for the sandbox admin e2e
-  // suite. Grants the Admin*/List* IAM on this pool's handler role.
-  admin: {},
-  mfa: 'off',
-  mfaTypes: ['SMS', 'TOTP', 'EMAIL'],
-  selfSignUp: true,
+  // suite. Grants the Admin*/List* IAM on this pool's handler role. Only the
+  // e2e build needs it (the secret-gated `testSupport.authCAdmin*` methods are
+  // its only callers), so a normal build grants no Admin* action on this pool.
+  admin: { actions: e2eBuild ? ['groups', 'lifecycle'] : [] },
+  mfa: { mode: 'off', types: ['SMS', 'TOTP', 'EMAIL'] },
   codeDelivery: async (username, code, purpose) => {
     await recordDeliveredCode('authC', { username, code, purpose });
-    logCodeLocally(`[AuthCognito] ${purpose} code for "${username}": ${code}`);
+    logCodeLocally(`[Auth authC] ${purpose} code for "${username}": ${code}`);
   },
 });
 
-// Separate pool for MFA round-trip tests — `mfa: 'optional'` forces
-// signIn to issue a TOTP challenge once the user enrolls.
+// Separate pool for MFA round-trip tests — `mode: 'optional'` makes signIn
+// issue a TOTP challenge once the user enrolls.
 //
-// Only `TOTP` in mfaTypes — AWS Cognito Email MFA requires SES-backed
-// `UserPoolEmail.withSES(...)` which the BB doesn't expose yet
-// (Part 2). TOTP has no such external dependency and exercises the
-// full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn
-// round-trip the Phase D + Phase E tests need.
-const authCMfa = new AuthCognito(scope, 'authCMfa', {
-  passwordPolicy: { minLength: 8, requireDigits: true },
-  mfa: 'optional',
-  mfaTypes: ['TOTP'],
-  selfSignUp: true,
+// `totpVerification: 'rfc6238'`: the local pool checks TOTP codes as Cognito
+// does, so the tests answer with real codes (`totpCodeFor` from
+// `@aws-blocks/blocks/utils`) and a wrong secret fails locally too. Mock-only;
+// the deployed pool always verifies.
+//
+// Only `TOTP` in `types` (stated explicitly: `Auth` would otherwise default to
+// SMS + TOTP) — AWS Cognito Email MFA requires an SES-backed sender (`email`),
+// which this test app sets only when `E2E_FROM_EMAIL` is set. TOTP has no such external dependency and exercises the
+// full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn round-trip.
+const authCMfa = new Auth(scope, 'authCMfa', {
+  ...e2eEmail,
+  emailPassword: {
+    selfSignUp: true,
+    passwordPolicy: { minLength: 8, requireDigits: true },
+  },
+  mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'AWS Blocks e2e' },
+  totpVerification: 'rfc6238',
   codeDelivery: async (username, code, purpose) => {
     await recordDeliveredCode('authCMfa', { username, code, purpose });
-    logCodeLocally(`[AuthCognitoMfa] ${purpose} code for "${username}": ${code}`);
+    logCodeLocally(`[Auth authCMfa] ${purpose} code for "${username}": ${code}`);
   },
 });
 
-// AuthOIDC - OIDC sign-in gate
-// Uses the stub IdP in mock runtime — no real IdP needed for local tests.
+// Formerly `AuthOIDC` - OIDC sign-in gate, no email + password (so no user
+// pool). Uses the stub IdP in local and sandbox — no real IdP needed for tests.
 //
 // ── Sign-in records (e2e read-back) ─────────────────────────────────────────
 //
@@ -189,7 +324,7 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 // record of whoever signed in last, on either instance. The second case is
 // worse than a failure because it can pass by accident.
 //
-// Persist to the shared KVStore keyed by `userId` and scoped per AuthOIDC
+// Persist to the shared KVStore keyed by `userId` and scoped per OIDC
 // instance, and require `userId` on the read, so a test can only ask for the
 // sign-in it is actually waiting on.
 //
@@ -211,57 +346,190 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
   return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
-const oidcProviders = [
-  stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
-] as const;
+// The stub IdP is local and sandbox only: `Auth` refuses a stub provider at
+// synth for any other deployment and never mounts its routes there. Choose
+// providers by deployment type so the production e2e still deploys every OIDC
+// `Auth` instance. `getDeploymentType()` is set from the CDK context at synth
+// and delivered to compute via the BB config, so synth and runtime agree. The
+// production branch uses a placeholder real provider under the same id; the
+// e2e only asserts its route surface, never a real sign-in.
+const stubsAllowed = getDeploymentType() !== 'production';
 
-const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
-  providers: oidcProviders,
+/** The OIDC provider of every e2e instance: the stub IdP, or a placeholder real provider in production. */
+function e2eOidcProvider(): BuiltinProvider {
+  return stubsAllowed
+    ? stubIdp({ onAuthorize: (req) => req.users[0] })
+    : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' };
+}
+
+// The record key is the provider id on both the server and the client.
+const oidcAuthProviders = {
+  google: e2eOidcProvider(),
+  corporate: e2eOidcProvider(),
+};
+
+function isOidcProvider(id: string): id is keyof typeof oidcAuthProviders {
+  return Object.hasOwn(oidcAuthProviders, id);
+}
+
+const oidcAuth = new Auth(scope, 'oidc-auth', {
+  store: 'builtin',
+  providers: oidcAuthProviders,
   onSignIn: async (user) => {
-    await recordSignIn('oidc-auth', { userId: user.userId, email: user.email, provider: user.provider });
+    await recordSignIn('oidc-auth', { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider });
   },
 });
 
-// AuthOIDC (second instance) — exercises the onSignIn hook with a profile
-// upsert pattern and bearer-token auth for native clients. Uses custom paths
-// to avoid colliding with the first instance.
-const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
-  providers: [
-    stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
-  ],
-  callbackPath: '/aws-blocks/auth/extras/callback',
-  signOutPath: '/aws-blocks/auth/extras/signout',
+// Second OIDC instance — exercises the onSignIn hook with a profile upsert
+// pattern and bearer-token auth for native clients. Uses custom paths to avoid
+// colliding with the first instance.
+const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
+  store: 'builtin',
+  providers: {
+    'google-extras': e2eOidcProvider(),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/extras/callback',
+    signOutPath: '/aws-blocks/auth/extras/signout',
+  },
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
   // the native-client flow — /aws-blocks/auth/extras/exchange returns tokens
   // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
-    await recordSignIn('oidc-auth-extras', { userId: user.userId, email: user.email, provider: user.provider });
+    const email = user.attributes.email ?? null;
+    await recordSignIn('oidc-auth-extras', { userId: user.userId, email, provider: user.signInProvider });
     // Upsert profile — the canonical post-sign-in pattern.
     await oidcProfiles.put(`profile:${user.userId}`, JSON.stringify({
       userId: user.userId,
-      email: user.email,
-      name: user.name,
-      provider: user.provider,
+      email,
+      name: user.attributes.name ?? null,
+      provider: user.signInProvider,
       lastSignIn: new Date().toISOString(),
     }));
   },
 });
 
-// AuthOIDC (third instance) — exercises the relay flow for native/CLI clients.
+// Third OIDC instance — exercises the relay flow for native/CLI clients.
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
-const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
-  providers: [
-    stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] }),
-  ],
-  callbackPath: '/aws-blocks/auth/relay/callback',
-  signOutPath: '/aws-blocks/auth/relay/signout',
+const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
+  store: 'builtin',
+  providers: {
+    'google-relay': e2eOidcProvider(),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/relay/callback',
+    signOutPath: '/aws-blocks/auth/relay/signout',
+    allowedRelayOrigins: [relayOrigin('testapp://auth')],
+  },
   allowBearerAuth: true,
-  allowedRelayOrigins: [
-    relayOrigin('testapp://auth'),
-  ],
+});
+
+// Fourth OIDC instance — a web frontend on ANOTHER origin than this API signs in
+// with the browser redirect client (`@aws-blocks/bb-auth/browser-client`).
+// It uses the relay transport with `relayTo` = the frontend's return page; a
+// loopback `http://127.0.0.1:<port>` frontend is always allowed, and a deployed
+// frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
+// routes apart from the other OIDC instances.
+const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
+  store: 'builtin',
+  providers: {
+    'web-idp': e2eOidcProvider(),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/web/callback',
+    signOutPath: '/aws-blocks/auth/web/signout',
+    allowedRelayOrigins: [relayOrigin('https://app.example.com')],
+  },
+});
+
+// `validateUser`: one policy for every sign-up and sign-in. Only
+// addresses at `@allowed.example` may join, plus the SES mailbox simulator's
+// success address tagged `+allowed-` (`success+allowed-<id>@simulator.amazonses.com`):
+// with `E2E_FROM_EMAIL` the pool sends through SES, whose sandbox delivers only
+// to verified or simulator recipients, so the deployed in-policy sign-up uses
+// that address.
+//
+// Two instances share the policy, one per store, because a block keeps its
+// users in one place:
+// - `auth-gated` (Cognito): email + password, so both phases run. On AWS the
+//   pool also gets a Cognito PreSignUp trigger, so a `SignUp` sent straight to
+//   Cognito is held to the same policy.
+// - `auth-gated-idp` (`store: 'builtin'`): the stub IdP, sign-in phase only. The
+//   stub IdP's only user is outside the policy, so its sign-in is rejected.
+//   Custom paths keep its routes apart from the other OIDC instances.
+const GATED_POLICY_MESSAGE = 'Only @allowed.example accounts may join';
+async function gatedPolicy({ email }: UserCandidate): Promise<void> {
+  if (!email?.endsWith('@allowed.example') && !/^success\+allowed-[^@]+@simulator\.amazonses\.com$/.test(email ?? '')) {
+    throw new ApiError(GATED_POLICY_MESSAGE, 403, { name: AuthErrors.NotAuthorized });
+  }
+}
+const authGated = new Auth(scope, 'auth-gated', {
+  ...e2eEmail,
+  emailPassword: {
+    passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
+  },
+  validateUser: gatedPolicy,
+  codeDelivery: async (username, code, purpose) => {
+    await recordDeliveredCode('auth-gated', { username, code, purpose });
+    logCodeLocally(`[Auth auth-gated] ${purpose} code for "${username}": ${code}`);
+  },
+});
+new Auth(scope, 'auth-gated-idp', {
+  store: 'builtin',
+  providers: {
+    // The stub IdP in local and sandbox (see e2eOidcProvider); a placeholder
+    // real provider in production, where the gated suite skips the stub flow.
+    'gated-idp': stubsAllowed
+      ? stubIdp({
+          users: [{ sub: 'mallory-1', email: 'mallory@blocked.example', name: 'Mallory' }],
+          onAuthorize: (req) => req.users[0],
+        })
+      : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' },
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/gated/callback',
+    signOutPath: '/aws-blocks/auth/gated/signout',
+  },
+  validateUser: gatedPolicy,
+});
+
+/**
+ * The `sub` and `iss` claims of a federated session's ID token, read back
+ * independently of `userId` so the e2e can check `userId === ${iss}:${sub}`.
+ */
+async function idTokenSubject(instance: typeof oidcAuth | typeof oidcAuthExtras, context: BlocksContext) {
+  const payload = (await instance.getAuthSession(context)).tokens?.idToken.payload ?? {};
+  return {
+    sub: typeof payload.sub === 'string' ? payload.sub : null,
+    iss: typeof payload.iss === 'string' ? payload.iss : null,
+  };
+}
+
+// A `store: 'builtin'` block whose `onSignIn` hook fails. Signing in with
+// `hookfail-raw` throws an SDK-shaped error (account id + ARN in its message),
+// which the callback must answer with a generic 500. Signing in with
+// `hookfail-api` throws an ApiError, whose status, name and message must reach
+// the client unchanged.
+new Auth(scope, 'oidc-auth-hookfail', {
+  store: 'builtin',
+  providers: stubsAllowed
+    ? {
+        'hookfail-raw': stubIdp({ onAuthorize: (req) => req.users[0] }),
+        'hookfail-api': stubIdp({ onAuthorize: (req) => req.users[0] }),
+      }
+    : { 'hookfail-raw': { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' } },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/hookfail/callback',
+    signOutPath: '/aws-blocks/auth/hookfail/signout',
+  },
+  onSignIn: async (user) => {
+    if (user.signInProvider === 'hookfail-api') {
+      throw new ApiError('Sign-in is disabled for this account', 403, { name: 'SignInBlockedException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
 });
 
 // DistributedTable - Structured data with indexes
@@ -349,6 +617,30 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
   migrationsPath: './aws-blocks/dsql-migrations',
   removalPolicy: 'destroy',
 });
+
+// bb-database: one Database block, running on a cluster.
+// `dbx` owns an Aurora DSQL cluster; its migrations default to
+// ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
+const dbx = new SqlDatabase(scope, 'dbx');
+// A result schema: the row type derives from this value, and every row is validated against it.
+const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
+// `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
+// Both migrations create a table named `items`; dbxb's adds a foreign key, a
+// check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
+const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
+const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
+const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
+// `dbxc` runs on an Aurora PostgreSQL cluster created with the express configuration (`type: 'aurora'`):
+// full PostgreSQL, so its migration uses SERIAL, a plain CREATE INDEX and a trigger in PL/pgSQL, and a
+// transaction may change any number of rows. Scales to zero between requests.
+const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
+const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+// Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
+interface DbxcTables {
+  tasks: { id: Generated<number>; title: string; done: Generated<boolean>; updated_at: Generated<Date> };
+}
+const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
+const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -553,6 +845,14 @@ const fallbackAgent = new Agent(scope, 'fallback', {
 // FileBucket - File storage (S3)
 const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
 
+// FileBucket with upload constraints: only listed content types, uploads of at
+// most 1 KiB (presigned uploads must sign a contentLength).
+const constrainedBucket = new FileBucket(scope, 'constrained-files', {
+  allowedContentTypes: ['text/plain', 'image/*'],
+  maxUploadBytes: 1024,
+  removalPolicy: 'destroy',
+});
+
 // FileBucket with versioning enabled
 const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
 
@@ -581,6 +881,99 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
   secret: true,
 });
+
+// The Agent suite's API-key resolver test writes and reads its own secret: it
+// runs in a background process at the same time as the AppSetting suite, which
+// writes and restores `secretSetting` (test/background-suites.ts).
+const agentApiKeySetting = new AppSetting(scope, 'agent-api-key-setting', {
+  name: `${ssmPrefix}/agent-api-key`,
+  secret: true,
+});
+
+// Secret - Single high-value credential backed by AWS Secrets Manager
+// Opaque string secret (e.g. a third-party API key). `allowRuntimeWrite: true`
+// because the e2e sets the value via put(); `cacheTtlSeconds: 0` disables the
+// read cache for this instance so the read-after-write e2e tests below
+// (round-trip, overwrite, grace window, listVersions) are deterministic: with
+// the default 5-min cache and warm-Lambda reuse, a get() could be served a value
+// cached by an earlier test on the same warm instance. The default TTL is
+// covered by the unit tests; here 0 both fixes isolation and exercises the
+// cache-disabled path end to end.
+const apiKeySecret = new Secret(scope, 'secret-api-key', {
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Typed JSON secret with schema validation (e.g. a set of related credentials).
+const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
+  schema: dbSecretSchema,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Secret with an explicit well-known name (for CI/CD-driven management via the
+// aws CLI). Scoped by stack identity so parallel deploys don't collide.
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const namedSecret = new Secret(scope, 'secret-named', {
+  name: `${scope.fullId}/webhook-signing-key`,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Unset secret: created empty (no `generate`), so get() returns null until a
+// value is set. Exercises the "unset reads null on AWS, not a random string"
+// contract — this instance is deliberately never written in the e2e suite.
+const unsetSecret = new Secret(scope, 'secret-unset', { removalPolicy: 'destroy' });
+
+// Auto-generated secret: `generate: true` seeds a random value on first create,
+// so get() returns a non-null string before any put() — a signing/HMAC key that
+// just needs to exist.
+const generatedSecret = new Secret(scope, 'secret-generated', {
+  generate: true,
+  removalPolicy: 'destroy',
+});
+
+// allowRuntimeWrite matrix — three secrets covering the write-gating contract so
+// the e2e can assert build + runtime behavior for each case:
+//   - omitted  → read-only (no put() on the object or type; read-only IAM)
+//   - false    → read-only (explicit)
+//   - true     → writable  (put() present, callable, correctly typed; write IAM)
+// The build-level assertions live inline here (this backend module is compiled
+// by the e2e build/synth, so a wrong type fails the suite); the runtime
+// assertions are exposed via the secretWrite* RPC methods below.
+const writeOmittedSecret = new Secret(scope, 'secret-write-omitted', { removalPolicy: 'destroy' });
+const writeFalseSecret = new Secret(scope, 'secret-write-false', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: false,
+});
+const writeTrueSecret = new Secret(scope, 'secret-write-true', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: true,
+  // Disable the read cache so the write probe's put→get reflects the write
+  // deterministically (matches the other written e2e secrets).
+  cacheTtlSeconds: 0,
+});
+
+// Build-level proof that `put` is ABSENT from the type when writes aren't
+// allowed. If the read-only type ever regained `put`, `@ts-expect-error` would
+// itself become an unused-directive error and fail the e2e build — a meaningful,
+// non-silent failure. (These are never executed; see secretWrite* for runtime.)
+function _secretWriteTypeAssertions(): void {
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite omitted
+  void writeOmittedSecret.put;
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite: false
+  void writeFalseSecret.put;
+  // Writable: put IS present and typed (string value). No ts-expect-error here.
+  void writeTrueSecret.put('ok');
+  // @ts-expect-error — a writable string secret rejects a non-string value
+  void writeTrueSecret.put(123);
+}
+void _secretWriteTypeAssertions;
 
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -639,6 +1032,23 @@ const disabledCron = new CronJob(scope, 'disabled-cron', {
 const kb = new KnowledgeBase(scope, 'docs', {
   removalPolicy: 'destroy',
   source: './aws-blocks/knowledge',
+});
+
+// KnowledgeBase as an Agent tool. The search scope comes from the per-call tool context, which
+// server code sets from the authenticated session; the model only supplies the query.
+const kbToolAgent = new Agent(scope, 'kbtool', {
+  removalPolicy: 'destroy',
+  inferenceOnly: true,
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ folder: z.string() }),
+  tools: (tool) => ({
+    searchDocs: tool({
+      ...kb.asAgentTool({ filter: (context) => ({ folder: { equals: context.folder } }), maxResults: 10 }),
+      // Canned provider only: search for a query that matches the docs instead of a placeholder.
+      cannedExamples: { query: 'Building Blocks Scope' },
+    }),
+  }),
 });
 
 // Tracer - Distributed tracing backed by X-Ray
@@ -755,12 +1165,13 @@ new RawRoute(scope, 'GreetRoute', {
   },
 });
 
-// Wildcard — captures everything after /files/ as context.request.params['*']
+// Wildcard — captures everything after /files/ as context.request.params['*'].
+// Also echoes the URL's pathname, which must be the route path on every stage.
 new RawRoute(scope, 'FilesRoute', {
   method: 'GET',
   path: '/files/*',
   handler: async (context) => {
-    context.response.send({ path: context.request.params['*'] });
+    context.response.send({ path: context.request.params['*'], pathname: context.request.url.pathname });
   },
 });
 
@@ -996,14 +1407,22 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Auth Tests
   // ------------------------------------------------------------------------
   
-  async authSignUp(username: string, password: string) {
-    await auth.signUp(username, password);
+  /**
+   * `email`, when given, is stored on the user and verified by the sign-up
+   * code (the default pool auto-verifies email). A password reset needs it:
+   * the reset code goes only to a verified contact, locally as on Cognito.
+   */
+  async authSignUp(username: string, password: string, email?: string) {
+    await auth.signUp(username, password, email ? { attributes: { email } } : undefined);
     return { success: true };
   },
 
   async authSignIn(username: string, password: string) {
-    const user = await auth.signIn(username, password, context);
-    return { userId: user.userId, username: user.username, createdAt: user.createdAt };
+    const result = await auth.signIn(username, password, context);
+    // No MFA or forced password change on this pool, so a confirmed user's
+    // sign-in always completes in one step.
+    if (result.status !== 'signedIn') throw new ApiError(`Unexpected sign-in step: ${result.nextStep.name}`, 500);
+    return { userId: result.user.userId, username: result.user.username, userSub: result.user.userSub };
   },
 
   async authSignOut() {
@@ -1049,38 +1468,44 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * the read to a username makes that mistake unexpressible.
    */
   async authGetLastCode(username: string) {
-    return await readDeliveredCode<{ username: string; code: string }>('auth', username);
+    return await readDeliveredCode<DeliveredCode>('auth', username);
   },
 
-  /**
-   * Delete every recorded verification code, across all auth channels. Returns
-   * how many records were removed.
-   *
-   * Codes are one small record per test user and CI destroys the table at
-   * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
-   * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
-   */
-  async authPurgeDeliveredCodes() {
-    return { deleted: await purgeDeliveredCodes() };
-  },
-
-  // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
-  // inspect the emitted Set-Cookie for each instance.
+  // Cookie-attribute convergence (D-007): sign an existing user in so the e2e
+  // can inspect the emitted Set-Cookie for each instance. They create no
+  // account — see `sameOriginOptions` for how the e2e provisions the user.
   async authSameOriginSignInSetsCookie(username: string, password: string) {
-    await authSameOrigin.signUp(username, password);
-    await authSameOrigin.signIn(username, password, context);
+    await signInExisting(authSameOrigin, username, password, context);
     return { success: true };
   },
 
   async authCrossDomainSignInSetsCookie(username: string, password: string) {
-    await authCrossDomain.signUp(username, password);
-    await authCrossDomain.signIn(username, password, context);
+    await signInExisting(authCrossDomain, username, password, context);
     return { success: true };
+  },
+
+  // Code-confirmed sign-up on the cookie instances — the same flow a user goes
+  // through, and how the local e2e creates the user the cookie RPCs sign in.
+  // On AWS the code is emailed, so a deployed run uses `testSupport` instead.
+  async authCookieSignUp(instance: CookieAuthId, username: string, password: string) {
+    await cookieAuthFor(instance).signUp(username, password);
+    return { success: true };
+  },
+
+  async authCookieConfirmSignUp(instance: CookieAuthId, username: string, code: string) {
+    await cookieAuthFor(instance).confirmSignUp(username, code);
+    return { success: true };
+  },
+
+  /** Read back the code delivered to `username` on a cookie instance. See `authGetLastCode`. */
+  async authCookieGetLastCode(instance: CookieAuthId, username: string) {
+    cookieAuthFor(instance);
+    return await readDeliveredCode<DeliveredCode>(instance, username);
   },
 
   // ------------------------------------------------------------------------
   // ------------------------------------------------------------------------
-  // AuthCognito Tests
+  // Auth (authC, formerly AuthCognito) Tests
   // ------------------------------------------------------------------------
 
   async authCSignUp(username: string, password: string, email: string, department?: string) {
@@ -1128,80 +1553,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return user;
   },
 
-  async authCRequireRole(role: string) {
-    // Role arrives over the wire as a string; narrow to the pool's group union
-    // at the boundary (runtime validates membership regardless). `const O` made
-    // requireRole's param the literal union 'admins' | 'readers'.
-    const user = await authC.requireRole(context, role as Parameters<typeof authC.requireRole>[1]);
+  // `const O` makes requireRole's param the literal union of `users.groups`.
+  async authCRequireRole(role: 'admins' | 'readers') {
+    const user = await authC.requireRole(context, role);
     return user;
   },
 
-  // ── Admin surface (auth.admin) — exercised by sandbox-admin-e2e ────────────
-  // In a real app these would be gated by `requireRole`; the e2e harness drives
-  // them directly to verify the admin grant + behavior end-to-end.
-  async authCAdminCreateUser(username: string, temporaryPassword: string) {
-    const u = await authC.admin.createUser(username, { temporaryPassword });
-    return { username: u.username, enabled: u.enabled };
-  },
-  async authCAdminCreateUserWithDept(username: string, temporaryPassword: string, department: string) {
-    // Seeds a declared custom attribute so authCAdminGetUser can round-trip it.
-    const u = await authC.admin.createUser(username, {
-      temporaryPassword,
-      attributes: { department, email: `${username}@example.com` },
-    });
-    return { username: u.username, enabled: u.enabled };
-  },
-  async authCAdminGetUser(username: string) {
-    const u = await authC.admin.getUser(username);
-    if (!u) return null;
-    // Return the typed reads so the e2e can assert the attribute/group round-trip.
-    return {
-      username: u.username,
-      userSub: u.userSub,
-      enabled: u.enabled,
-      department: u.attributes['custom:department'] ?? null,
-      groups: u.groups ?? [],
-    };
-  },
-  async authCAdminScan(filter?: { attribute: string; match: 'startsWith' | 'equals'; value: string }) {
-    const usernames: string[] = [];
-    for await (const u of authC.admin.scan(filter)) usernames.push(u.username);
-    return usernames;
-  },
-  async authCAdminSetPassword(username: string, password: string) {
-    await authC.admin.setUserPassword(username, password, { permanent: true });
-    return { success: true };
-  },
-  async authCAdminAddToGroup(username: string, group: string) {
-    await authC.admin.addUserToGroup(username, group as Parameters<typeof authC.admin.addUserToGroup>[1]);
-    return { success: true };
-  },
-  async authCAdminListGroupsForUser(username: string) {
-    return await authC.admin.listGroupsForUser(username);
-  },
-  async authCAdminRemoveFromGroup(username: string, group: string) {
-    await authC.admin.removeUserFromGroup(username, group as Parameters<typeof authC.admin.removeUserFromGroup>[1]);
-    return { success: true };
-  },
-  async authCAdminDisableUser(username: string) {
-    await authC.admin.disableUser(username);
-    return { success: true };
-  },
-  async authCAdminEnableUser(username: string) {
-    await authC.admin.enableUser(username);
-    return { success: true };
-  },
-  async authCAdminDeleteUser(username: string) {
-    await authC.admin.deleteUser(username);
-    return { success: true };
-  },
-  async authCAdminRevokeSessions(username: string) {
-    await authC.admin.revokeUserSessions(username);
-    return { success: true };
-  },
-
   async authCFetchUserAttributes() {
-    return await authC.fetchUserAttributes(context);
+    return await authC.getUserAttributes(context);
   },
 
   async authCUpdatePassword(oldPassword: string, newPassword: string) {
@@ -1229,13 +1588,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   /** Read back the code delivered to `username`. See `authGetLastCode`. */
   async authCGetLastCode(username: string) {
-    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authC', username);
+    return await readDeliveredCode<DeliveredCode>('authC', username);
   },
 
   // Phase G — devices: list + remember + forget.
   async authCFetchDevices() {
     const out = [];
-    for await (const d of authC.fetchDevices(context)) out.push(d);
+    for await (const d of authC.scanDevices(context)) out.push(d);
     return out;
   },
   async authCRememberDevice() {
@@ -1247,26 +1606,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // Phase D: MFA preference — per-factor delta (Amplify v6 shape).
-  async authCUpdateMFAPreference(input: {
-    sms?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
-    totp?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
-    email?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
-  }) {
-    await authC.updateMFAPreference(context, input);
-    return { success: true };
-  },
-
-  async authCFetchMFAPreference() {
-    return await authC.fetchMFAPreference(context);
-  },
+  // No MFA-preference methods on `authC`: its MFA is off, so `Auth` makes
+  // `updateMfaPreference` / `getMfaPreference` compile errors there (see
+  // `_authTypeChecks` below). MFA preferences are exercised on `authCMfa`.
 
   // Phase A: fetchAuthSession exposes `{ tokens: { idToken, accessToken }, userSub }`
   // with `payload: Record<string, unknown>`. The raw JWT strings are not
   // JSON-serializable by default (they're functions with a toString), so
   // project to strings + narrowed claims for the RPC boundary.
   async authCFetchAuthSession() {
-    const session = await authC.fetchAuthSession(context);
+    const session = await authC.getAuthSession(context);
     if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
@@ -1282,7 +1631,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async authCFetchAuthSessionForceRefresh() {
-    const session = await authC.fetchAuthSession(context, { forceRefresh: true });
+    const session = await authC.getAuthSession(context, { forceRefresh: true });
     if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
@@ -1310,7 +1659,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await authCMfa.signIn(username, password, context);
   },
   async authCMfaConfirmSignIn(session: string, code: string) {
-    return await authCMfa.confirmSignIn(session, { code }, context);
+    return await authCMfa.confirmSignIn(session, code, context);
   },
   async authCMfaSignOut() {
     await authCMfa.signOut(context);
@@ -1318,44 +1667,60 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   /** Read back the code delivered to `username`. See `authGetLastCode`. */
   async authCMfaGetLastCode(username: string) {
-    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authCMfa', username);
+    return await readDeliveredCode<DeliveredCode>('authCMfa', username);
   },
   async authCMfaFetchMFAPreference() {
-    return await authCMfa.fetchMFAPreference(context);
+    return await authCMfa.getMfaPreference(context);
   },
   async authCMfaUpdateMFAPreference(input: {
     sms?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
     totp?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
     email?: 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
   }) {
-    // `const O` narrowed updateMFAPreference's input to the pool's mfaTypes
-    // (here ['TOTP']); the wire shape is wider, so narrow at the boundary.
-    await authCMfa.updateMFAPreference(context, input as Parameters<typeof authCMfa.updateMFAPreference>[1]);
+    // `const O` narrows updateMfaPreference's input to the pool's `mfa.types`
+    // (here ['TOTP']); the wire shape is wider, so pass only the TOTP factor.
+    // Other factors are refused at runtime, exactly as the pool would.
+    if (input.sms !== undefined || input.email !== undefined) {
+      throw new ApiError('Only TOTP is enabled on this pool', 400, { name: 'InvalidParameterException' });
+    }
+    await authCMfa.updateMfaPreference(context, input.totp !== undefined ? { totp: input.totp } : {});
     return { success: true };
   },
 
   // Phase E: TOTP associate/verify. Pool is `authCMfa` so the enrollment
   // flips the factor into the user's mfaPreference.enabled array.
   async authCMfaSetUpTOTP() {
-    return await authCMfa.setUpTOTP(context);
+    return await authCMfa.setUpTotp(context);
   },
   async authCMfaVerifyTOTPSetup(code: string) {
-    await authCMfa.verifyTOTPSetup(context, code);
+    await authCMfa.verifyTotpSetup(context, code);
     return { success: true };
   },
 
   // ------------------------------------------------------------------------
-  // AuthOIDC Tests
+  // Auth (oidc-auth, formerly AuthOIDC) Tests
   // ------------------------------------------------------------------------
 
+  // `provider` arrives over the wire as any string, but `getSignInUrl` accepts
+  // only configured ids (a compile-time check). Narrow at the boundary and
+  // answer an unknown id with the block's own canonical error name.
   async oidcGetSignInUrl(provider: string) {
+    if (!isOidcProvider(provider)) {
+      throw new ApiError(`Provider "${provider}" is not configured`, 400, { name: 'ProviderNotConfiguredException' });
+    }
     const url = await oidcAuth.getSignInUrl(context, provider);
     return { url };
   },
 
   async oidcRequireAuth() {
     const user = await oidcAuth.requireAuth(context);
-    return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
+    return {
+      userId: user.userId,
+      email: user.attributes.email ?? null,
+      name: user.attributes.name ?? null,
+      provider: user.signInProvider,
+      ...(await idTokenSubject(oidcAuth, context)),
+    };
   },
 
   async oidcCheckAuth() {
@@ -1365,7 +1730,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async oidcGetCurrentUser() {
     const user = await oidcAuth.getCurrentUser(context);
     if (!user) return null;
-    return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
+    return {
+      userId: user.userId,
+      email: user.attributes.email ?? null,
+      name: user.attributes.name ?? null,
+      provider: user.signInProvider,
+      ...(await idTokenSubject(oidcAuth, context)),
+    };
   },
 
   async oidcSignOut() {
@@ -1379,7 +1750,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    *
    * `userId` is required. The hook fires on a different request than this read,
    * so "whoever signed in last" is not a safe question to ask: the answer can
-   * be another user, or another AuthOIDC instance's user, and the test would
+   * be another user, or another OIDC instance's user, and the test would
    * pass on the wrong record.
    */
   async oidcGetLastSignInUser(userId: string) {
@@ -1387,16 +1758,36 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async oidcGetProviders() {
-    return [...oidcAuth.providers];
+    return Object.keys(oidcAuthProviders);
   },
 
   // ------------------------------------------------------------------------
-  // AuthOIDC Second Instance Tests (onSignIn hook + profile upsert)
+  // Auth (auth-gated) Tests — validateUser on sign-up and sign-in
+  // ------------------------------------------------------------------------
+
+  async gatedSignUp(username: string, password: string, email: string) {
+    const r = await authGated.signUp(username, password, { attributes: { email } });
+    return { isSignUpComplete: r.isSignUpComplete };
+  },
+
+  async gatedRequireAuth() {
+    const user = await authGated.requireAuth(context);
+    return { userId: user.userId };
+  },
+
+  // ------------------------------------------------------------------------
+  // Auth (oidc-auth-extras) Tests (onSignIn hook + profile upsert)
   // ------------------------------------------------------------------------
 
   async oidcExtrasRequireAuth() {
     const user = await oidcAuthExtras.requireAuth(context);
-    return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
+    return {
+      userId: user.userId,
+      email: user.attributes.email ?? null,
+      name: user.attributes.name ?? null,
+      provider: user.signInProvider,
+      ...(await idTokenSubject(oidcAuthExtras, context)),
+    };
   },
 
   /** Read back the sign-in record for `userId`. See `oidcGetLastSignInUser`. */
@@ -1425,7 +1816,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     context.response.headers.set('set-cookie', `${name}=${value}; HttpOnly; Secure; SameSite=None`);
     return { success: true };
   },
-  
+
+  // Sets two cookies in one response — `set` then `append`, the same pattern
+  // Auth uses for its session + auto-sign-in cookies. Every value must
+  // reach the browser on AWS too (API Gateway REST needs multiValueHeaders).
+  async setTwoCookies(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-a=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-b=2; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    return { success: true };
+  },
+
+  // Clears a cookie and then throws 401 — the `requireAuth`-on-a-dead-session
+  // shape. The client must receive both the error and the clearing cookie.
+  async clearCookieThenThrow(name: string) {
+    context.response.headers.set('set-cookie', `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+  },
+
+  // Sets a live cookie AND clears another, then throws — a method that changes
+  // cookies and then fails. Only the deletion may reach the client, with the
+  // error envelope (code, message, name) unchanged.
+  async setLiveAndClearCookieThenThrow(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-live=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-gone=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('rejected after changing cookies', 409, { name: 'CookieTestRejected' });
+  },
+
+  // Signs an existing user in for real, then rejects them with a post-sign-in
+  // policy check. The 403 must NOT carry the live session cookie signIn just
+  // set. It creates no account: the test provisions the user on
+  // `auth-same-origin` first (see `sameOriginOptions`).
+  async authSignInThenThrow(username: string, password: string) {
+    await signInExisting(authSameOrigin, username, password, context);
+    throw new ApiError('forbidden', 403, { name: 'Forbidden' });
+  },
+
   async getCookie(name: string) {
     const cookies = context.request.headers.get('cookie') || '';
     const match = cookies.split('; ').find(c => c.startsWith(`${name}=`));
@@ -1460,6 +1885,32 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
   },
   
+  // A publish from the same invocation as a server-side subscriber must reach
+  // its handler once. On AWS the handler is reachable both in-process and over
+  // the subscriber's own WebSocket, so this counts the calls for one publish.
+  async realtimeChannelSubscribeOnePublishCount(subChannel: string) {
+    const ch = await realtime.getChannel('cursors', subChannel);
+    let calls = 0;
+    const sub = ch.subscribe(() => { calls++; });
+    await sub.established;
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    sub.unsubscribe();
+    return { calls };
+  },
+
+  // Same check through rt.subscribe(), which returns only an unsubscribe
+  // function, so give its socket time to subscribe before publishing.
+  async realtimeSubscribeOnePublishCount(subChannel: string) {
+    let calls = 0;
+    const unsubscribe = realtime.subscribe('cursors', subChannel, () => { calls++; });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    unsubscribe();
+    return { calls };
+  },
+
   async realtimeGetCursorChannel() {
     return realtime.getChannel('cursors', 'default');
   },
@@ -1484,8 +1935,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // does NOT hydrate it into a channel client. Tests need the raw token fields.
     const ch = await realtime.getChannel('cursors', subChannel);
     const raw = ch.toJSON() as Record<string, unknown>;
-    const { __blocks, ...descriptor } = raw;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key typed as string (see agentGetRawDescriptor)
+    // so a `refresh` callback can spread this cast-free without overriding channel.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
+  },
+
+  async realtimeGetExactChannel(subChannel: string) {
+    return realtime.getChannel('cursors', subChannel, { scope: 'exact' });
+  },
+
+  async realtimeGetChildOfChannel(subChannel: string, scope: 'exact' | 'subtree') {
+    // A handle for `<subChannel>/child` that carries the token minted for
+    // `<subChannel>`: what a client holding the parent handle could send.
+    const ch = await realtime.getChannel('cursors', subChannel, { scope });
+    const descriptor = ch.toJSON() as Record<string, unknown>;
+    descriptor.channel = `${String(descriptor.channel)}/child`;
+    return descriptor as unknown as typeof ch;
   },
 
   async realtimeGetPoisonedChannel(subChannel: string) {
@@ -1520,8 +1987,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async realtimePublishOversizedPayload() {
-    // Message will exceed 32KB WebSocket frame limit
-    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(33_000) };
+    // Message will exceed the 128 KiB WebSocket logical message limit
+    const bigData = { userId: 'u1', x: 0, y: 0, color: 'x'.repeat(132_000) };
     await realtime.publish('cursors', 'oversized', bigData);
     return { success: true };
   },
@@ -1557,6 +2024,454 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   
   async returnLargePayload(size: number) {
     return { data: 'x'.repeat(size) };
+  },
+
+  // ------------------------------------------------------------------------
+  // bb-database Tests (Database + DatabaseCluster)
+  // ------------------------------------------------------------------------
+
+  async dbxInfo() {
+    return {
+      dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
+      dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
+      dbxb: { cluster: dbxb.cluster, schemaName: dbxb.schemaName },
+      dbxc: { cluster: dbxc.cluster, schemaName: dbxc.schemaName },
+    };
+  },
+
+  // dbxc: PostgreSQL features on an `aurora` cluster.
+  async dbxcAdd(title: string) {
+    return await dbxc.queryOne<{ id: number; title: string; done: boolean }>(
+      sql`INSERT INTO tasks (title) VALUES (${title}) RETURNING id, title, done`,
+    );
+  },
+
+  async dbxcComplete(id: number) {
+    const before = await dbxc.queryOne<{ updated_at: string }>(sql`SELECT updated_at::text FROM tasks WHERE id = ${id}`);
+    await dbxc.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+    const after = await dbxc.queryOne<{ done: boolean; updated_at: string }>(
+      sql`SELECT done, updated_at::text FROM tasks WHERE id = ${id}`,
+    );
+    return { done: after?.done ?? false, touched: before !== null && after !== null && before.updated_at !== after.updated_at };
+  },
+
+  // More rows in one transaction than a DSQL cluster allows; an `aurora` cluster has no such limit.
+  async dbxcBulk(count: number) {
+    const prefix = `bulk-${Date.now().toString(36)}-`;
+    const inserted = await dbxc.transaction(async (tx) => {
+      const { rowCount } = await tx.execute(
+        sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`,
+      );
+      return rowCount;
+    });
+    const { rowCount: deleted } = await dbxc.execute(sql`DELETE FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { inserted, deleted };
+  },
+
+  async dbxcDelete(id: number) {
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as QueryFailed.
+  async dbxcAddComment(taskId: number, body: string) {
+    try {
+      const row = await dbxc.queryOne<{ id: number }>(
+        sql`INSERT INTO comments (task_id, body) VALUES (${taskId}, ${body}) RETURNING id`,
+      );
+      return { id: row?.id ?? null, error: null };
+    } catch (e) {
+      return { id: null, error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A join with an aggregate in one statement; `count(*)` is bigint, cast so it is a number on both environments.
+  async dbxcTasksWithCounts(ids: number[]) {
+    return await dbxc.query<{ id: number; title: string; comments: number }>(
+      sql`SELECT t.id, t.title, count(c.id)::int AS comments
+          FROM tasks t LEFT JOIN comments c ON c.task_id = t.id
+          WHERE t.id = ANY(${ids})
+          GROUP BY t.id, t.title ORDER BY t.id`,
+    );
+  },
+
+  async dbxcCommentCount(taskId: number) {
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM comments WHERE task_id = ${taskId}`);
+    return row?.n ?? 0;
+  },
+
+  // A transaction that fails after writing: PostgreSQL keeps nothing, however many rows it touched.
+  async dbxcAtomicFail(count: number) {
+    const prefix = `atomic-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`);
+        throw new ApiError('abort after the insert', 409);
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  // A block-level execute() inside the callback runs in the transaction on the aurora cluster too: when the
+  // callback throws, nothing is kept (the statement would otherwise auto-commit on another pool connection).
+  async dbxcBlockWriteInAbortedTransaction(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxc.transaction(async () => {
+        await dbxc.execute(sql`INSERT INTO tasks (title) VALUES (${`${prefix}-aborted`})`);
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A block-level query() inside the callback sees the callback's own uncommitted write.
+  async dbxcBlockReadInTransaction(title: string) {
+    const seenInside = await dbxc.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+      const row = await dbxc.queryOne<{ id: number }>(sql`SELECT id FROM tasks WHERE title = ${title}`);
+      return row !== null;
+    });
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE title = ${title}`);
+    return { seenInside, committed: rowCount === 1 };
+  },
+
+  // Kysely through DatabaseDialect: typed rows, and affected-row counts that come from the engine.
+  async dbxcKyselyRoundTrip(title: string) {
+    const inserted = await dbxcKysely
+      .insertInto('tasks')
+      .values({ title })
+      .returning(['id', 'title', 'done'])
+      .executeTakeFirstOrThrow();
+    const updated = await dbxcKysely.updateTable('tasks').set({ done: true }).where('id', '=', inserted.id).executeTakeFirst();
+    const row = await dbxcKysely.selectFrom('tasks').select(['id', 'title', 'done']).where('id', '=', inserted.id).executeTakeFirst();
+    const deleted = await dbxcKysely.deleteFrom('tasks').where('id', '=', inserted.id).executeTakeFirst();
+    return {
+      inserted,
+      updated: Number(updated.numUpdatedRows),
+      row: row ?? null,
+      deleted: Number(deleted.numDeletedRows),
+    };
+  },
+
+  // A Kysely transaction that throws keeps nothing, and the ApiError passes through.
+  async dbxcKyselyRollback(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxcKysely.transaction().execute(async (trx) => {
+        await trx.insertInto('tasks').values([{ title: `${prefix}-1` }, { title: `${prefix}-2` }]).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A Kysely statement inside the block's transaction() runs in that transaction.
+  async dbxcKyselyInBlockTransaction(title: string) {
+    let seenInside = false;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+        const row = await dbxcKysely.selectFrom('tasks').select('id').where('title', '=', title).executeTakeFirst();
+        seenInside = row !== undefined;
+        await dbxcKysely.insertInto('tasks').values({ title: `${title}-kysely` }).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${title}%`}`);
+    return { seenInside, kept: row?.n ?? 0 };
+  },
+
+  // What Kysely returns for bigint, numeric and timestamp values, read on the server: JSON would hide a Date.
+  async dbxcKyselyValueTypes() {
+    const { rows } = await kyselySql<{ big: unknown; num: unknown; at: unknown; n: unknown }>`
+      select 7::bigint as big, 1.50::numeric as num, now() as at, count(*) as n from tasks
+    `.execute(dbxcKysely);
+    const kind = (value: unknown) => (value instanceof Date ? 'Date' : typeof value);
+    const [row] = rows;
+    return row ? { big: kind(row.big), num: kind(row.num), at: kind(row.at), n: kind(row.n) } : null;
+  },
+
+  // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
+  // missing privilege (42501, QueryFailed) when deployed.
+  async dbxcRejectDdl() {
+    try {
+      await dbxc.execute(sql`CREATE TABLE dbxc_should_not_exist (id INT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcRejectTruncate() {
+    try {
+      await dbxc.execute(sql`TRUNCATE tasks`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A result schema on the aurora path: the row type comes from the value, and a mismatch is a typed error.
+  async dbxcGetValidated(id: number) {
+    return await dbxc.queryOne(sql`SELECT id, title, done FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+  },
+
+  async dbxcSchemaMismatch(id: number) {
+    try {
+      await dbxc.queryOne(sql`SELECT id, title FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcSimulatedConflictComplete(id: number) {
+    try {
+      simulateConflict(dbxc);
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbxc.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
+  },
+
+  async dbxInsert(id: string, name: string, value: number) {
+    const { rowCount } = await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`);
+    return { rowCount };
+  },
+
+  async dbxGet(id: string) {
+    return await dbx.queryOne<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items WHERE id = ${id}`,
+    );
+  },
+
+  async dbxList() {
+    return await dbx.query<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items ORDER BY id`,
+    );
+  },
+
+  async dbxDelete(id: string) {
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A read-modify-write with no side effects: safe to re-run on a conflict.
+  async dbxTransfer(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(
+      async (tx) => {
+        const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+        if (!sender || sender.value < amount) throw new Error('Insufficient balance');
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true, maxRetries: 3 },
+    );
+    return { success: true };
+  },
+
+  // A 404 thrown inside the callback must reach the client as a 404, not as TransactionFailed.
+  async dbxTransferStrict(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(async (tx) => {
+      const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+      if (!sender) throw new ApiError('no such sender', 404);
+      await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+      await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+    });
+    return { success: true };
+  },
+
+  // The result type comes from the schema, not from a type argument.
+  async dbxGetValidated(id: string) {
+    return await dbx.queryOne(sql`SELECT id, name, value, category FROM dbx_items WHERE id = ${id}`, { schema: DbxItem });
+  },
+
+  async dbxSchemaMismatch(id: string) {
+    try {
+      await dbx.queryOne(sql`SELECT id, name, value FROM dbx_items WHERE id = ${id}`, {
+        schema: z.object({ id: z.string(), name: z.string(), value: z.string() }),
+      });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // Local mode only: simulateConflict() (from the testing entry) throws in the
+  // Lambda runtime, so the handler reports that nothing was simulated and the test skips.
+  async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
+    try {
+      simulateConflict(dbx);
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbx.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
+  },
+
+  async dbxDuplicateInsert(id: string) {
+    try {
+      await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // DDL on the app connection of a distributed cluster: the mock's guard
+  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  async dbxRejectDdl() {
+    try {
+      await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxRejectTruncate() {
+    try {
+      await dbx.execute(sql`TRUNCATE dbx_items`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // More than 3,000 rows in one transaction: TransactionRowLimitExceeded, from
+  // the mock locally and from DSQL's SQLSTATE 54000 when deployed. Nothing is kept.
+  async dbxRowLimit() {
+    const prefix = `limit-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbx.transaction(async (tx) => {
+        await tx.execute(
+          sql`INSERT INTO dbx_items (id, name, value) SELECT ${prefix} || g, 'bulk', g FROM generate_series(1, 3001) g`,
+        );
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbx.queryOne<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM dbx_items WHERE id LIKE ${`${prefix}%`}`,
+    );
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  // A block-level execute() inside the callback runs in the transaction: when the callback throws, nothing
+  // is kept, locally and on DSQL (where the statement would otherwise auto-commit on another connection).
+  async dbxBlockWriteInAbortedTransaction(id: string) {
+    let aborted = false;
+    try {
+      await dbx.transaction(async () => {
+        await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'aborted'}, ${1})`);
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbx.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM dbx_items WHERE id = ${id}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A block-level query() inside the callback sees the callback's own uncommitted write.
+  async dbxBlockReadInTransaction(id: string) {
+    const seenInside = await dbx.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'inside'}, ${1})`);
+      const row = await dbx.queryOne<{ id: string }>(sql`SELECT id FROM dbx_items WHERE id = ${id}`);
+      return row !== null;
+    });
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { seenInside, committed: rowCount === 1 };
+  },
+
+  // Shared distributed cluster: two blocks, two schemas, one table name.
+  async dbxaAdd(sku: string, qty: number) {
+    // BIGINT identity: a number locally and on DSQL alike; the schema checks it in both.
+    return await dbxa.queryOne(sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`, {
+      schema: z.object({ id: z.number(), sku: z.string(), qty: z.number() }),
+    });
+  },
+
+  async dbxaDelete(sku: string) {
+    const { rowCount } = await dbxa.execute(sql`DELETE FROM items WHERE sku = ${sku}`);
+    return { rowCount };
+  },
+
+  async dbxbAdd(accountId: string, owner: string, amount: number) {
+    await dbxb.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${owner}) ON CONFLICT (id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${amount})`);
+    });
+    return await dbxb.queryOne<{ account_id: string; total: number }>(
+      sql`SELECT account_id, total::int AS total FROM account_totals WHERE account_id = ${accountId}`,
+    );
+  },
+
+  // The validated foreign key refuses an orphan; the check constraint refuses a negative amount.
+  async dbxbRejectOrphan(accountId: string) {
+    const outcome = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.name : String(e);
+      }
+    };
+    return {
+      orphan: await outcome(() => dbxb.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${1})`)),
+      negative: await outcome(() =>
+        dbxb.transaction(async (tx) => {
+          await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${'x'}) ON CONFLICT (id) DO NOTHING`);
+          await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${-1})`);
+        }),
+      ),
+    };
+  },
+
+  // ON DELETE CASCADE on DSQL: the cascaded rows count toward the row limit, but a handful is fine.
+  async dbxbDeleteAccount(accountId: string) {
+    await dbxb.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
+    const row = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);
+    return { remainingItems: row?.n ?? 0 };
+  },
+
+  async sharedClusterCounts() {
+    const a = await dbxa.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    const b = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    return { dbxa: a?.n ?? 0, dbxb: b?.n ?? 0 };
   },
 
   // ------------------------------------------------------------------------
@@ -1629,6 +2544,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } catch (e: any) {
       return { error: e.name };
     }
+  },
+
+  // Request errors: each statement is rejected by Postgres for something the
+  // caller did (a constraint, a foreign key, a row-level-security policy or a
+  // missing grant), and must reach the client as a named 4xx, not a 500.
+  async dbCheckViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
+  },
+
+  async dbNotNullViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
+  },
+
+  async dbForeignKeyViolation(id: string) {
+    await db.execute(
+      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
+    );
+  },
+
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
+  async dbRlsViolation(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
+  },
+
+  async dbMissingGrant(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
   },
 
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
@@ -1751,15 +2701,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async dsqlDuplicateInsert(id: string) {
     try {
       await dsql.execute(sql`INSERT INTO dsql_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
-  async dsqlRejectForeignKey() {
-    try {
-      await dsql.execute(sql`CREATE TABLE bad_fk (id TEXT, ref TEXT REFERENCES dsql_items(id))`);
       return { error: null };
     } catch (e: any) {
       return { error: e.name };
@@ -1891,42 +2832,64 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentCreateConversationId() {
     const user = await auth.getCurrentUser(context);
-    return { conversationId: await agent.createConversationId(user?.userId ?? 'anonymous') };
+    return { conversationId: await agent.createConversationId(user?.userSub ?? 'anonymous') };
   },
 
   async agentListConversations() {
     const user = await auth.getCurrentUser(context);
-    return { conversations: await agent.listConversations(user?.userId ?? 'anonymous') };
+    return { conversations: await agent.listConversations(user?.userSub ?? 'anonymous') };
   },
 
   async agentStream(message: string, conversationId?: string, channelId?: string) {
     const user = await auth.getCurrentUser(context);
-    const userId = user?.userId ?? 'anonymous';
+    const userId = user?.userSub ?? 'anonymous';
     const result = await agent.stream(message, conversationId ? { conversationId, channelId, userId } : { channelId, userId });
     return { channelId: result.channelId };
   },
 
   async agentGetChannel(channelId: string) {
-    return { channel: await agent.getChannel(channelId) };
+    const user = await auth.getCurrentUser(context);
+    return { channel: await agent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' }) };
+  },
+
+  async agentGetRawDescriptor(channelId: string) {
+    // Return the raw toJSON() descriptor for the AGENT's chunks channel with __blocks
+    // removed so client middleware does NOT hydrate it into a channel client. useChat's
+    // `refresh` callback needs the raw token fields to re-mint fresh credentials before a
+    // reconnect. Mirrors realtimeGetRawDescriptor, but sourced from the agent's chunks
+    // channel (agent.getChannel(channelId, { userId }), scoped to the session user) so the
+    // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
+    const user = await auth.getCurrentUser(context);
+    const ch = await agent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' });
+    const raw = ch.toJSON() as Record<string, unknown>;
+    const { __blocks, ...rest } = raw;
+    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/u/{user}/{channelId}`
+    // path) typed as a string, so a consumer's `refresh` callback can spread this into a
+    // ChatChannelDescriptor cast-free — the fresh token must resubscribe under the SAME
+    // key the transport stored it under, so this channel must NOT be overridden downstream.
+    const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
+    return descriptor;
   },
 
   async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user?.userId ?? 'anonymous' });
+    await agent.resume(channelId, responses, { conversationId, userId: user?.userSub ?? 'anonymous' });
     return { ok: true };
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await agent.getPendingInterrupts(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentGetConversation(conversationId: string) {
-    return { messages: await agent.getConversation(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { messages: await agent.getConversation(conversationId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentDeleteConversation(conversationId: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.deleteConversation(conversationId, user?.userId ?? 'anonymous');
+    await agent.deleteConversation(conversationId, user?.userSub ?? 'anonymous');
     return { deleted: true };
   },
 
@@ -1936,7 +2899,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
-    return { messages: await inferenceAgent.getConversation(conversationId) };
+    return { messages: await inferenceAgent.getConversation(conversationId, { userId: 'n/a' }) };
   },
 
   async agentInferenceOnlyDeleteConversation(conversationId: string) {
@@ -1955,23 +2918,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversationId };
   },
   async cannedGetChannel(channelId: string) {
-    return { channel: await cannedAgent.getChannel(channelId) };
+    return { channel: await cannedAgent.getChannel(channelId, { userId: 'test-user' }) };
   },
   async cannedResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean }>, conversationId?: string) {
     await cannedAgent.resume(channelId, responses, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
     return { ok: true };
   },
   async cannedGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId) };
+    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId, { userId: 'test-user' }) };
   },
   async cannedGetConversation(conversationId: string) {
-    return { messages: await cannedAgent.getConversation(conversationId) };
+    return { messages: await cannedAgent.getConversation(conversationId, { userId: 'test-user' }) };
   },
 
   async fallbackStream(message: string) {
     const channelId = crypto.randomUUID();
     const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
-    return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+    return { channelId, channel: await fallbackAgent.getChannel(channelId, { userId: 'test-user' }) };
   },
 
   async agentPresetStream(presetName: string, message: string) {
@@ -1984,10 +2947,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
-    // Puts a test value into the secret setting, then resolves it via the same
+    // Puts a test value into its own secret setting, then resolves it via the same
     // () => Promise<string> pattern the agent uses for apiKey.
-    await secretSetting.put('sk-test-12345');
-    const resolver: () => Promise<string> = () => secretSetting.get();
+    await agentApiKeySetting.put('sk-test-12345');
+    const resolver: () => Promise<string> = () => agentApiKeySetting.get();
     const resolved = await resolver();
     return { resolved: resolved === 'sk-test-12345' };
   },
@@ -2047,6 +3010,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { body: file.body.toString(), contentType: file.contentType, size: file.size };
   },
 
+  async filePutUrlWithOptions(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await bucket.putUrl(path, options);
+  },
+
+  async fileGetUrlAttachment(path: string, attachment: boolean | string) {
+    return await bucket.getUrl(path, { attachment });
+  },
+
+  // FileBucket with allowedContentTypes / maxUploadBytes
+
+  async constrainedFilePutUrl(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await constrainedBucket.putUrl(path, options);
+  },
+
+  async constrainedFilePut(path: string, content: string, contentType?: string) {
+    await constrainedBucket.put(path, content, contentType ? { contentType } : undefined);
+    return { success: true };
+  },
+
+  async constrainedFileGet(path: string) {
+    const file = await constrainedBucket.get(path);
+    if (!file) return null;
+    return { body: file.body.toString(), contentType: file.contentType, size: file.size };
+  },
+
   // ------------------------------------------------------------------------
   // Versioned FileBucket Tests
   // ------------------------------------------------------------------------
@@ -2069,6 +3057,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async vFileListVersions(path: string) {
     return await versionedBucket.listVersions(path);
+  },
+
+  async vFileGetUrl(path: string, versionId?: string) {
+    return await versionedBucket.getUrl(path, versionId ? { versionId } : undefined);
   },
 
   async vFileRestoreVersion(path: string, versionId: string) {
@@ -2128,14 +3120,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async settingGetSecret() {
-    return { value: await secretSetting.get() };
-  },
-
-  async settingPutSecret(value: string) {
-    await secretSetting.put(value);
-    return { success: true };
-  },
   // CronJob Tests
   // ------------------------------------------------------------------------
 
@@ -2167,6 +3151,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbWaitUntilSynced(options?: WaitUntilSyncedOptions) {
     await kb.waitUntilSynced(options);
     return { success: true };
+  },
+
+  async kbAgentToolSearch(message: string) {
+    // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
+    // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
+    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const done = await result.complete();
+    return { text: done.text ?? '' };
   },
 
   // ------------------------------------------------------------------------
@@ -2279,8 +3271,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async zodAuthSignIn(rawInput: unknown) {
     const { username, password } = AuthSignInInput.parse(rawInput);
-    const user = await auth.signIn(username, password, context);
-    return { userId: user.userId, username: user.username, createdAt: user.createdAt };
+    const result = await auth.signIn(username, password, context);
+    if (result.status !== 'signedIn') throw new ApiError(`Unexpected sign-in step: ${result.nextStep.name}`, 500);
+    return { userId: result.user.userId, username: result.user.username, userSub: result.user.userSub };
   },
 
   async zodDbInsert(rawInput: unknown) {
@@ -2390,14 +3383,404 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { stdout: captured.stdout, stderr: captured.stderr };
   },
+
+  // ------------------------------------------------------------------------
+  // Multi-compute — which function served this call (see isolatedApi below)
+  // ------------------------------------------------------------------------
+
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
+
+// ============================================================================
+// Multi-compute — a namespace on its own compute
+//
+// `isolatedApi` runs on a separate serverless compute with less memory than the
+// default, so a deployed call proves the gateway routed it there: it reports a
+// different function and the compute's own memory size. The export name differs
+// from the constructor name ('isolated'), as with `auth.createApi()`, because
+// the gateway routes on the export name the client calls.
+// ============================================================================
+
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    pid: process.pid,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
 
 // Export auth state machine API
 export const authApi = auth.createApi();
+export const authDeliveryFailsApi = authDeliveryFails.createApi();
 export const authCApi = authC.createApi();
+// TOTP enrolment through the state machine (`setUpTotp`, `verifyTotpSetup`, …).
+export const authCMfaApi = authCMfa.createApi();
 
-// Export OIDC auth state machine API
+// Export OIDC auth state machine API (federated providers appear as
+// `signIn:<id>` actions carrying the sign-in URL)
 export const oidcAuthApi = oidcAuth.createApi();
+
+// Deny by default (`auth.protect`): `methods` runs only after the session check
+// for a user signed in to `auth` (the `api.authSignIn` session), with that user,
+// typed by `auth`'s options; `ping` needs no session. See
+// test/auth-protect.test.ts.
+export const protectedApi = auth.protect(scope, 'protectedApi', {
+  public: () => ({
+    async ping() {
+      return { ok: true };
+    },
+  }),
+  methods: (_context, user) => ({
+    async whoAmI() {
+      return { username: user.username, userSub: user.userSub, signInProvider: user.signInProvider };
+    },
+    async echo(text: string) {
+      return { text, by: user.userSub };
+    },
+  }),
+});
+
+// ── HTTP status for failed calls (ApiNamespace `httpErrorStatus`) ──────────
+//
+// The same gated call as `api.authRequired`, on a namespace created with
+// `httpErrorStatus: true`: a signed-out call answers HTTP 401 instead of 200.
+// The JSON-RPC body is the same, so the typed client rejects with the same
+// `ApiError` either way (`isAuthError` / `isBlocksError` keep working).
+export const strictStatusApi = new ApiNamespace(scope, 'strictStatus', (context) => ({
+  async authRequired() {
+    const user = await auth.requireAuth(context);
+    return { user: { username: user.username } };
+  },
+}), { httpErrorStatus: true });
+
+// ── Social sign-in in local dev ────────────────────────────────────────────
+//
+// A Google provider whose client secret is a `Secret` (Secrets Manager). In
+// `npm run dev` Cognito managed login does not exist, so `getAuthState()` marks
+// `signIn:google` unavailable (with a hint) and the sign-in route answers a
+// browser with an explanatory page. Local only: a deployed social provider
+// needs a globally unique Cognito domain and a real client secret, which this
+// app's sandbox and production e2e runs do not set up, so on a deployment the
+// block and its export are absent (like `testSupport`).
+const localDev = getDeploymentType() === 'local';
+const authSocial = localDev
+  ? new Auth(scope, 'auth-social', {
+      providers: {
+        google: {
+          type: 'google',
+          clientId: 'e2e-placeholder.apps.googleusercontent.com',
+          clientSecret: new Secret(scope, 'auth-social-google-client-secret'),
+        },
+      },
+      redirects: {
+        callbackPath: '/aws-blocks/auth/social/callback',
+        signOutPath: '/aws-blocks/auth/social/signout',
+      },
+    })
+  : undefined;
+export const authSocialApi = authSocial?.createApi();
+
+// ── e2e test support (only when `e2eBuild`) ────────────────────────────────
+
+// The secret guarding `testSupport`: a random value made fresh for each e2e run
+// and handed to everything in that run through `BLOCKS_TEST_SUPPORT_SECRET`. In
+// CI the workflow generates it (masked in the logs); otherwise the harness
+// (`test/e2e.test.ts`) generates it before it starts the dev server or deploys.
+// Deployed, `index.cdk.ts` registers it as config, so the Lambda reads the same
+// value and the harness never fetches it from AWS. Like every config value it
+// is in the stack's config deployment, readable by principals in the stack's
+// account; it is never in the repo or the CI logs, and it dies with the run's
+// stack.
+const testSupportSecret = e2eBuild ? requireTestSupportSecret() : null;
+
+/** This e2e build's test-support secret; an e2e build without one is refused. */
+function requireTestSupportSecret(): string {
+  const value = process.env.BLOCKS_TEST_SUPPORT_SECRET;
+  if (!value || value.length < 32) {
+    throw new Error(
+      `BLOCKS_TEST_ENV=${process.env.BLOCKS_TEST_ENV} is an e2e build, but BLOCKS_TEST_SUPPORT_SECRET is ` +
+        'missing or shorter than 32 characters (the e2e harness sets it)',
+    );
+  }
+  return value;
+}
+
+/** Constant-time comparison of a caller-supplied secret with the expected one. */
+function secretMatches(provided: unknown, expected: string): boolean {
+  if (typeof provided !== 'string') return false;
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * e2e support. Absent (`undefined`, so no RPC route) unless the app was built
+ * for an e2e run (`e2eBuild`), and every call must present that build's secret
+ * before it does anything. These are test-only shortcuts — account creation,
+ * the whole `authC.admin` surface, a secret setting's value, a sweep of the
+ * delivered codes — that must never be reachable on a normal build.
+ */
+export const testSupport = testSupportSecret
+  ? new ApiNamespace(scope, 'testSupport', () => {
+      /** Reject a caller without this build's secret (403) before any work. */
+      const requireSecret = async (secret: unknown): Promise<void> => {
+        if (!secretMatches(secret, testSupportSecret)) throw new ApiError('Forbidden', 403);
+      };
+      return {
+        /**
+         * Create a confirmed user with a permanent password on `auth`, or on the
+         * cookie instance named by `options.instance`. Cognito emails the sign-up
+         * code to the address, which the test cannot read, so it creates the user
+         * through `admin` instead. For suites that need a signed-in user but do
+         * not test sign-up itself. Never expose this in a real app: it lets the
+         * caller create an account.
+         */
+        async provisionUser(
+          secret: string,
+          username: string,
+          password: string,
+          options: { instance?: 'auth' | CookieAuthId } = {},
+        ) {
+          await requireSecret(secret);
+          const target = options.instance ?? 'auth';
+          if (target === 'auth') {
+            await auth.admin.createUser(username, { temporaryPassword: password, suppressInvite: true });
+            await auth.admin.setUserPassword(username, password, { permanent: true });
+          } else {
+            const instance = cookieAuthFor(target);
+            await instance.admin.createUser(username, { temporaryPassword: password, suppressInvite: true });
+            await instance.admin.setUserPassword(username, password, { permanent: true });
+          }
+          return { success: true };
+        },
+
+        /**
+         * Delete every recorded verification code, across all auth channels. Returns
+         * how many records were removed.
+         *
+         * Codes are one small record per test user and CI destroys the table at
+         * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
+         * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+         *
+         * Pass `username` to delete only that user's records (every channel). The
+         * e2e sweeps everything once, before its suites start running at the same
+         * time (test/background-suites.ts), and passes `username` after that: a full
+         * purge then could delete a code another suite is still waiting to read.
+         */
+        async authPurgeDeliveredCodes(secret: string, username?: string) {
+          await requireSecret(secret);
+          return { deleted: await purgeDeliveredCodes(username) };
+        },
+
+        // ── Admin surface (auth.admin) — exercised by auth-cognito-admin-sandbox ──
+        // In a real app these would be gated by `requireRole`; the e2e harness drives
+        // them directly (with the test-support secret) to verify the admin grant +
+        // behavior end-to-end.
+        async authCAdminCreateUser(secret: string, username: string, temporaryPassword: string) {
+          await requireSecret(secret);
+          const u = await authC.admin.createUser(username, { temporaryPassword });
+          return { username: u.username, enabled: u.enabled };
+        },
+        async authCAdminCreateUserWithDept(secret: string, username: string, temporaryPassword: string, department: string) {
+          await requireSecret(secret);
+          // Seeds a declared custom attribute so authCAdminGetUser can round-trip it.
+          const u = await authC.admin.createUser(username, {
+            temporaryPassword,
+            attributes: { department, email: `${username}@example.com` },
+            // Without SUPPRESS, Cognito emails an invite via its default sender, whose
+            // account-wide daily cap turns repeat CI runs into LimitExceededException.
+            suppressInvite: true,
+          });
+          return { username: u.username, enabled: u.enabled };
+        },
+        async authCAdminGetUser(secret: string, username: string) {
+          await requireSecret(secret);
+          const u = await authC.admin.getUser(username);
+          if (!u) return null;
+          // Return the typed reads so the e2e can assert the attribute/group round-trip.
+          return {
+            username: u.username,
+            userSub: u.userSub,
+            enabled: u.enabled,
+            department: u.attributes['custom:department'] ?? null,
+            groups: u.groups ?? [],
+          };
+        },
+        async authCAdminScan(secret: string, filter?: { attribute: string; match: 'startsWith' | 'equals'; value: string }) {
+          await requireSecret(secret);
+          const usernames: string[] = [];
+          for await (const u of authC.admin.scan(filter)) usernames.push(u.username);
+          return usernames;
+        },
+        async authCAdminSetPassword(secret: string, username: string, password: string) {
+          await requireSecret(secret);
+          await authC.admin.setUserPassword(username, password, { permanent: true });
+          return { success: true };
+        },
+        async authCAdminAddToGroup(secret: string, username: string, group: 'admins' | 'readers') {
+          await requireSecret(secret);
+          await authC.admin.addUserToGroup(username, group);
+          return { success: true };
+        },
+        async authCAdminListGroupsForUser(secret: string, username: string) {
+          await requireSecret(secret);
+          return await authC.admin.listGroupsForUser(username);
+        },
+        async authCAdminRemoveFromGroup(secret: string, username: string, group: 'admins' | 'readers') {
+          await requireSecret(secret);
+          await authC.admin.removeUserFromGroup(username, group);
+          return { success: true };
+        },
+        async authCAdminDisableUser(secret: string, username: string) {
+          await requireSecret(secret);
+          await authC.admin.disableUser(username);
+          return { success: true };
+        },
+        async authCAdminEnableUser(secret: string, username: string) {
+          await requireSecret(secret);
+          await authC.admin.enableUser(username);
+          return { success: true };
+        },
+        async authCAdminDeleteUser(secret: string, username: string) {
+          await requireSecret(secret);
+          await authC.admin.deleteUser(username);
+          return { success: true };
+        },
+        async authCAdminRevokeSessions(secret: string, username: string) {
+          await requireSecret(secret);
+          await authC.admin.revokeUserSessions(username);
+          return { success: true };
+        },
+
+        // AppSetting secret round-trip (the `secret-setting` SecureString).
+        async settingGetSecret(secret: string) {
+          await requireSecret(secret);
+          return { value: await secretSetting.get() };
+        },
+
+        async settingPutSecret(secret: string, value: string) {
+          await requireSecret(secret);
+          await secretSetting.put(value);
+          return { success: true };
+        },
+
+        // Secret (AWS Secrets Manager) round-trips. Secret values are never served
+        // to an arbitrary caller, so these are secret-gated like `settingGetSecret`.
+        async secretGetApiKey(secret: string) {
+          await requireSecret(secret);
+          return { value: await apiKeySecret.get() };
+        },
+
+        async secretPutApiKey(secret: string, value: string) {
+          await requireSecret(secret);
+          await apiKeySecret.put(value);
+          return { success: true };
+        },
+
+        async secretGetDbCredentials(secret: string) {
+          await requireSecret(secret);
+          return { value: await dbCredentialsSecret.get() };
+        },
+
+        async secretPutDbCredentials(secret: string, value: { host: string; port: number }) {
+          await requireSecret(secret);
+          await dbCredentialsSecret.put(value);
+          return { success: true };
+        },
+
+        async secretPutDbCredentialsInvalid(secret: string, value: unknown) {
+          await requireSecret(secret);
+          // Exercises schema validation on put. `value` is deliberately untyped here
+          // because the test passes an intentionally-wrong shape; the BB rejects it.
+          await dbCredentialsSecret.put(value as { host: string; port: number });
+          return { success: true };
+        },
+
+        async secretGetNamed(secret: string) {
+          await requireSecret(secret);
+          return { value: await namedSecret.get() };
+        },
+
+        async secretPutNamed(secret: string, value: string) {
+          await requireSecret(secret);
+          await namedSecret.put(value);
+          return { success: true };
+        },
+
+        async secretGetApiKeyPrevious(secret: string) {
+          await requireSecret(secret);
+          return { value: await apiKeySecret.get({ version: 'previous' }) };
+        },
+
+        async secretListApiKeyVersions(secret: string) {
+          await requireSecret(secret);
+          const versions = await apiKeySecret.listVersions();
+          // Return client-safe metadata (versionId + stages count), never values.
+          return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
+        },
+
+        // Unset secret: never written, so get() must return null (not a random
+        // generated string) on AWS — the "unset reads null" contract.
+        async secretGetUnset(secret: string) {
+          await requireSecret(secret);
+          return { value: await unsetSecret.get() };
+        },
+
+        // Generated secret: get() before any put() returns the seeded random value.
+        async secretGetGenerated(secret: string) {
+          await requireSecret(secret);
+          return { value: await generatedSecret.get() };
+        },
+
+        // allowRuntimeWrite matrix (#842) — runtime behavior probes. Each reports
+        // whether `put` exists on the object, and what happens when it's invoked.
+        // For the read-only secrets the call is forced through a minimal callable
+        // view (the only cast — a customer bypassing the types) and must fail
+        // with a TypeError. The writable one is called normally and must round-trip.
+        async secretWriteProbeOmitted(secret: string) {
+          await requireSecret(secret);
+          const hasPut = typeof (writeOmittedSecret as { put?: unknown }).put === 'function';
+          let callError: string | null = null;
+          try {
+            await (writeOmittedSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+          } catch (e) {
+            callError = e instanceof Error ? e.constructor.name : String(e);
+          }
+          return { hasPut, callError };
+        },
+
+        async secretWriteProbeFalse(secret: string) {
+          await requireSecret(secret);
+          const hasPut = typeof (writeFalseSecret as { put?: unknown }).put === 'function';
+          let callError: string | null = null;
+          try {
+            await (writeFalseSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+          } catch (e) {
+            callError = e instanceof Error ? e.constructor.name : String(e);
+          }
+          return { hasPut, callError };
+        },
+
+        async secretWriteProbeTrue(secret: string, value: string) {
+          await requireSecret(secret);
+          const hasPut = typeof writeTrueSecret.put === 'function';
+          await writeTrueSecret.put(value);
+          const readBack = await writeTrueSecret.get();
+          return { hasPut, readBack };
+        },
+      };
+    })
+  : undefined;
 
 // ============================================================================
 // Static Type Checks — DistributedTable
@@ -2491,4 +3874,31 @@ function _distributedTableTypeChecks() {
   table.delete({});
   // @ts-expect-error — missing 'sk' sort key
   table.delete({ pk: 'x' });
+}
+
+// ============================================================================
+// Static Type Checks — Auth mode gates
+//
+// Compile-time only (never called): an `Auth` instance rejects methods its
+// configuration does not support, so these calls must stay compile errors.
+// ============================================================================
+
+async function _authTypeChecks(context: BlocksContext) {
+  // `authC` has MFA off: the MFA methods are gated.
+  // @ts-expect-error — ERROR_mfa_is_off_on_this_Auth_instance
+  await authC.getMfaPreference(context);
+  // @ts-expect-error — ERROR_mfa_is_off_on_this_Auth_instance
+  await authC.updateMfaPreference(context, {});
+
+  // The OIDC instances keep no user pool (`store: 'builtin'`): the password methods are gated.
+  // @ts-expect-error — ERROR_emailPassword_is_disabled_on_this_Auth_instance
+  await oidcAuth.signIn('user', 'password', context);
+
+  // `getSignInUrl` only accepts configured provider ids.
+  // @ts-expect-error — 'nonexistent' is not a configured provider
+  await oidcAuth.getSignInUrl(context, 'nonexistent');
+
+  // `authCMfa` advertises only TOTP, so the SMS factor is not an input.
+  // @ts-expect-error — 'sms' is not in mfa.types
+  await authCMfa.updateMfaPreference(context, { sms: 'ENABLED' });
 }

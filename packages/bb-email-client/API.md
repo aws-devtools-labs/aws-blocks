@@ -41,6 +41,7 @@ export interface EmailOptions {
     configurationSet?: string;
     fromAddress: string;
     logger?: ChildLogger;
+    maxBatchSize?: number;
     replyTo?: string[];
 }
 

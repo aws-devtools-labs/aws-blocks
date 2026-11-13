@@ -1,5 +1,8 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+  // Each package overrides this. Building Blocks report their aws-runtime entry
+  // (dist/index.aws.d.ts), not the default/types (mock) entry, so API.md documents
+  // the deployed surface. Regenerate with `npm run update:api`; never hand-edit API.md.
   "mainEntryPointFilePath": "<projectFolder>/dist/index.d.ts",
   "apiReport": {
     "enabled": true,

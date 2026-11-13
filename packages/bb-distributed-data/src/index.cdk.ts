@@ -8,6 +8,7 @@
  */
 
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
+import { deployTimeLambdaEntry, markAddedChildrenBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -19,12 +20,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
+import { validateMigrations } from './validation.js';
+import { BB_NAME } from './version.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope, vpc: { requiresEgress: true } });
+    super(id, { parent: scope, bbName: BB_NAME, vpc: { requiresEgress: true } });
 
     const stack = cdk.Stack.of(this);
+    // The cluster, migration function and provider below go at stack scope;
+    // they are this block's (marked at the end of the constructor).
+    const stackChildrenBefore = new Set(stack.node.children);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
     const region = stack.region;
     const dbRole = sanitizeDbRoleName(this.fullId);
@@ -71,14 +77,17 @@ export class DistributedDatabase extends BuildingBlockScope {
 
     // Resolve migrations path if provided
     const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
+    if (resolvedMigrationsPath) validateMigrations(readMigrationsDir(resolvedMigrationsPath));
     const migrationsHash = resolvedMigrationsPath ? hashMigrationsDir(resolvedMigrationsPath) : 'no-migrations';
 
     // Migration/provisioning Lambda — always created to provision the app DB role.
     // Also runs .sql migrations when migrationsPath is provided.
     const migrationFn = new lambda.NodejsFunction(stack, `${this.fullId}DsqlMigrationFn`, {
       // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
-      // Must NOT use ../src/migration-lambda.ts — src/ is excluded from the published package.
-      entry: join(import.meta.dirname ?? new URL('.', import.meta.url).pathname, 'migration-lambda.js'),
+      // Must NOT use ../src/migration-lambda.ts — an installed package runs from dist/. A vendorized
+      // copy (blocks-vendorize copies src/ only, no dist/) has just ./migration-lambda.ts next to this
+      // file, which deployTimeLambdaEntry falls back to.
+      entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './migration-lambda' }),
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
@@ -129,6 +138,10 @@ export class DistributedDatabase extends BuildingBlockScope {
 
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
+
+    // So the service-principal trust check treats the roles of these stack-level
+    // constructs as AWS Blocks roles rather than the app's.
+    markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
   }
 
   /**
@@ -140,6 +153,13 @@ export class DistributedDatabase extends BuildingBlockScope {
   getEngine(): never {
     return synthGuard('DistributedDatabase', 'getEngine');
   }
+
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+  query(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'transaction'); }
+  simulateConflict(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'simulateConflict'); }
 }
 
 /** Hash all .sql files in a directory to detect changes. */
@@ -153,7 +173,16 @@ function hashMigrationsDir(dir: string): string {
   return hash.digest('hex').slice(0, 16);
 }
 
+function readMigrationsDir(dir: string): Record<string, string> {
+  return Object.fromEntries(
+    readdirSync(dir)
+      .filter(file => file.endsWith('.sql'))
+      .sort()
+      .map(file => [file, readFileSync(join(dir, file), 'utf-8')]),
+  );
+}
+
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
-export type { DistributedDatabaseOptions } from './types.js';
+export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';

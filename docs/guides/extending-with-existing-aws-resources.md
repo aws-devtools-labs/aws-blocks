@@ -11,7 +11,7 @@ situation:
 
 | # | Pattern | One-liner |
 |---|---|---|
-| 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks Lambda via `blocksStack.handler` / `blocksBackend.handler` |
+| 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks runtime via `executionRole` (IAM) and `registerConfig` (config) |
 | 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, RDS, Cognito) — keeps mocks, skips provisioning |
 | 3 | **Custom BB** | Author your own Building Block inside your monorepo (or publish to npm) when no first-party BB exists |
 | 4 | **Vendorize** | Eject a first-party BB's source into `vendor/` and own it outright |
@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `AuthCognito`)
+- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `Auth`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -71,7 +71,8 @@ actually constraining you. Use this to weigh the tradeoffs:
 ## Pattern 1: CDK in Blocks
 
 Blocks gives you two CDK shapes for embedding it in your infrastructure. Both
-expose the same `.handler` Lambda you reach into for IAM and env vars — pick
+expose the same `.executionRole` (for IAM) and work with `registerConfig` (for
+runtime config) — pick
 based on whether Blocks gets its own stack or shares one with your existing
 infra.
 
@@ -82,12 +83,16 @@ infra.
 
 Once instantiated, you can:
 
-- attach IAM policies (`blocksStack.handler.addToRolePolicy(...)`)
-- inject env vars (`blocksStack.handler.addEnvironment(...)`)
+- attach IAM policies to the role every Blocks compute assumes
+  (`blocksStack.executionRole.addToPrincipalPolicy(...)`)
 - grant access to any CDK resource you create alongside Blocks
-  (`myQueue.grantSendMessages(blocksStack.handler)`)
+  (`myQueue.grantSendMessages(blocksStack.executionRole)`)
+- pass config to the runtime (`registerConfig(blocksStack, 'MY_KEY', value)`) —
+  every compute loads it into `process.env` at cold start, before your backend
+  module is imported
 
-Then read those env vars from inside your runtime code with the AWS SDK directly.
+Then read those values from `process.env` inside your runtime code and call the
+AWS SDK directly.
 
 > **Note on naming:** these names use the `blocks` prefix.
 
@@ -102,7 +107,7 @@ onto it.
 ```ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, registerConfig } from '@aws-blocks/blocks/cdk';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -117,9 +122,9 @@ export const blocksStack = await BlocksStack.create(app, 'my-app', {
 // Pretend this queue was created by another stack you don't own.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 
-// Grant Blocks' Lambda permission to send to it, and inject the URL.
-externalQueue.grantSendMessages(blocksStack.handler);
-blocksStack.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+// Grant the Blocks runtime permission to send to it, and pass it the URL.
+externalQueue.grantSendMessages(blocksStack.executionRole);
+registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
 
 **`aws-blocks/index.ts`** (your runtime layer)
@@ -169,11 +174,11 @@ export class MyApiStack extends cdk.Stack {
       backendCDKPath: join(__dirname, 'aws-blocks/index.ts'),
     });
 
-    // Same .handler / .apiUrl / .gateway as BlocksStack — wire normally.
-    externalQueue.grantSendMessages(blocks.handler);
-    blocks.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+    // Same .executionRole / .apiUrl / .gateway as BlocksStack — wire normally.
+    externalQueue.grantSendMessages(blocks.executionRole);
+    registerConfig(blocks, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
-    new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.apiUrl });
+    new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.publicApiUrl });
   }
 }
 ```
@@ -231,7 +236,7 @@ Today this is supported by:
 | `DistributedTable` | `DistributedTable.fromExisting(tableName)` | Existing DynamoDB table (skips GSI provisioning — customer owns indexes) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
 | `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
-| `AuthCognito` | `AuthCognito.fromExisting(userPoolId, clientId?)` | Existing Cognito User Pool |
+| `Auth` | `Auth.fromExisting(userPoolId, clientId?)`, passed as the `userPool` option | Existing Cognito User Pool |
 
 ### Example: KVStore over a legacy DynamoDB table
 
@@ -248,7 +253,7 @@ front and surface it both ways:
 const LEGACY_TABLE = 'my-existing-sessions-table';
 process.env.LEGACY_SESSIONS_TABLE = LEGACY_TABLE; // synth-time
 // ... BlocksStack.create(...) — this loads index.ts, which reads the env above ...
-blocksStack.handler.addEnvironment('LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
+registerConfig(blocksStack, 'LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
 ```
 
 ```ts
@@ -268,18 +273,19 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 
 > **IAM is handled for you.** When you pass `fromExisting(...)`, the BB still
 > calls `grantReadWriteData` / `grantReadWrite` on the bound resource and
-> attaches the policy to `blocksStack.handler`'s role. You do *not* need to wire
+> attaches the policy to `blocksStack.executionRole`. You do *not* need to wire
 > IAM separately. Cross-account references are an exception — CDK's
 > `fromTableName` / `fromBucketName` can't introspect a resource in another
 > account, so for cross-account brownfield setups fall back to Pattern 1
-> (raw IAM via `blocksStack.handler.addToRolePolicy`).
+> (raw IAM via `blocksStack.executionRole.addToPrincipalPolicy`).
 
 ### What this gives you
 
 - **Mocks still work.** `npm run dev` writes to the local mock store, not the
   real table.
 - **No accidental mutation.** The BB will *not* modify the wrapped resource —
-  no schema changes, no IAM grants beyond what you wire up yourself.
+  no schema changes and no resource policy edits. The only IAM change is the
+  grant on `blocksStack.executionRole` described above.
 - Typed API parity with a Blocks-managed resource — call sites don't know the
   difference.
 
@@ -320,13 +326,13 @@ conditions:
 
 ### Skeleton
 
-**`src/index.cdk.ts`** — provisions the queue, grants Blocks' Lambda access,
-and surfaces config via env vars:
+**`src/index.cdk.ts`** — provisions the queue, grants the Blocks runtime access,
+and surfaces config with `registerConfig`:
 
 ```ts
 import { Duration } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 export interface QueueOptions {
@@ -343,8 +349,8 @@ export class Queue extends Scope {
         : undefined,
     });
 
-    queue.grantSendMessages(this.handler);
-    this.handler.addEnvironment(`${envSafe(this.fullId)}_URL`, queue.queueUrl);
+    queue.grantSendMessages(this.executionRole);
+    registerConfig(this, `${envSafe(this.fullId)}_URL`, queue.queueUrl);
   }
 }
 
@@ -461,6 +467,11 @@ In tests, you can read `work.sent` to assert what would have been delivered.
 
 - One more package to build and own. Worth it when you have ≥2 callers or
   when hand-rolled SDK boilerplate becomes a liability.
+- Its IAM roles are your app's, as for any construct in your backend. A role
+  that trusts an AWS service principal (other than Lambda) without an
+  `aws:SourceAccount` or `aws:SourceArn` condition gets a synth warning, which
+  you resolve or acknowledge as described in "Service-principal trust" in the
+  [`@aws-blocks/core` README](../../packages/core/README.md).
 
 For the canonical example of an in-tree BB that does this, see
 [`packages/bb-kv-store/src/index.cdk.ts`](../../packages/bb-kv-store/src/index.cdk.ts) —
@@ -510,6 +521,9 @@ accurate to what your BB actually implements rather than aspirational.
   Lambda bundlers de-duplicate.
 - Document the BB's contract (options, methods, mock semantics) in a
   `README.md` — community BBs without docs don't get adopted.
+- Call `assertNotMockInDeployedEnv('<your-bb-name>')` (from
+  `@aws-blocks/core/bb-utils`) at the top level of your mock (`default`) entry,
+  so a deploy bundled without `aws-runtime` fails closed like the first-party BBs.
 - Keep the export-conditions exact:
   ```json
   "exports": {
@@ -523,6 +537,67 @@ accurate to what your BB actually implements rather than aspirational.
   ```
   Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
   pick the right entry point.
+
+### Deploying to a compute target Blocks doesn't own
+
+Blocks' own deploy path (`npm run deploy` / `npm run sandbox`, and the
+Lambda, container, and AgentCore computes it provisions) bundles your backend
+with the `aws-runtime` export condition for you.
+
+If you deploy the backend yourself — your own esbuild/webpack build, a
+container image, or another serverless platform — you **must** configure that
+bundler to resolve the `aws-runtime` condition:
+
+```bash
+esbuild src/handler.ts --bundle --platform=node --conditions=aws-runtime ...
+```
+
+```js
+// esbuild build() options
+await build({
+  entryPoints: ['src/handler.ts'],
+  bundle: true,
+  platform: 'node',
+  // Keep `module`: passing custom conditions drops esbuild's implicit `module`
+  // condition, which would switch dependencies to their CJS builds.
+  conditions: ['aws-runtime', 'module'],
+});
+```
+
+```bash
+# Unbundled Node (e.g. a container running `node dist/server.js` with node_modules)
+node --conditions=aws-runtime dist/server.js
+# or
+NODE_OPTIONS=--conditions=aws-runtime node dist/server.js
+```
+
+```js
+// webpack
+module.exports = {
+  resolve: {
+    conditionNames: ['aws-runtime', 'node', 'import', 'module', 'default'],
+  },
+};
+```
+
+Without it, module resolution falls back to each Building Block's `default`
+export — the mock entry — and the bundle runs in-memory local-dev stubs instead
+of the real AWS implementations.
+
+Building Blocks fail closed on compute that Blocks configures: when a BB's mock
+entry is loaded in a deployed environment it throws instead of silently running
+the mock. Where that surfaces depends on the compute: on container and
+AgentCore computes the process fails at start, while on Lambda the backend is
+imported lazily on the first invocation (`createLambdaHandler`), so the deploy
+itself succeeds and every request then returns an error. A deployed environment is detected from the
+`BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which Blocks sets only
+on compute it configures, so the check works the same on Lambda, ECS/Fargate,
+and AgentCore — it is not Lambda-specific. Local dev and tests are unaffected.
+
+On compute Blocks doesn't configure, those variables are not set unless you set
+them yourself, so this check does not run there. In that case your bundler
+configuration — resolving the `aws-runtime` condition as shown above — is what
+keeps the mock entries out of your deployed artifact.
 
 **Found an issue with a first-party BB before publishing your own?** Consider
 opening a PR upstream against [`aws-blocks`](https://github.com/aws-devtools-labs/aws-blocks) — the team would
@@ -560,6 +635,13 @@ import { KVStore } from '@aws-blocks/bb-kv-store';   // resolves to vendor/, not
 
 Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 `cdk synth` (no rebuild — `tsx` consumes `.ts` directly).
+
+Some blocks also deploy helper Lambdas of their own: `Auth` (the user-pool
+immutability guard, and the identity-provider registration for
+Cognito-federated sign-in), `DistributedTable` (the GSI manager, for a table
+with indexes), and `Database` / `DistributedDatabase` (the migration runner).
+In a vendored copy these are bundled from `vendor/<package>/src/` at synth with
+your app's `esbuild`, so edits to those handlers deploy too.
 
 ### Reverting
 
@@ -662,7 +744,7 @@ When introducing Blocks into an existing AWS account:
 - **Identify what's mockable.** Inventory which existing resources have a BB
   with a `fromExisting` factory ([Pattern 2](#pattern-2-fromexisting-on-a-building-block));
   those are your highest-leverage integrations.
-- **Wire perms via `blocksStack.handler`** ([Pattern 1](#pattern-1-cdk-in-blocks))
+- **Wire perms via `blocksStack.executionRole`** ([Pattern 1](#pattern-1-cdk-in-blocks))
   for everything else. Resist the urge to mutate Blocks-managed resources from
   outside the BB — that's vendorize territory.
 - **Create a per-app BB package** the moment a Pattern-1 integration has

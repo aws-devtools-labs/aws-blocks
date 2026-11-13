@@ -57,6 +57,17 @@ export function isPgliteUnreachableTrap(error: unknown): boolean;
 // @public
 export const loadMigrationsFromDir: (dir: string) => Promise<Record<string, string>>;
 
+// @public
+export function logRecovery(log: {
+    error: (message: string, meta?: Record<string, unknown>) => void;
+}, label: string): void;
+
+// @public
+export const PGLITE_DATA_LAYER_RECOVERED_SENTINEL = "[bb-data] PGlite init trap: data layer recovered";
+
+// @public
+export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = "[bb-data] PGlite init trap: data layer unavailable";
+
 // Warning: (ae-internal-missing-underscore) The name "PgliteInitRetryOptions" should be prefixed with an underscore because the declaration is marked as @internal
 //
 // @internal
@@ -93,6 +104,11 @@ export interface SqlQuery {
     // (undocumented)
     readonly sql: string;
 }
+
+// @public
+export function trackEager<T>(promise: Promise<T>, log: {
+    error: (message: string, meta?: Record<string, unknown>) => void;
+}, label: string, onTrap?: () => void): Promise<T>;
 
 // @public
 export interface Transaction {

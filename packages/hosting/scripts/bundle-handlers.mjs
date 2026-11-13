@@ -32,6 +32,12 @@ const handlers = [
     // read as file `x`, export `bundle.handler` → "Cannot find module".
     outfile: join(pkgRoot, 'dist', 'constructs', 'kv_keys_handler_bundle.mjs'),
   },
+  {
+    // `@aws-sdk/client-lambda-web` (Lambda Web Functions) is not in the Lambda
+    // runtime baseline either.
+    entry: join(pkgRoot, 'src', 'constructs', 'web_function_policy_handler.ts'),
+    outfile: join(pkgRoot, 'dist', 'constructs', 'web_function_policy_handler_bundle.mjs'),
+  },
 ];
 
 await Promise.all(
@@ -41,6 +47,15 @@ await Promise.all(
       outfile: h.outfile,
       bundle: true,
       platform: 'node',
+      // Resolve Building Block `aws-runtime` export conditions so the bundle
+      // picks the real AWS implementations, never the `default` (mock) entry.
+      // `module` is kept so esbuild still prefers packages' ESM builds: passing
+      // custom conditions otherwise drops esbuild's implicit `module` condition
+      // and would pull CJS AWS SDK builds. (`node` is already implied by
+      // platform: 'node'.) bb-container-compute/src/bundle.ts and
+      // bb-agent/src/agentcore-bundle.ts still use ['aws-runtime', 'node'] —
+      // aligning them is a follow-up.
+      conditions: ['aws-runtime', 'module'],
       // Match the Lambda runtime (DEFAULT_NODE_RUNTIME). Bump together.
       target: 'node24',
       format: 'esm',

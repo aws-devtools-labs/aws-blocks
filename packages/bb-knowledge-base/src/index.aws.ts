@@ -21,8 +21,13 @@ import type {
 	RetrieveResult,
 	MetadataFilter,
 	WaitUntilSyncedOptions,
+	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolResult,
 } from './types.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
+import { createAgentTool } from './agent-tool.js';
 import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -37,6 +42,10 @@ export type {
 	RetrieveResult,
 	MetadataFilter,
 	WaitUntilSyncedOptions,
+	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolResult,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -112,25 +121,41 @@ function isFilterRelatedValidation(message: string): boolean {
 }
 
 function mapSdkError(err: unknown): Error {
-	// Non-Error throw (e.g., string or object) — stringify for diagnostics. There
-	// is no underlying Error to attach, so `cause` is left unset.
+	// Non-Error throw (e.g., string or object) — use a STABLE message (the raw
+	// value could be anything, so it must not reach the wire) and keep the
+	// stringified form server-side on a synthetic non-enumerable `cause`.
 	if (!(err instanceof Error)) {
-		return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
+		const mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, 'Knowledge base retrieval failed.');
+		Object.defineProperty(mapped, 'cause', {
+			value: new Error(String(err)),
+			enumerable: false,
+			writable: true,
+			configurable: true,
+		});
+		return mapped;
 	}
 
+	// Every branch below uses a STABLE, BB-authored message — never the raw SDK
+	// `err.message`/`String(err)`. Branded messages now cross the RPC wire, and a
+	// Bedrock error can embed the account id, role name, or KB ARN (e.g. an
+	// AccessDenied), so interpolating it here would re-open the leak. The raw SDK
+	// error is preserved server-side on the non-enumerable `cause` below.
 	let mapped: Error;
 	if (err.name === 'ResourceNotFoundException') {
 		mapped = blocksError(
 			KnowledgeBaseErrors.NotReady,
-			`Knowledge base not found. Run \`cdk deploy\` first. (${err.message})`,
+			'Knowledge base not found. Run `cdk deploy` first.',
 		);
 	} else if (err.name === 'ValidationException' && isFilterRelatedValidation(err.message)) {
-		mapped = blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
+		mapped = blocksError(
+			KnowledgeBaseErrors.InvalidFilter,
+			'Invalid metadata filter in the knowledge base query.',
+		);
 	} else if (err.name === 'ValidationException') {
-		mapped = blocksError(KnowledgeBaseErrors.ValidationError, err.message);
+		mapped = blocksError(KnowledgeBaseErrors.ValidationError, 'Knowledge base query validation failed.');
 	} else {
 		// Catch-all for unrecognized SDK errors (network, auth, throttling, etc.).
-		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
+		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, 'Knowledge base retrieval failed.');
 	}
 
 	// Preserve the original SDK error as the standard `Error.cause` for diagnostics
@@ -138,6 +163,28 @@ function mapSdkError(err: unknown): Error {
 	// `JSON.stringify(mapped)` cannot leak the SDK error's $metadata (requestId/cfId);
 	// the cause stays programmatically accessible (`mapped.cause === err`).
 	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
+	return mapped;
+}
+
+/**
+ * Build the `IngestionFailed` error for a FAILED ingestion job. The message is a
+ * STABLE, BB-authored string: `failureReasons` is raw Bedrock service text that
+ * can quote bucket names, object keys and ARNs, and a branded error's message
+ * crosses the RPC wire. When reasons were reported, they stay server-side on the
+ * standard, non-enumerable `Error.cause` (an {@link IngestionFailureCause}:
+ * `cause.message` joins them; `cause.failureReasons` keeps the array), so
+ * `JSON.stringify(err)` and the RPC response never carry them. With no reasons
+ * (none reported, or the `GetIngestionJob` lookup failed) there is no `cause`.
+ */
+function ingestionFailed(reasons: string[]): Error {
+	const mapped = blocksError(
+		KnowledgeBaseErrors.IngestionFailed,
+		'Knowledge base ingestion failed. See the ingestion job in the Bedrock console or the server logs for the failure reasons.',
+	);
+	if (reasons.length > 0) {
+		const cause: IngestionFailureCause = Object.assign(new Error(reasons.join('; ')), { failureReasons: [...reasons] });
+		Object.defineProperty(mapped, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	}
 	return mapped;
 }
 
@@ -227,6 +274,7 @@ export class KnowledgeBase extends Scope {
 	// lazily on first sync call via getAgentClient() so instances that only
 	// ever retrieve() (or never check sync state) don't allocate it.
 	private agentClient?: BedrockAgentClient;
+	private readonly kbDescription?: string;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -235,6 +283,7 @@ export class KnowledgeBase extends Scope {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = _options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fullIdCached = this.fullId;
+		this.kbDescription = _options?.description;
 		this.runtimeClient = new BedrockAgentRuntimeClient({
 			maxAttempts: 3,
 			retryMode: 'adaptive',
@@ -331,6 +380,54 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
+	 * Expose this knowledge base as an Agent tool whose search scope comes from your server code,
+	 * not from the model.
+	 *
+	 * Pass the result to the `tool()` factory in an Agent's `tools` callback. The tool takes one
+	 * input, `query`; the metadata filter is derived on every call by `options.filter` from the
+	 * per-call tool context, which you fill from the authenticated session in `agent.stream()`.
+	 * The tool is marked `untrustedOutput: true`, so the agent wraps retrieved text in an
+	 * untrusted-data block and tells the model to treat it as data, never instructions.
+	 *
+	 * Retrieval is read-only, so the tool doesn't set `needsApproval`. Set `needsApproval` on the
+	 * agent's tools that have side effects.
+	 *
+	 * Synth-safe: you can declare the tool at module top level. The search itself runs only at
+	 * runtime.
+	 *
+	 * @param options - `filter` (required) derives the metadata filter from the tool context;
+	 *   optional `description` and `maxResults` (default 5).
+	 * @returns A plain tool definition (`description`, `parameters`, `untrustedOutput: true`,
+	 *   `handler`) for the Agent's `tool()` factory. The handler returns plain JSON search hits.
+	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function, or
+	 *   `options.maxResults` is not an integer. When the tool runs, an error thrown by `filter`
+	 *   fails the call (no unscoped search), and so does a `filter` result other than `undefined`
+	 *   that isn't a non-empty filter with a non-empty string `equals` per key (`null`, `{}`,
+	 *   `{ tenant: { equals: undefined } }`); `retrieve()` errors propagate.
+	 *
+	 * @example
+	 * ```typescript
+	 * const agent = new Agent(scope, 'assistant', {
+	 *   systemPrompt: 'Answer questions from the tenant documents.',
+	 *   toolContextSchema: z.object({ tenantId: z.string() }),
+	 *   tools: (tool) => ({
+	 *     searchDocs: tool(kb.asAgentTool({
+	 *       filter: (context) => ({ tenant: { equals: context.tenantId } }),
+	 *     })),
+	 *   }),
+	 * });
+	 *
+	 * // In an API method: the scope comes from the authenticated session. The built-in auth
+	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
+	 * const user = await auth.requireAuth(context);
+	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
+	 * ```
+	 */
+	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
+		return createAgentTool(this.retrieve.bind(this), options, this.kbDescription);
+	}
+
+	/**
 	 * Report whether the knowledge base is **synced with your latest data** —
 	 * i.e. its most recent Bedrock ingestion job has reached `COMPLETE`. Mirrors
 	 * the "Sync" state Bedrock surfaces in the console.
@@ -368,7 +465,7 @@ export class KnowledgeBase extends Scope {
 	 *
 	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
 	 *   no managed data source to track); `false` while ingestion is pending.
-	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed. The message is a stable string. When Bedrock reported `failureReasons`, they are kept server-side on the non-enumerable `err.cause` (an {@link IngestionFailureCause}; read `err.cause?.failureReasons ?? []`) and in the server log.
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   For mapped Bedrock control-plane errors. Two distinct conditions map to `NotReady`:
 	 *   the `KB_ID` env var being unset (a *config* error thrown directly, so it carries no
@@ -400,10 +497,7 @@ export class KnowledgeBase extends Scope {
 		if (job.status === 'COMPLETE') return true;
 		if (job.status === 'FAILED') {
 			const reasons = await this.fetchFailureReasons(knowledgeBaseId, dataSourceId, job.ingestionJobId);
-			throw blocksError(
-				KnowledgeBaseErrors.IngestionFailed,
-				`Knowledge base ingestion failed.${reasons.length ? ` Reasons: ${reasons.join('; ')}` : ''}`,
-			);
+			throw ingestionFailed(reasons);
 		}
 		// STARTING | IN_PROGRESS | STOPPING | STOPPED → not synced yet.
 		return false;
@@ -448,7 +542,7 @@ export class KnowledgeBase extends Scope {
 	 *   many consecutive transient control-plane errors are tolerated before
 	 *   giving up; `signal` (optional `AbortSignal`) cancels the wait.
 	 * @throws {KnowledgeBaseTimeoutException} If the KB does not sync within `timeoutMs`.
-	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed. The message is a stable string. When Bedrock reported `failureReasons`, they are kept server-side on the non-enumerable `err.cause` (an {@link IngestionFailureCause}; read `err.cause?.failureReasons ?? []`) and in the server log.
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   Propagated from {@link isSynced} for mapped Bedrock control-plane errors — see its docs
 	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
@@ -523,11 +617,15 @@ export class KnowledgeBase extends Scope {
 				// control-plane errors, fold the most recent one into the message.
 				// Otherwise a timeout reads like a healthy KB that just never finished
 				// ingesting, hiding that the final polls were actually failing transiently.
+				// Surface the mapped error's stable NAME (e.g. RetrievalFailedException),
+				// never its message: `lastTransient` is a mapped KB error whose message is
+				// a stable BB string, and this Timeout error crosses the RPC wire, so
+				// interpolating raw driver/SDK text here would re-open the leak.
 				const base = `Knowledge base did not sync within ${timeoutMs}ms`;
 				throw blocksError(
 					KnowledgeBaseErrors.Timeout,
 					consecutiveTransientErrors > 0 && lastTransient
-						? `${base} (last transient error: ${lastTransient.message})`
+						? `${base} (last transient error: ${lastTransient.name})`
 						: `${base}.`,
 				);
 			}
@@ -606,7 +704,14 @@ export class KnowledgeBase extends Scope {
 				new GetIngestionJobCommand({ knowledgeBaseId, dataSourceId, ingestionJobId }),
 			);
 			const reasons = response.ingestionJob?.failureReasons ?? [];
-			if (reasons.length === 0) {
+			if (reasons.length > 0) {
+				// Server-side only: the reasons are raw service text, so the thrown
+				// IngestionFailedException carries a stable message and keeps them on
+				// its non-enumerable `cause` instead. `warn`, not `error`: isSynced() is
+				// meant for per-request gating, so this line repeats on every call while
+				// the latest job stays FAILED.
+				this.log.warn(`Ingestion job ${ingestionJobId} is FAILED: ${reasons.join('; ')}`);
+			} else {
 				// A FAILED job with no reported reasons is unusual — surface a hint so
 				// the otherwise reason-less IngestionFailedException is easier to diagnose.
 				this.log.warn(

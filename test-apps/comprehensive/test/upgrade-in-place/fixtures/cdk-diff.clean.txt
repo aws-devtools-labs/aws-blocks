@@ -1,0 +1,85 @@
+Stack bb-test-upgrade-dryrun
+IAM Statement Changes
+┌───┬──────────────────────────┬────────┬──────────────────────────────────────────────┬───────────────────┬───────────┐
+│   │ Resource                 │ Effect │ Action                                       │ Principal         │ Condition │
+├───┼──────────────────────────┼────────┼──────────────────────────────────────────────┼───────────────────┼───────────┤
+│ + │ ${upgrade/auth/pool.Arn} │ Allow  │ cognito-idp:AdminListGroupsForUser           │ AWS:${BlocksRole} │           │
+│   │                          │        │ cognito-idp:AssociateSoftwareToken           │                   │           │
+│   │                          │        │ cognito-idp:ChangePassword                   │                   │           │
+│   │                          │        │ cognito-idp:CompleteWebAuthnRegistration     │                   │           │
+│   │                          │        │ cognito-idp:ConfirmForgotPassword            │                   │           │
+│   │                          │        │ cognito-idp:ConfirmSignUp                    │                   │           │
+│   │                          │        │ cognito-idp:DeleteUser                       │                   │           │
+│   │                          │        │ cognito-idp:DeleteWebAuthnCredential         │                   │           │
+│   │                          │        │ cognito-idp:ForgetDevice                     │                   │           │
+│   │                          │        │ cognito-idp:ForgotPassword                   │                   │           │
+│   │                          │        │ cognito-idp:GetUser                          │                   │           │
+│   │                          │        │ cognito-idp:GetUserAttributeVerificationCode │                   │           │
+│   │                          │        │ cognito-idp:GlobalSignOut                    │                   │           │
+│   │                          │        │ cognito-idp:InitiateAuth                     │                   │           │
+│   │                          │        │ cognito-idp:ListDevices                      │                   │           │
+│   │                          │        │ cognito-idp:ListWebAuthnCredentials          │                   │           │
+│   │                          │        │ cognito-idp:ResendConfirmationCode           │                   │           │
+│   │                          │        │ cognito-idp:RespondToAuthChallenge           │                   │           │
+│   │                          │        │ cognito-idp:SetUserMFAPreference             │                   │           │
+│   │                          │        │ cognito-idp:SignUp                           │                   │           │
+│   │                          │        │ cognito-idp:StartWebAuthnRegistration        │                   │           │
+│   │                          │        │ cognito-idp:UpdateDeviceStatus               │                   │           │
+│   │                          │        │ cognito-idp:UpdateUserAttributes             │                   │           │
+│   │                          │        │ cognito-idp:VerifySoftwareToken              │                   │           │
+│   │                          │        │ cognito-idp:VerifyUserAttribute              │                   │           │
+│ - │ ${upgrade/auth/pool.Arn} │ Allow  │ cognito-idp:AssociateSoftwareToken           │ AWS:${BlocksRole} │           │
+│   │                          │        │ cognito-idp:ChangePassword                   │                   │           │
+│   │                          │        │ cognito-idp:CompleteWebAuthnRegistration     │                   │           │
+│   │                          │        │ cognito-idp:ConfirmForgotPassword            │                   │           │
+│   │                          │        │ cognito-idp:ConfirmSignUp                    │                   │           │
+│   │                          │        │ cognito-idp:DeleteUser                       │                   │           │
+│   │                          │        │ cognito-idp:DeleteWebAuthnCredential         │                   │           │
+│   │                          │        │ cognito-idp:ForgetDevice                     │                   │           │
+│   │                          │        │ cognito-idp:ForgotPassword                   │                   │           │
+│   │                          │        │ cognito-idp:GetUser                          │                   │           │
+│   │                          │        │ cognito-idp:GetUserAttributeVerificationCode │                   │           │
+│   │                          │        │ cognito-idp:GlobalSignOut                    │                   │           │
+│   │                          │        │ cognito-idp:InitiateAuth                     │                   │           │
+│   │                          │        │ cognito-idp:ListDevices                      │                   │           │
+│   │                          │        │ cognito-idp:ListWebAuthnCredentials          │                   │           │
+│   │                          │        │ cognito-idp:ResendConfirmationCode           │                   │           │
+│   │                          │        │ cognito-idp:RespondToAuthChallenge           │                   │           │
+│   │                          │        │ cognito-idp:SetUserMFAPreference             │                   │           │
+│   │                          │        │ cognito-idp:SignUp                           │                   │           │
+│   │                          │        │ cognito-idp:StartWebAuthnRegistration        │                   │           │
+│   │                          │        │ cognito-idp:UpdateDeviceStatus               │                   │           │
+│   │                          │        │ cognito-idp:UpdateUserAttributes             │                   │           │
+│   │                          │        │ cognito-idp:VerifySoftwareToken              │                   │           │
+│   │                          │        │ cognito-idp:VerifyUserAttribute              │                   │           │
+└───┴──────────────────────────┴────────┴──────────────────────────────────────────────┴───────────────────┴───────────┘
+(NOTE: There may be security-related changes not in this list. See https://github.com/aws/aws-cdk/issues/1299)
+
+Resources
+[~] AWS::IAM::Policy BlocksRole/DefaultPolicy BlocksRoleDefaultPolicyF2F3EE2E
+ └─ [~] PolicyDocument
+     └─ [~] .Statement:
+         └─ @@ -90,6 +90,7 @@
+            [ ] },
+            [ ] {
+            [ ]   "Action": [
+            [+]     "cognito-idp:AdminListGroupsForUser",
+            [ ]     "cognito-idp:SignUp",
+            [ ]     "cognito-idp:ConfirmSignUp",
+            [ ]     "cognito-idp:ResendConfirmationCode",
+[~] AWS::Lambda::Function DefaultCompute/Handler DefaultComputeHandlerF1C2C112
+ ├─ [~] Code
+ │   └─ [~] .S3Key:
+ │       ├─ [-] 8ed6b9c37f9c7c70bd6d755a84d0849fc2ff66655cf0a53256a59ef1634b1d5b.zip
+ │       └─ [+] a7188bdfa609753fc244130b2b5164da0f5733354be1a17ca4d7f3621af4c2fe.zip
+ └─ [~] Metadata
+     └─ [~] .aws:asset:path:
+         ├─ [-] asset.8ed6b9c37f9c7c70bd6d755a84d0849fc2ff66655cf0a53256a59ef1634b1d5b
+         └─ [+] asset.a7188bdfa609753fc244130b2b5164da0f5733354be1a17ca4d7f3621af4c2fe
+[~] AWS::Cognito::UserPool upgrade/auth/pool upgradeauthpool556377DE
+ └─ [+] DeletionProtection
+     └─ INACTIVE
+
+
+
+✨  Number of stacks with differences: 1

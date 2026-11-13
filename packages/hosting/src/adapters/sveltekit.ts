@@ -26,6 +26,7 @@
  *   - `build/prerendered/`  — prerendered HTML pages
  *   - `build/server/`       — the SSR bundle
  */
+import { shouldSkipBuild } from './shared/build_profile.js';
 import { spawn } from './spawn.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
@@ -34,7 +35,7 @@ import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
 import { createJiti } from 'jiti';
-import { getPackageInfoSync } from 'local-pkg';
+import { getProjectPackageInfo } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
@@ -129,7 +130,9 @@ const BRIDGE_BACKUP_BASENAME = 'svelte.config.blocks-original';
 export const sveltekitAdapter = (
   options: SveltekitAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, skipBuild, buildCommand } = options;
+  const { projectDir, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, 'build')));
   const bodySizeLimit = options.bodySizeLimit ?? DEFAULT_BODY_SIZE_LIMIT_BYTES;
 
   assertSvelteKitVersion(projectDir);
@@ -229,7 +232,7 @@ export const sveltekitAdapter = (
 // ---- version guard ----
 
 const assertSvelteKitVersion = (projectDir: string): void => {
-  const info = getPackageInfoSync('@sveltejs/kit', { paths: [projectDir] });
+  const info = getProjectPackageInfo('@sveltejs/kit', projectDir);
   const version = info?.version;
   // Enforce the FULL verified range — both the floor (< 2.0 rejected) and the
   // upper bound. A new major (e.g. 3.x) can silently change the adapter-node
@@ -519,9 +522,7 @@ const installAdapterNode = (projectDir: string): void => {
   // major. A transitive/older major (e.g. ^4) can emit a different `build/`
   // layout than the manifest builder assumes, so treat it as "not installed"
   // and install the pin — mirrors the `semver.satisfies` gate on @sveltejs/kit.
-  const existing = getPackageInfoSync('@sveltejs/adapter-node', {
-    paths: [projectDir],
-  });
+  const existing = getProjectPackageInfo('@sveltejs/adapter-node', projectDir);
   if (existing?.version && semver.satisfies(existing.version, ADAPTER_NODE_RANGE)) {
     return;
   }
@@ -789,6 +790,7 @@ const buildManifest = (input: {
       type: 'http-server',
       bundle: buildDir,
       entrypoint: RUN_SH_FILENAME,
+      serverEntry: 'index.js',
       port: SVELTEKIT_SERVER_PORT,
       placement: 'regional',
       runtime: FRAMEWORK_COMPUTE_RUNTIME,

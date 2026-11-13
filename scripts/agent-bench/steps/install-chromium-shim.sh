@@ -59,9 +59,12 @@ for name in chromium chromium-browser google-chrome; do
   bin="$(command -v "$name" 2>/dev/null || true)"
   [ -n "$bin" ] && candidates="$candidates $bin"
 done
-# Playwright's chromium: PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome (glob may miss).
+# Playwright's chromium binary (glob may miss). The chrome-linux* dir name is per platform:
+# chrome-linux64 on linux-x64, chrome-linux-arm64 on linux-arm64 (EXECUTABLE_PATHS in
+# playwright-core). The plain chrome-linux exists on neither, so match any chrome-linux* dir; an
+# unmatched glob stays literal and fails the -x check below.
 if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
-  for pw in "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux/chrome; do
+  for pw in "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome; do
     [ -x "$pw" ] && candidates="$candidates $pw"
   done
 fi

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isTelemetryEnabled } from '../telemetry/consent.js';
+import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { CORE_VERSION } from '../version.js';
 
 /**
@@ -20,4 +21,21 @@ export function getCdkTelemetryEnv(command: string): Record<string, string> {
     return { CDK_DISABLE_CLI_TELEMETRY: '1' };
   }
   return { CDK_CLI_USERAGENT: `aws-blocks/${CORE_VERSION}/${command}` };
+}
+
+/**
+ * Build the framework-sink environment variable for the cdk child.
+ *
+ * Returns nothing when the user opted out, so an opted-out run never writes the
+ * sink file: opting out must not persist telemetry data to disk.
+ *
+ * @param sinkPath - File the synth child writes the resolved framework to, or
+ *   undefined when no sink directory could be created
+ * @returns An object to spread into the child process `env`
+ */
+export function getFrameworkSinkEnv(sinkPath: string | undefined): Record<string, string> {
+  if (!sinkPath || !isTelemetryEnabled()) {
+    return {};
+  }
+  return { [FRAMEWORK_SINK_ENV]: sinkPath };
 }

@@ -27,8 +27,10 @@ struct BlocksDemoApp: App {
 
 @MainActor
 final class AppState: ObservableObject {
-    let api = Api()
-    let authApi = AuthApi()
+    // One client for the app's lifetime, so it is never closed.
+    let blocks = Blocks()
+    var api: Api { blocks.api }
+    var authApi: AuthApi { blocks.authApi }
 
     @Published var authState: AuthState?
     @Published var error: String?

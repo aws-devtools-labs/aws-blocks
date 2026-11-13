@@ -1,0 +1,16 @@
+{
+  "app_ready": "The todo form is visible on the local app.",
+  "prior_phase_state": "The verifier has one saved record from each earlier phase.",
+  "prior_data": "Earlier records retain their titles, completion, due dates and labels.",
+  "create_todo": "Add creates exactly one visible todo through the backend.",
+  "complete_todo": "Completion persists after page reload.",
+  "edit_todo": "Unchecking and editing a todo preserves the new title.",
+  "set_due_date": "A saved due date persists after page reload.",
+  "clear_due_date": "Clearing and saving removes the due date.",
+  "normalize_labels": "Saved labels are trimmed, nonempty and deduplicated after reload.",
+  "clear_labels": "Clearing and saving removes all displayed labels.",
+  "preserve_fields": "Saving feature fields preserves the title and completion state.",
+  "delete_todo": "Deleting a todo removes it and it stays absent after reload.",
+  "seed_survival": "A new verifier-created record saves all fields for subsequent phases.",
+  "reload_survival": "All verifier-created records survive reload in a fresh browser context."
+}

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { CorsRule, FileBucketOptions } from './types.js';
+import { validateUploadConstraintOptions } from './upload-constraints.js';
+import { validationFailed } from './validation-error.js';
 
 /**
  * Default noncurrent-version expiration (days) applied to the versioned main
@@ -10,20 +12,121 @@ import type { CorsRule, FileBucketOptions } from './types.js';
  */
 export const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 
+/**
+ * Message for `FileBucketErrors.PresignedUploadUnsupported`. Shared so the mock
+ * and the AWS runtime word the rejection identically.
+ */
+export function presignedUploadUnsupportedMessage(fullId: string): string {
+	return (
+		`FileBucket "${fullId}" has objectLock, so presigned uploads (putUrl / createUploadHandle) are not supported: ` +
+		`S3 requires a signed Content-MD5 or checksum header on every upload to an Object Lock bucket, which a presigned ` +
+		`URL created before the file is known can't carry. Upload through the backend with put() instead.`
+	);
+}
+
+/**
+ * Message for `FileBucketErrors.VersionNotFound` from `restoreVersion()`. Shared
+ * so the mock and the AWS runtime word it identically. Static on purpose: the
+ * error crosses the wire, so it names neither the key nor the version id.
+ */
+export const VERSION_NOT_FOUND_MESSAGE = 'The requested version does not exist';
+
+/** Upper bound for `objectLock.retentionDays` (100 years). */
+export const MAX_OBJECT_LOCK_RETENTION_DAYS = 36500;
+
 /** CORS methods that mutate state; a wildcard origin must never allow these. */
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 /**
- * Build a `ValidationFailed`-named error the same way `mock-utils.ts`'s local
- * `blocksError` helper does, so a rejected key surfaces the same `.name` and
- * name-prefixed `.message` regardless of which layer rejected it. Kept as a
- * small local helper (rather than importing core's `blocksError`) to keep this
- * module dependency-light — it has no other runtime imports.
+ * True for a character that has no legitimate use in an object key or prefix:
+ * - ASCII control characters (`\x00`–`\x1f`, `\x7f`) and C1 control
+ *   characters (U+0080–U+009F, which includes NEL U+0085);
+ * - the Unicode line and paragraph separators U+2028 and U+2029;
+ * - the bidirectional embedding/override (U+202A–U+202E) and isolate
+ *   (U+2066–U+2069) formatting characters, which make a key render differently
+ *   from the bytes it contains.
  */
-function validationError(message: string): Error {
-	const err = new Error(`ValidationFailed: ${message}`);
-	err.name = 'ValidationFailed';
-	return err;
+function isDisallowedKeyChar(code: number): 'control' | 'format' | null {
+	if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return 'control';
+	if (code === 0x2028 || code === 0x2029) return 'format';
+	if ((code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) return 'format';
+	return null;
+}
+
+/**
+ * Encoded characters {@link isDotSegment} decodes: `%2e` (`.`), `%2f` (`/`) and
+ * `%5c` (`\`), in either case.
+ */
+const ENCODED_DOT_OR_SEPARATOR = /%2e|%2f|%5c/gi;
+
+/** The character each {@link ENCODED_DOT_OR_SEPARATOR} match decodes to. */
+const DECODED: Readonly<Record<string, string>> = { '%2e': '.', '%2f': '/', '%5c': '\\' };
+
+/**
+ * True when `segment` is a `.` or `..` path segment, either literally or once
+ * every `%2e` (`.`), `%2f` (`/`) and `%5c` (`\`) in it is decoded (in either
+ * case) and the result is split on `/` and `\`: `%2e%2e`, `.%2E`, `..%2f..`
+ * and `%2e%2e%2fb` all count, because a piece of the decoded segment is `.` or
+ * `..`. Only those three sequences are decoded: any other `%` — including a
+ * literal one such as `100%done.txt` — is left as-is, so ordinary filenames
+ * containing `%` stay valid.
+ *
+ * This is a single decoding pass. A double-encoded sequence (`%252e`) is not
+ * decoded again; rejecting it is out of scope.
+ */
+function isDotSegment(segment: string): boolean {
+	const decoded = segment.replace(ENCODED_DOT_OR_SEPARATOR, (seq) => DECODED[seq.toLowerCase()]);
+	return decoded.split(/[/\\]/).some((piece) => piece === '.' || piece === '..');
+}
+
+/** S3's maximum object key length, in bytes of the key's UTF-8 encoding. */
+const MAX_KEY_BYTES = 1024;
+
+/**
+ * UTF-8 encoder for the key length check. `TextEncoder` is a global in Node and
+ * in browsers, so this module stays loadable from every entry point.
+ */
+const UTF8 = new TextEncoder();
+
+/**
+ * Character and segment rules shared by {@link assertValidKey} and
+ * {@link assertValidPrefix}. `label` only selects the static message prefix
+ * (`Invalid key` / `Invalid prefix`); messages never echo the input.
+ */
+function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSlash: boolean): void {
+	for (let i = 0; i < value.length; i++) {
+		const code = value.charCodeAt(i);
+		const kind = isDisallowedKeyChar(code);
+		if (kind === 'control') {
+			throw validationFailed(`Invalid ${label}: contains control characters`);
+		}
+		if (kind === 'format') {
+			throw validationFailed(`Invalid ${label}: contains Unicode line-separator or bidirectional formatting characters`);
+		}
+		if (code === 0x5c) {
+			throw validationFailed(`Invalid ${label}: backslash not allowed`);
+		}
+	}
+	if (value.startsWith('/')) {
+		throw validationFailed(`Invalid ${label}: leading slash not allowed`);
+	}
+	const segments = value.split('/');
+	for (let i = 0; i < segments.length; i++) {
+		const segment = segments[i];
+		if (isDotSegment(segment)) {
+			throw validationFailed(`Invalid ${label}: contains a path traversal segment`);
+		}
+		// Reject an empty segment (adjacent slashes `a//b` or a trailing slash
+		// `a/`). The mock maps keys onto the filesystem via `path.join`, which
+		// collapses `a//b` to `a/b` and strips a trailing slash, while S3 treats
+		// each as a distinct literal key — so permitting them would reintroduce a
+		// mock↔S3 divergence. (A leading empty segment is reported above as a
+		// leading slash; this covers interior and trailing ones.) A prefix may end
+		// with `/` (`uploads/`), so its final segment is allowed to be empty.
+		if (segment === '' && !(allowTrailingSlash && i === segments.length - 1)) {
+			throw validationFailed(`Invalid ${label}: contains an empty path segment`);
+		}
+	}
 }
 
 /**
@@ -38,9 +141,18 @@ function validationError(message: string): Error {
  *
  * Rejects a key that:
  * - is empty or not a string — there is no meaningful object to address;
+ * - is longer than 1024 bytes once UTF-8 encoded — S3's key length limit, so
+ *   such a key is rejected locally just as S3 rejects it;
  * - contains a NUL byte or any other ASCII control character (`\x00`–`\x1f` or
  *   `\x7f`) — control bytes in a key are almost always a bug or an injected
  *   value and have no legitimate use in an S3 key;
+ * - contains a C1 control character (U+0080–U+009F, including NEL U+0085), the
+ *   Unicode line/paragraph separators U+2028 / U+2029, or a bidirectional
+ *   embedding, override or isolate character (U+202A–U+202E, U+2066–U+2069) —
+ *   these break log lines and headers or make a key display differently from the
+ *   characters it contains;
+ * - contains a backslash (`\`) — some tools and filesystems treat it as a path
+ *   separator, so a key with one can address a different location than S3 does;
  * - has a leading `/` (absolute-style key) — S3 keys are not absolute paths, and
  *   a leading slash produces a surprising empty-first-segment key;
  * - contains an empty path segment — an interior `a//b` or a trailing `a/`. The
@@ -48,42 +160,55 @@ function validationError(message: string): Error {
  *   literal keys, so permitting them would reintroduce a mock↔S3 divergence;
  * - contains a `..` (or `.`) path SEGMENT — checked per `/`-delimited segment,
  *   not by substring, so a normal filename such as `my..file.txt` is accepted
- *   while a path traversal segment like `a/../b` is rejected.
+ *   while a path traversal segment like `a/../b` is rejected. A segment also
+ *   counts when a piece of it is `.` or `..` once `%2e`, `%2f` and `%5c` are
+ *   decoded (in either case) and the result is split on `/` and `\`
+ *   (`a/%2e%2e/b`, `a/..%2f../b`, `a/%2e%2e%2fb`), since code that URL-decodes
+ *   keys would see a traversal segment there. No other percent-encoding is
+ *   interpreted, so `100%done.txt` and `50%25.txt` stay valid, and the decoding
+ *   is a single pass (a double-encoded `%252e` is not decoded again).
+ *
+ * Error messages are static and never include the key.
  *
  * The motivation is dev/prod parity: any key worth rejecting in local dev is
  * worth rejecting on AWS, so that a developer never sees a rejection locally
  * that silently does not occur in the deployed path.
  *
  * @param key - The object key to validate.
- * @throws {Error} With name `ValidationFailed` if the key violates any rule.
+ * @throws {Error} With name `ValidationFailed` (an `ApiError` with status 400) if the key violates any rule.
  */
 export function assertValidKey(key: string): void {
 	if (typeof key !== 'string' || key.length === 0) {
-		throw validationError('Invalid key: must be a non-empty string');
+		throw validationFailed('Invalid key: must be a non-empty string');
 	}
-	for (let i = 0; i < key.length; i++) {
-		const code = key.charCodeAt(i);
-		if (code <= 0x1f || code === 0x7f) {
-			throw validationError('Invalid key: contains control characters');
-		}
+	if (UTF8.encode(key).length > MAX_KEY_BYTES) {
+		throw validationFailed(`Invalid key: longer than ${MAX_KEY_BYTES} bytes in UTF-8`);
 	}
-	if (key.startsWith('/')) {
-		throw validationError('Invalid key: leading slash not allowed');
+	assertKeyShape(key, 'key', false);
+}
+
+/**
+ * Validate a `scan({ prefix })` prefix with the same character and segment
+ * rules as {@link assertValidKey}, adapted to a prefix:
+ * - `undefined` and the empty string are accepted (an unscoped scan);
+ * - a trailing `/` is accepted (`uploads/`), so the final segment may be empty;
+ * - the final segment may be a partial name (`reports/2024-0`).
+ *
+ * Everything else matches key validation: a leading `/`, an interior empty
+ * segment, a `.` / `..` segment (including its `%2e` spelling), control
+ * characters, line/paragraph separators, bidirectional formatting characters
+ * and backslashes are rejected. Runs in both the mock and the AWS runtime, so a
+ * prefix is accepted or rejected identically. Messages never echo the prefix.
+ *
+ * @param prefix - The scan prefix to validate.
+ * @throws {Error} With name `ValidationFailed` (an `ApiError` with status 400) if the prefix violates any rule.
+ */
+export function assertValidPrefix(prefix: string | undefined): void {
+	if (prefix === undefined || prefix === '') return;
+	if (typeof prefix !== 'string') {
+		throw validationFailed('Invalid prefix: must be a string');
 	}
-	for (const segment of key.split('/')) {
-		if (segment === '..' || segment === '.') {
-			throw validationError('Invalid key: contains a path traversal segment');
-		}
-		// Reject an empty segment (adjacent slashes `a//b` or a trailing slash
-		// `a/`). The mock maps keys onto the filesystem via `path.join`, which
-		// collapses `a//b` to `a/b` and strips a trailing slash, while S3 treats
-		// each as a distinct literal key — so permitting them would reintroduce a
-		// mock↔S3 divergence. (A leading empty segment is reported above as a
-		// leading slash; this covers interior and trailing ones.)
-		if (segment === '') {
-			throw validationError('Invalid key: contains an empty path segment');
-		}
-	}
+	assertKeyShape(prefix, 'prefix', true);
 }
 
 /**
@@ -92,7 +217,7 @@ export function assertValidKey(key: string): void {
  * would reject (mock↔CDK parity — see bb-app-setting's validation.ts for the
  * same pattern).
  *
- * These are the two guards previously duplicated verbatim in `index.cdk.ts` and
+ * The CORS and noncurrent-expiration guards were previously duplicated verbatim in `index.cdk.ts` and
  * `index.mock.ts`; extracting them keeps a single source of truth. Both checks
  * depend only on the option shape (not on an async value/schema), so they are
  * safe to run synchronously in both constructors.
@@ -103,7 +228,10 @@ export function assertValidKey(key: string): void {
  * preserves the exact pre-refactor behavior on both paths.
  *
  * The caller gates this on the non-external branch (an `external`/wrapped bucket
- * is owned elsewhere and bypasses these guards on both paths).
+ * is owned elsewhere and skips these guards on both paths). The one exception
+ * is the upload-constraint check at the end ({@link validateUploadConstraintOptions}):
+ * those options are enforced at runtime, so the external branches run that
+ * check on its own.
  *
  * @param fullId - The bucket's scope-derived id, used in error messages.
  * @param options - The FileBucket options to validate.
@@ -137,4 +265,36 @@ export function validateFileBucketOptions(fullId: string, options?: FileBucketOp
 			);
 		}
 	}
+
+	// Object Lock locks object VERSIONS, so S3 requires versioning on the
+	// bucket. Reject the contradiction instead of silently re-enabling
+	// versioning (which would also flip the version-aware method typings).
+	const objectLock = options?.objectLock;
+	if (objectLock !== undefined) {
+		if (options?.versioned === false) {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock requires versioning, but versioned is false. ` +
+				`Remove versioned: false (versioning is on by default) or remove objectLock.`,
+			);
+		}
+		if (objectLock.mode !== 'governance' && objectLock.mode !== 'compliance') {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock.mode must be 'governance' or 'compliance' (got ${String(objectLock.mode)}).`,
+			);
+		}
+		const days = objectLock.retentionDays;
+		if (!Number.isInteger(days) || days <= 0 || days > MAX_OBJECT_LOCK_RETENTION_DAYS) {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock.retentionDays must be an integer between 1 and ` +
+				`${MAX_OBJECT_LOCK_RETENTION_DAYS} (got ${days}).`,
+			);
+		}
+	}
+
+	// Upload constraints (`allowedContentTypes`, `maxUploadBytes`) are enforced
+	// by the runtime methods, not by S3 bucket configuration, so their shape is
+	// checked here too and by the AWS runtime constructor (see
+	// upload-constraints.ts). A wrapped bucket still enforces them, so the
+	// external-bucket branches call validateUploadConstraintOptions directly.
+	validateUploadConstraintOptions(fullId, options);
 }

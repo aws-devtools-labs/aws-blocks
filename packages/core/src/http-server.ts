@@ -1,0 +1,771 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Node HTTP server for container computes. A thin adapter over the
+// transport-neutral dispatcher: the same RawRoute, JSON-RPC, CORS and cookie
+// handling the Lambda handler serves, without the Lambda-only parts (API Gateway
+// event parsing, base64 bodies, the 28 s timeout guard).
+
+import { randomUUID } from 'node:crypto';
+import * as http from 'node:http';
+import * as net from 'node:net';
+import type { AddressInfo } from 'node:net';
+import { apiNamespaceFilterFromEnv } from './api-placement.js';
+import { registerBuiltinRoutes } from './builtin-routes.js';
+import {
+  CLIENT_USER_AGENT_HEADER,
+  CONTAINER_HTTP_PORT,
+  CONTAINER_READINESS_PORT,
+  FORWARDED_HOST_HEADER,
+  FORWARDED_STAGE_HEADER,
+  isRpcPath,
+  PUBLIC_HOST_HEADER,
+} from './constants.js';
+import { buildCorsHeaders } from './cors.js';
+import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
+import type { Dispatcher, DispatchRequest, DispatchResponse } from './dispatch.js';
+import { lockRouteRegistry } from './raw-route.js';
+import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
+import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from './rpc.js';
+
+/** @internal */
+export interface ServeHttpOptions {
+  /** Interface to bind. Default `127.0.0.1`; a container entry point passes `0.0.0.0`. */
+  host?: string;
+  /** Request port. Default: the `PORT` env var, else `8080`. `0` picks a free port. */
+  port?: number;
+  /** Readiness port, served separately so no route path is reserved. Default `8081`. */
+  healthPort?: number;
+  /**
+   * Build request URLs from the front-door-stamped {@link FORWARDED_HOST_HEADER} /
+   * {@link FORWARDED_STAGE_HEADER}. Enable only where every path to the listener
+   * goes through a front door that overwrites or strips them (the container
+   * compute behind its internal load balancer). A request whose stamped headers
+   * aren't exactly one well-formed value each is refused with a 400. Default `false`.
+   *
+   * Whatever this option is, a loopback `X-Forwarded-Host` (`localhost:<port>`,
+   * say) takes precedence over the stamped host and the public origin, as in the
+   * Lambda handler, so the sandbox dev server can proxy to the compute. It only
+   * ever yields a loopback `http://` URL (see {@link buildRequestUrl}).
+   */
+  trustForwardedHeaders?: boolean;
+  /** Public origin for request URLs when no front door stamped one. Default: `BLOCKS_PUBLIC_ORIGIN`. */
+  publicOrigin?: string;
+  /**
+   * Largest accepted request body. Default: the JSON-RPC body limit (10 MiB).
+   * JSON-RPC bodies stay capped at that limit regardless — checked while reading,
+   * before buffering past it; a larger value only raises the limit for RawRoutes.
+   */
+  maxBodyBytes?: number;
+  /** How long {@link HttpServerHandle.close} waits for in-flight requests. Default `25000`. */
+  drainTimeoutMs?: number;
+}
+
+/** @internal */
+export interface HttpServerHandle {
+  /** Bound interface address (e.g. `127.0.0.1`). */
+  readonly address: string;
+  /** Bound request port. */
+  readonly port: number;
+  /** Bound readiness port. */
+  readonly healthPort: number;
+  /**
+   * Stop accepting requests and report not-ready, wait up to `drainTimeoutMs` for
+   * in-flight requests (until their handlers settle and their responses have been
+   * written), then close any remaining connections. A request whose client
+   * disconnects before the response is fully delivered also counts as complete
+   * once its connection closes. Repeated calls return the same promise.
+   */
+  close(): Promise<void>;
+}
+
+const DEFAULT_PORT = CONTAINER_HTTP_PORT;
+const DEFAULT_HEALTH_PORT = CONTAINER_READINESS_PORT;
+const DEFAULT_DRAIN_TIMEOUT_MS = 25_000;
+
+/**
+ * Keep idle connections open longer than the ALB's 60 s idle timeout, so the
+ * load balancer — not the server — always closes them. Closing first races a
+ * request the ALB is already sending and surfaces as a 502.
+ */
+const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+
+/**
+ * How long a client has to send a whole request (headers and body). Above the
+ * longest front-door timeout (60 s), well below Node's 300 s default, so a
+ * trickled upload can't hold a buffer for minutes.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * How long to keep reading (and discarding) an oversized body before answering
+ * 413. Bounds how long a slow or endless upload can hold the connection.
+ */
+const OVERSIZED_BODY_LINGER_MS = 5_000;
+
+/** API Gateway stage names: letters, digits, `-` and `_`. */
+const STAGE_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * A stamped host: a DNS name or IP address with an optional port. Nothing that
+ * could carry userinfo, a path or a second host (`x@evil/`, `a, b`).
+ */
+const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
+
+/**
+ * A request's own `Host` header: a name of letters, digits, `.`, `-` and `_`
+ * (as in docker-compose service names like `my_service`), or a bracketed IPv6
+ * address (`[::1]:8080`), with an optional port.
+ */
+const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/**
+ * A load balancer trace ID usable as the request ID in log lines: one bounded
+ * run of printable, non-space ASCII, so a header value never adds whitespace or
+ * a line break to a log line.
+ */
+const TRACE_ID_PATTERN = /^[\x21-\x7e]{1,256}$/;
+
+/** Largest delay `setTimeout` honors; a longer one fires immediately. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+interface RequestEnv {
+  dispatch: Dispatcher;
+  maxBodyBytes: number;
+  publicOrigin: string | undefined;
+  trustForwardedHeaders: boolean;
+}
+
+/**
+ * Serve a backend module (the app's `aws-blocks/index.ts`) over HTTP.
+ *
+ * Call after config is loaded and the backend is imported. Registers the
+ * built-in routes and locks the route registry, as the Lambda handler does on
+ * initialization.
+ *
+ * @internal
+ */
+export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}): Promise<HttpServerHandle> {
+  const host = options.host ?? '127.0.0.1';
+  const port = options.port === undefined ? portFromEnv() : validPortOption('port', options.port);
+  const healthPort =
+    options.healthPort === undefined ? DEFAULT_HEALTH_PORT : validPortOption('healthPort', options.healthPort);
+  if (port !== 0 && port === healthPort) {
+    throw new Error(`[Blocks] The request port and healthPort must differ, both are ${port}`);
+  }
+  const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+  if (!Number.isFinite(drainTimeoutMs) || drainTimeoutMs < 0 || drainTimeoutMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `[Blocks] drainTimeoutMs must be a number from 0 to ${MAX_TIMER_DELAY_MS}, got ${String(drainTimeoutMs)}`,
+    );
+  }
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_RPC_BODY_BYTES;
+  // A non-integer limit (NaN in particular) would fail every size comparison and
+  // so disable the limit altogether.
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw new Error(`[Blocks] maxBodyBytes must be a non-negative integer, got ${String(maxBodyBytes)}`);
+  }
+  const publicOrigin = options.publicOrigin ?? process.env.BLOCKS_PUBLIC_ORIGIN;
+  if (publicOrigin && !URL.canParse(publicOrigin)) {
+    throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
+  }
+  const env: RequestEnv = {
+    // With `defaults.strictNamespacePlacement`, serve only the API namespaces placed on this compute.
+    dispatch: createDispatcher(backend, {
+      rpcErrorLabel: 'HTTP Server RPC Error:',
+      servesNamespace: apiNamespaceFilterFromEnv(),
+    }),
+    maxBodyBytes,
+    publicOrigin,
+    trustForwardedHeaders: options.trustForwardedHeaders ?? false,
+  };
+  registerBuiltinRoutes();
+  lockRouteRegistry();
+
+  let draining = false;
+  let inFlight = 0;
+  const idleWaiters: Array<() => void> = [];
+  // Open connections, and those with a response in progress (counted per socket).
+  const sockets = new Set<net.Socket>();
+  const busy = new Map<net.Socket, number>();
+
+  const server = http.createServer((req, res) => {
+    inFlight++;
+    const socket = req.socket;
+    busy.set(socket, (busy.get(socket) ?? 0) + 1);
+    // A request that arrives while draining closes its connection once its
+    // response is written. This flag only reaches requests that start after the
+    // drain began: a keep-alive connection whose request was already in flight
+    // is closed by the drain sweep (once idle) or by the final
+    // closeAllConnections() in drainAndClose.
+    if (draining) res.shouldKeepAlive = false;
+    // Concurrent requests share one log stream; every error line for this request
+    // carries this ID.
+    const requestId = requestIdOf(req);
+    const handled = handleRequest(req, res, env, requestId).catch((error: unknown) => {
+      // The client went away mid-request (e.g. an aborted upload): nothing to answer.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
+      console.error('HTTP server error:', `[request ${requestId}]`, error);
+      if (res.destroyed) return;
+      if (res.headersSent) {
+        // Defensive: every response is written with a single res.end, so headers
+        // only go out together with the whole body and this branch isn't reached
+        // today. It guards a future streaming or multi-write response.
+        // Part of a response is already on the wire and its framing can't be
+        // completed correctly: drop the connection so a keep-alive client never
+        // reads the next response out of a misframed one.
+        res.destroy();
+        return;
+      }
+      writeInternalServerError(res);
+    });
+    // The response is done once it is handed to the OS (or the client is gone).
+    const responded = new Promise<void>((resolve) => res.once('close', resolve));
+    // Counted until the handler settles AND its response has been written — not
+    // until the client disconnects — so draining never cuts off work still running
+    // for a client that went away, nor a large response still being flushed.
+    void responded.then(() => {
+      const remaining = (busy.get(socket) ?? 1) - 1;
+      if (remaining > 0) busy.set(socket, remaining);
+      else busy.delete(socket);
+    });
+    void Promise.all([handled, responded]).finally(() => {
+      inFlight--;
+      if (inFlight === 0) {
+        for (const resolve of idleWaiters.splice(0)) resolve();
+      }
+    });
+  });
+  server.on('connection', (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = KEEP_ALIVE_TIMEOUT_MS + 1_000;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+
+  const health = http.createServer((_req, res) => {
+    const status = draining ? 503 : 200;
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ status: draining ? 'draining' : 'ok' }));
+  });
+
+  await listen(server, port, host);
+  try {
+    await listen(health, healthPort, host);
+  } catch (error) {
+    server.close();
+    throw error;
+  }
+
+  let closing: Promise<void> | undefined;
+  async function drainAndClose(): Promise<void> {
+    draining = true;
+    // Stop accepting connections with the socket server's close, not
+    // http.Server#close: that also sweeps the connections Node deems idle, which
+    // include one whose response has ended but is still being flushed — cutting
+    // the response short.
+    net.Server.prototype.close.call(server);
+    // Idle keep-alive connections would otherwise hold the drain open until they
+    // time out, so close them now. A connection with a response in progress is
+    // left alone: it closes once written if its request arrived after the drain
+    // began, and otherwise at the final closeAllConnections() below.
+    for (const socket of sockets) {
+      if (!busy.has(socket)) socket.destroy();
+    }
+    if (inFlight > 0) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, drainTimeoutMs);
+        timer.unref();
+        idleWaiters.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => health.close(() => resolve()));
+  }
+
+  const bound = server.address() as AddressInfo;
+  return {
+    address: bound.address,
+    port: bound.port,
+    healthPort: (health.address() as AddressInfo).port,
+    close() {
+      closing ??= drainAndClose();
+      return closing;
+    },
+  };
+}
+
+/** The `PORT` env var, else {@link DEFAULT_PORT}. A set-but-invalid value fails fast. */
+function portFromEnv(): number {
+  const raw = process.env.PORT;
+  if (raw === undefined || raw === '') return DEFAULT_PORT;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`[Blocks] PORT must be an integer from 1 to 65535, got "${raw}"`);
+  }
+  return port;
+}
+
+/** A port option: an integer from 0 (any free port) to 65535. An invalid value fails fast. */
+function validPortOption(name: 'port' | 'healthPort', value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
+    throw new Error(`[Blocks] ${name} must be an integer from 0 to 65535, got ${String(value)}`);
+  }
+  return value;
+}
+
+function listen(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+}
+
+/**
+ * The ID that ties a request's log lines together: the load balancer's
+ * `X-Amzn-Trace-Id` when it is one well-formed value (see {@link TRACE_ID_PATTERN}),
+ * so the lines also match the ALB access logs, else a random UUID.
+ */
+function requestIdOf(req: http.IncomingMessage): string {
+  const trace = req.headersDistinct['x-amzn-trace-id'];
+  if (trace?.length === 1 && TRACE_ID_PATTERN.test(trace[0])) return trace[0];
+  return randomUUID();
+}
+
+async function handleRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  env: RequestEnv,
+  requestId: string,
+): Promise<void> {
+  const origin = header(req, 'origin') ?? '';
+  // Front doors forward the routing path itself (no API Gateway stage).
+  const { pathname } = splitTarget(req.url ?? '/');
+  // JSON-RPC is capped at its own limit whatever `maxBodyBytes` allows RawRoutes.
+  const bodyLimit = isRpcPath(pathname) ? Math.min(env.maxBodyBytes, MAX_RPC_BODY_BYTES) : env.maxBodyBytes;
+
+  const signal = clientGoneSignal(res);
+
+  const body = await readBody(req, bodyLimit);
+  if (body === undefined) {
+    // Lingering holds the connection for a bounded time so the 413 arrives intact
+    // instead of being lost to a reset; it runs before the stamped-header check by
+    // design, since the body must be drained before any response is written.
+    await discardRemainingBody(req);
+    // Still uploading after the linger window: answer, then drop the connection.
+    if (!req.complete) res.setHeader('Connection', 'close');
+    writeResponse(res, payloadTooLarge(pathname, origin, bodyLimit), requestId);
+    return;
+  }
+
+  // A front door overwrites the stamped headers with a single value. Two values
+  // mean a client sent its own under a name the front door didn't overwrite (a
+  // different letter case, say), and a malformed one could move the URL's host:
+  // refuse the request rather than guess which value is the front door's.
+  if (env.trustForwardedHeaders && !hasValidStampedHeaders(req)) {
+    writeResponse(res, {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', ...buildCorsHeaders(origin) },
+      cookies: [],
+      body: JSON.stringify({ error: 'Bad Request' }),
+    }, requestId);
+    return;
+  }
+
+  const response = await env.dispatch(
+    toDispatchRequest(req, body, {
+      path: pathname,
+      publicOrigin: env.publicOrigin,
+      trustForwardedHeaders: env.trustForwardedHeaders,
+      signal,
+      requestId,
+    }),
+  );
+  writeResponse(res, response, requestId);
+}
+
+/**
+ * The request signal: fires when the client goes away before the response is
+ * written, so handlers can stop in-flight fetch / SDK calls.
+ *
+ * @internal
+ */
+export function clientGoneSignal(res: http.ServerResponse): AbortSignal {
+  const abort = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) abort.abort();
+  });
+  return abort.signal;
+}
+
+/** @internal */
+export interface NodeDispatchRequestInit {
+  /** Routing path (see {@link DispatchRequest.path}). */
+  path: string;
+  /** Public origin for request URLs (see {@link buildRequestUrl}). */
+  publicOrigin?: string;
+  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl} and {@link buildRequestBaseUrl}). */
+  trustForwardedHeaders?: boolean;
+  signal?: AbortSignal;
+  requestId?: string;
+}
+
+/**
+ * The {@link DispatchRequest} for a Node HTTP request whose body has been read
+ * into `body`. Shared by every Node HTTP transport (this server, the local dev
+ * server) so they hand the dispatcher identical requests.
+ *
+ * @internal
+ */
+export function toDispatchRequest(req: http.IncomingMessage, body: Buffer, init: NodeDispatchRequestInit): DispatchRequest {
+  return {
+    method: req.method ?? 'GET',
+    path: init.path,
+    origin: header(req, 'origin') ?? '',
+    cookie: header(req, 'cookie') ?? '',
+    clientUserAgent: header(req, CLIENT_USER_AGENT_HEADER),
+    headers: () => toHeaders(req),
+    url: () => buildRequestUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
+    baseUrl: () => buildRequestBaseUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
+    body: () => ({ text: body.toString('utf-8'), stream: body.length > 0 ? bytesStream(body) : null }),
+    signal: init.signal,
+    requestId: init.requestId,
+  };
+}
+
+/**
+ * The response for a body over the limit: the JSON-RPC 413 envelope on the RPC
+ * path (what `parseRpcRequest` answers, so the client surfaces `e.status === 413`
+ * and `PayloadTooLarge`), a plain 413 elsewhere.
+ */
+function payloadTooLarge(pathname: string, origin: string, limitBytes: number): Omit<DispatchResponse, 'kind'> {
+  const cors = buildCorsHeaders(origin);
+  if (isRpcPath(pathname)) {
+    return {
+      status: 200,
+      headers: rpcResponseHeaders(cors),
+      cookies: [],
+      body: payloadTooLargeResponse(limitBytes),
+    };
+  }
+  return {
+    status: 413,
+    headers: { 'Content-Type': 'application/json', ...cors },
+    cookies: [],
+    body: JSON.stringify({ error: 'Payload Too Large' }),
+  };
+}
+
+/**
+ * Read and discard the rest of an oversized body, for at most
+ * {@link OVERSIZED_BODY_LINGER_MS}. Answering first would let Node close a socket
+ * that still holds unread data, which resets the connection and can discard the
+ * 413 before the client reads it.
+ *
+ * @internal
+ */
+export function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
+  if (req.complete) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, OVERSIZED_BODY_LINGER_MS);
+    timer.unref();
+    function done() {
+      clearTimeout(timer);
+      resolve();
+    }
+    req.once('end', done);
+    req.once('close', done);
+    req.once('error', done);
+    req.resume();
+  });
+}
+
+/**
+ * Write a dispatcher response to a Node HTTP response. `requestId`, when set,
+ * prefixes the error line logged for an invalid status. `errorHeaders`, when
+ * set, is added to the plain 500 sent for an invalid status (see
+ * {@link writeInternalServerError}).
+ *
+ * @internal
+ */
+export function writeResponse(
+  res: http.ServerResponse,
+  response: Omit<DispatchResponse, 'kind'>,
+  requestId?: string,
+  errorHeaders?: Readonly<Record<string, string>>,
+): void {
+  // A handler can set any number as `ctx.response.status`. Only a final status
+  // is sent: Node refuses an out-of-range one only while ending the response,
+  // after the handler's headers and Content-Length are recorded, and sends a 1xx
+  // as an interim response with no body, so a keep-alive client would read the
+  // next response as the answer. Check it up front and answer an out-of-range or
+  // interim status with a plain 500, without the handler's headers or cookies.
+  if (!isValidStatus(response.status)) {
+    if (requestId === undefined) console.error('HTTP server error:', 'invalid response status', response.status);
+    else console.error('HTTP server error:', `[request ${requestId}]`, 'invalid response status', response.status);
+    writeInternalServerError(res, errorHeaders);
+    return;
+  }
+  res.statusCode = response.status;
+  for (const [name, value] of Object.entries(response.headers)) {
+    res.setHeader(name, value);
+  }
+  if (response.cookies.length > 0) {
+    res.setHeader('Set-Cookie', response.cookies);
+  }
+  res.end(response.body);
+}
+
+/** Whether `status` is a final HTTP status, 200 to 599. */
+function isValidStatus(status: number): boolean {
+  return Number.isInteger(status) && status >= 200 && status <= 599;
+}
+
+/**
+ * Answer a plain 500. Every header set so far is removed first, so the error
+ * response carries no stale Content-Length (which would misframe the next
+ * response on a keep-alive connection) and none of the handler's cookies.
+ * `extraHeaders`, when set, is added after that removal, for headers the
+ * caller sends on every response (such as the dev server's CORS headers).
+ *
+ * @internal
+ */
+export function writeInternalServerError(
+  res: http.ServerResponse,
+  extraHeaders?: Readonly<Record<string, string>>,
+): void {
+  for (const name of res.getHeaderNames()) res.removeHeader(name);
+  const body = JSON.stringify({ error: 'Internal Server Error' });
+  res.writeHead(500, {
+    ...extraHeaders,
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+/**
+ * Read the whole request body, or `undefined` once it exceeds `limit` bytes.
+ * The rest of an oversized body is discarded, not buffered.
+ *
+ * @internal
+ */
+export function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | undefined> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) {
+      resolve(undefined);
+      return;
+    }
+    let chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return;
+      size += chunk.length;
+      if (size > limit) {
+        tooLarge = true;
+        chunks = [];
+        resolve(undefined);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooLarge) return;
+      const body = Buffer.concat(chunks, size);
+      chunks = [];
+      resolve(body);
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Where a request arrived, in the order of {@link buildRequestUrl}: the origin and
+ * API Gateway stage prefix (`''` when there is none) of the base URL the backend is
+ * reachable at, and the origin the client called, which `ctx.request.url` reports.
+ * A loopback forwarded host contributes only its host: its own query, fragment or
+ * userinfo (`localhost:3000?a=b#c`) never rides along, as in the Lambda handler.
+ * Behind a Blocks CloudFront front door the client called the door's host (a
+ * trusted `x-blocks-public-host`), while the base URL stays the one the door
+ * stamped, as on Lambda.
+ */
+function resolveRequestOrigin(
+  req: http.IncomingMessage,
+  publicOrigin: string | undefined,
+  trustForwardedHeaders: boolean,
+): { origin: URL; stagePrefix: string; viewerOrigin: URL } {
+  const forwardedHost = header(req, 'x-forwarded-host');
+  if (isLoopbackForwardedHost(forwardedHost)) {
+    const origin = new URL(new URL(`http://${forwardedHost}`).origin);
+    return { origin, stagePrefix: '', viewerOrigin: origin };
+  }
+  const base = resolveBaseOrigin(req, publicOrigin, trustForwardedHeaders);
+  const publicHost = trustedPublicHost(header(req, PUBLIC_HOST_HEADER));
+  return { ...base, viewerOrigin: publicHost ? new URL(`https://${publicHost}`) : base.origin };
+}
+
+/** The base origin and stage of a request with no loopback forwarded host (see {@link resolveRequestOrigin}). */
+function resolveBaseOrigin(
+  req: http.IncomingMessage,
+  publicOrigin: string | undefined,
+  trustForwardedHeaders: boolean,
+): { origin: URL; stagePrefix: string } {
+  const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
+  if (stampedHost) {
+    const stamped = header(req, FORWARDED_STAGE_HEADER);
+    const stagePrefix = stamped && STAGE_PATTERN.test(stamped) ? `/${stamped}` : '';
+    return { origin: new URL(`https://${stampedHost}`), stagePrefix };
+  }
+  if (publicOrigin) return { origin: new URL(publicOrigin), stagePrefix: '' };
+  return { origin: new URL(`http://${requestHost(req)}`), stagePrefix: '' };
+}
+
+/**
+ * The externally visible URL of a request — origin, path and query values as the
+ * Lambda handler reports them in `ctx.request.url` for the same request:
+ *
+ * 1. A trusted loopback `X-Forwarded-Host` (the sandbox dev-server front door):
+ *    `http://<that host><path>`, no stage. Applies with or without
+ *    `trustForwardedHeaders`, as in the Lambda handler; only a loopback host is
+ *    taken, so it never yields anything but a loopback `http://` URL.
+ * 2. A front-door host in `x-blocks-public-host` that is one of the backend's own
+ *    CloudFront front-door hosts (see {@link trustedPublicHost}):
+ *    `https://<host><path>` — exactly what the Lambda handler reports behind the
+ *    same door, whether the door reached this container straight or through the
+ *    gateway. Several values (a client copy under another letter case) are never
+ *    one of those hosts, so they fall through.
+ * 3. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}:
+ *    `https://<host><path>`. The path is the route path, with no stage, as on
+ *    Lambda; a stamped {@link FORWARDED_STAGE_HEADER} goes to {@link buildRequestBaseUrl}.
+ * 4. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
+ * 5. The request's own `Host`, over plain HTTP (local `docker run`).
+ *
+ * The request target only ever supplies the path and query: a `//host/...` or
+ * absolute-form target can never move the URL to another host.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string, trustForwardedHeaders = false): URL {
+  const { pathname, search } = splitTarget(req.url ?? '/');
+  const url = new URL(resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders).viewerOrigin);
+  // Assign the path rather than resolving the target against the origin.
+  url.pathname = pathname;
+  // Re-serialize the query the way the Lambda handler does (it rebuilds it from
+  // API Gateway's parsed parameters), so `href` matches across transports.
+  url.search = new URLSearchParams(search).toString();
+  return url;
+}
+
+/**
+ * The externally reachable base URL of a request (`getRequestBaseUrl()`): the
+ * origin the front door stamped plus the stamped API Gateway stage
+ * (`https://<host>/prod`), with no trailing slash, as the Lambda handler reports
+ * it for the same request. Behind a Blocks CloudFront front door it stays that
+ * stamped origin, while {@link buildRequestUrl} reports the host the client called.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildRequestBaseUrl(
+  req: http.IncomingMessage,
+  publicOrigin?: string,
+  trustForwardedHeaders = false,
+): string {
+  const { origin, stagePrefix } = resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders);
+  return `${origin.origin}${stagePrefix}`;
+}
+
+/**
+ * The request's own `Host`, or `localhost` when it is missing or isn't a plain
+ * host[:port] (see {@link REQUEST_HOST_PATTERN}). Falling back rather than
+ * answering 400 keeps a request that never reads its URL working, and keeps
+ * userinfo, a path or a second host out of `ctx.request.url`.
+ */
+function requestHost(req: http.IncomingMessage): string {
+  const host = header(req, 'host');
+  if (host && REQUEST_HOST_PATTERN.test(host) && URL.canParse(`http://${host}`)) return host;
+  return 'localhost';
+}
+
+/**
+ * Whether the front-door-stamped headers, where present, are one well-formed
+ * value each: {@link FORWARDED_HOST_HEADER} a host (see
+ * {@link STAMPED_HOST_PATTERN}) that also forms a valid `https://` URL (so its
+ * port is in range), {@link FORWARDED_STAGE_HEADER} a stage name.
+ */
+function hasValidStampedHeaders(req: http.IncomingMessage): boolean {
+  const host = req.headersDistinct[FORWARDED_HOST_HEADER];
+  if (
+    host &&
+    (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]) || !URL.canParse(`https://${host[0]}`))
+  ) {
+    return false;
+  }
+  const stage = req.headersDistinct[FORWARDED_STAGE_HEADER];
+  if (stage && (stage.length !== 1 || !STAGE_PATTERN.test(stage[0]))) return false;
+  return true;
+}
+
+/**
+ * Split a request target into its path and query without resolving it as a URL:
+ * `//host/x` stays a path (not a protocol-relative reference to `host`), and an
+ * absolute-form target (`http://host/x`, as sent to a proxy) contributes only its
+ * raw path and query — never its host, and with `..` segments left as sent, as
+ * for any other target.
+ */
+function splitTarget(target: string): { pathname: string; search: string } {
+  const pathAndQuery = target.startsWith('/') ? target : absoluteFormPath(target);
+  const query = pathAndQuery.indexOf('?');
+  return query === -1
+    ? { pathname: pathAndQuery, search: '' }
+    : { pathname: pathAndQuery.slice(0, query), search: pathAndQuery.slice(query) };
+}
+
+/** The raw path and query of an absolute-form target (`http://host/x?y` → `/x?y`); `/` for anything else. */
+function absoluteFormPath(target: string): string {
+  const scheme = target.indexOf('://');
+  if (scheme === -1) return '/';
+  const authority = target.slice(scheme + 3);
+  // The path starts where the authority ends.
+  const end = authority.search(/[/?#]/);
+  if (end === -1) return '/';
+  const rest = authority.slice(end).split('#')[0];
+  return rest.startsWith('/') ? rest : `/${rest}`;
+}
+
+/** A single request header value (Node lower-cases names; repeats are joined). */
+function header(req: http.IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
+function toHeaders(req: http.IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v);
+  }
+  return headers;
+}
+
+/** The raw body bytes as a stream, copied only when a handler reads it. */
+function bytesStream(bytes: Buffer): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        controller.enqueue(new Uint8Array(bytes));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}

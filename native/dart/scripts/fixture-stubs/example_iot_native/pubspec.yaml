@@ -1,0 +1,5 @@
+name: example_iot_native
+description: Compile-only stub of a declared native package (codegen fixture 27).
+publish_to: none
+environment:
+  sdk: ^3.11.0

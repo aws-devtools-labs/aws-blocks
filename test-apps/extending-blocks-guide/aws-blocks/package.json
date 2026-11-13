@@ -14,5 +14,10 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.1156.0",
+    "@aws-sdk/client-sqs": "^3.1156.0",
+    "zod": "^4.6.7"
   }
 }

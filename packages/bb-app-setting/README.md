@@ -2,9 +2,9 @@
 
 A single application configuration value backed by SSM Parameter Store.
 
-**When to use:** You need a configuration value (feature flag, API URL, threshold) or a secret (API key, token) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
+**When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
 
-**When NOT to use:** If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
+**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -19,6 +19,15 @@ const setting = new AppSetting(scope, id, options)
 | `get()` | `Promise<T>` | Read the current value. |
 | `put(value)` | `Promise<void>` | Update the value at runtime. |
 
+**CDK layer (synth time) only** — read-only properties on the construct, for CDK code and for other Building Blocks' CDK layers. They are not on the local or Lambda runtime class.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `parameterName` | `string` | The SSM parameter name: the explicit `name` (always set for `fromExisting`), else the derived `/${fullId}`. The same name the runtime reads. |
+| `secret` | `boolean` | `true` for an SSM SecureString (`secret: true`), for created and `fromExisting` settings alike. |
+
+For example, `Auth` reads both when an `AppSetting` is passed as an identity provider's client secret: it registers the provider against `parameterName`, so a secret with an explicit `name` or from `AppSetting.fromExisting` works, and it refuses a setting whose `secret` is `false`.
+
 ### Options
 
 | Option | Type | Required | Description |
@@ -26,7 +35,7 @@ const setting = new AppSetting(scope, id, options)
 | `name` | `string` | No | SSM parameter path. When omitted, derived from the scope tree as `/${fullId}`, guaranteeing uniqueness within the stack. |
 | `value` | `T` | No | Initial value. Required for non-secret parameters. Must not be provided when `secret` is set. |
 | `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T` from the schema. Cannot be used with `secret`. |
-| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). Cannot be used with `schema` or `value`. |
+| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). Cannot be used with `schema` or `value`. For a production secret, prefer [`Secret`](../bb-secret/README.md) (AWS Secrets Manager) — see **When NOT to use** above. |
 | `kmsKeyArn` | `string` | No | ARN of a customer-managed KMS key to encrypt the SecureString, instead of the default `aws/ssm` key. Only valid with `secret: true`. See the note below. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 

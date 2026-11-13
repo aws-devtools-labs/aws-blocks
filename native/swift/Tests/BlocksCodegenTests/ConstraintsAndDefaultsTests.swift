@@ -13,11 +13,11 @@ import XCTest
 /// shape and the generated Swift output against fixture specs.
 final class ConstraintsAndDefaultsTests: XCTestCase {
 
-    private func generate(_ spec: String) throws -> (models: String, api: String) {
+    private func generate(_ spec: String) throws -> GeneratedSources {
         let data = Data(spec.utf8)
         let rpcModel = try OpenRPCParser().parse(data: data)
         let codegen = CodegenModelBuilder().build(from: rpcModel)
-        return SwiftCodeGenerator().generate(from: codegen)
+        return try SwiftCodeGenerator().generate(from: codegen)
     }
 
     private func allOutput(_ spec: String) throws -> String {
@@ -124,6 +124,37 @@ final class ConstraintsAndDefaultsTests: XCTestCase {
         XCTAssertTrue(all.contains("role: String? = \"viewer\""))
         XCTAssertTrue(all.contains("active: Bool? = true"))
         XCTAssertTrue(all.contains("max: Int? = 5"))
+    }
+
+    func testTimeFormatStringDefaultRenderedAsSwiftLiteral() throws {
+        let spec = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.create",
+                "params": [{ "name": "input", "required": true, "schema": {
+                    "type": "object",
+                    "required": ["opensAt"],
+                    "properties": {
+                        "opensAt":  { "type": "string", "format": "time", "default": "08:00" },
+                        "closesAt": { "type": "string", "format": "time", "default": "09:30" },
+                        "id":       { "type": "string", "format": "uuid", "default": "00000000-0000-0000-0000-000000000000" }
+                    }
+                }}],
+                "result": { "name": "CreateResult", "schema": { "type": "boolean" } }
+            }]
+        }
+        """
+
+        let all = try allOutput(spec)
+        // `format: time` generates as `String`, so the default is kept for both
+        // required and optional fields.
+        XCTAssertTrue(all.contains("opensAt: String = \"08:00\""))
+        XCTAssertTrue(all.contains("closesAt: String? = \"09:30\""))
+        // `format: uuid` generates as `UUID`; a string literal default is not emitted.
+        XCTAssertTrue(all.contains("id: UUID? = nil"))
+        XCTAssertFalse(all.contains("00000000-0000-0000-0000-000000000000\""))
     }
 
     func testConstParsesAsSingleValueEnum() throws {
@@ -245,5 +276,46 @@ final class ConstraintsAndDefaultsTests: XCTestCase {
                       "Optional field should unwrap before validation")
         XCTAssertTrue(all.contains("v.range(of: \"^[a-z]+$\", options: .regularExpression)"),
                       "Should validate unwrapped optional against pattern")
+    }
+
+    /// A component schema whose fields carry the given `properties` JSON, returned from one method.
+    private func componentSpec(properties: String) -> String {
+        """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "components": { "schemas": { "Widget": {
+                "type": "object",
+                "properties": \(properties),
+                "required": ["code"]
+            }}},
+            "methods": [{
+                "name": "api.get",
+                "params": [],
+                "result": { "name": "GetResult", "schema": { "$ref": "#/components/schemas/Widget" } }
+            }]
+        }
+        """
+    }
+
+    func testModelValidationImportsRuntime() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string", "minLength": 2 } }"#))
+        XCTAssertTrue(out.models.contains("throw CodegenError.validation("),
+                      "Model validation should reach Models.swift")
+        XCTAssertTrue(out.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"),
+                      "Models.swift names CodegenError, so it must import BlocksRuntime")
+    }
+
+    func testModelUnknownFieldImportsRuntime() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string" }, "extra": { "type": "array" } }"#))
+        XCTAssertTrue(out.models.contains("JSONValue"), "An array without items should decode as [JSONValue]")
+        XCTAssertTrue(out.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"),
+                      "Models.swift names JSONValue, so it must import BlocksRuntime")
+    }
+
+    func testModelWithoutRuntimeSymbolsOmitsRuntimeImport() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string" } }"#))
+        XCTAssertFalse(out.models.contains("import BlocksRuntime"),
+                       "Models.swift naming no runtime symbol should import Foundation only")
     }
 }

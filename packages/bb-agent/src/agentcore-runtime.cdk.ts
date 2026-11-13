@@ -28,7 +28,8 @@ import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { getBlocksRoot, getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 
@@ -61,6 +62,7 @@ export class AgentCoreRuntime extends Scope {
 		}
 
 		const stack = cdk.Stack.of(this);
+		const root = getBlocksRoot(this);
 
 		// Run the loop AS the shared Blocks execution role (`role: this.executionRole`) — the same
 		// role the Lambda handler runs as. Because every Building Block grants its runtime permissions
@@ -70,7 +72,7 @@ export class AgentCoreRuntime extends Scope {
 		// for a future per-BB compute abstraction.
 		const role = this.executionRole;
 
-		// Add the agent's shared-role trust + grants ONCE per stack. Every agent instance would
+		// Add the agent's shared-role trust + grants ONCE per backend root. Every agent instance would
 		// otherwise add the SAME trust / Bedrock / InvokeAgentRuntime statements to the ONE shared
 		// role; with several agents in an app that piles up duplicates and overflows the IAM inline-
 		// policy size limit (CDK then spills into `OverflowPolicy` managed policies and the role
@@ -79,9 +81,14 @@ export class AgentCoreRuntime extends Scope {
 		// publish, the session bucket, and the conversation/message tables are already granted to the
 		// shared role by the Realtime BB's handler wiring and the Agent's FileBucket/DistributedTable
 		// children, so they're not repeated here — the loop inherits them by running as the role.)
+		//
+		// Keyed on the backend ROOT, not `cdk.Stack.of(this)`: the grants target THIS backend's shared
+		// execution role (`this.executionRole`), and two BlocksBackends in one cdk.Stack have distinct
+		// roles. A stack-scoped guard would let backend A's flag suppress backend B's grants entirely,
+		// leaving B's role with no Bedrock trust/access (a correctness + security regression).
 		const SHARED_GRANTS_KEY = Symbol.for('BLOCKS_AGENT_RUNTIME_SHARED_ROLE_GRANTS');
-		const stackAny = stack as unknown as Record<symbol, boolean | undefined>;
-		if (!stackAny[SHARED_GRANTS_KEY]) {
+		const rootAny = root as unknown as Record<symbol, boolean | undefined>;
+		if (!rootAny[SHARED_GRANTS_KEY]) {
 			// The container publishes to Realtime AS this shared role, which already holds the publish
 			// grants (the Realtime BB grants postToConnection + the connections table to the handler on
 			// the same role) — so no Realtime IAM grant is needed here; it's inherited by running as the role.
@@ -103,10 +110,7 @@ export class AgentCoreRuntime extends Scope {
 					effect: Effect.ALLOW,
 					principals: [new ServicePrincipal('bedrock-agentcore.amazonaws.com')],
 					actions: ['sts:AssumeRole'],
-					conditions: {
-						StringEquals: { 'aws:SourceAccount': stack.account },
-						ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:bedrock-agentcore:${stack.region}:${stack.account}:*` },
-					},
+					conditions: sourceScopedConditions(stack, 'bedrock-agentcore', '*'),
 				}),
 			);
 			// Bedrock model access for the loop (no Building Block grants this, and the loop no longer
@@ -136,14 +140,14 @@ export class AgentCoreRuntime extends Scope {
 					],
 				}),
 			);
-			stackAny[SHARED_GRANTS_KEY] = true;
+			rootAny[SHARED_GRANTS_KEY] = true;
 		}
 
 		// Inject the config location so the container loads the FULL app config via
 		// loadConfigToProcessEnv() — the same config the Lambda handler loads. That's how it gets
 		// BLOCKS_RT_CALLBACK_URL (registered by the Realtime BB) plus any other config-backed BB value
 		// an agent's tools touch; without it the container runs with empty config and those BBs fail.
-		// Idempotent (one config bucket per stack); IAM to read it is inherited via the shared role.
+		// Idempotent (one config bucket per backend root); IAM to read it is inherited via the shared role.
 		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
 
 		const runtime = new Runtime(this, 'AgentRuntime', {

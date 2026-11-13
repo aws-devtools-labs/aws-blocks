@@ -8,9 +8,7 @@
   "references": [
     { "path": "../core" },
     { "path": "../auth-common" },
-    { "path": "../bb-auth-basic" },
-    { "path": "../bb-auth-cognito" },
-    { "path": "../bb-auth-oidc" },
+    { "path": "../bb-auth" },
     { "path": "../bb-kv-store" },
     { "path": "../bb-distributed-table" },
     { "path": "../bb-realtime" },
@@ -19,6 +17,7 @@
     { "path": "../bb-async-job" },
     { "path": "../bb-agent" },
     { "path": "../bb-app-setting" },
+    { "path": "../bb-secret" },
     { "path": "../bb-knowledge-base" },
     { "path": "../bb-cron-job" },
     { "path": "../bb-file-bucket" },
@@ -27,6 +26,8 @@
     { "path": "../bb-logger" },
     { "path": "../bb-tracer" },
     { "path": "../bb-dashboard" },
-    { "path": "../bb-lambda-compute" }
+    { "path": "../bb-lambda-compute" },
+    { "path": "../bb-container-compute" },
+    { "path": "../bb-compute" }
   ]
 }

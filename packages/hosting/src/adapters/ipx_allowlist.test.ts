@@ -25,8 +25,7 @@ import assert from 'node:assert';
 import {
   isRemoteSourceAllowed,
   matchHostname,
-  matchPathPrefix,
-} from './ipx_allowlist.js';
+  matchPathPrefix, looksLikeSvg } from './ipx_allowlist.js';
 
 void describe('matchHostname', () => {
   void it('exact match', () => {
@@ -289,5 +288,43 @@ void describe('isRemoteSourceAllowed', () => {
       ),
       false,
     );
+  });
+});
+
+void describe('looksLikeSvg — SVG detected by content, not filename', () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+
+  void it('detects a bare <svg> document', () => {
+    assert.strictEqual(looksLikeSvg(enc('<svg xmlns="http://www.w3.org/2000/svg"></svg>')), true);
+  });
+
+  void it('detects SVG behind an XML prolog, comment, DOCTYPE, BOM and whitespace', () => {
+    const doc =
+      '\uFEFF  \n<?xml version="1.0"?>\n<!-- logo -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x">\n<svg width="4"><rect/></svg>';
+    assert.strictEqual(looksLikeSvg(enc(doc)), true);
+  });
+
+  void it('is case-insensitive and accepts an ArrayBuffer', () => {
+    assert.strictEqual(looksLikeSvg(enc('<SVG/>').buffer as ArrayBuffer), true);
+  });
+
+  void it('does not flag raster images (binary magic numbers never start with "<")', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x3c, 0x73, 0x76, 0x67]); // PNG magic + "<svg"
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+    const gif = enc('GIF89a<svg>');
+    assert.strictEqual(looksLikeSvg(png), false);
+    assert.strictEqual(looksLikeSvg(jpeg), false);
+    assert.strictEqual(looksLikeSvg(gif), false);
+  });
+
+  void it('does not flag non-SVG markup or an <svgfoo> lookalike', () => {
+    assert.strictEqual(looksLikeSvg(enc('<html><body>hi</body></html>')), false);
+    assert.strictEqual(looksLikeSvg(enc('<svgfoo></svgfoo>')), false);
+  });
+
+  void it('handles empty input', () => {
+    assert.strictEqual(looksLikeSvg(undefined), false);
+    assert.strictEqual(looksLikeSvg(null), false);
+    assert.strictEqual(looksLikeSvg(new Uint8Array()), false);
   });
 });

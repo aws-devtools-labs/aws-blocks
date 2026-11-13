@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import { getBlocksRoot } from './root-registry.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_DASHBOARD_REGISTRY');
 
@@ -9,15 +9,16 @@ const REGISTRY_KEY = Symbol.for('BLOCKS_DASHBOARD_REGISTRY');
 type DashboardFinalizer = () => void;
 
 /**
- * Get or create the deferred-dashboard list for a given stack. Stored on the
- * stack object (keyed by a Symbol), so each stack in a multi-stack synth gets
- * its own — mirrors the config + compute registries.
+ * Get or create the deferred-dashboard list for a given backend root. Stored on
+ * the root object (keyed by a Symbol), so each `BlocksStack`/`BlocksBackend` gets
+ * its own — even when two backends share one `cdk.Stack`. Mirrors the config +
+ * compute registries.
  */
-function getRegistry(stack: cdk.Stack): DashboardFinalizer[] {
-	let list = (stack as unknown as Record<symbol, DashboardFinalizer[] | undefined>)[REGISTRY_KEY];
+function getRegistry(root: Construct): DashboardFinalizer[] {
+	let list = (root as unknown as Record<symbol, DashboardFinalizer[] | undefined>)[REGISTRY_KEY];
 	if (!list) {
 		list = [];
-		(stack as unknown as Record<symbol, DashboardFinalizer[]>)[REGISTRY_KEY] = list;
+		(root as unknown as Record<symbol, DashboardFinalizer[]>)[REGISTRY_KEY] = list;
 	}
 	return list;
 }
@@ -43,7 +44,7 @@ function getRegistry(stack: cdk.Stack): DashboardFinalizer[] {
  *   by {@link finalizeDashboards}.
  */
 export function registerDashboardFinalizer(scope: Construct, finalize: DashboardFinalizer): void {
-	getRegistry(cdk.Stack.of(scope)).push(finalize);
+	getRegistry(getBlocksRoot(scope)).push(finalize);
 }
 
 /**
@@ -61,7 +62,7 @@ export function registerDashboardFinalizer(scope: Construct, finalize: Dashboard
  * @param scope - Any construct in the stack (used to locate the stack).
  */
 export function finalizeDashboards(scope: Construct): void {
-	const list = getRegistry(cdk.Stack.of(scope));
+	const list = getRegistry(getBlocksRoot(scope));
 	// Drain the list so a repeated call can't rebuild an already-built dashboard.
 	const pending = list.splice(0, list.length);
 	for (const finalize of pending) finalize();

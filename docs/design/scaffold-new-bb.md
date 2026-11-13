@@ -44,7 +44,7 @@ by `name`; `get()`-style reads return `null` for not-found.
 | Shape | Required files | Example | Notes |
 |---|---|---|---|
 | **Primitive** (owns new infra) | `index.cdk/aws/mock/browser.ts` + `types.ts` + `errors.ts` + `version.ts` | `bb-kv-store` | full 4-layer split; `fromExisting()` factory |
-| **Composite** (composes other BBs, no own infra) | single `index.ts` + `errors.ts` + `version.ts` (+ `index.browser.ts` stub) | `bb-auth-basic` | exports only `browser`/`types`/`default`; no `cdk`/`aws-runtime` conditions |
+| **Composite** (composes other BBs, little or no infra of its own) | single `index.ts` + `errors.ts` + `version.ts` (+ `index.browser.ts` stub) when every layer is the composed BBs' | `bb-auth` | `bb-auth` composes `KVStore` (`sessions`) and `AppSetting` (`session-secret`) in every layer, and a `store: 'builtin'` config provisions nothing else; it uses the full four-layer split because it can also own a Cognito pool. The 3-condition `browser`/`types`/`default` shape (no `cdk`/`aws-runtime`) was `bb-auth-basic`'s, removed when `Auth` replaced it (D-023); no shipped block uses it now |
 | **Client-facing** (non-HTTP protocol) | all of Primitive **+** a real `index.browser.ts` / client middleware (Transferable) | `bb-realtime` | atypical layout; **v2**, generate a pointer to `bb-realtime`, not a full template |
 
 ## 3. The canonical file skeleton (Primitive, from `bb-kv-store`)
@@ -63,7 +63,7 @@ packages/bb-{name}/
     errors.ts           # {Class}Errors as-const, wire-name strings ("...Exception")
     index.mock.ts       # default + types entry; persists to getMockDataDir()
     index.aws.ts        # aws-runtime; SDK client w/ buildUserAgentChain()
-    index.cdk.ts        # cdk; provisions infra, grants on this.handler, synthGuard stubs
+    index.cdk.ts        # cdk; provisions infra, grants on this.executionRole, synthGuard stubs
     index.browser.ts    # stub class (no-op ctor) + re-export errors
     index.test.ts       # node:test; resets .bb-data in beforeEach
     parity.test.ts      # mock↔aws↔browser behavioral parity
@@ -93,6 +93,13 @@ duplicate them:** `npm run sync-docs` (README catalog table between markers);
 `packages/blocks` prebuild/prepack runs `gen-block-docs.mjs`; `packages/core` prebuild
 runs `generate-bb-names.mjs` off the vendorize map. So updating touchpoint #3's
 vendorize map is enough for the telemetry allowlist to regenerate.
+
+A BB with no customer-facing export is the exception: it is deliberately absent from
+the vendorize map, so it never reaches the allowlist that way. Add its BB name to
+`NON_VENDORIZED_BB_NAMES` in `scripts/generate-bb-names.mjs` instead, and — because
+that list is keyed by BB name while `packages/blocks/src/vendorize-map.test.ts` keeps
+its own skip list keyed by package name — add the package to that skip list too.
+`LambdaCompute`, the internal default compute, is the only such BB today.
 
 ## 5. Relation to "extending with existing resources" (analysis #4)
 

@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope } from './index.js';
+import { buildingBlockParent, computeScopeFullId, OFFICIAL_BB_NAMES, Scope } from './index.js';
 import type { ScopeParent } from './index.js';
 import { CORE_VERSION } from '../version.js';
 
@@ -26,6 +26,13 @@ class TestBB extends Scope {
 	/** Expose protected method for testing */
 	public testBuildUserAgentChain(): [string, string][] {
 		return this.buildUserAgentChain();
+	}
+
+	/** Expose protected method for testing */
+	public testFormatUserAgentString(maxBytes?: number): string {
+		return maxBytes === undefined
+			? this.formatUserAgentString()
+			: this.formatUserAgentString(maxBytes);
 	}
 }
 
@@ -54,7 +61,7 @@ describe('buildUserAgentChain', () => {
 		const root = { id: 'my-app' };
 		const parentBB = new TestBB('auth', {
 			parent: root,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		const childBB = new TestBB('store', {
@@ -67,7 +74,7 @@ describe('buildUserAgentChain', () => {
 
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -83,7 +90,7 @@ describe('buildUserAgentChain', () => {
 		});
 		const parentBB = new TestBB('auth', {
 			parent: grandparentBB,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		const childBB = new TestBB('store', {
@@ -97,7 +104,7 @@ describe('buildUserAgentChain', () => {
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
 			['bb', 'Dashboard/2.0.0'],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -129,7 +136,7 @@ describe('buildUserAgentChain', () => {
 		const root = { id: 'my-app' };
 		const parentBB = new TestBB('auth', {
 			parent: root,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		// Plain scope between parent BB and child BB
@@ -147,7 +154,7 @@ describe('buildUserAgentChain', () => {
 
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -238,5 +245,326 @@ describe('buildUserAgentChain', () => {
 
 		assert.strictEqual(chain[0][0], 'aws-blocks');
 		assert.strictEqual(chain[0][1], CORE_VERSION);
+	});
+});
+
+// ── registerLambdaEventHandler: one handler per event key ───────────────────
+
+describe('registerLambdaEventHandler', () => {
+	type Handlers = Map<string, (record: unknown) => Promise<void>>;
+	const GLOBAL_KEY = '__BLOCKS_LAMBDA_EVENT_HANDLERS__';
+	const handlers = (): Handlers => Reflect.get(globalThis, GLOBAL_KEY);
+
+	test('registers under `{eventSource}:{identifier}`', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		Reflect.deleteProperty(globalThis, '__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__');
+		const handler = async () => {};
+		new TestBB('job', { parent: { id: 'app' } }).registerLambdaEventHandler('aws:sqs', 'queue-a', handler);
+		assert.strictEqual(handlers().get('aws:sqs:queue-a'), handler);
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+	});
+
+	test('a second handler for the same key is refused, and the first stays in place', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		Reflect.deleteProperty(globalThis, '__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__');
+		const first = async () => {};
+		new TestBB('auth', { parent: { id: 'app' } }).registerLambdaEventHandler(
+			'aws:cognito-idp',
+			'us-east-1_Pool',
+			first,
+		);
+		const second = new TestBB('adminauth', { parent: { id: 'app' } });
+		assert.throws(
+			() => second.registerLambdaEventHandler('aws:cognito-idp', 'us-east-1_Pool', async () => {}),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /'app-adminauth'/, 'names the block that tried to register');
+				assert.match(e.message, /Building Block 'app-auth'/, 'names the block that registered first');
+				assert.match(e.message, /"aws:cognito-idp:us-east-1_Pool"/, 'names the event key');
+				assert.match(e.message, /already registered/);
+				return true;
+			},
+		);
+		assert.strictEqual(handlers().get('aws:cognito-idp:us-east-1_Pool'), first, 'never silently replaced');
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		Reflect.deleteProperty(globalThis, '__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__');
+	});
+
+	test('the same identifier under another event source, or another identifier, is a different key', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		const bb = new TestBB('multi', { parent: { id: 'app' } });
+		bb.registerLambdaEventHandler('aws:sqs', 'x', async () => {});
+		bb.registerLambdaEventHandler('blocks.cronjob', 'x', async () => {});
+		bb.registerLambdaEventHandler('aws:sqs', 'y', async () => {});
+		assert.deepStrictEqual([...handlers().keys()].sort(), ['aws:sqs:x', 'aws:sqs:y', 'blocks.cronjob:x']);
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+	});
+});
+
+// ── formatUserAgentString: string rendering + Postgres 63-byte limit ────────
+
+describe('formatUserAgentString', () => {
+	test('renders the chain as a space-delimited string', () => {
+		const root = { id: 'my-app' };
+		const bb = new TestBB('db', { parent: root, bbName: 'Database', bbVersion: '0.2.6' });
+
+		assert.strictEqual(
+			bb.testFormatUserAgentString(),
+			`aws-blocks/${CORE_VERSION} bb/Database/0.2.6`,
+		);
+	});
+
+	test('empty chain (no official BB) renders as empty string', () => {
+		const root = { id: 'my-app' };
+		// A Scope with no official bbName produces a chain of just [aws-blocks/x];
+		// force the fully-empty case via a subclass whose chain is empty.
+		class EmptyChainBB extends TestBB {
+			public override testFormatUserAgentString(): string {
+				return this.formatUserAgentString();
+			}
+			protected override buildUserAgentChain(): [string, string][] {
+				return [];
+			}
+		}
+		const bb = new EmptyChainBB('x', { parent: root });
+		assert.strictEqual(bb.testFormatUserAgentString(), '');
+	});
+
+	test('a chain within 63 bytes is returned unchanged', () => {
+		const root = { id: 'my-app' };
+		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
+		const db = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const s = db.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Auth/1.0.1-rc.1 bb/Database/0.2.6`);
+	});
+
+	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p3 = new TestBB('c', { parent: p2, bbName: 'EmailClient', bbVersion: '7.8.9' });
+		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+		assert.ok(Buffer.byteLength(full, 'utf8') > 63, 'precondition: full string must exceed 63 bytes');
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63, `result must fit in 63 bytes, got ${Buffer.byteLength(s, 'utf8')}`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/KnowledgeBase/1.2.3 ... bb/Database/0.2.6`);
+	});
+
+	test('never truncates mid-token: result is always a fitting subset', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '10.20.30' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '10.20.30' });
+		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '10.20.30' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
+		for (const tok of s.split(' ')) {
+			assert.ok(tok === '...' || /^[a-z-]+\/\S+$/.test(tok), `token "${tok}" is malformed`);
+		}
+	});
+
+	test('a custom (non-official) leaf BB name never appears in the string', () => {
+		const root = { id: 'my-app' };
+		assert.ok(!OFFICIAL_BB_NAMES.has('MyPrivateBlock'), 'precondition: the name must not be official');
+		const leaf = new TestBB('db', { parent: root, bbName: 'MyPrivateBlock', bbVersion: '9.9.9' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(!s.includes('MyPrivateBlock'), `custom leaf name leaked into "${s}"`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+	});
+
+	test('the origin is kept when the leaf cannot fit alongside it', () => {
+		const root = { id: 'my-app' };
+		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
+		const leaf = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
+
+		// 20 bytes admits `aws-blocks/<core>` but not the marker plus the leaf.
+		const s = leaf.testFormatUserAgentString(20);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+	});
+
+	test('drops the fewest parents needed, nearest the leaf first', () => {
+		const root = { id: 'my-app' };
+		const outer = new TestBB('a', { parent: root, bbName: 'Agent', bbVersion: '0.0.0' });
+		const inner = new TestBB('b', { parent: outer, bbName: 'Logger', bbVersion: '0.0.0' });
+		const leaf = new TestBB('kv', { parent: inner, bbName: 'KVStore', bbVersion: '0.0.0' });
+
+		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
+		assert.ok(
+			Buffer.byteLength(full, 'utf8') > 63,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must overflow`,
+		);
+
+		const s = leaf.testFormatUserAgentString();
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Agent/0.0.0 ... bb/KVStore/0.0.0`);
+	});
+
+	test('a value that cannot be rendered as whole entries is omitted', () => {
+		// Omitted rather than carrying a mangled half-token.
+		const twoByte = 'é'.repeat(30);
+		class MultiByteBB extends TestBB {
+			protected override buildUserAgentChain(): [string, string][] {
+				return [['aws-blocks', twoByte]];
+			}
+		}
+		const bb = new MultiByteBB('x', { parent: { id: 'my-app' } });
+		assert.ok(Buffer.byteLength(`aws-blocks/${twoByte}`, 'utf8') > 40, 'precondition: must overflow');
+
+		assert.strictEqual(bb.testFormatUserAgentString(40), '');
+	});
+
+	test('a multi-entry chain is measured in bytes before it is shortened', () => {
+		const leafEntry = `bb/${'é'.repeat(20)}/1.0.0`;
+		class MultiByteChainBB extends TestBB {
+			protected override buildUserAgentChain(): [string, string][] {
+				return [
+					['aws-blocks', CORE_VERSION],
+					['bb', `${'é'.repeat(20)}/1.0.0`],
+				];
+			}
+		}
+		const bb = new MultiByteChainBB('x', { parent: { id: 'my-app' } });
+
+		const full = `aws-blocks/${CORE_VERSION} ${leafEntry}`;
+		assert.ok(full.length <= 50, `precondition: ${full.length} characters must look like it fits`);
+		assert.ok(
+			Buffer.byteLength(full, 'utf8') > 50,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow`,
+		);
+
+		const s = bb.testFormatUserAgentString(50);
+		assert.ok(
+			Buffer.byteLength(s, 'utf8') <= 50,
+			`result must fit in 50 bytes, got ${Buffer.byteLength(s, 'utf8')}`,
+		);
+	});
+
+	test('every byte is printable ASCII, which is all Postgres preserves', () => {
+		const root = { id: 'my-app' };
+		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '0.2.6' });
+
+		const s = leaf.testFormatUserAgentString();
+		assert.ok(s.includes('...'), `expected an elision marker in "${s}"`);
+		// Postgres rewrites any other byte as a `\xNN` escape, so a non-ASCII
+		// marker would reach pg_stat_activity mangled.
+		for (const byte of Buffer.from(s, 'utf8')) {
+			assert.ok(
+				byte >= 0x20 && byte <= 0x7e,
+				`byte 0x${byte.toString(16)} is not printable ASCII, in "${s}"`,
+			);
+		}
+	});
+});
+
+// ── buildingBlockParent: a hand-built parent for the pre-super() window ─────
+
+describe('buildingBlockParent', () => {
+	const root = { id: 'my-app' };
+
+	test('a child of the synthetic parent is attributed to it', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'Auth',
+			bbVersion: '0.2.1',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'Auth/0.2.1'],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('a name outside OFFICIAL_BB_NAMES is withheld from the chain', () => {
+		assert.strictEqual(OFFICIAL_BB_NAMES.has('MyCustomBlock'), false);
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'MyCustomBlock',
+			bbVersion: '9.9.9',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('ancestors above the synthetic parent survive the hop', () => {
+		const grandparent = new TestBB('db', {
+			parent: root,
+			bbName: 'Database',
+			bbVersion: '3.0.0',
+		});
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: grandparent,
+			bbName: 'Auth',
+			bbVersion: '0.2.1',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'Database/3.0.0'],
+			['bb', 'Auth/0.2.1'],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('an empty bbVersion is withheld rather than rendered as a bare name', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'Auth',
+			bbVersion: '',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	// The child's resource names come from this ID, so a real parent and a
+	// synthetic one must produce the same string.
+	test('the derived fullId is the literal a real parent would produce', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'Auth',
+			bbVersion: '0.2.1',
+		});
+
+		assert.strictEqual(self.fullId, 'my-app-auth');
+		assert.strictEqual(new TestBB('sessions', { parent: self }).fullId, 'my-app-auth-sessions');
+		assert.strictEqual(computeScopeFullId({ id: 'sessions', parent: self }), 'my-app-auth-sessions');
 	});
 });

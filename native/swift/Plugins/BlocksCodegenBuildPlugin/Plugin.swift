@@ -8,6 +8,8 @@
 import PackagePlugin
 import Foundation
 
+let blocksCodegenConfigName = "blocks.codegen.json"
+
 /// A build plugin that automatically generates typed Swift models and API methods
 /// from a Blocks spec file (`blocks.spec.json`) at build time.
 ///
@@ -20,25 +22,32 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
 
         // Find blocks.spec.json in the target's source files
         let specFile = sourceTarget.sourceFiles.first { file in
-            file.path.lastComponent == "blocks.spec.json"
+            file.url.lastPathComponent == "blocks.spec.json"
         }
 
         guard let specFile else {
             return []
         }
 
-        let generatorTool = try context.tool(named: "swift-code-generator")
-        let outputDir = context.pluginWorkDirectory.appending("Generated")
+        let configDir = specFile.url.deletingLastPathComponent()
+        let configFile = sourceTarget.sourceFiles.first { file in
+            file.url.lastPathComponent == blocksCodegenConfigName
+                && file.url.deletingLastPathComponent() == configDir
+        }
 
-        let modelsOutput = outputDir.appending("Models.swift")
-        let apiOutput = outputDir.appending("API.swift")
+        let generatorTool = try context.tool(named: "swift-code-generator")
+        let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
+
+        let modelsOutput = outputDir.appendingPathComponent("Models.swift")
+        let apiOutput = outputDir.appendingPathComponent("API.swift")
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
-                executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                executable: generatorTool.url,
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+                    + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },
+                inputFiles: [specFile.url] + [configFile?.url].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]
@@ -51,25 +60,32 @@ import XcodeProjectPlugin
 extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
     func createBuildCommands(context: XcodePluginContext, target: XcodeTarget) throws -> [Command] {
         let specFile = target.inputFiles.first { file in
-            file.path.lastComponent == "blocks.spec.json"
+            file.url.lastPathComponent == "blocks.spec.json"
         }
 
         guard let specFile else {
             return []
         }
 
-        let generatorTool = try context.tool(named: "swift-code-generator")
-        let outputDir = context.pluginWorkDirectory.appending("Generated")
+        let configDir = specFile.url.deletingLastPathComponent()
+        let configFile = target.inputFiles.first { file in
+            file.url.lastPathComponent == blocksCodegenConfigName
+                && file.url.deletingLastPathComponent() == configDir
+        }
 
-        let modelsOutput = outputDir.appending("Models.swift")
-        let apiOutput = outputDir.appending("API.swift")
+        let generatorTool = try context.tool(named: "swift-code-generator")
+        let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
+
+        let modelsOutput = outputDir.appendingPathComponent("Models.swift")
+        let apiOutput = outputDir.appendingPathComponent("API.swift")
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.path.lastComponent)",
-                executable: generatorTool.path,
-                arguments: [specFile.path.string, outputDir.string],
-                inputFiles: [specFile.path],
+                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                executable: generatorTool.url,
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+                    + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },
+                inputFiles: [specFile.url] + [configFile?.url].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]

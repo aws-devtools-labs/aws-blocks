@@ -14,8 +14,11 @@
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/custom_model_provider/
  */
 
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { Model } from '@strands-agents/sdk';
 import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
+import { AgentErrors, blocksAgentError } from '../errors.js';
 import { ToolResultBlock } from '@strands-agents/sdk';
 import type { CannedToolHints } from '../types.js';
 
@@ -27,6 +30,8 @@ interface CannedProviderOptions {
 	modelId?: string;
 	/** Per-tool hints (examples, triggers) keyed by tool name. */
 	hints?: Map<string, CannedToolHints>;
+	/** Custom phrase-to-response dictionary, or a path to a JSON dictionary. */
+	responses?: Record<string, string> | string;
 }
 
 const CANNED_RESPONSES: Record<string, string> = {
@@ -38,36 +43,99 @@ const CANNED_RESPONSES: Record<string, string> = {
 const DEFAULT_RESPONSE = 'This is a canned mock response. No real model was called. [canned]';
 
 /**
- * Pick a canned text response by keyword, matched on word boundaries for the same reason
- * tool matching is: substring matching fired `order` inside "reorder" and `help` inside
- * "helper", the same false-positive class the tool matcher avoids.
+ * Pick a canned text response from a custom dictionary or built-in keywords. Matches use
+ * word boundaries for the same reason tool matching is: substring matching fired `order`
+ * inside "reorder" and `help` inside "helper", the same false-positive class the tool
+ * matcher avoids.
  */
-function matchResponse(prompt: string): string {
+function matchResponse(prompt: string, customResponses?: Record<string, string>, cache = true): { response: string; verbatim: boolean } {
 	const lower = prompt.toLowerCase();
-	for (const [keyword, response] of Object.entries(CANNED_RESPONSES)) {
-		if (promptMentionsWord(lower, keyword)) return response;
+	if (customResponses) {
+		for (const [phrase, response] of Object.entries(customResponses)) {
+			if (wordBoundaryPattern(phrase.trim().toLowerCase(), cache).test(lower)) return { response, verbatim: true };
+		}
+		return { response: DEFAULT_RESPONSE, verbatim: false };
 	}
-	return DEFAULT_RESPONSE;
+	for (const [keyword, response] of Object.entries(CANNED_RESPONSES)) {
+		if (promptMentionsWord(lower, keyword)) return { response, verbatim: false };
+	}
+	return { response: DEFAULT_RESPONSE, verbatim: false };
+}
+
+/** Keep `cause` server-side: non-enumerable, so `JSON.stringify` cannot carry it to a client. */
+function withCause(err: Error, cause: unknown): Error {
+	Object.defineProperty(err, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	return err;
+}
+
+/**
+ * Validate the parsed dictionary before using it to select a response. Failures are branded
+ * `InvalidModelConfig` errors, so a failed turn reports them on the `error` chunk instead of a
+ * generic message. Because that message reaches the client, it never quotes the dictionary's
+ * contents: the offending phrase rides on the non-enumerable `cause` (logged by the agent).
+ */
+function validateResponses(value: unknown, source: string): Record<string, string> {
+	if (!value || Array.isArray(value) || typeof value !== 'object') {
+		throw blocksAgentError(AgentErrors.InvalidModelConfig, `${source} must be an object mapping phrases to response strings.`);
+	}
+	for (const [phrase, response] of Object.entries(value)) {
+		if (!phrase.trim()) throw blocksAgentError(AgentErrors.InvalidModelConfig, `${source} contains a blank response phrase.`);
+		if (typeof response !== 'string') {
+			throw withCause(
+				blocksAgentError(AgentErrors.InvalidModelConfig, `${source} has a non-string response; every response must be a string.`),
+				new Error(`Offending phrase: '${phrase}'`),
+			);
+		}
+	}
+	return value as Record<string, string>;
+}
+
+/**
+ * Read and parse one snapshot of a configured response file for a text selection.
+ *
+ * Client-visible messages name the file by basename only — never the absolute server path —
+ * and never echo its contents (a V8 `SyntaxError` message quotes the malformed text, so it is
+ * kept on the non-enumerable `cause`). A read failure stays unbranded: its OS error text is
+ * reported to the client as a generic message and logged by the agent.
+ */
+async function readResponsesFile(filePath: string): Promise<Record<string, string>> {
+	let contents: string;
+	try {
+		contents = await readFile(filePath, 'utf8');
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to read canned responses file '${filePath}': ${detail}`);
+	}
+	const name = basename(filePath);
+	try {
+		return validateResponses(JSON.parse(contents), `Canned responses file '${name}'`);
+	} catch (error) {
+		if (error instanceof SyntaxError) {
+			throw withCause(blocksAgentError(AgentErrors.InvalidModelConfig, `Malformed canned responses JSON in '${name}'.`), error);
+		}
+		throw error;
+	}
 }
 
 const wordPatternCache = new Map<string, RegExp>();
 
 /**
  * Compile a word-boundary matcher for a word or phrase, cached by phrase.
- * Uses `\b...\b` rather than substring `includes()` so a tool word like "cat"
+ * Uses Unicode letter/mark/number/underscore boundaries rather than substring `includes()` so a tool word like "cat"
  * (from `getCat`) is NOT triggered by an unrelated word like "category", and
  * "pass" (from `getPass`) is not triggered by "password". Regex metacharacters are
  * escaped so punctuation in tool names can't break the pattern, and internal
  * whitespace becomes `\s+` so a multi-word phrase tolerates irregular spacing.
  * Compiled patterns are cached because matching re-runs for every tool on every
- * `stream()` call, and the key space is bounded by the agent's tool and trigger set.
+ * `stream()` call, and the key space is bounded by the agent's tool, trigger, and inline response keys.
+ * Pass `cache = false` to reuse existing patterns without retaining new file-backed phrases.
  */
-function wordBoundaryPattern(phrase: string): RegExp {
+function wordBoundaryPattern(phrase: string, cache = true): RegExp {
 	let pattern = wordPatternCache.get(phrase);
 	if (!pattern) {
 		const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-		pattern = new RegExp(`\\b${escaped}\\b`);
-		wordPatternCache.set(phrase, pattern);
+		pattern = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`, 'iu');
+		if (cache) wordPatternCache.set(phrase, pattern);
 	}
 	return pattern;
 }
@@ -218,11 +286,18 @@ let toolCallCounter = 0;
 export class CannedProvider extends Model<CannedConfig> {
 	private config: CannedConfig;
 	private hints: Map<string, CannedToolHints>;
+	private responses?: Record<string, string>;
+	private responsesFile?: string;
 
 	constructor(options?: CannedProviderOptions) {
 		super();
 		this.config = { modelId: options?.modelId ?? 'canned-mock' };
 		this.hints = options?.hints ?? new Map();
+		if (typeof options?.responses === 'string') {
+			this.responsesFile = resolve(options.responses);
+		} else if (options?.responses !== undefined) {
+			this.responses = { ...validateResponses(options.responses, 'Canned responses') };
+		}
 	}
 
 	updateConfig(config: Partial<CannedConfig>): void {
@@ -258,16 +333,23 @@ export class CannedProvider extends Model<CannedConfig> {
 			return;
 		}
 
-		// Default: keyword-based text response
-		yield* this.emitText(matchResponse(prompt));
+		// Default: keyword-based text response. Read a configured file exactly once for
+		// this selection so each request sees one coherent, current dictionary snapshot.
+		const responses = this.responsesFile ? await readResponsesFile(this.responsesFile) : this.responses;
+		const selected = matchResponse(prompt, responses, !this.responsesFile);
+		yield* this.emitText(selected.response, selected.verbatim);
 	}
 
 	/** Emit a text response as ModelStreamEvents. */
-	private async *emitText(response: string): AsyncIterable<ModelStreamEvent> {
+	private async *emitText(response: string, verbatim = false): AsyncIterable<ModelStreamEvent> {
 		yield { type: 'modelMessageStartEvent', role: 'assistant' };
 		yield { type: 'modelContentBlockStartEvent' };
-		for (const word of response.split(' ')) {
-			yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'textDelta', text: word + ' ' } };
+		if (verbatim) {
+			if (response) yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'textDelta', text: response } };
+		} else {
+			for (const word of response.split(' ')) {
+				yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'textDelta', text: `${word} ` } };
+			}
 		}
 		yield { type: 'modelContentBlockStopEvent' };
 		yield { type: 'modelMessageStopEvent', stopReason: 'endTurn' };

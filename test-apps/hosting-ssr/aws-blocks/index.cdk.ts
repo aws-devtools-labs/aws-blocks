@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { Hosting, BlocksStack, BlocksPresets, secret, config } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets, secret, config, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -43,10 +43,12 @@ new Hosting(blocksStack, 'Hosting', {
   // (No app-wide ssrDefaultTtl: only routes that opt in via `s-maxage` cache,
   // keeping the other e2e routes uncached.)
   cacheKeyCookies: ['bb_session'],
-  compute: {
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(30),
-  },
+  // HOSTING_COMPUTE_TYPE=web-function runs the same suite against AWS Lambda
+  // Web Functions (OpenNext then builds a node-wrapper HTTP server).
+  compute:
+    process.env.HOSTING_COMPUTE_TYPE === 'web-function'
+      ? { type: 'web-function', timeout: cdk.Duration.seconds(30) }
+      : { memorySize: 1024, timeout: cdk.Duration.seconds(30) },
   // E2E: secret() → Secrets Manager, config() → SSM Parameter Store. The values
   // are written out of band by the CLI (see test/e2e.test.ts) and read at runtime
   // via getSecret/getConfig in /api/probe/secret.
@@ -55,6 +57,19 @@ new Hosting(blocksStack, 'Hosting', {
     DEMO_CONFIG: config('DEMO_CONFIG'),
   },
 });
+
+// Sandbox e2e only — see "Sandbox e2e test support" in `index.ts`. The flag
+// is read here at synth and registered as config (`registerConfig`, which
+// every compute loads into `process.env` before the backend module is
+// imported), so the deployed backend builds the same `testSupport` namespace
+// that synth did. The run's test-support secret travels the same way: the
+// e2e `globalSetup` (or the CI workflow) sets `BLOCKS_TEST_SUPPORT_SECRET`
+// before synth, and the deployed backend reads it from config.
+if (process.env.BLOCKS_TEST_ENV === 'sandbox') {
+  registerConfig(blocksStack, 'BLOCKS_TEST_ENV', 'sandbox');
+  // `index.ts` already refused to load without it, so it is set here.
+  registerConfig(blocksStack, 'BLOCKS_TEST_SUPPORT_SECRET', process.env.BLOCKS_TEST_SUPPORT_SECRET);
+}
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

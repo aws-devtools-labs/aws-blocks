@@ -11,6 +11,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // lazily inside createStrandsModel(). See issue #153.
 import type { CannedToolHints, ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
+import { getMantleApiKeyResolver, mintedMantleRegion } from './mantle.js';
 
 // TODO: validate model-specific inference config (e.g., some models don't support topP with temperature)
 
@@ -87,9 +88,24 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 		const baseUrl = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
 		const url = `${baseUrl}/models`;
 
-		const resolvedKey = typeof config.apiKey === 'function'
-			? await config.apiKey()
-			: config.apiKey ?? process.env.OPENAI_API_KEY;
+		// A Bedrock Mantle endpoint without an explicit apiKey (an empty string counts as omitted)
+		// authenticates with a short-term Bedrock API key minted from the AWS credentials;
+		// OPENAI_API_KEY is never sent there.
+		const mantleRegion = mintedMantleRegion(config);
+		let resolvedKey: string | undefined;
+		if (mantleRegion) {
+			try {
+				resolvedKey = await getMantleApiKeyResolver(mantleRegion, customUserAgent)();
+			} catch (err) {
+				// Unhealthy rather than thrown, so the model fallback loop moves on to the next candidate.
+				log.warn(`Could not create a Bedrock API key for ${baseUrl} from the AWS credentials`, { provider: config.provider, error: (err as Error).message });
+				return false;
+			}
+		} else {
+			resolvedKey = typeof config.apiKey === 'function'
+				? await config.apiKey()
+				: config.apiKey ?? process.env.OPENAI_API_KEY;
+		}
 
 		// 1. Check if endpoint is reachable
 		let res: Response;
@@ -105,6 +121,21 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 		}
 
 		if (!res.ok) {
+			// A rejected minted key almost always means the AWS identity lacks a Mantle permission;
+			// name the actions so the fix is obvious. The key itself is never logged.
+			if (mantleRegion && (res.status === 401 || res.status === 403)) {
+				let bodySnippet = '';
+				try {
+					bodySnippet = (await res.text()).slice(0, 200);
+				} catch {
+					// The status alone is enough for the hint.
+				}
+				log.warn(
+					`Mantle rejected the minted key (HTTP ${res.status}) at ${baseUrl}. Check that the AWS credentials allow bedrock-mantle:CallWithBearerToken, bedrock-mantle:ListModels and bedrock-mantle:CreateInference in ${mantleRegion}.`,
+					{ provider: config.provider, status: res.status, bodySnippet },
+				);
+				return false;
+			}
 			log.warn(`Endpoint returned HTTP ${res.status}: ${baseUrl}`, { provider: config.provider, status: res.status });
 			return false;
 		}
@@ -154,16 +185,50 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 }
 
 /**
+ * Renders a `buildUserAgentChain()` chain for Strands' string-typed
+ * `clientConfig.customUserAgent`.
+ *
+ * Strands interpolates the value into a template literal
+ * (`` `${clientConfig.customUserAgent} strands-agents-ts-sdk` ``), so handing it
+ * the `[string, string][]` chain stringifies to `aws-blocks,0.6.0,bb,Agent/0.5.0`.
+ * Rendered the way the SDK's own user-agent middleware renders a tuple —
+ * `key/value`, with `/` inside the value replaced by `-`, since the SDK's value
+ * escape rejects it.
+ */
+function formatUserAgentChain(chain: [string, string][]): string {
+	return chain.map(([key, value]) => `${key}/${value.replace(/\//g, '-')}`).join(' ');
+}
+
+/** Configs already warned about the deprecated `guardrails` field (see createStrandsModel). */
+const warnedDeprecatedGuardrails = new WeakSet<ModelConfig>();
+
+/**
  * Maps Blocks' ModelConfig to the corresponding Strands model provider.
  * The developer configures one unified ModelConfig shape — this factory
  * translates it to BedrockModel, OpenAIModel, or CannedProvider internally.
  *
+ * Strands builds the `BedrockRuntimeClient` that carries
+ * `Converse`/`ConverseStream` internally, so `customUserAgent` reaches it
+ * through `clientConfig` rather than a client we hold.
+ *
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
-export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>): Promise<Model<BaseModelConfig>> {
+export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>, customUserAgent?: [string, string][]): Promise<Model<BaseModelConfig>> {
+	// Checked before any provider branch, so no provider (canned included) silently ignores it.
+	if (config?.guardrail && config.provider !== 'bedrock') {
+		throw blocksAgentError(AgentErrors.InvalidModelConfig, `ModelConfig.guardrail is only supported for provider 'bedrock' (got '${config.provider}').`);
+	}
+	// `guardrails` was declared on ModelConfig but never wired to any provider. Say so rather
+	// than let a developer believe content filtering is on. Once per config: the model is
+	// rebuilt every turn, and a per-turn warning would grow with traffic.
+	if (config?.guardrails && !warnedDeprecatedGuardrails.has(config)) {
+		warnedDeprecatedGuardrails.add(config);
+		log?.warn('ModelConfig.guardrails is not applied by any model provider. Use ModelConfig.guardrail to attach a Bedrock guardrail.', { provider: config.provider });
+	}
+
 	if (!config || config.provider === 'canned') {
 		const { CannedProvider } = await import('./providers/canned.js');
-		return new CannedProvider({ hints: cannedHints });
+		return new CannedProvider({ hints: cannedHints, responses: config?.cannedResponses });
 	}
 
 	// Test-only provider — throws mid-stream to verify error handling
@@ -180,6 +245,16 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		const { BedrockModel } = await import('@strands-agents/sdk');
 		return new BedrockModel({
 			modelId: config.modelId,
+			...(config.guardrail && {
+				guardrailConfig: {
+					guardrailIdentifier: config.guardrail.identifier,
+					guardrailVersion: config.guardrail.version,
+					...(config.guardrail.trace && { trace: config.guardrail.trace }),
+				},
+			}),
+			...(customUserAgent && {
+				clientConfig: { customUserAgent: formatUserAgentChain(customUserAgent) },
+			}),
 			...(config.inferenceConfig && {
 				temperature: config.inferenceConfig.temperature,
 				topP: config.inferenceConfig.topP,
@@ -193,10 +268,20 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		if (!config.modelId) {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, "Model provider 'openai-api' requires modelId.");
 		}
-		// Resolve apiKey: string, async function, or env var fallback
-		const apiKey = typeof config.apiKey === 'function' ? await config.apiKey() : config.apiKey;
-		if (!apiKey && !process.env.OPENAI_API_KEY) {
-			throw blocksAgentError(AgentErrors.InvalidModelConfig, "provider 'openai-api' requires apiKey or OPENAI_API_KEY environment variable.");
+		// A Bedrock Mantle endpoint without an explicit apiKey (an empty string counts as omitted)
+		// authenticates with short-term Bedrock API keys minted from the AWS credentials. The
+		// resolver is handed to the OpenAI client as a function, which calls it before each request, so keys are refreshed over a
+		// long session. OPENAI_API_KEY is not used for Mantle: an OpenAI key is never valid there.
+		const mantleRegion = mintedMantleRegion(config);
+		let apiKey: string | (() => Promise<string>) | undefined;
+		if (mantleRegion) {
+			apiKey = getMantleApiKeyResolver(mantleRegion, customUserAgent);
+		} else {
+			// Resolve apiKey: string, async function, or env var fallback
+			apiKey = typeof config.apiKey === 'function' ? await config.apiKey() : config.apiKey;
+			if (!apiKey && !process.env.OPENAI_API_KEY) {
+				throw blocksAgentError(AgentErrors.InvalidModelConfig, "provider 'openai-api' requires apiKey or OPENAI_API_KEY environment variable.");
+			}
 		}
 		const { OpenAIModel } = await import('@strands-agents/sdk/models/openai');
 		return new OpenAIModel({

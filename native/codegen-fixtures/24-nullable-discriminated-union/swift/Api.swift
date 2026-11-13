@@ -1,11 +1,16 @@
 import Foundation
 import BlocksRuntime
 
-public class Api {
+public final nonisolated class Api: Sendable {
     private let client: BlocksClient
 
-    public init(server: BlocksServer = Servers.local) {
-        self.client = BlocksClient(server: server)
+    public init(client: BlocksClient) {
+        self.client = client
+    }
+
+    @available(*, deprecated, message: "Use blocks.api from one Blocks() or Blocks(server:) you hold")
+    public convenience init(server: BlocksServer = Servers.local) {
+        self.init(client: BlocksClient(server: server))
     }
 
     /// Calls `api.updateAttributes`.
@@ -29,9 +34,18 @@ public class Api {
         public struct IsUpdatedFalse: Codable {
             public let nextStep: NextStep
 
+            public init(nextStep: NextStep) {
+                self.nextStep = nextStep
+            }
+
             public struct NextStep: Codable {
                 public let destination: String
                 public let name: String
+
+                public init(destination: String, name: String) {
+                    self.destination = destination
+                    self.name = name
+                }
             }
         }
 
@@ -47,21 +61,19 @@ public class Api {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .isUpdatedTrue:
-                    try container.encode("true", forKey: .isUpdated)
+                    try container.encode(true, forKey: .isUpdated)
                 case .isUpdatedFalse(let params):
-                    try container.encode("false", forKey: .isUpdated)
+                    try container.encode(false, forKey: .isUpdated)
                     try params.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                let disc = try container.decode(String.self, forKey: .isUpdated)
+                let disc = try container.decode(Bool.self, forKey: .isUpdated)
                 switch disc {
-                case "true": self = .isUpdatedTrue
-                case "false": self = .isUpdatedFalse(try IsUpdatedFalse(from: decoder))
-                default:
-                    throw DecodingError.dataCorruptedError(forKey: .isUpdated, in: container, debugDescription: "Unknown value: \(disc)")
+                case true: self = .isUpdatedTrue
+                case false: self = .isUpdatedFalse(try IsUpdatedFalse(from: decoder))
                 }
             }
         }
@@ -72,10 +84,19 @@ public class Api {
         public struct Email: Codable {
             public let body: String
             public let subject: String
+
+            public init(body: String, subject: String) {
+                self.body = body
+                self.subject = subject
+            }
         }
 
         public struct Sms: Codable {
             public let message: String
+
+            public init(message: String) {
+                self.message = message
+            }
         }
 
         public enum Result: Codable {
@@ -113,8 +134,37 @@ public class Api {
 }
 
 
+// MARK: - Blocks
+
+/// One BlocksClient, so one URLSession (RPC and OIDC calls) and one token store, for every namespace in this spec;
+/// file transfers and realtime use the shared runtime session. Hold one while the backend is in use: `let blocks = Blocks()`.
+public final nonisolated class Blocks: Sendable {
+    /// The server every API calls.
+    public let server: BlocksRuntime.BlocksServer
+    /// The client every API runs on.
+    public let client: BlocksRuntime.BlocksClient
+
+    public let api: Api
+
+    /// Defaults to the spec's first server; a `session` you pass stays yours.
+    public init(
+        server: BlocksRuntime.BlocksServer = Servers.local,
+        session: URLSession? = nil,
+        tokenStore: any BlocksRuntime.TokenStore = BlocksRuntime.InMemoryTokenStore()
+    ) {
+        self.server = server
+        self.client = BlocksRuntime.BlocksClient(server: server, session: session, tokenStore: tokenStore)
+        self.api = .init(client: client)
+    }
+
+    /// Later calls throw ClientClosedError; calls in flight finish, then the session this instance created is released.
+    public func close() {
+        client.close()
+    }
+}
+
 // MARK: - Servers
 
-public enum Servers {
+public nonisolated enum Servers {
     public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
 }

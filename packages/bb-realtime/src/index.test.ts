@@ -624,29 +624,88 @@ describe('Realtime', () => {
 		);
 	});
 
-	// ── Publish Size Validation (WebSocket frame limit) ──────────────────
+	// ── Publish Size Validation (WebSocket logical message limit) ────────
 
-	it('should reject publish payload exceeding 32KB', async () => {
+	// API Gateway reassembles frames, so the cap is the 128 KiB message quota,
+	// not the 32 KiB frame quota.
+	it('should reject publish payload exceeding 128KiB', async () => {
 		const rt = new Realtime(mockScope, 'size', {
 			namespaces: { ns: Realtime.namespace(testSchema()) },
 		});
-		const bigData = { payload: 'x'.repeat(33_000) };
+		const bigData = { payload: 'x'.repeat(132_000) };
 		await assert.rejects(
 			() => rt.publish('ns', 'ch', bigData),
-			(err: Error) => err.name === RealtimeErrors.ValidationFailed && err.message.includes('frame'),
+			(err: Error) => err.name === RealtimeErrors.ValidationFailed && err.message.includes('128 KiB'),
 		);
 	});
 
-	it('should accept publish payload just under 32KB', async () => {
+	it('should accept publish payload just under 128KiB', async () => {
 		const rt = new Realtime(mockScope, 'size-ok', {
 			namespaces: { ns: Realtime.namespace(testSchema()) },
 		});
 		// envelope: {"type":"message","channel":"test-app-size-ok/ns/ch","data":{"payload":"..."}}
-		// ~70 bytes overhead, so 32600 bytes of payload is safely under 32768
-		const data = { payload: 'x'.repeat(32_600) };
+		// ~70 bytes overhead, so 130900 bytes of payload is safely under 131072
+		const data = { payload: 'x'.repeat(130_900) };
 		const received: unknown[] = [];
 		rt.subscribe('ns', 'ch', (msg) => received.push(msg));
 		await rt.publish('ns', 'ch', data);
 		assert.strictEqual(received.length, 1);
+	});
+
+	// Build a payload whose serialized envelope is exactly `target` bytes.
+	function payloadOfEnvelopeSize(fullChannel: string, target: number): { payload: string } {
+		const overhead = Buffer.byteLength(JSON.stringify({ type: 'message', channel: fullChannel, data: { payload: '' } }), 'utf8');
+		return { payload: 'x'.repeat(target - overhead) };
+	}
+
+	it('should accept an envelope of exactly 131072 bytes', async () => {
+		const rt = new Realtime(mockScope, 'size-eq', {
+			namespaces: { ns: Realtime.namespace(testSchema()) },
+		});
+		const data = payloadOfEnvelopeSize('test-app-size-eq/ns/ch', 131_072);
+		assert.strictEqual(
+			Buffer.byteLength(JSON.stringify({ type: 'message', channel: 'test-app-size-eq/ns/ch', data }), 'utf8'),
+			131_072,
+		);
+		const received: unknown[] = [];
+		rt.subscribe('ns', 'ch', (msg) => received.push(msg));
+		await rt.publish('ns', 'ch', data);
+		assert.strictEqual(received.length, 1);
+	});
+
+	it('should reject an envelope of exactly 131073 bytes', async () => {
+		const rt = new Realtime(mockScope, 'size-over', {
+			namespaces: { ns: Realtime.namespace(testSchema()) },
+		});
+		const data = payloadOfEnvelopeSize('test-app-size-over/ns/ch', 131_073);
+		await assert.rejects(
+			() => rt.publish('ns', 'ch', data),
+			(err: Error) => err.name === RealtimeErrors.ValidationFailed
+				&& err.message.includes('131073/131072'),
+		);
+	});
+
+	it('should round-trip an ~80KiB payload byte-exactly through the mock', async () => {
+		const rt = new Realtime(mockScope, 'size-rt', {
+			namespaces: { ns: Realtime.namespace(testSchema()) },
+		});
+		// Customer scenario: a large model-generated JSON object.
+		const data = {
+			id: 'answer-1',
+			items: Array.from({ length: 800 }, (_, i) => ({
+				index: i,
+				label: `item-${i}`,
+				text: 'λ ünïcødé 😀 '.repeat(4),
+			})),
+		};
+		const serialized = JSON.stringify(data);
+		assert.ok(Buffer.byteLength(serialized, 'utf8') > 80 * 1024, 'fixture should exceed 80 KiB');
+
+		const received: unknown[] = [];
+		rt.subscribe('ns', 'ch', (msg) => received.push(msg));
+		await rt.publish('ns', 'ch', data);
+		assert.strictEqual(received.length, 1);
+		assert.strictEqual(JSON.stringify(received[0]), serialized);
+		assert.deepStrictEqual(received[0], data);
 	});
 });

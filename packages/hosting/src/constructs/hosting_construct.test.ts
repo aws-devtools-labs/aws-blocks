@@ -11,6 +11,12 @@ import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
+import {
+  SSR_CACHE_GUARD_FILE,
+  SSR_CACHE_GUARD_HANDLER,
+  SSR_CACHE_GUARD_HANDLER_FILE,
+  SSR_CACHE_GUARD_NODE_OPTION,
+} from './ssr_cache_guard.js';
 
 // ---- Helpers ----
 
@@ -214,6 +220,198 @@ void describe('HostingConstruct — SSR mode', () => {
         }),
       },
     });
+  });
+
+  void it('keeps the SSR cache guard first in a compute.environment NODE_OPTIONS for a Web Adapter server', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'run.sh'), '#!/bin/sh\nexec node index.mjs\n');
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {
+          default: {
+            type: 'http-server',
+            bundle: bundleDir,
+            entrypoint: 'run.sh',
+            port: 3000,
+            placement: 'regional',
+            runtime: 'nodejs24.x',
+          },
+        },
+        staticAssets: { directory: staticDir },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'ssr-http-node-options',
+      },
+      compute: { environment: { NODE_OPTIONS: '--enable-source-maps' } },
+      skipRegionValidation: true,
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'run.sh',
+      Environment: {
+        Variables: Match.objectLike({
+          NODE_OPTIONS: `${SSR_CACHE_GUARD_NODE_OPTION} --enable-source-maps`,
+        }),
+      },
+    });
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('SsrCacheGuardNotInstalled'));
+  });
+
+  void it('warns when the SSR cache guard cannot be installed in front of the server', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'run.sh'), '#!/bin/sh\nexec ./bootstrap\n');
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {
+          default: {
+            type: 'http-server',
+            bundle: bundleDir,
+            entrypoint: 'run.sh',
+            port: 3000,
+            placement: 'regional',
+            runtime: 'nodejs24.x',
+          },
+        },
+        staticAssets: { directory: staticDir },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'ssr-http-not-node',
+      },
+      compute: { environment: { NODE_OPTIONS: '--enable-source-maps' } },
+      skipRegionValidation: true,
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp("SSR cache guard is not installed in front of compute 'default'.*does not start a Node\\.js server"),
+    );
+    // The guard is not loaded, so NODE_OPTIONS stays as given.
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'run.sh',
+      Environment: { Variables: Match.objectLike({ NODE_OPTIONS: '--enable-source-maps' }) },
+    });
+  });
+
+  void it('derives the SSR cache guard cache key from the door: every cookie behind the CloudFront-over-ALB door', () => {
+    const guardFor = (frontDoor: ConstructorParameters<typeof HostingConstruct>[2]['frontDoor']): string => {
+      const staticDir = createStaticDir();
+      const bundleDir = createBundleDir();
+      const manifest = ssrManifest(staticDir, bundleDir);
+      manifest.compute.default = { ...manifest.compute.default, streaming: false };
+      new HostingConstruct(createStack(), 'Hosting', { manifest, frontDoor, skipRegionValidation: true });
+      return fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+    };
+    assert.match(guardFor({ kind: 'stackedRouter' }), /^const ALL_COOKIES_KEYED = true;$/m);
+    assert.match(guardFor(undefined), /^const ALL_COOKIES_KEYED = false;$/m);
+    assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
+  });
+
+  void it('bakes cdn.cacheGuardIgnoredCookies into the SSR cache guard, and keeps them out of the cache key', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: ssrManifest(staticDir, bundleDir),
+      frontDoor: { features: { cacheKeyCookies: ['bb_session'], cacheGuardIgnoredCookies: ['_ga', '_fbp'] } },
+    });
+    const guard = fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+    assert.match(guard, /^const KEY_COOKIES = new Set\(\["__prerender_bypass","__next_preview_data","__dpl","bb_session","_ga","_fbp"\]\);$/m);
+    const policies = Template.fromStack(stack).findResources('AWS::CloudFront::CachePolicy');
+    const keyed = JSON.stringify(Object.values(policies).map((p) => p.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig));
+    assert.ok(keyed.includes('bb_session'));
+    assert.ok(!keyed.includes('_ga') && !keyed.includes('_fbp'), keyed);
+  });
+
+  void it('fails synth when a cookie is both a cache-key cookie and ignored by the SSR cache guard', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    assert.throws(
+      () =>
+        new HostingConstruct(createStack(), 'Hosting', {
+          manifest: ssrManifest(staticDir, bundleDir),
+          cdn: { cacheKeyCookies: ['bb_session'], cacheGuardIgnoredCookies: ['bb_session'] },
+        }),
+      (err: unknown) => err instanceof HostingError && err.code === 'CacheGuardIgnoredCookieInCacheKeyError',
+    );
+  });
+
+  void it('installs the SSR cache guard on every regional compute a route targets, not on the image function', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const splitDir = path.join(tmpDir, 'split');
+    const imageDir = path.join(tmpDir, 'image');
+    for (const dir of [splitDir, imageDir]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const handler = async () => {};');
+    }
+    const manifest = ssrManifest(staticDir, bundleDir);
+    const regional = { type: 'handler', handler: 'index.handler', placement: 'regional', streaming: true, runtime: 'nodejs24.x' } as const;
+    manifest.compute.fnApi = { ...regional, bundle: splitDir };
+    manifest.compute['image-optimization'] = { ...regional, bundle: imageDir, streaming: false };
+    manifest.routes = [{ pattern: '/api/*', target: 'fnApi' }, { pattern: '/_next/image', target: 'image-optimization' }, ...manifest.routes];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    assert.ok(fs.existsSync(path.join(splitDir, SSR_CACHE_GUARD_HANDLER_FILE)));
+    assert.equal(fs.existsSync(path.join(imageDir, SSR_CACHE_GUARD_FILE)), false);
+    const handlers = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')).map(
+      (r) => r.Properties.Handler,
+    );
+    assert.equal(handlers.filter((h) => h === SSR_CACHE_GUARD_HANDLER).length, 2);
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('SsrCacheGuardNotInstalled'));
+  });
+
+  void it('installs the SSR cache guard on a regional compute a route names as its fallback', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const fallbackDir = path.join(tmpDir, 'fallback');
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    fs.writeFileSync(path.join(fallbackDir, 'index.mjs'), 'export const handler = async () => {};');
+    const manifest = ssrManifest(staticDir, bundleDir);
+    manifest.compute.fnFallback = {
+      type: 'handler',
+      handler: 'index.handler',
+      placement: 'regional',
+      streaming: true,
+      runtime: 'nodejs24.x',
+      bundle: fallbackDir,
+    };
+    manifest.routes = [
+      { pattern: '/data/*', target: 'static', fallback: 'fnFallback' },
+      { pattern: '/assets/*', target: 'static', fallback: 's3' },
+      ...manifest.routes,
+    ];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    assert.ok(fs.existsSync(path.join(fallbackDir, SSR_CACHE_GUARD_HANDLER_FILE)));
+    const handlers = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')).map(
+      (r) => r.Properties.Handler,
+    );
+    assert.equal(handlers.filter((h) => h === SSR_CACHE_GUARD_HANDLER).length, 2);
+  });
+
+  void it('warns instead of installing the guard for a routed compute that shares the server bundle with another handler', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'other.mjs'), 'export const handler = async () => {};');
+    const manifest = ssrManifest(staticDir, bundleDir);
+    manifest.compute.fnApi = { ...manifest.compute.default, handler: 'other.handler' };
+    manifest.routes = [{ pattern: '/api/*', target: 'fnApi' }, ...manifest.routes];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp("not installed in front of compute 'fnApi'.*shares its bundle with compute 'default'"),
+    );
+    assert.match(fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_HANDLER_FILE), 'utf-8'), /from "\.\/index\.mjs"/);
   });
 
   void it('accepts compute.timeout as a plain number (seconds) and coerces to Duration', () => {

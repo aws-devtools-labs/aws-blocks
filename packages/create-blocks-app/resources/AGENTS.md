@@ -5,7 +5,7 @@
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — start here), then `<block>/README.md`, plus `<block>/API.md` and `<block>/DESIGN.md` where present.
+- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
 
@@ -13,7 +13,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Backend defines APIs; the frontend imports the same names as a typed client
 
-- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`. You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
+- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`; a namespace whose methods need a signed-in user is best declared with `auth.protect(scope, '<name>', { public, methods })` (see below). You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
 - The frontend imports those **same export names** from `'aws-blocks'`:
 
   ```ts
@@ -26,19 +26,69 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
-### Auth is a Building Block, not hand-rolled
+### Auth on the frontend
 
-Get the current user inside a method with `await auth.requireAuth(context)` (throws if unauthenticated — put it at the top of a protected method). On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui`:
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures it: `store` picks where users live — a Cognito user pool (the default: email + password, on by default, plus `providers` entries of `type: 'google'`, `'apple'`, `'facebook'`, `'amazon'`, `'saml'` or `'oidc'`), or `store: 'builtin'` (no user pool: `type: 'oidc'` entries, `github()` and `stubIdp()`, verified by your backend). One block holds one kind of user; password users and backend-verified IdP users need two `Auth` blocks. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
 
 ```ts
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
-authContainer.appendChild(Authenticator(authApi));
-onAuthChange(authApi, (user) => { /* re-render for signed-in/out */ });
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  // Email sign-in, matched ignoring case — fixed once the user pool exists (see below).
+  users: { signInWith: ['email'], caseSensitive: false, groups: ['admins'] }, // groups: optional, for requireRole
+  // Local dev only: no email is sent, so log the codes. Ignored on AWS (Cognito emails them).
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
+export const authApi = auth.createApi();               // the state machine the sign-in UI drives
+// Deny by default: `methods` runs only after the session check, with the signed-in user.
+export const notesApi = auth.protect(scope, 'notesApi', {
+  public: (context) => ({                              // no session needed
+    async health() {
+      return { ok: true };
+    },
+  }),
+  methods: (context, user) => ({                       // 401 NotAuthenticatedException if signed out
+    async myNotes() {
+      return user.userSub;                             // key per-user data on userSub
+    },
+  }),
+});
+export const adminApi = auth.protect(scope, 'adminApi', {
+  methods: () => ({ async adminReport() {} }),
+}, { role: 'admins' });                                // 403 NotAuthorizedException if not in the group
+// A plain ApiNamespace is public: each method must await its own guard.
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async myProfile() {
+    const user = await auth.requireAuth(context);      // 401 NotAuthenticatedException if signed out
+    return user.attributes.email;
+  },
+}));
 ```
 
-`AuthBasic` without a `codeDelivery` config signs a user in immediately on sign-up (no email confirmation step).
+- **Prefer `auth.protect(scope, '<name>', { public: (context) => ({ ... }), methods: (context, user) => ({ ... }) })` for any namespace with signed-in methods.** `methods` runs only after the session check (and the group check, with `{ role }` as the last argument), once per call, with the typed `user`; `public` methods need no session. A signed-out call to anything but a public method gets 401. This way a forgotten guard can't expose a method.
+- **In a plain `ApiNamespace`, gate every method that needs a user.** Its methods are public by default: call `await auth.requireAuth(context)` (or `await auth.requireRole(context, '<group>')`) at the top. Always `await` it: a guard that isn't awaited protects nothing, and no lint rule in this project catches the missing `await`. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
+- **Pass options inline.** The block narrows its types to the literal options: `requireRole` accepts only declared `users.groups`, and methods your configuration doesn't enable are compile errors. Don't route the options through a variable typed `AuthOptions`.
+- **Sign-up always confirms the email address with a 6-digit code.** With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it — no second password entry — but the code is always required. Locally the code goes to `codeDelivery` and to `.bb-data/<scope id>-<auth id>/last-code.json` (e.g. `.bb-data/my-app-auth/last-code.json`); once deployed, Amazon Cognito emails it (its default sender is limited to 50 emails a day).
+- **The flow over `authApi`** (what the `Authenticator` does for you, and what tests call): `setAuthState({ action: 'signUp', username, password, email })` → state `confirmingSignUp`; `setAuthState({ action: 'confirmSignUp', username, code })`; `setAuthState({ action: 'autoSignIn', username })` → `signedIn`. Later: `{ action: 'signIn', username, password }` and `{ action: 'signOut' }`. This app's pool uses `users: { signInWith: ['email'], caseSensitive: false }`: the email *is* the username (omit `email`), it matches ignoring case, and `user.username` is an id Cognito generates — show `user.displayName` (on `AuthState.user` / `onAuthChange`, the email) and read the address server-side from `user.attributes.email`. (Without `signInWith`, the block's default is `['username', 'email']`: users choose a username, which must not look like an email address, and can also sign in with their email once it is confirmed.)
+- **`signInWith` and `caseSensitive` are permanent.** Cognito fixes both when the user pool is created; changing them later means a new pool and migrating every user, so the block refuses the change at synth. Decide before the first deploy that holds real users. The email + case-insensitive shape is also what Amplify's client libraries expect, so a frontend can later sign in with them against the same pool (see "Planning to use Amplify client libraries?" in `bb-auth/README.md`).
+- **Errors cross the wire by name.** Match them with `isBlocksError(e, 'NotAuthenticatedException')` (from `@aws-blocks/blocks/client` on the frontend) or `isAuthError(e, AuthErrors.NotAuthenticated)` on the backend.
+- **Decide `users.signInWith` and custom attributes before the first deploy** — Cognito can't change them on an existing user pool. The first synth writes a baseline under `aws-blocks/baselines/` (commit it); from then on synth refuses such a change. **Never change the block's id** (`'auth'`) or its scope after deploying: that creates a new, empty user pool and removes the old one along with its users.
+
+`Auth` supplies the backend only; the frontend must let a user sign in. On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui` — it renders sign-up, the code step and sign-in, and submits the automatic sign-in for you:
+
+- On the backend, define signed-in methods with `auth.protect(...)`, or call `await auth.requireAuth(context)` at the top of each protected method of a plain `ApiNamespace`. Either throws when the user is not signed in.
+- On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
+  - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
+  - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
+  - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
+- `codeDelivery` never skips the code step: every sign-up confirms its email with a code, with or without the hook. Locally the code is written to `.bb-data/<scope id>-<auth id>/last-code.json`, and passed to the hook too; the deployed app ignores the hook and Amazon Cognito emails the code.
+
+When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
+
+`Authenticator` emits stable testids. The fields are `authenticator-username` / `authenticator-password` (on an email sign-in pool the username field is labelled Email and takes the address) and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; social, OIDC and SAML sign-in actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
 
 ### The deployed frontend finds the backend on its own
 
@@ -61,16 +111,93 @@ import { api } from 'aws-blocks';
 const res = await api.ping('world');   // { message: 'hi world' }
 ```
 
+### Live data: push with Realtime, or poll safely
+
+For data that changes while the page is open (dashboards, counters, feeds), prefer **push over poll**: the `Realtime` block delivers updates to the browser as they happen. A backend method returns a channel handle (`await rt.getChannel(namespace, channel)`), the frontend calls `subscribe(handler)` on it, and the backend calls `rt.publish(...)` when the data changes. See the `bb-realtime` docs for the full API.
+
+If you poll instead, every open tab calls the backend on a timer: each call is a Lambda invocation and an API Gateway request, so a careless poller wastes money and can hit the stage's rate limit. A safe poller:
+
+1. **Never overlaps calls.** Schedule the next call after the previous one settles: chain `setTimeout`, never a fixed `setInterval`.
+2. **Pauses while the tab is hidden.** Stop on `visibilitychange` → `hidden`, and refresh right away on `visible`.
+3. **Makes one call per tick.** Add one backend method that returns everything the view shows, not several calls per tick.
+4. **Backs off on errors**, up to a ceiling.
+5. **Stops on dispose**, and ignores a response that arrives after it.
+
+The typed client has no abort option, so a response can't be cancelled. Rules 1 and 5 make that safe: there is never more than one call in flight, and a late response is dropped.
+
+```ts
+// src/poll.ts — replace getDashboard with your own one-call-per-tick method
+import { api } from 'aws-blocks';
+
+type Dashboard = Awaited<ReturnType<typeof api.getDashboard>>;
+
+export function pollDashboard(render: (data: Dashboard) => void, intervalMs = 5_000): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = false;
+  let stopped = false;
+  let failures = 0;
+
+  const visible = () => document.visibilityState === 'visible';
+
+  async function tick(): Promise<void> {
+    timer = undefined;
+    if (stopped || inFlight || !visible()) return;
+    inFlight = true;
+    try {
+      const data = await api.getDashboard();
+      if (stopped) return;
+      failures = 0;
+      render(data);
+    } catch {
+      failures++;
+    } finally {
+      inFlight = false;
+    }
+    if (stopped || !visible()) return;
+    timer = setTimeout(tick, Math.min(intervalMs * 2 ** failures, 60_000));
+  }
+
+  function onVisibilityChange(): void {
+    if (!visible()) {
+      clearTimeout(timer);
+      timer = undefined;
+    } else if (timer === undefined) {
+      void tick();
+    }
+  }
+
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  void tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+  };
+}
+```
+
+Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` when it unmounts.
+
+### Typechecking: `npm run typecheck`
+
+- An app with a `tsconfig.app.json` (the Vite templates) checks the browser code and the backend as separate TypeScript projects: `src/` without Node types, `aws-blocks/` (through `aws-blocks/tsconfig.json`) with them. `process` or `Buffer` in `src/` fails with `TS2591`, and a `node:` import with `TS2307`: that code runs in the browser. Keep it in `aws-blocks/`, or read build-time values with `import.meta.env`.
+- Run `npm run typecheck` (`tsc -b --force`), never `npx tsc --noEmit` at the root: that root `tsconfig.json` only lists references, so it checks nothing. `TS6305 ... has not been built` means `tsc` ran without `-b`.
+- `TS6307 ... is not listed within the file list of project` means the backend imports a file its project does not include. `TROUBLESHOOTING.md` in the docs folder has the fix for this and the other errors of the layout.
+- A Next.js or backend-only app has one `tsconfig.json` with Node types, and `npm run typecheck` is `tsc --noEmit`.
+
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
-3. For faster iteration: run `npm run dev &` in the background, then run `npm run test:e2e` repeatedly (reuses the running server)
+3. For faster iteration, keep one dev server running and rerun tests against it:
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
+   - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app). To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server.
+   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
 
-If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace shares one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field, not the URL: there are no per-namespace paths like `/aws-blocks/authApi`, and anything after `/aws-blocks/api` in the path is ignored. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`), not the 2nd `ApiNamespace` argument.
+If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace is served at one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field: there are no per-namespace paths like `/aws-blocks/authApi`. (The typed client also appends the namespace to the URL — `/aws-blocks/api/<namespace>` — so a gateway can route it; if you use that form, the namespace in the path must match the one in `method`, or the call fails with `-32600` Invalid Request.) The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`), not the 2nd `ApiNamespace` argument.
 
 ```bash
 curl -X POST http://localhost:3000/aws-blocks/api \
@@ -87,13 +214,41 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 ## Rules
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
-- **To store data, reach for a storage Building Block** — `KVStore` for key–value, `DistributedTable` for a queryable table (rows + indexes). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
-- **The framework model above covers the common path.** Read a block's own docs (`README.md`, then `API.md` / `DESIGN.md` where present) when you need a block's specific API surface — not every block has all three, so a missing file is not an error (see the **AWS Blocks docs** bullet for where the docs folder lives).
+- **To store data, reach for a storage Building Block** — default to `DistributedTable` for app records you list or query as a collection (todos, notes, orders); use `KVStore` for values you read and write by one key, structured or not (settings, flags, caches, sessions, per-user preferences). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
+- **The framework model above covers the common path.** For a block's specific API surface, read its `README.md`; open `API.md` only for an exact signature and `DESIGN.md` only when you are stuck (see the **AWS Blocks docs** bullet for where the docs folder lives).
 
 ## Deploying (requires AWS credentials)
 
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
+- `npm run sandbox:deploy` — deploy backend to AWS once and exit (no watch, no dev server); use this from scripts and CI
+- `npm run sandbox:preview` — deploy the sandbox backend plus a hosted preview of the frontend once and exit; prints the preview URL. It is the same stack as `sandbox` / `sandbox:deploy`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL
 - `npm run deploy` — full production deploy to AWS
-- `npm run sandbox:destroy` — tear down sandbox resources
+- `npm run sandbox:destroy` — tear down sandbox resources; in a terminal it asks first (`npm run sandbox:destroy -- --yes` skips the question), and without one (CI, an agent's shell) it runs without asking
 
-On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Grep that one line for "deploy finished + where it lives"; don't poll CloudFormation or hunt the URL out of the streamed output.
+`npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish. The same applies to a first `npm run sandbox:deploy`.
+
+If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile, the deployment Region and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script. If the message first lists `aws configure set region <region> --profile <name>`, that command changes the user's AWS config: include it when you ask, and run it before the sign-in.
+
+If either command stops with `CDK is not bootstrapped in Region <region> of account <account-id>`, the message includes the command that fixes it: `npx cdk bootstrap aws://<account-id>/<region> --app=`, run from the project directory. Bootstrapping is needed once per account and Region, takes a few minutes, and creates IAM roles and other resources in the user's account: ask the user before you run it, then re-run the npm script.
+
+Before deploying, both commands print `Deployment target: <credentials>, Region <region>`, where the credentials are for example `AWS profile <name>` or `access keys in AWS_ACCESS_KEY_ID`, then the account name and plan. When the credentials are the AWS-managed role of the new AWS sign-up experience, a link to `https://settings.aws.com/billing` follows; other accounts get no link. The deploy does not pause: if the credentials or Region are not the ones the user expects, stop the command (Ctrl-C) and ask. `Account name: not available` or `Account plan: not available` is not an error: the deploy continues. Never change a spend limit yourself. When the output has the billing link, give it to the user, and ask them to verify in AWS Settings that the project they manage matches the CLI deployment target. If the user signs in with `aws login`, the profile Region must be set to the project's Region before sign-in (`aws configure set region <region> --profile <name>`); after changing it, they run `aws login` again.
+
+On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`); with the background redirect above, look for it in `deploy.log`. Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
+
+`npm run sandbox:deploy` prints `BLOCKS_DEPLOYED api=<backend>` too. The typed client (`aws-blocks/client.js`) is generated before the deploy and `.blocks-sandbox/config.json` is written before the line, so once you see it the app is ready to run against the sandbox. To get the API URL alone in a script, run `npx --no -- cdk-blocks sandbox deploy --query apiUrl`.
+
+If you will immediately self-test the frontend, add `npm run deploy -- --wait-live`: it holds the `BLOCKS_DEPLOYED` line until the new build is actually being served through CloudFront, so a request issued right after the signal returns the new asset rather than a stale cached bundle. Without it, the signal fires as soon as the deploy process exits, which can be a few seconds before the edge finishes serving the new build. Tune the budget with `--wait-live-timeout=<seconds>` (default 180); if it can't confirm within the budget it says so and exits non-zero instead of printing the signal.
+
+**Stack naming.** The deploy scripts name stacks from `stackId` in `.blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `aws-blocks/index.cdk.ts`.
+
+## Blocks CLI
+
+Every `npm run …` script above is a thin alias of the `cdk-blocks` command from `@aws-blocks/blocks` (for example `"deploy": "cdk-blocks deploy"`), so prefer the npm scripts: `npm run deploy` runs `cdk-blocks deploy`, and `npm run dev -- --port 4000` passes flags through. When you need the command directly, run `npx --no -- cdk-blocks <command>`. Always keep `--no`: it uses the app's installed CLI and never downloads a package.
+
+- `npx --no -- cdk-blocks --help` lists every command; `npx --no -- cdk-blocks help <command>` (for example `npx --no -- cdk-blocks help sandbox destroy`) shows one command's flags and examples.
+- `--output json` prints one JSON document on stdout and keeps progress on stderr; `--query <field>` prints one field raw, for example `npx --no -- cdk-blocks deploy --query apiUrl` or `npx --no -- cdk-blocks whoami --query stacks.production`.
+- `npm run destroy` asks for confirmation in a terminal. Without one (CI, an agent's shell) it refuses with exit code 2 unless you pass `--yes`: `npm run destroy -- --yes`. Ask the user before you delete their production stack.
+- Exit codes: `0` success, `1` the operation failed, `2` usage error (unknown command or flag, or a confirmation the run could not give), `130` interrupted.
+- Dev server settings live in `package.json` under `"blocks": { "dev": { "port", "frontendPort" } }`; `"frontend": false` there runs the backend only. `npm run dev` starts the app's Vite (or `next dev`) on `frontendPort`, behind `port`; flags such as `npm run dev -- --port 4000 --frontend-port 4100` override them. A server started with `--port` is stopped with the same flag (`npm run dev:stop -- --port 4000`), or with `npm run cleanup`, which stops every dev server the app started. Set `"frontendCommand"` only for another frontend dev server, and give it the same port as `frontendPort`; `npm run dev` warns when the command does not contain that port.
+- With a SQL data block, `npx --no -- cdk-blocks db migrate aws-blocks/migrations` applies the SQL migrations in `aws-blocks/migrations/` to the local database (PGlite, in `.bb-data/`), and `npx --no -- cdk-blocks db status aws-blocks/migrations` lists the applied and pending ones; `--url <connection-string>` targets an external database instead. `npx --no -- cdk-blocks help db` lists the other verbs.
+- `npm run vendorize -- @aws-blocks/bb-kv-store` (`cdk-blocks vendorize <package>`) copies a Building Block's source into the app so you can customize it; `--force` overwrites an existing copy.

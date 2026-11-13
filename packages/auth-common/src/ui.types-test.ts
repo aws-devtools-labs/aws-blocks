@@ -2,16 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Negative type tests for `AuthStateApi.setAuthState` discrimination.
+ * Negative type tests for `AuthStateApi.setAuthState` discrimination and the
+ * `StatusMessage` factory signature.
  *
  * Compile-only. Each `@ts-expect-error` line asserts the following
  * expression is currently a type error; if it stops being a type error
- * (e.g. the map regresses to `Record<string, any>`), the build fails.
+ * (e.g. the map regresses to `Record<string, any>`, or `StatusMessage`'s
+ * `text` becomes required), the build fails.
  *
  * @internal
  */
 
-import type { AuthStateApi } from './ui.js';
+import type { AuthState } from './index.js';
+import type { AuthStateApi, StatusKind } from './ui.js';
+import { getAuthStateSnapshot, StatusMessage, submitAuthAction, subscribeAuthState } from './ui.js';
 
 declare const api: AuthStateApi;
 
@@ -61,4 +65,116 @@ async function negative() {
 	await api.setAuthState({ action: 'nonsense' });
 }
 
-void positive; void negative;
+// ---------------------------------------------------------------------------
+// The store against React's `useSyncExternalStore` (requirement S10).
+//
+// A structural stand-in with React 18/19's exact signature (`@types/react`
+// `useSyncExternalStore<Snapshot>`), so this compiles without a React
+// dependency. `ui.react-types.test.ts` repeats the check against the real
+// `@types/react`. Zero casts: this is the code a customer writes.
+// ---------------------------------------------------------------------------
+
+declare function useSyncExternalStore<Snapshot>(
+	subscribe: (onStoreChange: () => void) => () => void,
+	getSnapshot: () => Snapshot,
+	getServerSnapshot?: () => Snapshot,
+): Snapshot;
+
+function store() {
+	const subscribe: (onStoreChange: () => void) => () => void = (cb) => subscribeAuthState(api, cb);
+	const getSnapshot: () => AuthState | null = () => getAuthStateSnapshot(api);
+	const state: AuthState | null = useSyncExternalStore(subscribe, getSnapshot, () => null);
+	// The README's hook, verbatim.
+	const useAuthState = () =>
+		useSyncExternalStore(
+			(cb: () => void) => subscribeAuthState(api, cb),
+			() => getAuthStateSnapshot(api),
+			() => null,
+		);
+	const viaHook: AuthState | null = useAuthState();
+	// A listener may also read the new state it is handed.
+	const stop: () => void = subscribeAuthState(api, (s: AuthState) => void s.state);
+	void state;
+	void viaHook;
+	stop();
+}
+
+// ---------------------------------------------------------------------------
+// submitAuthAction — the README / CUSTOMIZING-AUTH-UI.md snippets (R17)
+// ---------------------------------------------------------------------------
+
+async function notifier(username: string, password: string, showError: (message?: string) => void) {
+	// Same discriminated input as setAuthState, so a wrong payload is a compile error.
+	const next: AuthState = await submitAuthAction(api, { action: 'signIn', username, password });
+	if (next.retriable) showError(next.error);
+	await submitAuthAction(api, { action: 'signOut' });
+	// @ts-expect-error — signIn requires password, exactly as setAuthState does.
+	await submitAuthAction(api, { action: 'signIn', username });
+	// @ts-expect-error — unknown action.
+	await submitAuthAction(api, { action: 'nonsense' });
+}
+
+// README "Custom auth UI" snippet.
+async function readmeSignIn(username: string, password: string): Promise<string | undefined> {
+	const next = await submitAuthAction(api, { action: 'signIn', username, password });
+	if (next.retriable) return next.error;
+	return undefined;
+}
+
+// CUSTOMIZING-AUTH-UI.md "Depth 3" snippet.
+async function renderAuth(root: HTMLElement, showError: (message?: string) => void) {
+	const state = await api.getAuthState();
+	if (state.state === 'signedIn') {
+		root.textContent = `Signed in as ${state.user?.username}`;
+		return;
+	}
+	const next = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+	if (next.retriable) {
+		showError(next.error);
+		return;
+	}
+	await submitAuthAction(api, { action: 'signOut' });
+}
+
+void positive; void negative; void store; void notifier; void readmeSignIn; void renderAuth;
+
+// StatusMessage — the factory and its handle. Mirrors the sibling UI
+// surfaces so an accidental signature change (e.g. making the initial
+// options or set()'s text required) is caught at build time.
+function statusPositive() {
+	// No-arg call compiles — every option is optional.
+	const bare = StatusMessage();
+	// Options are all optional and independently omittable.
+	StatusMessage({});
+	StatusMessage({ kind: 'loading' });
+	StatusMessage({ text: 'Saving…' });
+	StatusMessage({ testId: 'app-status' });
+	StatusMessage({ kind: 'success', text: 'Done.', testId: 'app-status' });
+	// set() — kind required, text optional, every StatusKind member accepted.
+	bare.set('idle');
+	bare.set('loading');
+	bare.set('success', 'Done.');
+	bare.set('error', 'Failed.');
+	// The handle's element is a read-only HTMLElement.
+	const el: HTMLElement = bare.element;
+	void el;
+}
+
+function statusNegative() {
+	const handle = StatusMessage();
+	// @ts-expect-error — kind must be a StatusKind member, not an arbitrary string.
+	StatusMessage({ kind: 'pending' });
+	// @ts-expect-error — testId is a string, not a number.
+	StatusMessage({ testId: 42 });
+	// @ts-expect-error — set() requires a kind argument.
+	handle.set();
+	// @ts-expect-error — set()'s kind must be a StatusKind member.
+	handle.set('pending');
+	// @ts-expect-error — element is read-only.
+	handle.element = document.createElement('div');
+	// @ts-expect-error — StatusKind has no 'pending' member.
+	const bad: StatusKind = 'pending';
+	void bad;
+}
+
+void statusPositive; void statusNegative;

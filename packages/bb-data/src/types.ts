@@ -46,6 +46,27 @@ export interface DatabaseOptions {
    * @default '16.13'
    */
   postgresVersion?: string;
+  /**
+   * Postgres extensions to load in the **local** PGlite engine, by name
+   * (e.g. `['postgis']` or `['pgvector']`).
+   *
+   * Local-only, mirroring `postgresVersion`: read only by the local PGlite
+   * implementation and ignored on AWS, where Aurora PostgreSQL supports these
+   * extensions natively. This keeps spatial / vector code that works on Aurora
+   * also working in local dev, preserving local/production parity.
+   *
+   * Each declared extension is distributed as its own optional package and is
+   * loaded by dynamic import, so only projects that declare one pay its install
+   * cost. A declared extension whose package is not installed (or an unknown
+   * name) fails on the first database interaction with an actionable error — the
+   * exact `npm install` command for a missing package, or the list of supported
+   * names for an unknown one. Supported names: `postgis`, `pgvector`.
+   *
+   * You still run `CREATE EXTENSION <name>` in a migration — this option only
+   * makes the extension available for `CREATE EXTENSION` to succeed locally.
+   * @default [] (no extensions)
+   */
+  extensions?: string[];
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
   /**
@@ -61,6 +82,59 @@ export interface DatabaseOptions {
    * and the tier by a string. The CDK layer resolves these against the VPC.
    */
   subnets?: SubnetSelection;
+  /**
+   * ARN of an existing customer-managed KMS key to use for the Aurora cluster's
+   * storage-at-rest encryption. The same key also encrypts the cluster's
+   * auto-generated credentials secret. When omitted, storage is still encrypted,
+   * but with the account's AWS-managed `aws/rds` key — storage encryption is
+   * always on regardless of this option.
+   *
+   * Referenced by **ARN** (a plain string) rather than a `kms.IKey` for the same
+   * reason as `subnets`: the `Database` constructor resolves to a runtime entry
+   * point that must not import `aws-cdk-lib`. The CDK layer rehydrates the ARN
+   * into a `kms.IKey` (via `kms.Key.fromKeyArn`) and passes it to the cluster.
+   *
+   * **Requirements for the key you pass.** The key is *imported* — Blocks binds
+   * to it by ARN and does not (cannot) modify its key policy — so the key's
+   * policy must already permit the principals that use it:
+   * - The **deploying principal** needs `kms:CreateGrant` and `kms:DescribeKey`
+   *   on the key: RDS uses a grant to encrypt the cluster's storage volume with it.
+   * - The runtime path reads the credentials secret over the RDS Data API, so
+   *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
+   *   adds the identity-side permission; the key policy must still allow it.
+   * - The key must be in the **same account and region** as the cluster.
+   *
+   * **Why this is a flat ARN** (rather than the `encryption:
+   * 'aws-managed' | 'customer-managed' | fromKmsKey(arn)` shape used by
+   * `bb-distributed-table` / `bb-kv-store`): `Database` resolves to a runtime
+   * entry point that must not import `aws-cdk-lib`, so it cannot expose the
+   * CDK-helper `fromKmsKey()` form, and the Data-API access model means there is
+   * no per-table managed-key choice to model — storage is either AWS-managed
+   * (default) or the one customer-managed key named here. Unifying the option
+   * shape across the data blocks is tracked as a follow-up.
+   */
+  storageEncryptionKeyArn?: string;
+  /**
+   * Automated-backup retention for the Aurora cluster, which is also its
+   * point-in-time-recovery (PITR) window — Aurora keeps continuous backups
+   * within this window and restores from it.
+   *
+   * A single knob, since the recovery window only means anything when backups
+   * are on:
+   * - `true` — enable backups with the standard 15-day window.
+   * - `false` — Aurora **cannot** turn automated backups off (the cluster
+   *   minimum is 1 day), so this clamps to the 1-day minimum rather than
+   *   disabling them.
+   * - `{ retentionDays: n }` — enable backups and pin the window. Aurora
+   *   requires an integer **1–35**; an out-of-range value warns at synth and
+   *   falls back to the 15-day default.
+   *
+   * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+   * from `BlocksPresets` — on under `production`, off under `sandbox`; a `false`
+   * default lands on the 1-day minimum per the clamp above). A per-block value
+   * always wins. The CDK layer resolves this into the cluster's backup retention.
+   */
+  pointInTimeRecovery?: boolean | { retentionDays: number };
 }
 
 /**

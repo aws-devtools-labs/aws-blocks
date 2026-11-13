@@ -14,7 +14,7 @@ Blocks supports DynamoDB through KVStore and DistributedTable Building Blocks fo
 
 ## How does authentication work?
 
-Blocks provides AuthBasic for username and password authentication with JWT sessions. It includes password hashing with bcrypt, HTTP-only cookie sessions, optional email-confirmed signup, and password reset flows.
+Blocks provides the Auth Building Block for authentication: email and password sign-in backed by a Cognito user pool, social sign-in, OIDC and SAML. It includes HTTP-only cookie sessions, email-confirmed signup, and password reset flows.
 
 ## Can I use Blocks for real-time features?
 

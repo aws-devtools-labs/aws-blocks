@@ -283,21 +283,26 @@ test('CDK: an out-of-range retentionDays falls back to the default window (still
 
 // ── Synth-time warnings actually fire (not just the fallback values) ─────────
 
-test('CDK: an unrecognized encryption value warns at synth', () => {
-  const { stack, parent } = setup();
+test('CDK: an unrecognized encryption value fails the synth', () => {
+  const { parent } = setup();
   // The typed `encryption` union can't express an unrecognized value, so build
-  // it at runtime via Object.assign (no cast) to exercise the UnknownEncryption
-  // synth guard.
+  // it at runtime via Object.assign (no cast) to exercise the encryption synth
+  // guard. A JS caller's typo must not silently downgrade to the AWS-managed key.
   const options: KVStoreOptions<unknown> = {};
-  Object.assign(options, { encryption: 'kms' });
-  new KVStore(parent, 'sessions', options);
-  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+  Object.assign(options, { encryption: 'kms-managed' });
+  assert.throws(
+    () => new KVStore(parent, 'sessions', options),
+    /Unrecognized encryption 'kms-managed'.*'aws-managed', 'customer-managed', or KVStore\.fromKmsKey\(arn\)/,
+  );
 });
 
 test('CDK: an out-of-range retentionDays warns at synth', () => {
   const { stack, parent } = setup();
   new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: 60 } });
-  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-blocks/bb-kv-store:InvalidPitrDays'),
+  );
 });
 
 test('CDK: durability options passed alongside fromExisting warn at synth', () => {

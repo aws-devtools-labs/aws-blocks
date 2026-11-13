@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, brandBlocksError } from '@aws-blocks/core';
 
 /**
  * Standardized error constants for the Database Building Block.
@@ -15,6 +15,10 @@ export const DatabaseErrors = {
   TransactionFailed: 'TransactionFailedException',
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
+  PermissionDenied: 'PermissionDeniedException',
+  CheckViolation: 'CheckViolationException',
+  NotNullViolation: 'NotNullViolationException',
+  ForeignKeyViolation: 'ForeignKeyViolationException',
 } as const;
 
 /**
@@ -64,7 +68,53 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
   });
 }
 
+/**
+ * Request errors: SQLSTATEs caused by what the caller asked for, not by a server
+ * failure. Each maps to a 4xx `ApiError` with a stable name and a fixed message,
+ * so callers can branch with `isBlocksError(e, DatabaseErrors.PermissionDenied)`
+ * (and so on) on the server and the client. None is retriable: the same statement
+ * fails the same way. The raw driver text, which names tables, columns and
+ * constraints, is kept only as `cause` (server-side).
+ *
+ * - `42501` insufficient_privilege: the caller's statement hit a row-level-security
+ *   `WITH CHECK` rejection or a missing grant for the role → 403 `PermissionDenied`.
+ *   A refused `SET LOCAL ROLE` from `withRLS()` itself is a setup error, which
+ *   `setRLSContext()` re-tags as a 500 `QueryFailed`.
+ * - `23514` check_violation → 400 `CheckViolation`
+ * - `23502` not_null_violation → 400 `NotNullViolation`
+ * - `23503` foreign_key_violation: the referenced row is missing, or rows still
+ *   reference the one being deleted → 409 `ForeignKeyViolation`
+ */
+const REQUEST_ERRORS: Record<string, { status: number; name: string; message: string }> = {
+  '42501': { status: 403, name: DatabaseErrors.PermissionDenied, message: 'Permission denied for this operation' },
+  '23514': { status: 400, name: DatabaseErrors.CheckViolation, message: 'A value violates a check constraint' },
+  '23502': { status: 400, name: DatabaseErrors.NotNullViolation, message: 'A required value is missing' },
+  '23503': { status: 409, name: DatabaseErrors.ForeignKeyViolation, message: 'The item violates a foreign key constraint' },
+};
+
+/**
+ * Build the 4xx ApiError for a request-error SQLSTATE (see {@link REQUEST_ERRORS}),
+ * or `undefined` when `code` is not one of them. Shared by every engine
+ * translator (PGlite, pg-client, Data API) so all paths produce an identically
+ * shaped error.
+ */
+export function requestError(code: string, cause: Error): ApiError | undefined {
+  const entry = REQUEST_ERRORS[code];
+  if (!entry) return undefined;
+  return new ApiError(entry.message, entry.status, { name: entry.name, cause });
+}
+
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
+
+/**
+ * Whether `name` is one of the `DatabaseErrors` names — i.e. an engine
+ * translator already produced a branded BB error that should be re-thrown as-is
+ * rather than re-tagged. Takes a plain `string` so callers need no cast to test
+ * an arbitrary `error.name` against the literal-typed name set.
+ */
+export function isKnownDatabaseErrorName(name: string): boolean {
+  return knownErrors.has(name);
+}
 
 /**
  * Data API exception names that mean "the cluster is not accepting statements yet"
@@ -84,17 +134,59 @@ export const TRANSIENT_DATA_API_ERROR_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Stable, BB-authored client-facing messages per DatabaseErrors name. The raw
+ * driver text (which varies by engine and can name columns / constraints) is
+ * never sent — it is kept only as `cause` for server-side diagnostics. Because a
+ * branded error's `name` AND `message` now cross the wire (D-003), a re-tag path
+ * must give the error a stable message here rather than forward the driver's.
+ */
+const RE_TAG_MESSAGES: Record<string, string> = {
+  [DatabaseErrors.QueryFailed]: 'The database query failed',
+  [DatabaseErrors.ConnectionFailed]: 'The database connection failed',
+  [DatabaseErrors.TransactionFailed]: 'The database transaction failed',
+  [DatabaseErrors.UniqueConstraintViolation]: 'The item violates a unique constraint',
+  [DatabaseErrors.SerializationFailure]: 'The transaction failed due to a serialization conflict',
+};
+
+/**
+ * Build a BRANDED re-tag error: a fresh `Error` carrying the BB `name` and a
+ * stable BB message, with the original driver error kept as `cause` (server-side
+ * only). This is the single place the re-tag paths (`translatePgError`,
+ * `translateDsqlError`, `wrapError`) produce their thrown error, so the brand and
+ * the stable-message invariant never diverge. The name crosses the wire so
+ * `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` keeps
+ * matching on the client (the auto-pause-resume retry contract relies on it),
+ * while the raw driver text never leaks (D-003).
+ */
+export function reTagged(name: string, cause: Error): Error {
+  const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DatabaseErrors.QueryFailed];
+  const wrapped = new Error(`${name}: ${message}`, { cause });
+  wrapped.name = name;
+  return brandBlocksError(wrapped);
+}
+
+/**
  * Wrap an error with a standardized DatabaseErrors name.
  *
- * If the error already has a recognized DatabaseErrors name, it is re-thrown as-is.
- * Otherwise, its name is set to QueryFailed before throwing.
+ * The re-tagged error is BRANDED (via {@link reTagged}) so its BB `name` crosses
+ * the RPC wire and `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)`
+ * keeps matching on the client (the auto-pause-resume retry contract in the README
+ * relies on this). Since a branded error's message is now forwarded too (D-003),
+ * the raw driver text is replaced with a stable BB message and the original engine
+ * error is retained as `cause` (server-side only) — so a re-tag never leaks driver
+ * internals over the wire.
+ *
+ * If the error already carries a recognized DatabaseErrors name, that name is
+ * kept; otherwise it is set to QueryFailed.
  *
  * @param e - The caught value (may not be an Error)
  */
 export function wrapError(e: unknown): never {
   const error = e instanceof Error ? e : new Error(String(e));
-  if (!knownErrors.has(error.name)) {
-    error.name = DatabaseErrors.QueryFailed;
-  }
-  throw error;
+  // A request-error name keeps its 4xx status: re-tagging it as a plain Error
+  // would serialize as a 500 that carries a 4xx name.
+  const request = Object.entries(REQUEST_ERRORS).find(([, entry]) => entry.name === error.name);
+  if (request) throw requestError(request[0], error);
+  const name = knownErrors.has(error.name) ? error.name : DatabaseErrors.QueryFailed;
+  throw reTagged(name, error);
 }

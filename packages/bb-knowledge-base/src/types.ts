@@ -6,6 +6,7 @@
  * This file has zero runtime dependencies — types only.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { z } from 'zod';
 
 // ── Source Configuration ────────────────────────────────────────────────────
 
@@ -155,6 +156,78 @@ export interface RetrieveResult {
 	metadata: Record<string, string>;
 }
 
+// ── Agent Tool ─────────────────────────────────────────────────────────────
+
+/**
+ * Options for `KnowledgeBase.asAgentTool()`.
+ *
+ * @typeParam TContext - The per-call tool context the agent passes to its tools (the Agent's
+ *   `toolContextSchema` type, filled from `stream(..., { context })` in your server code).
+ */
+export interface KnowledgeBaseAgentToolOptions<TContext> {
+	/**
+	 * **Required.** Derives the metadata filter for every search from the per-call tool context,
+	 * which your server code fills from the authenticated session (for example
+	 * `context: { tenantId }` in `agent.stream()`, with a tenant id your app looks up for the
+	 * signed-in user). The model never sees or sets the filter: the tool's only input is `query`.
+	 *
+	 * Return `undefined` to search the whole knowledge base. That choice is explicit on purpose:
+	 * pass `filter: () => undefined` only when every caller may read every document. Any other
+	 * result must narrow the search: `null`, an empty object, or a key whose `equals` is missing
+	 * or an empty string fails the tool call with `KnowledgeBaseErrors.ValidationError` instead
+	 * of running a wider search.
+	 *
+	 * Throw (for example when the session carries no tenant) to fail the tool call rather than
+	 * run an unscoped search. May be async.
+	 *
+	 * @example
+	 * ```typescript
+	 * filter: (context) => ({ tenant: { equals: context.tenantId } })
+	 * ```
+	 */
+	filter: (context: TContext) => MetadataFilter | undefined | Promise<MetadataFilter | undefined>;
+	/**
+	 * Tool description shown to the model. Default: a generic "search the knowledge base"
+	 * description that includes the knowledge base's own `description` when it has one.
+	 */
+	description?: string;
+	/**
+	 * Maximum results per search, same rules as `RetrieveOptions.maxResults`. Default: 5.
+	 * Checked when the tool is defined: a non-integer throws from `asAgentTool()`.
+	 */
+	maxResults?: number;
+}
+
+/**
+ * One search hit as returned to the agent by the `asAgentTool()` tool. Same fields as
+ * {@link RetrieveResult}, as a plain JSON object.
+ */
+export type KnowledgeBaseAgentToolResult = {
+	text: string;
+	score: number;
+	source: string;
+	metadata: { [key: string]: string };
+};
+
+/**
+ * A tool definition returned by `KnowledgeBase.asAgentTool()`. Pass it to the `tool()` factory in
+ * an Agent's `tools` callback (`tools: (tool) => ({ searchDocs: tool(kb.asAgentTool({ ... })) })`).
+ *
+ * It is a plain object shaped like `@aws-blocks/bb-agent`'s `ToolDefinition`, so the knowledge
+ * base doesn't depend on the agent package. `untrustedOutput` is always `true`: retrieved text
+ * is content you don't control.
+ */
+export type KnowledgeBaseAgentTool<TContext> = {
+	/** Tool description shown to the model. */
+	description: string;
+	/** The tool's input schema: a single non-empty `query` string. */
+	parameters: z.ZodObject<{ query: z.ZodString }>;
+	/** Always `true`: the agent wraps results in an untrusted-data block. */
+	untrustedOutput: true;
+	/** Runs the scoped search. Called by the agent with the model's input and the per-call context. */
+	handler: (args: { input: { query: string }; context: TContext }) => Promise<KnowledgeBaseAgentToolResult[]>;
+};
+
 // ── Sync Options ───────────────────────────────────────────────────────────
 
 /**
@@ -217,3 +290,16 @@ export interface WaitUntilSyncedOptions {
 	 */
 	signal?: AbortSignal;
 }
+
+/**
+ * The server-side `cause` attached (non-enumerable) to an `IngestionFailedException`
+ * when Bedrock reported failure reasons for the failed ingestion job. `message`
+ * joins the reasons with `'; '`; `failureReasons` keeps the raw array. The reasons
+ * are raw Bedrock service text that can name buckets, object keys or ARNs, so they
+ * never appear in the error's own message or its RPC response.
+ *
+ * `cause` is absent when the job reported no reasons or the `GetIngestionJob`
+ * lookup failed, so treat it as optional (`cause?.failureReasons ?? []`). Read it
+ * in server code only, for logging or diagnostics.
+ */
+export type IngestionFailureCause = Error & { failureReasons: string[] };

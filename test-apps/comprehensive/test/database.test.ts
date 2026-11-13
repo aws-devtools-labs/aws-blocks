@@ -83,8 +83,10 @@ export function databaseTests(getApi: () => typeof apiType) {
       await api.dbInsert(a, 'sender', 50);
       await api.dbInsert(b, 'receiver', 0);
 
-      // Transfer more than balance — should fail
-      await assert.rejects(() => api.dbTransfer(a, b, 999), /Insufficient balance/);
+      // Transfer more than balance — should fail. The handler throws a raw
+      // Error, which the RPC gate collapses to a generic 500 (message
+      // sanitized); the rollback itself is asserted by the unchanged values below.
+      await assert.rejects(() => api.dbTransfer(a, b, 999), ApiError);
 
       // Values unchanged
       const sender = await api.dbGet(a);
@@ -131,6 +133,37 @@ export function databaseTests(getApi: () => typeof apiType) {
         await api.dbDelete(id);
       }
     });
+
+    // Request errors (SQLSTATE 23514, 23502, 23503, 42501) must serialize to a
+    // named 4xx over the wire, not a generic 500 QueryFailed, so a client can
+    // branch on them with isBlocksError. The PGlite mock enforces every
+    // constraint and policy, so this exercises the real translate path locally.
+    test('Database - withRLS() switches to the authenticated role', async () => {
+      assert.strictEqual(await getApi().dbRlsCurrentRole(), 'authenticated');
+    });
+
+    const requestErrorCases = [
+      { method: 'dbCheckViolation', status: 400, name: DatabaseErrors.CheckViolation },
+      { method: 'dbNotNullViolation', status: 400, name: DatabaseErrors.NotNullViolation },
+      { method: 'dbForeignKeyViolation', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+      { method: 'dbRlsViolation', status: 403, name: DatabaseErrors.PermissionDenied },
+      { method: 'dbMissingGrant', status: 403, name: DatabaseErrors.PermissionDenied },
+    ] as const;
+    for (const { method, status, name } of requestErrorCases) {
+      test(`Database - ${method} returns ${status} ${name} over the wire`, async () => {
+        const api = getApi();
+        await assert.rejects(
+          () => api[method](`re-${Date.now().toString(36)}`),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, status, `${name} must be ${status}, not 500`);
+            assert.ok(isBlocksError(e, name), `expected ${name}, got ${e.name}`);
+            assert.strictEqual(e.retriable, false);
+            return true;
+          },
+        );
+      });
+    }
 
     // Kysely transactions must be atomic on the real engine.
     test('Database - Kysely transaction commits transfer', async () => {

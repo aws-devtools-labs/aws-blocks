@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, onAuthChange } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from '@aws-blocks/blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.
 // Full docs: node_modules/@aws-blocks/blocks/README.md
 
 type Todo = { todoId: string; title: string; completed: boolean; priority: number; version: number };
-type User = { username: string; userId: string };
+// The signed-in user (groups, attributes, userSub), typed by the backend's `authApi`.
+type User = AuthUserOf<typeof authApi>;
 type SortBy = 'priority' | 'title' | undefined;
 
 function TodoApp() {
@@ -14,28 +15,49 @@ function TodoApp() {
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState(2);
   const [sortBy, setSortBy] = useState<SortBy>(undefined);
+  const [status] = useState(() => StatusMessage({ testId: 'todo-status' }));
+  const statusRef = useRef<HTMLDivElement>(null);
+
+  // Attached once outside React's render output so re-renders never remount
+  // the live region — a region that stays mounted is what screen readers announce.
+  useEffect(() => {
+    statusRef.current?.appendChild(status.element);
+    return () => status.element.remove();
+  }, [status]);
+
+  const run = useCallback(async (action: () => Promise<unknown>, failure: string): Promise<boolean> => {
+    try {
+      await action();
+      status.set('idle');
+      return true;
+    } catch (e) {
+      status.set('error', `${failure}: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }, [status]);
 
   const load = useCallback(async () => {
-    setTodos(await api.listTodos(sortBy));
-  }, [sortBy]);
+    await run(async () => setTodos(await api.listTodos(sortBy)), 'Could not load todos');
+  }, [sortBy, run]);
 
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    let sub: any;
+    let unsubscribe: (() => void) | undefined;
     (async () => {
       try {
         const channel = await api.subscribeTodos();
-        sub = channel.subscribe(() => load());
+        const sub = channel.subscribe(() => load());
+        unsubscribe = () => sub.unsubscribe();
         await sub.established;
       } catch { /* realtime not available in local dev */ }
     })();
-    return () => sub?.unsubscribe();
+    return () => unsubscribe?.();
   }, [load]);
 
   const addTodo = async () => {
     if (!newTitle.trim()) return;
-    await api.createTodo(newTitle.trim(), newPriority);
+    if (!(await run(() => api.createTodo(newTitle.trim(), newPriority), 'Could not add todo'))) return;
     setNewTitle('');
     await load();
   };
@@ -51,7 +73,7 @@ function TodoApp() {
   };
 
   const remove = async (todoId: string) => {
-    await api.deleteTodo(todoId);
+    if (!(await run(() => api.deleteTodo(todoId), 'Could not delete todo'))) return;
     await load();
   };
 
@@ -71,9 +93,9 @@ function TodoApp() {
           <option value={2}>🟡 Medium</option>
           <option value={3}>🟢 Low</option>
         </select>
-        <button onClick={addTodo}>Add</button>
+        <button className="bb-button bb-button-primary" onClick={addTodo}>Add</button>
       </div>
-      <div style={{ marginBottom: 12, fontSize: '0.85em', color: '#666' }}>
+      <div style={{ marginBottom: 12, fontSize: '0.85em', color: 'var(--bb-color-text-muted, #666)' }}>
         Sort:{' '}
         <button onClick={() => setSortBy(undefined)} style={{ fontWeight: !sortBy ? 'bold' : 'normal' }}>Default</button>{' '}
         <button onClick={() => setSortBy('priority')} style={{ fontWeight: sortBy === 'priority' ? 'bold' : 'normal' }}>Priority</button>{' '}
@@ -93,7 +115,8 @@ function TodoApp() {
           </li>
         ))}
       </ul>
-      <p style={{ color: '#888', fontSize: '0.85em' }}>{todos.filter(t => !t.completed).length} remaining</p>
+      <div ref={statusRef} />
+      <p style={{ color: 'var(--bb-color-text-muted, #888)', fontSize: '0.85em' }}>{todos.filter(t => !t.completed).length} remaining</p>
     </div>
   );
 }
@@ -116,13 +139,13 @@ export function App() {
     <div>
       <div ref={menuRef} />
       <h1>Blocks App</h1>
-      <p style={{ color: '#666', fontSize: '0.9em', lineHeight: 1.5, marginBottom: 24 }}>
+      <p style={{ color: 'var(--bb-color-text-muted, #666)', fontSize: '0.9em', lineHeight: 1.5, marginBottom: 24 }}>
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,
         {' '}<strong>real-time sync</strong> across browser tabs,
-        and <strong>todos stored in a distributed table</strong> with secondary index queries.
+        and <strong>todos stored in a distributed table</strong> with per-user isolation.
       </p>
-      {!user && <p>Sign in to get started.</p>}
+      {!user && <p>Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the <code>npm run dev</code> terminal.</p>}
       {user && <TodoApp />}
     </div>
   );

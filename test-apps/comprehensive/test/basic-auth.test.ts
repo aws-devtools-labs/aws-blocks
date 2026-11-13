@@ -3,27 +3,73 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { readFileSync } from 'node:fs';
+import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
+import { getTestSupport } from './test-support.js';
 
-const InvalidCredentials = 'InvalidCredentialsException';
-const UserAlreadyExists = 'UserAlreadyExistsException';
-const SessionExpired = 'SessionExpiredException';
-const InvalidPassword = 'InvalidPasswordException';
-const InvalidCode = 'InvalidCodeException';
+// Ported from AuthBasic to the unified `Auth` block (instance id `auth`).
+// Error names follow the canonical `AuthErrors` vocabulary:
+//   InvalidCredentialsException → NotAuthorizedException
+//   UserAlreadyExistsException  → UsernameExistsException
+//   SessionExpiredException     → NotAuthenticatedException
+//   InvalidCodeException        → CodeMismatchException (wrong code, or no
+//                                 outstanding code) | ExpiredCodeException
+//                                 (code past its lifetime); reviewed per test
+//   InvalidPasswordException    → unchanged
+// and an unconfirmed user who signs in with the right password now gets
+// UserNotConfirmedException (Cognito's behaviour) instead of a credential error.
+
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isLocal = ENV === 'local';
+
+/** Resolve the API origin from the sandbox config (same source the client uses). */
+function getBaseUrl(): string {
+  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+  const apiUrl: string = config.apiUrl;
+  return apiUrl.replace(/\/aws-blocks\/api$/, '');
+}
+
+interface RpcResponse {
+  result?: unknown;
+  error?: { code: number; message: string; data?: { name?: string } };
+  setCookies: string[];
+}
+
+/**
+ * One raw JSON-RPC call with an optional MANUAL `Cookie` header, returning the
+ * JSON-RPC body and any `Set-Cookie` headers. Bypasses the shared cookie jar so
+ * a captured session cookie can be replayed verbatim (the auth-cookie-attrs
+ * technique).
+ */
+async function rpcRaw(baseUrl: string, method: string, args: unknown[], cookie?: string): Promise<RpcResponse> {
+  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
+  });
+  const body = await resp.json();
+  return { result: body.result, error: body.error, setCookies: resp.headers.getSetCookie?.() ?? [] };
+}
 
 function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/** Wait for the AuthBasic code delivered to `username`. See ./poll-for-code.ts. */
+/** Wait for the code delivered to `username` on the `auth` instance. See ./poll-for-code.ts. */
 const pollForCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
   codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username, options);
 
 export function basicAuthTests(getApi: () => typeof apiType) {
 
-  describe('AuthBasic', () => {
+  // Every sign-up confirms with an emailed code. Locally the mock hands it
+  // to `codeDelivery`, which the backend records for `authGetLastCode`; on AWS
+  // Cognito emails it and there is no backdoor to read it, so — like the
+  // `authC` suite — this one runs against the local runtime only. Suites that
+  // just need a signed-in user use `provisionConfirmedUser` (./test-support.ts),
+  // which goes through the secret-gated `testSupport.provisionUser` there.
+  describe('Auth (email + password, formerly AuthBasic)', { skip: !isLocal && 'verification-code flow needs a mailbox (sign-up always confirms by email)' }, () => {
 
     // ── Sign Up (code-confirmed) ─────────────────────────────────────────
 
@@ -33,12 +79,13 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const username = uniqueUser();
         await api.authSignUp(username, 'password123');
 
-        // Can't sign in yet — unconfirmed
+        // Can't sign in yet — unconfirmed. Reported only after the correct
+        // password, so it reveals nothing to a caller without the credential.
         try {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.UserNotConfirmed), `Expected ${AuthErrors.UserNotConfirmed}, got ${e}`);
         }
       });
 
@@ -55,7 +102,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
 
         const user = await api.authSignIn(username, 'password123');
         assert.strictEqual(user.username, username);
-        assert.ok(user.createdAt);
+        assert.ok(user.userSub, 'a confirmed user has a stable userSub');
         await api.authSignOut();
       });
 
@@ -63,12 +110,17 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const username = uniqueUser();
         await api.authSignUp(username, 'password123');
+        // Wait for the real code so '000000' is a wrong code for a live one,
+        // not a missing one (and cannot collide with the delivered code).
+        const delivered = await pollForCode(api, username);
+        const wrong = delivered.code === '000000' ? '111111' : '000000';
 
+        // InvalidCode split: a wrong code is CodeMismatch.
         try {
-          await api.authConfirmSignUp(username, '000000');
+          await api.authConfirmSignUp(username, wrong);
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
 
@@ -80,7 +132,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(username, 'password456');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, UserAlreadyExists), `Expected ${UserAlreadyExists}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.UserAlreadyExists), `Expected ${AuthErrors.UserAlreadyExists}, got ${e}`);
         }
       });
 
@@ -90,7 +142,11 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(uniqueUser(), 'short');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.InvalidPassword), `Expected ${AuthErrors.InvalidPassword}, got ${e}`);
+          // The message describes this block's own policy (length only), the
+          // same locally and on AWS.
+          assert.ok(e instanceof Error);
+          assert.strictEqual(e.message, 'Password must be at least 6 characters.');
         }
       });
     });
@@ -122,7 +178,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'wrongpassword');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
       });
 
@@ -132,7 +188,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn('no-such-user-ever', 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
       });
     });
@@ -205,7 +261,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authRequired();
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, SessionExpired), `Expected ${SessionExpired}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.NotAuthenticated), `Expected ${AuthErrors.NotAuthenticated}, got ${e}`);
         }
       });
 
@@ -213,6 +269,46 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         await api.authSignOut();
         assert.strictEqual(await api.authGetCurrentUser(), null);
+      });
+    });
+
+    // ── Server-side revocation on sign-out (#766) ────────────────────────
+    // The shared `api` client keeps one cookie jar, so it cannot hold a cookie
+    // across the sign-out that clears it. This drives raw JSON-RPC with a
+    // MANUAL Cookie header to capture a session cookie, sign out WITH it, then
+    // REPLAY it: sign-out must delete the session server-side, not just clear
+    // the browser's cookie.
+
+    describe('session revocation on sign-out', () => {
+      test('a cookie captured before sign-out is rejected when replayed after', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+        const username = uniqueUser();
+        await api.authSignUp(username, 'password123');
+        const code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code.code);
+
+        // Sign in over raw RPC and capture the session cookie (jar bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        assert.ok(!signIn.error, `authSignIn failed: ${JSON.stringify(signIn.error)}`);
+        const sessionCookies = signIn.setCookies.filter((c) => /^auth_[^=]+=[^;]+/.test(c));
+        assert.strictEqual(sessionCookies.length, 1, `one session cookie, got: ${signIn.setCookies.join(' | ')}`);
+        const cookie = sessionCookies[0].split(';')[0]; // name=value, drop attributes
+
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before sign-out');
+
+        const signOut = await rpcRaw(baseUrl, 'authSignOut', [], cookie);
+        assert.ok(!signOut.error, `authSignOut failed: ${JSON.stringify(signOut.error)}`);
+
+        // The same, signature-valid cookie no longer names a session.
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed cookie is rejected after sign-out');
+
+        // A requireAuth-gated call with it is a 401 whose name crosses the wire.
+        const gated = await rpcRaw(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(gated.error?.code, 401, `requireAuth rejects the replayed cookie: ${JSON.stringify(gated)}`);
+        assert.strictEqual(gated.error?.data?.name, AuthErrors.NotAuthenticated);
       });
     });
 
@@ -227,7 +323,9 @@ export function basicAuthTests(getApi: () => typeof apiType) {
       test('full reset flow — reset, confirm with code, sign in with new password', async () => {
         const api = getApi();
         const username = uniqueUser();
-        await api.authSignUp(username, 'password123');
+        // A reset code goes only to a verified contact (as on Cognito), so the
+        // user signs up with an email, which the sign-up code verifies.
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
         let code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
 
@@ -247,7 +345,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials));
+          assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
         }
 
         // New password should work
@@ -256,19 +354,56 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignOut();
       });
 
+      test('a cookie captured before a password reset is rejected when replayed after (#912)', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+        const username = uniqueUser();
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
+        let code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code.code);
+
+        // Sign in over raw RPC and capture the session cookie (jar bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        assert.ok(!signIn.error, `authSignIn failed: ${JSON.stringify(signIn.error)}`);
+        const cookie = signIn.setCookies.find((c) => /^auth_[^=]+=[^;]+/.test(c))?.split(';')[0];
+        assert.ok(cookie, `a session cookie, got: ${signIn.setCookies.join(' | ')}`);
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before the reset');
+
+        await api.authResetPassword(username);
+        code = await pollForCode(api, username, { not: code.code });
+        await api.authConfirmResetPassword(username, code.code, 'newpass123');
+
+        // The reset signed the user out everywhere: the old cookie no longer authenticates.
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed cookie is rejected after the reset');
+        const gated = await rpcRaw(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(gated.error?.code, 401, `requireAuth rejects the replayed cookie: ${JSON.stringify(gated)}`);
+        assert.strictEqual(gated.error?.data?.name, AuthErrors.NotAuthenticated);
+
+        // A sign-in with the new password is a fresh session that works.
+        const user = await api.authSignIn(username, 'newpass123');
+        assert.strictEqual(user.username, username);
+        assert.strictEqual(await api.authCheckAuth(), true);
+        await api.authSignOut();
+      });
+
       test('confirmResetPassword rejects invalid code', async () => {
         const api = getApi();
         const username = uniqueUser();
-        await api.authSignUp(username, 'password123');
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
         let code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
         await api.authResetPassword(username);
+        const resetCode = await pollForCode(api, username, { not: code.code });
+        const wrong = resetCode.code === '000000' ? '111111' : '000000';
 
+        // InvalidCode split: a wrong code for an outstanding reset is CodeMismatch.
         try {
-          await api.authConfirmResetPassword(username, '000000', 'newpass123');
+          await api.authConfirmResetPassword(username, wrong, 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
 
@@ -279,11 +414,14 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const code = await pollForCode(api, username);
         await api.authConfirmSignUp(username, code!.code);
 
+        // InvalidCode split: with no reset outstanding there is nothing to
+        // match, which Cognito (and the mock) report as CodeMismatch — the same
+        // answer as a wrong code, so the flow does not reveal account state.
         try {
           await api.authConfirmResetPassword(username, '123456', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isAuthError(e, AuthErrors.CodeMismatch), `Expected ${AuthErrors.CodeMismatch}, got ${e}`);
         }
       });
     });
@@ -314,7 +452,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         // aws-blocks/index.ts.
         const persisted = await api.kvGet(`__last-code:auth:${username}`);
         assert.ok(persisted, 'code should be persisted in the shared store');
-        assert.deepStrictEqual(JSON.parse(persisted!), { username, code: delivered.code });
+        assert.deepStrictEqual(JSON.parse(persisted!), { username, code: delivered.code, purpose: 'signUp' });
       });
 
       test('codes are keyed per user — a later signup does not mask an earlier one', async () => {
@@ -354,26 +492,43 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const username = uniqueUser();
 
-        // Start from a known-empty set: the mock store persists to disk between
-        // local runs, so leftovers from an earlier build would mask what this
-        // delivery actually wrote.
-        await api.authPurgeDeliveredCodes();
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        // Exactly one key. An unkeyed "latest code" slot is what made this
+        // Exactly one key for this user, and no record keyed by anything but
+        // its own username. An unkeyed "latest code" slot is what made this
         // flaky in the first place: whoever delivered last owned it, so a
         // reader could be handed another user's code. Nothing reads one, so
         // nothing writes one — and that also halves the writes per delivery.
-        const codeKeys = (await api.kvScan())
-          .map((e) => e.key)
-          .filter((key) => key.startsWith('__last-code:'));
-
-        assert.deepStrictEqual(codeKeys, [`__last-code:auth:${username}`]);
+        //
+        // Checked as an invariant over every code record rather than "this is
+        // the only key": the store also holds other users' records, from the
+        // Agent suite signing up users in a background process at the same
+        // time (./background-suites.ts) and, locally, from earlier runs
+        // persisted in .bb-data/. Every record must be keyed by the username
+        // it holds, so a shared slot fails here whoever delivered last.
+        const codeEntries = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
+        for (const { key, value } of codeEntries) {
+          // key = __last-code:<channel>:<username>
+          const keyedUser = key.split(':').slice(2).join(':');
+          let held: unknown;
+          try {
+            held = (JSON.parse(value) as { username?: unknown }).username;
+          } catch {
+            held = undefined;
+          }
+          assert.strictEqual(held, keyedUser, `code record ${key} must hold the username it is keyed by`);
+        }
+        assert.deepStrictEqual(
+          codeEntries.map((e) => e.key).filter((key) => key.endsWith(`:${username}`)),
+          [`__last-code:auth:${username}`],
+        );
       });
 
-      // Runs last in this suite: it clears every channel's codes, and the
-      // suites that follow deliver their own.
+      // Purges only this test's user: a purge of every code would delete one
+      // the Agent suite, running in a background process at the same time, is
+      // still waiting to read (./background-suites.ts). e2e.test.ts tests the
+      // full purge before those suites start.
       test('purge clears code records and leaves other keys alone', async () => {
         const api = getApi();
         const username = uniqueUser();
@@ -382,12 +537,45 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        const { deleted } = await api.authPurgeDeliveredCodes();
-        assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+        const { testSupport, secret } = await getTestSupport();
+        const { deleted } = await testSupport.authPurgeDeliveredCodes(secret, username);
+        assert.strictEqual(deleted, 1, `expected this user's one record purged, got ${deleted}`);
 
         assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
         assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
         await api.kvDelete(bystander);
+      });
+    });
+
+    // ── setAuthState error redaction ─────────────────────────────────────
+    //
+    // `auth-delivery-fails` has a codeDelivery hook that throws, so signUp
+    // fails after the user record is written. The state machine reports the
+    // failure in `AuthState.error`, which reaches unauthenticated clients.
+
+    describe('setAuthState error redaction', () => {
+      // Dynamic import, not static: `aws-blocks` resolves to the generated
+      // client.js, which only exists once e2e.test.ts has started the server
+      // (it imports the client the same way). Destructure the namespace from the
+      // module; awaiting the namespace proxy itself would probe it as a thenable.
+
+      test('an unbranded backend error reaches the client only as a generic message', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `raw-${uniqueUser()}@example.com`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'The authentication service hit an unexpected error. Please try again.');
+        assert.strictEqual(state.errorName, 'InternalErrorException');
+        assert.ok(!JSON.stringify(state).includes('111122223333'), `AuthState must not carry backend detail: ${JSON.stringify(state)}`);
+      });
+
+      test('an ApiError message and name reach the client unchanged', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `api-${uniqueUser()}@example.com`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'That address cannot receive email');
+        assert.strictEqual(state.errorName, 'UndeliverableAddressException');
       });
     });
 

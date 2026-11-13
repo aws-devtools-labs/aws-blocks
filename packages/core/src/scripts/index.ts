@@ -11,13 +11,68 @@ export {
 } from '../telemetry/index.js';
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
-export { type DeployOptions, deploy } from './deploy.js';
-export { type DestroyOptions, destroy } from './destroy.js';
-export { type DevServerOptions, startDevServer } from './dev-server.js';
+export {
+	DEFAULT_DASHBOARD_PORT,
+	type DashboardArgs,
+	type DashboardCommand,
+	type DashboardOptions,
+	buildDashboardUrl,
+	dashboard,
+	parseDashboardArgs,
+} from './dashboard.js';
+export {
+	DEPLOY_HISTORY_FILE,
+	type DeployHistoryRecord,
+	type DeployRecorder,
+	appendDeployHistoryRecord,
+	createDeployRecorder,
+	getGitSha,
+	summarizeError,
+} from './deploy-history.js';
+export { type DeployedStack, type DeployOptions, deploy } from './deploy.js';
+export { BACKEND_OUTPUT_KEY, OUTPUTS_DIR, OUTPUTS_FILE, type OutputsStage, outputsFileIn } from './deploy-outputs.js';
+export { type DeploymentTarget, resolveDeploymentTarget } from './deployment-target.js';
+export { type DeployedStackOptions, type DestroyOptions, deployedStackExists, destroy } from './destroy.js';
+export {
+	type DevServerOptions,
+	runStopCli,
+	type StopResult,
+	startDevServer,
+	stopDevServer,
+	stopMessage,
+} from './dev-server.js';
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
-export { generateSpec, writeSpec } from './generate-spec.js';
-export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
+export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
+export { log } from './log.js';
+export {
+	NativeCatalogError,
+	type NativeDeclarationInput,
+	type NativeDeclarationSource,
+} from './native-catalogs.js';
+export {
+	type AwsIdentity,
+	type DeploymentCredentials,
+	describeDeploymentCredentials,
+	type ReadAwsIdentityOptions,
+	readAwsIdentity,
+} from './preflight-credentials.js';
+export { readNativeDeclarations } from './read-native-declarations.js';
+export {
+	NoFreePortError,
+	type PortScanOptions,
+	findFreePort,
+	isPortFree,
+} from './port-scan.js';
+export {
+	PROJECT_MARKER,
+	type ProjectResolution,
+	type ResolveProjectOptions,
+	type ResolvedProject,
+	isBlocksProject,
+	resolveProject,
+} from './project-discovery.js';
+export { destroySandbox, PREVIEW_MODE_CONTEXT, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
 export { getSandboxId, getStackId, getStackName } from './stack-id.js';
 export { type TelemetryOptions, telemetry } from './telemetry.js';

@@ -10,7 +10,16 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError } from './errors.js';
+import { BLOCKS_RPC_PREFIX, rpcNamespaceFromPath } from './constants.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
+
+/**
+ * The `.name` a plain `new Error(...)` carries. A throw whose name is still this
+ * default is treated as an unhandled internal error (generic 500, no name);
+ * a Building Block error thrown via `blocksError()` overrides it with a BB
+ * constant, which is what lets its name cross the wire (D-003).
+ */
+const DEFAULT_ERROR_NAME = 'Error';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -27,6 +36,17 @@ export interface RpcParsedRequest {
 export type RpcParseResult =
   | { ok: true; request: RpcParsedRequest }
   | { ok: false; response: string };
+
+/** Options for `parseRpcRequest`. */
+export interface RpcParseOptions {
+  /**
+   * The request path, without query string. When it is a per-namespace RPC path
+   * it must be exactly `/aws-blocks/api/{namespace}` (an optional trailing slash
+   * aside), and the namespace it names must match the body's `namespace.method`
+   * prefix, or the request is rejected as invalid.
+   */
+  pathname?: string;
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -45,12 +65,16 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
- * Note: this value is the Lambda + API Gateway limit. It lives here (in the
- * compute-agnostic parser) because Lambda is the only compute path today. When
- * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
- * become compute-aware — sourced from / overridden by the compute layer (via
- * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
- * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ * Note: this value is the API Gateway limit, and every compute keeps it — one
+ * constant in the compute-agnostic parser, so a call accepted on one compute is
+ * accepted on every other. A Lambda compute is reached through the gateway,
+ * which rejects a larger body first; a container compute may be reached without
+ * it, so there this guard is the limit.
+ *
+ * The container HTTP server (`serveHttp`) keeps the same limit for JSON-RPC on
+ * every path to it, and checks it while reading the body — before buffering past
+ * it — rather than only in `parseRpcRequest`: a front door that streams the body
+ * (a load balancer, a CloudFront VPC origin) enforces no limit of its own.
  */
 export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -81,9 +105,24 @@ export function encodeRpcRequest(apiNamespace: string, method: string, args: unk
  * Decode a JSON-RPC 2.0 response body.
  *
  * Returns the `result` on success, or throws an `ApiError` on error.
+ *
+ * A body that is not a JSON-RPC 2.0 envelope (`jsonrpc !== '2.0'`) — e.g. a
+ * gateway answering on its own with `{"message":"Too Many Requests"}` — also
+ * throws an `ApiError`. Its status is `httpStatus` when that is not a 2xx,
+ * else 502 (a success status with no envelope is an upstream fault); its
+ * message is the body's string `message` when present, else `HTTP <status>`.
+ * Pass `undefined` as `body` when the response text was not valid JSON.
+ *
+ * @param body The parsed response body.
+ * @param httpStatus The HTTP status of the response, if known.
  */
-export function decodeRpcResponse(body: unknown): unknown {
+export function decodeRpcResponse(body: unknown, httpStatus?: number): unknown {
   const rpc = body as any;
+  if (rpc === null || typeof rpc !== 'object' || rpc.jsonrpc !== VERSION) {
+    const status = httpStatus !== undefined && (httpStatus < 200 || httpStatus > 299) ? httpStatus : 502;
+    const message = typeof rpc?.message === 'string' && rpc.message ? rpc.message : `HTTP ${status}`;
+    throw new ApiError(message, status);
+  }
   if (rpc.error) {
     const { code, message, data } = rpc.error;
     // Application error codes use the HTTP status directly (e.g. 409).
@@ -104,13 +143,36 @@ export function decodeRpcResponse(body: unknown): unknown {
 // ── Server helpers (parse request, encode response) ─────────────────────────
 
 /**
+ * The JSON-RPC error envelope for a request body over `limitBytes` (default
+ * {@link MAX_RPC_BODY_BYTES}). Shared by {@link parseRpcRequest} and transports
+ * that reject an oversized RPC body before reading all of it.
+ *
+ * @internal
+ */
+export function payloadTooLargeResponse(limitBytes: number = MAX_RPC_BODY_BYTES): string {
+  return errorResponse(
+    413,
+    `Request body exceeds the ${limitBytes} byte (${+(limitBytes / (1024 * 1024)).toFixed(2)} MiB) limit`,
+    null,
+    { name: 'PayloadTooLarge' },
+  );
+}
+
+/**
  * Parse a raw body string into a validated `RpcParsedRequest`.
  *
  * Returns `{ ok: false, response }` with a ready-to-send JSON string when
  * the request is malformed, so callers can short-circuit without knowing
  * anything about the JSON-RPC spec.
+ *
+ * The body's `namespace.method` prefix is always the namespace dispatched. A
+ * per-namespace path (`options.pathname`) only addresses the request — a gateway
+ * routes on it, since it can't read the body — so a path that names a different
+ * namespace than the body is rejected rather than silently preferring either.
+ * The typed client never sends a mismatch; this only surfaces hand-written
+ * requests that would otherwise run on a different namespace than intended.
  */
-export function parseRpcRequest(bodyText: string): RpcParseResult {
+export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {}): RpcParseResult {
   // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
   // for the limit and its rationale.
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
@@ -119,15 +181,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
     // so a caller's `e.status === 413` works. `name` (which crosses the wire,
     // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
-    return {
-      ok: false,
-      response: errorResponse(
-        413,
-        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
-        null,
-        { name: 'PayloadTooLarge' },
-      ),
-    };
+    return { ok: false, response: payloadTooLargeResponse() };
   }
 
   let parsed: any;
@@ -135,6 +189,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     parsed = JSON.parse(bodyText || '{}');
   } catch {
     return { ok: false, response: errorResponse(RpcErrorCode.ParseError, 'Parse error', null) };
+  }
+
+  // A literal `null` body parses to null; reading `.id` off it would throw.
+  // Other primitives and arrays already fall through to Invalid Request below.
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, 'Invalid Request: body must be a JSON-RPC 2.0 object', null, { name: 'InvalidRequest' }),
+    };
   }
 
   const id = parsed.id ?? null;
@@ -159,6 +222,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const apiNamespace = parsed.method.substring(0, dotIndex);
+  const pathProblem = options.pathname === undefined ? undefined : rpcPathProblem(options.pathname, apiNamespace);
+  if (pathProblem) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, `Invalid Request: ${pathProblem}`, id, { name: 'InvalidRequest' }),
+    };
+  }
+
   const hasParams = Object.hasOwn(parsed, 'params');
   if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
     return {
@@ -180,7 +252,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
   return {
     ok: true,
     request: {
-      apiNamespace: parsed.method.substring(0, dotIndex),
+      apiNamespace,
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
       args,
@@ -197,17 +269,98 @@ export function successResponse(result: unknown, id: string | number | null): st
 /**
  * Encode an error as a JSON-RPC 2.0 response string.
  *
- * For `ApiError` instances the HTTP status becomes the error code (positive
- * integers never collide with the reserved -32xxx range). Generic errors
- * use code 500.
+ * Three cases, in order:
+ *
+ * 1. `ApiError` — a deliberate, wire-safe shape. Its HTTP status becomes the
+ *    error code (positive integers never collide with the reserved -32xxx
+ *    range), and its BB-level `name`/`retriable` flags cross the wire.
+ * 2. A wire-safe Building Block error — a plain `Error` thrown via
+ *    `blocksError()`, which stamps a non-enumerable brand identifying it as an
+ *    intentional BB error (e.g. `ValidationFailedException`). Per D-003 both the
+ *    `name` AND the `message` cross the wire: `isBlocksError()` keeps matching on
+ *    the client, and the BB-authored message (e.g. "Batch contains 150 payloads,
+ *    exceeds the 100 limit") reaches the caller instead of a generic string. This
+ *    rests on the invariant that a branded message never embeds raw driver text
+ *    (see `brandBlocksError`). The brand — not a non-generic `.name` — is the
+ *    signal, so a raw driver/SDK exception whose class name happens to be
+ *    non-generic (`PostgresError`) is NOT treated as wire-safe.
+ * 3. Anything else — a driver/SDK exception, a bare `Error`, or a non-`Error`
+ *    throw — collapses to a nameless generic 500 so raw exception class names
+ *    and messages never leak.
+ *
+ * Callers log the full error server-side in every case.
+ *
+ * The same decision (see {@link sanitizeCaughtError}) also shapes the RawRoute
+ * uncaught-exception response ({@link rawRouteErrorFromCatch}). A raw route
+ * still owns whatever it writes through `ctx.response` — only an exception that
+ * escapes the handler is sanitized.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  const code = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
+  const safe = sanitizeCaughtError(error);
   const data: Record<string, unknown> = {};
-  if (error instanceof Error && error.name && error.name !== 'Error') data.name = error.name;
-  if (error instanceof ApiError && error.retriable) data.retriable = true;
-  return errorResponse(code, message, id, Object.keys(data).length > 0 ? data : undefined);
+  if (safe.name) data.name = safe.name;
+  if (safe.retriable) data.retriable = true;
+  return errorResponse(safe.status, safe.message, id, Object.keys(data).length > 0 ? data : undefined);
+}
+
+/** The wire-safe view of a caught error: what may be shown to the client. */
+export interface SanitizedError {
+  status: number;
+  message: string;
+  /** Present only for a wire-safe error with a non-default name. */
+  name?: string;
+  retriable?: boolean;
+}
+
+/**
+ * Reduce a caught error to the fields that may cross the wire, applying the
+ * three cases documented on {@link errorResponseFromCatch}. Shared by the
+ * JSON-RPC serializer and the RawRoute uncaught-exception path so both make the
+ * same leak decision.
+ */
+export function sanitizeCaughtError(error: unknown): SanitizedError {
+  // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
+  // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
+  // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
+  // and its HTTP status / name / retriable survive — a plain `instanceof` would
+  // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
+  if (isApiErrorLike(error)) {
+    const safe: SanitizedError = { status: error.status, message: error.message };
+    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) safe.name = error.name;
+    if (error.retriable) safe.retriable = true;
+    return safe;
+  }
+  // A named Building Block error thrown via blocksError() carries the wire-safe
+  // brand: forward BOTH its BB `name` AND its `message` over the wire (D-003: the
+  // wire carries `name` alongside `message`). A branded error's message is
+  // BB-authored on purpose — e.g. "Batch contains 150 payloads, exceeds the 100
+  // limit" — and dropping it to a generic string is a DX regression, so it is
+  // preserved. The invariant this relies on: a branded error's message must never
+  // embed raw driver/SDK text (see brandBlocksError). The brand — not a
+  // non-generic `.name` — is the signal, so raw driver/SDK exceptions
+  // (PostgresError, …) are NOT branded and still collapse to a nameless 500 with a
+  // generic message, so their class name and raw text never leak.
+  // (Every ApiError is wire-safe too, but branch 1 already returned for those, so
+  // this arm only ever sees the branded plain-Error case.)
+  if (isWireSafeError(error) && error.name && error.name !== DEFAULT_ERROR_NAME) {
+    return { status: 500, message: error.message, name: error.name };
+  }
+  return { status: 500, message: 'Internal error' };
+}
+
+/**
+ * Build the HTTP response for an exception that escaped a RawRoute handler.
+ *
+ * The body keeps the RawRoute error shape (`{ error, name? }`), but its content
+ * goes through {@link sanitizeCaughtError}: an `ApiError` or a branded Building
+ * Block error keeps its status/name/message, while a raw driver/SDK exception
+ * collapses to a nameless generic 500. Callers log the full error server-side.
+ */
+export function rawRouteErrorFromCatch(error: unknown): { status: number; body: string } {
+  const safe = sanitizeCaughtError(error);
+  const body: { error: string; name?: string } = { error: safe.message };
+  if (safe.name) body.name = safe.name;
+  return { status: safe.status, body: JSON.stringify(body) };
 }
 
 /** Encode a "method not found" error. */
@@ -216,6 +369,35 @@ export function methodNotFoundResponse(detail: string, id: string | number | nul
 }
 
 // ── Internal ────────────────────────────────────────────────────────────────
+
+/** Longest caller-supplied name echoed back in an error message. */
+const MAX_ECHOED_NAME_LENGTH = 64;
+
+function clipName(name: string): string {
+  return name.length > MAX_ECHOED_NAME_LENGTH ? `${name.slice(0, MAX_ECHOED_NAME_LENGTH)}…` : name;
+}
+
+/**
+ * Why `pathname` can't carry a call into `bodyNamespace`, or `undefined` when it
+ * can. The bare endpoint carries any namespace (which compute serves which
+ * namespace is the dispatcher's `servesNamespace` check). A per-namespace path must be
+ * exactly `/aws-blocks/api/{namespace}` — one segment, so a deeper path is
+ * rejected the same way whichever compute serves it — and must name the body's
+ * namespace exactly (export names are case-sensitive). Names are clipped before
+ * they are echoed, so the error stays small whatever the caller sent.
+ */
+function rpcPathProblem(pathname: string, bodyNamespace: string): string | undefined {
+  if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+  const rest = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).replace(/\/$/, '');
+  if (rest.includes('/')) {
+    return `an RPC call goes to ${BLOCKS_RPC_PREFIX} or ${BLOCKS_RPC_PREFIX}/<namespace>, not a deeper path`;
+  }
+  const pathNamespace = rpcNamespaceFromPath(pathname);
+  if (pathNamespace !== undefined && pathNamespace !== bodyNamespace) {
+    return `the path addresses namespace "${clipName(pathNamespace)}" but the method is in namespace "${clipName(bodyNamespace)}"`;
+  }
+  return undefined;
+}
 
 export function errorResponse(
   code: number,

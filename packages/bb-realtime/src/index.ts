@@ -16,6 +16,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
 import type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -25,17 +26,23 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validatePublishSize } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize } from './utils.js';
 import { getBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-realtime');
 
 export { RealtimeErrors } from './errors.js';
 export type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
+	RealtimeChannelDescriptor,
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
@@ -64,6 +71,8 @@ globalEmitter.setMaxListeners(1000);
  * **Best practices:**
  * - Use descriptive namespace names (`cursors`, `chat`, `notifications`)
  * - Use channels for dynamic scoping (`room-123`, `user-456`)
+ * - A channel handle also opens the channel's `/`-separated sub-channels by default;
+ *   pass `{ scope: 'exact' }` to `getChannel()` when a sub-channel can belong to someone else
  * - Keep message payloads small — large payloads increase latency and cost
  * - Return channel handles from API methods for seamless client hydration
  *
@@ -124,6 +133,7 @@ export const Realtime: {
 
 	async publish(namespace: string, channel: string, data: unknown): Promise<void> {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		await validateSchema(ns.schema, data);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
@@ -136,17 +146,20 @@ export const Realtime: {
 
 	subscribe(namespace: string, channel: string, handler: (message: unknown) => void): () => void {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		globalEmitter.on(fullChannel, handler);
 		return () => { globalEmitter.off(fullChannel, handler); };
 	}
 
-	async getChannel(namespace: string, channel: string): Promise<RealtimeChannel<unknown>> {
+	async getChannel(namespace: string, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<unknown>> {
 		const ns = this._ns(namespace);
+		const tokenScope = resolveChannelTokenScope(options);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
-		const token = mintChannelToken(fullChannel, LOCAL_TOKEN_SECRET);
+		const token = mintChannelToken(fullChannel, LOCAL_TOKEN_SECRET, undefined, tokenScope);
 		const connectToken = mintConnectToken(this.fullId, LOCAL_TOKEN_SECRET);
 		return {
 			subscribe(handlerOrOptions: ((message: unknown) => void) | SubscribeOptions, _options?: never): RealtimeSubscription {

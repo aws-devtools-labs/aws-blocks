@@ -1,22 +1,23 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { blocksError as prefixedBlocksError, brandBlocksError } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 
-// Unlike the `blocksError` in index.mock.ts / index.aws.ts (which prefix the
-// message with `${name}: `), this one leaves the message unprefixed on purpose:
-// these checks moved out of the CDK constructor, which threw a plain message, so
-// keeping it unprefixed preserves the exact pre-refactor CDK synth error text.
+// The index.aws.ts / index.mock.ts error paths use core's prefixing
+// `blocksError` (message becomes `${name}: ${message}`). This helper stays
+// local and deliberately leaves the message UNPREFIXED: these checks moved out
+// of the CDK constructor, which threw a plain message, so keeping it unprefixed
+// preserves the exact pre-refactor CDK synth error text.
 //
-// NOTE: do not "DRY" these three helpers into one that prefixes — re-prefixing
-// this one would change the CDK synth text that existing behavior pins.
-// @see index.mock.ts `blocksError` (prefixes `${name}: `)
-// @see index.aws.ts `blocksError` (prefixes `${name}: `)
+// NOTE: do not re-prefix this one or route it through core's `blocksError` —
+// adding the `${name}: ` prefix would change the CDK synth text that existing
+// behavior pins.
 function blocksError(name: string, message: string): Error {
 	const err = new Error(message);
 	err.name = name;
-	return err;
+	return brandBlocksError(err);
 }
 
 /**
@@ -98,6 +99,32 @@ export function validateAppSettingOptions<T>(
 			AppSettingErrors.ValidationFailed,
 			`AppSetting '${id}': non-secret settings require a value. ` +
 			`Provide an initial value for the SSM parameter.`,
+		);
+	}
+}
+
+/** SSM standard-tier parameter value limit, in bytes. */
+export const MAX_VALUE_BYTES = 4096;
+
+/**
+ * Reject a serialized value that exceeds the SSM standard-tier 4 KB limit.
+ *
+ * Shared by the mock and AWS `put()` paths and called at the same point in
+ * both (after schema validation, before the write), so an oversized value
+ * fails with the same {@link AppSettingErrors.ValidationFailed} locally and
+ * deployed instead of reaching SSM. Unlike {@link validateAppSettingOptions},
+ * this uses core's prefixing `blocksError` (message `${name}: ${message}`),
+ * matching the other runtime `put()` errors.
+ *
+ * Secret settings are not size-checked here (unchanged behavior).
+ */
+export function assertValueWithinSizeLimit(serialized: string, isSecret: boolean): void {
+	if (isSecret) return;
+	const bytes = Buffer.byteLength(serialized, 'utf8');
+	if (bytes > MAX_VALUE_BYTES) {
+		throw prefixedBlocksError(
+			AppSettingErrors.ValidationFailed,
+			`Value size ${bytes} bytes exceeds the 4 KB (${MAX_VALUE_BYTES} bytes) limit`,
 		);
 	}
 }

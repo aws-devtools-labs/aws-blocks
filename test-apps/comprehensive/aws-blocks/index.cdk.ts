@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -16,6 +16,11 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
+// Optional IAM permissions boundary on every role AWS Blocks creates
+// (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
+// synthesizes with it set to prove every Building Block's roles are covered.
+const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
+
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
@@ -24,10 +29,16 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 // non-empty S3 buckets — its async delete-stack fails again on the
 // same buckets — so each push needs its own name.)
 const id = getSandboxId(projectRoot);
+// The production name keeps only the random half of `<user>-<random>`:
+// the stack name prefixes every derived resource name, and with CI's
+// `pr-<number>-<attempt>` suffix the user half (`runner` in CI) pushed
+// the longest FileBucket name (the `preset-balanced` agent's session
+// bucket) past S3's 63 characters at four-digit PR numbers.
+const salt = id.slice(id.lastIndexOf('-') + 1);
 
 const stackName = sandboxMode
   ? `bb-test-${id}${suffix ? `-${suffix}` : ''}`
-  : `bb-test-prod-${suffix || 'default'}-${id}`;
+  : `bb-test-prod-${suffix || 'default'}-${salt}`;
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -37,13 +48,55 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: BlocksPresets.sandbox,
+  //
+  // Outside sandbox mode (E2E Production), store the keys Blocks generates in
+  // Secrets Manager, as the production preset does, so that job deploys and
+  // exercises that path. The framework key secrets are deleted with the stack,
+  // so the stack stays fully deletable.
+  defaults: {
+    ...BlocksPresets.sandbox,
+    ...(sandboxMode ? {} : { secretsStore: 'secrets-manager' as const }),
+    permissionsBoundary,
+  },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
 // resolves the verified SES sender address in deployed environments.
 if (process.env.E2E_FROM_EMAIL) {
-  blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
+  registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
+}
+
+// Deployed e2e only — see "e2e test support" in `index.ts`. The flag
+// is read here at synth and registered as config (`registerConfig`, which
+// every compute loads into `process.env` before the backend module is
+// imported), so the deployed backend builds the same `testSupport` namespace
+// that synth did. The run's test-support secret travels the same way: the
+// harness (or the CI workflow) sets `BLOCKS_TEST_SUPPORT_SECRET` before synth,
+// and the deployed backend reads it from config. The harness already holds the
+// value, so it never reads it back from AWS.
+const testEnv = process.env.BLOCKS_TEST_ENV;
+if (testEnv === 'local') {
+  // `local` is the dev-server e2e build. Synthesized, it would grant the test
+  // support's Admin* IAM to a stack whose handler never registers the namespace.
+  throw new Error('BLOCKS_TEST_ENV=local is the local (dev server) e2e build; it is never synthesized or deployed');
+}
+if (testEnv === 'sandbox' || testEnv === 'production') {
+  registerConfig(blocksStack, 'BLOCKS_TEST_ENV', testEnv);
+  // `index.ts` already refused to load without it, so it is set here.
+  registerConfig(blocksStack, 'BLOCKS_TEST_SUPPORT_SECRET', process.env.BLOCKS_TEST_SUPPORT_SECRET);
+
+  // The `auth-gated` pool's native app client id, for the sandbox test that
+  // sends a `SignUp` straight to Cognito (as anyone holding the id could) and
+  // expects the `validateUser` PreSignUp trigger to reject it.
+  const gated = blocksStack.node.findAll().find((c) => c.node.id === 'auth-gated');
+  const gatedClient: unknown = gated ? Reflect.get(gated, 'userPoolClient') : undefined;
+  const gatedClientId: unknown =
+    typeof gatedClient === 'object' && gatedClient !== null ? Reflect.get(gatedClient, 'userPoolClientId') : undefined;
+  if (typeof gatedClientId !== 'string') {
+    throw new Error(`BLOCKS_TEST_ENV=${testEnv}, but index.ts declared no auth-gated Auth with a user pool client`);
+  }
+  new cdk.CfnOutput(blocksStack, 'GatedAuthClientId', { value: gatedClientId });
+  new cdk.CfnOutput(blocksStack, 'GatedAuthRegion', { value: blocksStack.region });
 }
 
 // Tag every taggable resource in the stack for easy identification and cleanup

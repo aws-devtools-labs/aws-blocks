@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { brandBlocksError } from '@aws-blocks/core';
+
 import type { BatchSubmitResult } from './types.js';
 
 /**
@@ -23,7 +25,10 @@ export const AsyncJobErrors = {
 	StatusNotTracked: 'StatusNotTrackedException',
 	/** Thrown at synth time when an `AsyncJobOptions` value is outside its supported range. */
 	InvalidOption: 'InvalidOptionException',
-	/** Thrown at synth time when the resolved compute is not a supported type (only Lambda today). */
+	/**
+	 * Thrown at synth time when the resolved compute (the job's own, or its scope's)
+	 * is not a Lambda or container compute, or belongs to another backend.
+	 */
 	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;
 
@@ -52,5 +57,6 @@ export class BatchSubmitFailedError extends Error {
 		super(`${AsyncJobErrors.BatchSubmitFailed}: ${message}`);
 		this.jobIds = jobIds;
 		this.failed = failed;
+		brandBlocksError(this);
 	}
 }

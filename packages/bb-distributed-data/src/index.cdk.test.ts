@@ -3,7 +3,8 @@
 
 /**
  * CDK construct tests for DistributedDatabase.
- * Pattern follows bb-auth-cognito/src/index.cdk.test.ts — sets up a plain Stack
+ * Pattern follows the auth block's CDK harness (bb-auth/src/test-support/cdk-synth.ts,
+ * originally bb-auth-cognito's) — sets up a plain Stack
  * with a placeholder handler on globalThis to satisfy Scope.handler lookups.
  */
 import { test } from 'node:test';
@@ -316,6 +317,23 @@ test('CDK: migration CustomResource has migrationsHash property', () => {
     assert.ok(cr.Properties?.migrationsHash, 'CustomResource should have migrationsHash property');
     assert.strictEqual(typeof cr.Properties.migrationsHash, 'string');
     assert.strictEqual(cr.Properties.migrationsHash.length, 16);
+  } finally {
+    rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  }
+});
+
+test('CDK: invalid DSQL migration fails at synth', () => {
+  rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  mkdirSync(MIGRATIONS_DIR, { recursive: true });
+  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'ALTER TABLE t ENABLE ROW LEVEL SECURITY');
+
+  try {
+    assert.throws(
+      () => synth((stack) => {
+        new DistributedDatabase(scope(stack), 'mydsql', { migrationsPath: MIGRATIONS_DIR });
+      }),
+      /row level security/i,
+    );
   } finally {
     rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   }

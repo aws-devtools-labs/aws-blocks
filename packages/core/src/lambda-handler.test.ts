@@ -1,16 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
+import { ApiError, blocksError } from './errors.js';
 import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
 import { HttpRequest } from '@smithy/protocol-http';
 import { installClientUserAgent } from './server/client-user-agent.js';
+import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
+import { getRequestBaseUrl } from './bb-utils.js';
 
 beforeEach(() => {
   clearRouteRegistry();
@@ -222,6 +225,20 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(body.error.code, -32600);
   });
 
+  it('returns Invalid Request for a literal JSON null body instead of throwing', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async noop() { return {}; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({ body: 'null' }));
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.id, null);
+  });
+
   it('decodes base64-encoded body', async () => {
     let capturedText = '';
 
@@ -266,6 +283,139 @@ describe('createLambdaHandler — RPC body handling', () => {
   });
 });
 
+describe('createLambdaHandler — strict API namespace placement (defaults.strictNamespacePlacement)', () => {
+  // What the CDK layer sets when `reports` is placed on compute `app-reports`:
+  // the placement map in the environment of every API compute, and the
+  // compute's own id only on that compute. The handler reads both from
+  // process.env, as a deployed function does.
+  const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
+
+  function withEnv(vars: Record<string, string>, fn: () => Promise<void>): () => Promise<void> {
+    return async () => {
+      const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, vars);
+      try {
+        await fn();
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    };
+  }
+
+  function placedBackend(calls: string[]) {
+    return {
+      api: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('api'); return 'api'; } }),
+      reports: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('reports'); return 'reports'; } }),
+    };
+  }
+
+  function rpc(namespace: string, path = '/aws-blocks/api') {
+    return makeEvent({ path, body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 }) });
+  }
+
+  it('the default compute refuses a namespace placed on another compute, on the bare endpoint', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      const result = await invoke(placedBackend(calls), rpc('reports'));
+      const body = JSON.parse(result.body);
+      assert.strictEqual(body.error?.code, -32601, 'refused like an unknown namespace');
+      assert.match(body.error?.message, /API 'reports' not found/);
+      assert.deepStrictEqual(calls, [], "the placed namespace's code never ran on the default compute");
+    },
+  ));
+
+  it('the default compute still serves its own namespaces on the bare endpoint and their own path', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+        const body = JSON.parse((await invoke(placedBackend(calls), rpc('api', path))).body);
+        assert.strictEqual(body.result, 'api', path);
+      }
+      assert.deepStrictEqual(calls, ['api', 'api']);
+    },
+  ));
+
+  it('the placed compute serves its namespace and refuses every other one', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, BLOCKS_API_COMPUTE_ID: 'app-reports' },
+    async () => {
+      const calls: string[] = [];
+      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/aws-blocks/api/reports'))).body);
+      assert.strictEqual(served.result, 'reports');
+      const refused = JSON.parse((await invoke(placedBackend(calls), rpc('api'))).body);
+      assert.strictEqual(refused.error?.code, -32601);
+      assert.deepStrictEqual(calls, ['reports']);
+    },
+  ));
+
+  it('serves every namespace on the bare endpoint when no placement is configured', async () => {
+    const calls: string[] = [];
+    const body = JSON.parse((await invoke(placedBackend(calls), rpc('reports'))).body);
+    assert.strictEqual(body.result, 'reports');
+  });
+
+  it('a refused namespace writes a 404 RpcErrors metric through onRpcError', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, AWS_LAMBDA_FUNCTION_NAME: 'app-default-fn' },
+    async () => {
+      const lines: string[] = [];
+      const savedWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+        if (text.includes('"_aws"')) {
+          lines.push(...text.split('\n').filter(Boolean));
+          return true;
+        }
+        return (savedWrite as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+      }) as typeof process.stdout.write;
+      try {
+        const body = JSON.parse((await invoke(placedBackend([]), rpc('reports'))).body);
+        assert.strictEqual(body.error?.code, -32601);
+      } finally {
+        process.stdout.write = savedWrite;
+      }
+      const metrics = lines.map((l) => JSON.parse(l));
+      assert.strictEqual(metrics.length, 1);
+      assert.strictEqual(metrics[0].Status, 404);
+      assert.strictEqual(metrics[0].StatusClass, '4xx');
+      assert.strictEqual(metrics[0].ApiNamespace, 'reports');
+      assert.strictEqual(metrics[0].FunctionName, 'app-default-fn');
+    },
+  ));
+
+  for (const [name, env, message] of [
+    ['a malformed placement map', { BLOCKS_API_NAMESPACE_COMPUTES: '{not json' }, /must be a JSON object/],
+    ['a compute id without a placement map', { BLOCKS_API_COMPUTE_ID: 'app-reports' }, /BLOCKS_API_COMPUTE_ID is set but/],
+  ] as const) {
+    it(`${name} fails initialization, and the next request retries it`, async () => {
+      const keys = ['BLOCKS_API_NAMESPACE_COMPUTES', 'BLOCKS_API_COMPUTE_ID'];
+      const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, env);
+      try {
+        const calls: string[] = [];
+        const handler = createLambdaHandler(async () => placedBackend(calls));
+        await assert.rejects(async () => handler(rpc('reports', '/aws-blocks/api/reports')), message);
+        assert.deepStrictEqual(calls, [], 'nothing was served');
+        // The same environment, once it carries a readable map, initializes.
+        for (const k of keys) delete process.env[k];
+        process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+        process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+        const res = (await handler(rpc('reports', '/aws-blocks/api/reports'))) as { body: string };
+        assert.strictEqual(JSON.parse(res.body).result, 'reports');
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+  }
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
@@ -283,6 +433,68 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
     assert.strictEqual(result.statusCode, 200);
     const body = JSON.parse(result.body);
     assert.strictEqual(body.result.msg, 'hello');
+  });
+});
+
+// ── per-namespace RPC path dispatch ──────────────────────────────────────────
+
+describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
+  it('dispatches a call sent to /aws-blocks/api/{namespace}', async () => {
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async generate(id: string) { return { id, done: true }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.generate', params: ['r1'], id: 1 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { id: 'r1', done: true });
+  });
+
+  it('still dispatches a call sent to the bare /aws-blocks/api using the body prefix (back-compat)', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) { return { msg }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { msg: 'hi' });
+  });
+
+  it('rejects a path namespace that does not match the body prefix', async () => {
+    // The path addresses `reports` but the body calls `api.generate`. Neither is
+    // silently preferred: dispatching either one would run code the caller didn't
+    // address on one side, so the request is an Invalid Request.
+    let called = false;
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-reports'; } }),
+      api: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-api'; } }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.generate', params: [], id: 2 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
+    assert.match(body.error?.message, /path addresses namespace "reports" but the method is in namespace "api"/);
+    assert.strictEqual(body.id, 2);
+    assert.strictEqual(called, false, 'neither namespace is dispatched');
   });
 });
 
@@ -411,6 +623,133 @@ describe('createLambdaHandler — RawRoute body handling', () => {
     assert.strictEqual(result.statusCode, 200);
     assert.deepStrictEqual(capturedParams, Object.assign(Object.create(null), { id: 'abc-123' }));
     assert.ok(capturedBody !== null);
+  });
+});
+
+// ── RPC errors never carry ARNs / AWS SDK detail ────────────────────────────
+
+describe('createLambdaHandler — AWS SDK AccessDenied detail never reaches the RPC client', () => {
+  it('collapses an AccessDenied (role + resource ARNs in the message, $metadata attached) to a generic error', async () => {
+    const roleArn = 'arn:aws:sts::123456789012:assumed-role/app-backend-HandlerRole-ABC123/app-backend-handler';
+    const resourceArn = 'arn:aws:dynamodb:us-west-2:123456789012:table/app-backend-orders-prod';
+    const sdkError = Object.assign(
+      new Error(`User: ${roleArn} is not authorized to perform: dynamodb:PutItem on resource: ${resourceArn}`),
+      { name: 'AccessDeniedException', $fault: 'client', $metadata: { httpStatusCode: 400, requestId: 'REQ-123' } },
+    );
+    const backend = { api: (_ctx: BlocksContext) => ({ async write() { throw sdkError; } }) };
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke(backend, makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.write', params: [], id: 1 }) }));
+    } finally {
+      console.error = originalError;
+    }
+
+    const body: string = result.body;
+    for (const leak of ['arn:aws', '123456789012', 'HandlerRole', 'app-backend-orders-prod', 'AccessDeniedException', 'REQ-123', 'dynamodb:PutItem']) {
+      assert.ok(!body.includes(leak), `client-visible error body leaked "${leak}": ${body}`);
+    }
+    assert.ok(JSON.parse(body).error, 'the call must still fail');
+  });
+});
+
+// ── RawRoute uncaught-exception sanitization ────────────────────────────────
+
+describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 without leaking its name or message', async () => {
+    class ResourceNotFoundException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'ResourceNotFoundException';
+      }
+    }
+    registerRoute({
+      method: 'GET',
+      path: '/raw/fails',
+      handler: async () => {
+        throw new ResourceNotFoundException('Requested resource not found: Table: internal-orders-prod');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/fails', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Internal error' });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes('ResourceNotFoundException'));
+    assert.ok(!serialized.includes('internal-orders-prod'));
+  });
+
+  it('keeps the name and message of a branded Building Block error thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/bb-error',
+      handler: async () => {
+        throw blocksError('ValidationFailedException', 'email must be a valid address');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/bb-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), {
+      error: 'ValidationFailedException: email must be a valid address',
+      name: 'ValidationFailedException',
+    });
+  });
+
+  it('keeps the status of an ApiError thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/api-error',
+      handler: async () => {
+        throw new ApiError('Forbidden', 403, { name: 'AccessDenied' });
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/api-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Forbidden', name: 'AccessDenied' });
+  });
+
+  it('leaves a deliberate ctx.response error write untouched', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/own-error',
+      handler: async (ctx) => {
+        ctx.response.status = 502;
+        ctx.response.send({ error: 'upstream said: ResourceNotFoundException' });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/own-error', body: null }));
+
+    assert.strictEqual(result.statusCode, 502);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'upstream said: ResourceNotFoundException' });
   });
 });
 
@@ -652,6 +991,382 @@ describe('createLambdaHandler — RawRoute cookie forwarding', () => {
 
     assert.strictEqual(result.statusCode, 200);
     assert.strictEqual(capturedCookies, 'auth=bearer-token; sid=999');
+  });
+});
+
+// ── Response Set-Cookie (API Gateway REST proxy format) ─────────────────────
+//
+// The backend Lambda is fronted by an API Gateway REST API with a Lambda proxy
+// integration (bb-lambda-compute), which uses the v1 payload format: the
+// `headers` map holds ONE value per name, so multiple `Set-Cookie` values must
+// travel in `multiValueHeaders`. The local dev server splits cookies itself,
+// so a regression here is invisible locally and only drops cookies on AWS.
+
+/** Every `headers` key that is a Set-Cookie, case-insensitively. */
+function setCookieKeysInHeaders(result: any): string[] {
+  return Object.keys(result.headers ?? {}).filter((k) => k.toLowerCase() === 'set-cookie');
+}
+
+describe('createLambdaHandler — RPC response Set-Cookie', () => {
+  it('returns every Set-Cookie an API method sets in multiValueHeaders', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          // Mirrors bb-auth: session cookie via set(), bridge cookie via append().
+          ctx.response.headers.set('set-cookie', 'session=abc; Path=/; HttpOnly; Secure; SameSite=Lax');
+          ctx.response.headers.append('set-cookie', 'bridge=xyz; Path=/; Max-Age=300; HttpOnly; Secure');
+          return { ok: true };
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [
+      'session=abc; Path=/; HttpOnly; Secure; SameSite=Lax',
+      'bridge=xyz; Path=/; Max-Age=300; HttpOnly; Secure',
+    ]);
+    // A Set-Cookie left in `headers` as well would be merged in by API Gateway
+    // alongside multiValueHeaders — it must live only in multiValueHeaders.
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(result.body)), { ok: true });
+  });
+
+  it('keeps the other response headers in headers', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', 'a=1');
+          ctx.response.headers.set('x-custom', 'v1');
+          ctx.response.headers.append('x-custom', 'v2');
+          return 'ok';
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.headers['content-type'], 'application/json');
+    assert.strictEqual(result.headers['cache-control'], 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    // Non-cookie multi-value headers keep their standard comma-joined form.
+    assert.strictEqual(result.headers['x-custom'], 'v1, v2');
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1']);
+  });
+
+  it('respects a status set by the method alongside cookies', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.status = 201;
+          ctx.response.headers.append('set-cookie', 'a=1');
+          ctx.response.headers.append('set-cookie', 'b=2');
+          return 'ok';
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.strictEqual(result.statusCode, 201);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1', 'b=2']);
+  });
+
+  it('emits no Set-Cookie when the method sets none', async () => {
+    const backend = { api: () => ({ async echo() { return 'ok'; } }) };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'] ?? [], []);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+describe('createLambdaHandler — RawRoute response Set-Cookie', () => {
+  it('returns every Set-Cookie a RawRoute sets in multiValueHeaders', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/two-cookies',
+      handler: async (ctx) => {
+        ctx.response.headers.set('set-cookie', 'a=1; Path=/');
+        ctx.response.headers.append('set-cookie', 'b=2; Path=/');
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/hooks/two-cookies' }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], ['a=1; Path=/', 'b=2; Path=/']);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+// ── Response Set-Cookie (API Gateway HTTP API / Function URL, payload v2) ───
+//
+// Payload format 2.0 has no `multiValueHeaders`; cookies travel in the
+// top-level `cookies: string[]`. v1 behaviour is covered above and must not
+// change.
+
+function makeV2Event(overrides: Record<string, any> = {}) {
+  return {
+    version: '2.0',
+    routeKey: '$default',
+    rawPath: '/aws-blocks/api',
+    rawQueryString: '',
+    requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: [], id: 1 }),
+    isBase64Encoded: false,
+    ...overrides,
+  };
+}
+
+describe('createLambdaHandler — payload v2 response Set-Cookie', () => {
+  it('RPC: returns every Set-Cookie in v2 `cookies`, not multiValueHeaders or headers', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', 'session=abc; Path=/; HttpOnly');
+          ctx.response.headers.append('set-cookie', 'bridge=xyz; Path=/; Max-Age=300');
+          ctx.response.headers.set('x-custom', 'v1');
+          return { ok: true };
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeV2Event());
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['session=abc; Path=/; HttpOnly', 'bridge=xyz; Path=/; Max-Age=300']);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    assert.strictEqual(result.headers['x-custom'], 'v1');
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(result.body)), { ok: true });
+  });
+
+  it('RawRoute: returns every Set-Cookie in v2 `cookies`', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/v2-cookies',
+      handler: async (ctx) => {
+        ctx.response.headers.set('set-cookie', 'a=1; Path=/');
+        ctx.response.headers.append('set-cookie', 'b=2; Path=/');
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeV2Event({
+      rawPath: '/hooks/v2-cookies',
+      requestContext: { http: { method: 'GET', path: '/hooks/v2-cookies' } },
+      body: undefined,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(result.cookies, ['a=1; Path=/', 'b=2; Path=/']);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+});
+
+// ── RPC error responses keep the method's Set-Cookie ────────────────────────
+//
+// A method that clears a cookie and then throws (e.g. `requireAuth` on a
+// deleted user: 401 + clear the session cookie) must deliver BOTH the error
+// and the clearing Set-Cookie. An error with no cookies is unchanged.
+//
+// Only cookie DELETIONS survive an error: a method that signs a user in and
+// then throws to reject them must not hand out a live session with the error.
+
+const CLEAR_SESSION = 'session=; Path=/; HttpOnly; Max-Age=0';
+
+function clearThenThrowBackend() {
+  return {
+    api: (ctx: BlocksContext) => ({
+      async echo() {
+        ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+        ctx.response.headers.set('x-not-forwarded', 'yes');
+        throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+      },
+    }),
+  };
+}
+
+/** Decode the JSON-RPC error envelope into the ApiError the client would see. */
+function decodeRpcError(result: any): ApiError {
+  try {
+    decodeRpcResponse(JSON.parse(result.body));
+  } catch (e) {
+    assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+    return e;
+  }
+  assert.fail('expected the RPC response to be an error');
+}
+
+describe('createLambdaHandler — RPC error response Set-Cookie', () => {
+  it('v1: delivers the 401 AND the clearing Set-Cookie in multiValueHeaders', async () => {
+    const result = await invoke(clearThenThrowBackend(), makeEvent());
+
+    assert.strictEqual(result.statusCode, 200);
+    const err = decodeRpcError(result);
+    assert.strictEqual(err.status, 401);
+    assert.strictEqual(err.name, 'NotAuthenticated');
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [CLEAR_SESSION]);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    // Only cookies are carried over — the error envelope keeps its standard headers.
+    assert.strictEqual(result.headers['x-not-forwarded'], undefined);
+    assert.strictEqual(result.headers['Content-Type'], 'application/json');
+  });
+
+  it('v2: delivers the 401 AND the clearing Set-Cookie in `cookies`', async () => {
+    const result = await invoke(clearThenThrowBackend(), makeV2Event());
+
+    assert.strictEqual(decodeRpcError(result).status, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+    assert.strictEqual(result.multiValueHeaders, undefined);
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+  });
+
+  it('an error with no cookies is returned exactly as before', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          throw new ApiError('Conflict', 409, { name: 'AlreadyExists' });
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(Object.keys(result).sort(), ['body', 'headers', 'statusCode']);
+    assert.strictEqual(result.statusCode, 200);
+    // The plain RPC error headers (original casing), no cookie fields added.
+    assert.strictEqual(result.headers['Content-Type'], 'application/json');
+    assert.strictEqual(result.headers['Cache-Control'], 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+    const err = decodeRpcError(result);
+    assert.strictEqual(err.status, 409);
+    assert.strictEqual(err.name, 'AlreadyExists');
+  });
+
+  it('error body never carries SDK metadata, even when cookies are delivered', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          const sdkError = Object.assign(new Error('User does not exist.'), {
+            name: 'UserNotFoundException',
+            $metadata: { httpStatusCode: 400, requestId: 'req-123' },
+            $fault: 'client',
+          });
+          const err = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+          Object.defineProperty(err, 'cause', { value: sdkError, enumerable: false });
+          throw err;
+        },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [CLEAR_SESSION]);
+    assert.ok(!result.body.includes('$metadata'), `body leaked SDK metadata: ${result.body}`);
+    assert.ok(!result.body.includes('req-123'), `body leaked SDK request id: ${result.body}`);
+    assert.ok(!result.body.includes('UserNotFoundException'), `body leaked the SDK error: ${result.body}`);
+  });
+
+  // ── Live cookies are dropped on error ──
+
+  const LIVE_SESSION = 'session=s3cr3t; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600';
+
+  function backendSettingThenThrowing(...cookies: string[]) {
+    return {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          for (const c of cookies) ctx.response.headers.append('set-cookie', c);
+          // e.g. `await auth.signIn(...)` then a post-sign-in policy check rejects the user
+          throw new ApiError('forbidden', 403, { name: 'Forbidden' });
+        },
+      }),
+    };
+  }
+
+  for (const [label, makeEv, cookiesOf] of [
+    ['v1', makeEvent, (r: any) => r.multiValueHeaders?.['Set-Cookie']],
+    ['v2', makeV2Event, (r: any) => r.cookies],
+  ] as const) {
+    it(`${label}: sign-in-then-throw → the error carries NO session cookie`, async () => {
+      const result = await invoke(backendSettingThenThrowing(LIVE_SESSION), makeEv());
+
+      assert.strictEqual(decodeRpcError(result).status, 403);
+      assert.strictEqual(cookiesOf(result), undefined, 'a live cookie must not be forwarded on error');
+      assert.strictEqual(result.multiValueHeaders, undefined);
+      assert.strictEqual(result.cookies, undefined);
+      assert.deepStrictEqual(setCookieKeysInHeaders(result), []);
+      assert.ok(!JSON.stringify(result).includes('s3cr3t'), 'session value leaked into the error response');
+    });
+
+    it(`${label}: live + clearing cookie, then throw → only the clearing cookie arrives`, async () => {
+      const result = await invoke(backendSettingThenThrowing(LIVE_SESSION, 'bridge=; Path=/; Max-Age=0'), makeEv());
+
+      // The error envelope is unchanged by the cookie filtering.
+      const error = decodeRpcError(result);
+      assert.strictEqual(error.status, 403);
+      assert.strictEqual(error.name, 'Forbidden');
+      assert.strictEqual(error.message, 'forbidden');
+      assert.deepStrictEqual(cookiesOf(result), ['bridge=; Path=/; Max-Age=0']);
+      assert.ok(!JSON.stringify(result).includes('s3cr3t'), 'session value leaked into the error response');
+    });
+  }
+
+  it('forwards deletions by negative Max-Age or past Expires; drops future Expires and Max-Age-overridden Expires', async () => {
+    const result = await invoke(backendSettingThenThrowing(
+      'a=; Path=/; Max-Age=-1',
+      'b=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+      'c=live; Path=/; Expires=Fri, 01 Jan 2100 00:00:00 GMT',
+      // Max-Age takes precedence over Expires (RFC 6265 §5.3) → this one is live.
+      'd=live; Path=/; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+      // "Max-Age=0" inside the VALUE is not an attribute → session cookie → live.
+      'e=Max-Age=0; Path=/',
+    ), makeEvent());
+
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [
+      'a=; Path=/; Max-Age=-1',
+      'b=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    ]);
+  });
+
+  it('success responses still forward live cookies (unchanged)', async () => {
+    const backend = {
+      api: (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.append('set-cookie', LIVE_SESSION);
+          ctx.response.headers.append('set-cookie', 'bridge=; Path=/; Max-Age=0');
+          return 'ok';
+        },
+      }),
+    };
+
+    const v1 = await invoke(backend, makeEvent());
+    assert.deepStrictEqual(v1.multiValueHeaders?.['Set-Cookie'], [LIVE_SESSION, 'bridge=; Path=/; Max-Age=0']);
+    const v2 = await invoke(backend, makeV2Event());
+    assert.deepStrictEqual(v2.cookies, [LIVE_SESSION, 'bridge=; Path=/; Max-Age=0']);
+  });
+
+  it('RawRoute error responses still forward every cookie, live ones included (unchanged)', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/hooks/live-then-throw',
+      handler: async (ctx) => {
+        ctx.response.headers.append('set-cookie', LIVE_SESSION);
+        ctx.response.headers.append('set-cookie', 'pending=; Path=/; Max-Age=0');
+        throw new ApiError('nope', 400);
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/hooks/live-then-throw' }));
+
+    assert.strictEqual(result.statusCode, 400);
+    assert.deepStrictEqual(result.multiValueHeaders?.['Set-Cookie'], [LIVE_SESSION, 'pending=; Path=/; Max-Age=0']);
   });
 });
 
@@ -1047,6 +1762,79 @@ describe('classifyEvent — event source classification', () => {
   });
 });
 
+// ── Cognito user pool triggers ──────────────────────────────────────────────
+
+function makeCognitoPreSignUpEvent(overrides: Record<string, any> = {}) {
+  return {
+    version: '1',
+    region: 'us-east-1',
+    userPoolId: 'us-east-1_Pool1',
+    userName: 'alice',
+    callerContext: { awsSdkVersion: 'aws-sdk-unknown-unknown', clientId: 'client-1' },
+    triggerSource: 'PreSignUp_SignUp',
+    request: { userAttributes: { email: 'alice@example.com' }, validationData: null },
+    response: { autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false },
+    ...overrides,
+  };
+}
+
+describe('createLambdaHandler — Cognito user pool triggers', () => {
+  it('classifies a trigger event as cognito-trigger (and not as HTTP)', () => {
+    const event = makeCognitoPreSignUpEvent();
+    assert.strictEqual(classifyEvent(event), 'cognito-trigger');
+    assert.strictEqual(isApiGatewayHttpEvent(event), false);
+  });
+
+  it('routes by the event\'s userPoolId and returns the event unchanged', async () => {
+    const seen: any[] = [];
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:cognito-idp:us-east-1_Other', async () => {
+      throw new Error('wrong pool');
+    });
+    handlers.set('aws:cognito-idp:us-east-1_Pool1', async (e) => {
+      seen.push(e);
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+    try {
+      const event = makeCognitoPreSignUpEvent();
+      const result = await createLambdaHandler(async () => ({}))(event);
+      assert.strictEqual(seen.length, 1);
+      assert.deepStrictEqual(result, makeCognitoPreSignUpEvent());
+      assert.deepStrictEqual(result.response, { autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false });
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('propagates a handler rejection (Cognito then rejects the operation)', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:cognito-idp:us-east-1_Pool1', async () => {
+      throw new Error('Rejected by policy');
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+    try {
+      await assert.rejects(createLambdaHandler(async () => ({}))(makeCognitoPreSignUpEvent()), /Rejected by policy/);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('fails closed, naming no resource, when no handler is registered for the pool', async () => {
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = new Map();
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await assert.rejects(createLambdaHandler(async () => ({}))(makeCognitoPreSignUpEvent()), (e: Error) => {
+        assert.strictEqual(e.message, 'This user pool trigger is not configured.');
+        return true;
+      });
+    } finally {
+      console.error = originalError;
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+});
+
 // ── Decode-path test (ensures client can decode the 504 JSON-RPC envelope) ──
 
 describe('createLambdaHandler — 504 response is decodable by RPC client', () => {
@@ -1198,7 +1986,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     assert.strictEqual(url.host, 'localhost:3000');
   });
 
-  it('keeps proto and stage prefix for the non-loopback (deploy) path', () => {
+  it('keeps proto and host, but not the stage prefix, for the non-loopback (deploy) path', () => {
     const url = buildEventUrl({
       path: '/auth/callback',
       headers: { 'x-forwarded-proto': 'https', Host: EXECUTE_API },
@@ -1206,7 +1994,29 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     });
     assert.strictEqual(url.protocol, 'https:');
     assert.strictEqual(url.host, EXECUTE_API);
-    assert.strictEqual(url.pathname, '/prod/auth/callback');
+    // The route path, as under the dev server: every front door adds the stage
+    // on the way to the gateway, so it is not part of the path the app routes on.
+    assert.strictEqual(url.pathname, '/auth/callback');
+  });
+
+  it('does not prepend the `$default` stage of a v2 event', () => {
+    const url = buildEventUrl({
+      version: '2.0',
+      rawPath: '/echo/a',
+      headers: { host: 'abc123.lambda-url.us-east-1.on.aws' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/echo/a' } },
+    });
+    assert.strictEqual(url.pathname, '/echo/a');
+  });
+
+  it('keeps the selected origin when the path starts with `//`', () => {
+    // `new URL('//evil.example/x', origin)` would resolve the path as a
+    // protocol-relative reference and swap the host.
+    for (const requestContext of [undefined, { stage: 'prod' }]) {
+      const url = buildEventUrl({ path: '//evil.example/echo/a', headers: { Host: EXECUTE_API }, requestContext });
+      assert.strictEqual(url.host, EXECUTE_API);
+      assert.strictEqual(url.pathname, '//evil.example/echo/a');
+    }
   });
 
   it('accepts 127.0.0.1 and [::1] as loopback forwarded hosts', () => {
@@ -1215,6 +2025,120 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
     const v6 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
     assert.strictEqual(v6.hostname, '[::1]');
+  });
+
+  it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
+    for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
+      const url = buildEventUrl({
+        path: '/aws-blocks/api/x',
+        headers: { 'x-forwarded-host': forwarded, Host: EXECUTE_API },
+        queryStringParameters: { a: '1' },
+      });
+      assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/x?a=1', forwarded);
+    }
+    const noQuery = buildEventUrl({ path: '/x', headers: { 'x-forwarded-host': 'localhost:3000?role=admin#injected', Host: EXECUTE_API } });
+    assert.strictEqual(noQuery.href, 'http://localhost:3000/x');
+  });
+});
+
+describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
+  // CloudFront forwards the gateway's own Host; the door stamps the viewer's host as
+  // x-blocks-public-host, and the backend's config lists the hosts its doors serve.
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+  const VIEWER = 'd111.cloudfront.net';
+  const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+  beforeEach(() => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},app.example.com`;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+    else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+  });
+  const throughDoor = (headers: Record<string, string>, path = '/aws-blocks/api/reports') => ({
+    path,
+    headers: { Host: EXECUTE_API, 'X-Forwarded-Proto': 'https', ...headers },
+    requestContext: { stage: 'prod' },
+    queryStringParameters: { a: '1' },
+  });
+
+  it('reports the URL the viewer called: its host, no stage', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${VIEWER}/aws-blocks/api/reports?a=1`);
+  });
+
+  it("reports a custom domain the door serves, whatever the header's letter case", () => {
+    const url = buildEventUrl(throughDoor({ 'X-Blocks-Public-Host': 'App.Example.com' }));
+    assert.strictEqual(url.href, 'https://app.example.com/aws-blocks/api/reports?a=1');
+  });
+
+  it("ignores a host that isn't one of the backend's front doors (a direct execute-api caller)", () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': 'attacker.example' }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('ignores a list of hosts, and a host with a port', () => {
+    for (const value of [`${VIEWER}, app.example.com`, `${VIEWER}:443`]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': value }));
+      assert.strictEqual(url.host, EXECUTE_API, value);
+    }
+  });
+
+  it('ignores two copies under different letter case', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER, 'X-Blocks-Public-Host': 'app.example.com' }));
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('ignores a header repeated on the wire, as the container does', () => {
+    // A REST event keeps the last copy in `headers` and every copy in `multiValueHeaders`.
+    const url = buildEventUrl({
+      ...throughDoor({ 'x-blocks-public-host': VIEWER }),
+      multiValueHeaders: { 'x-blocks-public-host': ['attacker.example', VIEWER] },
+    });
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('reports a subdomain of a wildcard custom domain the door serves, at any depth', () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of ['a.tenant.example.com', 'deep.a.tenant.example.com', 'A.Tenant.Example.com']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.href, `https://${host.toLowerCase()}/aws-blocks/api/reports?a=1`, host);
+    }
+  });
+
+  it("ignores a host a wildcard custom domain doesn't cover: its apex, a lookalike, a longer domain", () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of [
+      'tenant.example.com',
+      'eviltenant.example.com',
+      'a.tenant.example.com.evil.example',
+      '.tenant.example.com',
+      'x/y.tenant.example.com',
+      'u@a.tenant.example.com',
+      'a.tenant.example.com:443',
+      'a..tenant.example.com',
+    ]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.host, EXECUTE_API, host);
+    }
+  });
+
+  it('ignores the header when the backend has no front-door hosts', () => {
+    delete process.env.BLOCKS_PUBLIC_HOSTS;
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('keeps the loopback dev-server origin first (a sandbox proxying through the door)', () => {
+    const url = buildEventUrl(throughDoor({ 'x-forwarded-host': 'localhost:3000', 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/reports?a=1');
+  });
+
+  it('never moves to another host on a //- or /\\-prefixed path', () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }, path));
+      assert.strictEqual(url.host, VIEWER, path);
+      assert.strictEqual(url.pathname, '//evil.example/x', path);
+    }
   });
 });
 
@@ -1245,7 +2169,7 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
       method: 'GET',
       path: '/auth/callback',
       handler: async (ctx) => {
-        // This mirrors how AuthOIDC.computeCallbackUrl derives redirect_uri:
+        // This mirrors how the auth block's federation routes derive redirect_uri:
         // entirely from ctx.request.url.host.
         capturedHost = ctx.request.url.host;
         ctx.response.send('');
@@ -1290,6 +2214,107 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── RawRoute URL parity with the dev server (#1138) ─────────────────────────
+
+describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage', () => {
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+  function stageEvent(path: string, headers: Record<string, string> = {}) {
+    return makeEvent({
+      httpMethod: 'GET',
+      path,
+      body: null,
+      queryStringParameters: { q: 'a b' },
+      requestContext: { stage: 'prod' },
+      headers: { Host: EXECUTE_API, 'x-forwarded-proto': 'https', ...headers },
+    });
+  }
+
+  it('a RawRoute sees the route path, without the API Gateway stage', async () => {
+    let seen: { href: string; pathname: string; wildcard: string | undefined; q: string | null } | undefined;
+    registerRoute({
+      method: 'GET',
+      path: '/echo/*',
+      handler: async (ctx) => {
+        const { url, params } = ctx.request;
+        seen = { href: url.href, pathname: url.pathname, wildcard: params['*'], q: url.searchParams.get('q') };
+        ctx.response.send('');
+      },
+    });
+
+    const result = await invoke({}, stageEvent('/echo/a/b'));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(seen, {
+      href: `https://${EXECUTE_API}/echo/a/b?q=a+b`,
+      pathname: '/echo/a/b',
+      wildcard: 'a/b',
+      q: 'a b',
+    });
+  });
+
+  it('getRequestBaseUrl returns the gateway origin with its stage', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback'));
+
+    assert.strictEqual(base, `https://${EXECUTE_API}/prod`);
+  });
+
+  it('getRequestBaseUrl returns the loopback front door, without a stage, in sandbox', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback', { 'x-forwarded-host': 'localhost:3000' }));
+
+    assert.strictEqual(base, 'http://localhost:3000');
+  });
+
+  it("behind a Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
+    const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+    process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net';
+    try {
+      const seen = { url: '', base: '' };
+      registerRoute({
+        method: 'GET',
+        path: '/auth/callback',
+        handler: async (ctx) => {
+          seen.url = ctx.request.url.href;
+          seen.base = getRequestBaseUrl(ctx);
+          ctx.response.send('');
+        },
+      });
+
+      await invoke({}, stageEvent('/auth/callback', { 'x-blocks-public-host': 'd111.cloudfront.net' }));
+
+      assert.deepStrictEqual(seen, { url: 'https://d111.cloudfront.net/auth/callback?q=a+b', base: `https://${EXECUTE_API}/prod` });
+    } finally {
+      if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+      else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+    }
+  });
+
+  it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
+    const ctx = { request: { url: new URL('http://localhost:3000/aws-blocks/auth/callback?code=x') } };
+    assert.strictEqual(getRequestBaseUrl(ctx), 'http://localhost:3000');
   });
 });
 
@@ -1427,4 +2452,387 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
   });
 
+});
+
+// ── RPC dispatch surface (only the methods the API defines) ──────────────────
+
+/**
+ * Every member a plain object inherits from `Object.prototype`. A client must
+ * not be able to name any of them as an API method.
+ */
+const INHERITED_NAMES = [
+  'constructor',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  '__proto__',
+];
+
+function rpcCall(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+/** The exact body an unknown method on an existing API returns. */
+function unknownMethodBody(method: string, ns = 'api') {
+  return { jsonrpc: '2.0', error: { code: -32601, message: `Method not found: '${method}' on API '${ns}'` }, id: 1 };
+}
+
+/** The exact body an unknown API namespace returns. */
+function unknownApiBody(ns: string) {
+  return { jsonrpc: '2.0', error: { code: -32601, message: `Method not found: API '${ns}' not found` }, id: 1 };
+}
+
+/** A Building Block instance exported from the backend (a `Scope` subclass). */
+class FakeBlock {
+  readonly id = 'notes';
+  readonly fullId = 'app-notes';
+  async get(_key: string) { return 'stored-secret'; }
+  async delete(_key: string) { return 'deleted'; }
+}
+
+function dispatchBackend() {
+  const shared = { async composed() { return 'composed'; } };
+  return {
+    api: new ApiNamespace({ id: 'app' }, 'api', (_ctx: BlocksContext) => ({
+      async echo(msg: string) { return msg; },
+      async viaThis() { return this.echo('bound'); },
+      ...shared,
+      // An app may define a method with an Object.prototype name itself.
+      async toString() { return 'app-defined toString'; },
+    })),
+    auth: new ApiNamespace({ id: 'app' }, 'auth', (_ctx: BlocksContext) => ({
+      getAuthState: async () => ({ state: 'signedOut' }),
+      setAuthState: async (input: { action: string }) => ({ state: 'signedOut', action: input.action }),
+    })),
+    plainApi: { async ping() { return 'pong'; } },
+    notes: new FakeBlock(),
+    // A secret() marker whose (callable) schema must not become an endpoint.
+    stripeKey: { [Symbol.for('@aws-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
+  };
+}
+
+describe('createLambdaHandler — RPC dispatch reaches only the API\'s own methods', () => {
+  for (const name of INHERITED_NAMES) {
+    it(`'${name}' (inherited from Object.prototype) is "method not found"`, async () => {
+      // `auth` defines only getAuthState/setAuthState, nothing inherited.
+      const result = await invoke(dispatchBackend(), rpcCall(`auth.${name}`, [{ action: 'x' }]));
+      assert.strictEqual(result.statusCode, 200);
+      assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody(name, 'auth'));
+    });
+  }
+
+  it('an inherited name returns exactly what an unknown method returns', async () => {
+    const unknown = await invoke(dispatchBackend(), rpcCall('auth.doesNotExist'));
+    const inherited = await invoke(dispatchBackend(), rpcCall('auth.hasOwnProperty', ['getAuthState']));
+    assert.strictEqual(inherited.statusCode, unknown.statusCode);
+    assert.deepStrictEqual(inherited.headers, unknown.headers);
+    const a = JSON.parse(unknown.body);
+    const b = JSON.parse(inherited.body);
+    assert.deepStrictEqual(Object.keys(b.error).sort(), Object.keys(a.error).sort(), 'no extra fields (data, stack, reason)');
+    assert.strictEqual(b.error.code, a.error.code);
+    assert.strictEqual('data' in b.error, false);
+  });
+
+  const craftedPaths: Array<[string, Record<string, unknown>]> = [
+    ['api.__proto__.toString', unknownMethodBody('__proto__.toString')],
+    ['api.constructor.constructor', unknownMethodBody('constructor.constructor')],
+    ['api.echo.call', unknownMethodBody('echo.call')],
+    ['api.echo.constructor', unknownMethodBody('echo.constructor')],
+    ['api.', unknownMethodBody('')],
+    ['constructor.constructor', unknownApiBody('constructor')],
+    ['constructor.toString', unknownApiBody('constructor')],
+    ['__proto__.toString', unknownApiBody('__proto__')],
+    ['hasOwnProperty.call', unknownApiBody('hasOwnProperty')],
+    ['toString.call', unknownApiBody('toString')],
+    ['.echo', unknownApiBody('')],
+  ];
+  for (const [wire, expected] of craftedPaths) {
+    it(`crafted path '${wire}' cannot walk the prototype chain`, async () => {
+      const result = await invoke(dispatchBackend(), rpcCall(wire, ['x']));
+      assert.strictEqual(result.statusCode, 200);
+      assert.deepStrictEqual(JSON.parse(result.body), expected);
+    });
+  }
+
+  it('a namespace lookup on a null-prototype (ES module) backend rejects inherited names too', async () => {
+    const mod = Object.assign(Object.create(null), dispatchBackend());
+    for (const ns of ['constructor', '__proto__', 'toString']) {
+      const result = await invoke(mod, rpcCall(`${ns}.x`));
+      assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody(ns));
+    }
+  });
+
+  it('an exported Building Block instance is not an RPC namespace', async () => {
+    for (const method of ['get', 'delete', 'constructor']) {
+      const result = await invoke(dispatchBackend(), rpcCall(`notes.${method}`, ['k']));
+      assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody('notes'));
+    }
+  });
+
+  it('a secret()/config() marker export is not an RPC namespace', async () => {
+    const result = await invoke(dispatchBackend(), rpcCall('stripeKey.schema', ['x']));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownApiBody('stripeKey'));
+  });
+
+  it('a non-enumerable own property is not dispatchable', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => {
+        const methods = { async visible() { return 'ok'; } };
+        Object.defineProperty(methods, 'hidden', { value: async () => 'hidden', enumerable: false });
+        return methods;
+      },
+    };
+    const hidden = await invoke(backend, rpcCall('api.hidden'));
+    assert.deepStrictEqual(JSON.parse(hidden.body), unknownMethodBody('hidden'));
+    const visible = await invoke(backend, rpcCall('api.visible'));
+    assert.strictEqual(JSON.parse(visible.body).result, 'ok');
+  });
+
+  it('a non-function own property is "method not found", not a TypeError', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ version: '1.0', async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcCall('api.version'));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody('version'));
+  });
+
+  it('a handler that returns nothing is "method not found", not a TypeError', async () => {
+    const backend = { api: (_ctx: BlocksContext) => undefined };
+    const result = await invoke(backend, rpcCall('api.echo'));
+    assert.deepStrictEqual(JSON.parse(result.body), unknownMethodBody('echo'));
+  });
+
+  it('legitimate methods still dispatch: literal, spread-composed, `this`-bound, app-defined toString', async () => {
+    const backend = dispatchBackend();
+    const cases: Array<[string, unknown[], unknown]> = [
+      ['api.echo', ['hi'], 'hi'],
+      ['api.composed', [], 'composed'],
+      ['api.viaThis', [], 'bound'],
+      ['api.toString', [], 'app-defined toString'],
+      ['plainApi.ping', [], 'pong'],
+      ['auth.getAuthState', [], { state: 'signedOut' }],
+      ['auth.setAuthState', [{ action: 'signOut' }], { state: 'signedOut', action: 'signOut' }],
+    ];
+    for (const [wire, params, expected] of cases) {
+      const result = await invoke(backend, rpcCall(wire, params));
+      const body = JSON.parse(result.body);
+      assert.ok(!body.error, `${wire} errored: ${JSON.stringify(body.error)}`);
+      assert.deepStrictEqual(body.result, expected, wire);
+    }
+  });
+});
+
+// ── RPC dispatch: only API surfaces are callable ────────────────────────────
+//
+// The dispatcher resolves `backend[apiNamespace][method]`. It must not expose a
+// Building Block instance that happens to be exported from the backend module
+// (its whole data plane would bypass every `requireAuth` in the ApiNamespace
+// layer), `_`-private exports, or members inherited from `Object.prototype`.
+
+function rpcEvent(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+function rpcError(result: any): { code: number; message: string } | undefined {
+  return JSON.parse(result.body).error;
+}
+
+describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
+  it('rejects a method on an exported Building Block (Scope) instance', async () => {
+    let wrote = false;
+    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
+    const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
+    assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');
+    assert.strictEqual(wrote, false, 'the block method must never run');
+  });
+
+  it('rejects an underscore-private export', async () => {
+    let ran = false;
+    const backend = { _internal: () => ({ async run() { ran = true; return 1; } }) };
+    const result = await invoke(backend, rpcEvent('_internal.run'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+    assert.strictEqual(ran, false);
+  });
+
+  for (const inherited of ['toString', 'hasOwnProperty', 'constructor', 'valueOf', '__proto__']) {
+    it(`rejects the inherited Object.prototype member "${inherited}"`, async () => {
+      const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return m; } }) };
+      const result = await invoke(backend, rpcEvent(`api.${inherited}`));
+      assert.strictEqual(rpcError(result)?.code, -32601, `${inherited} must be method-not-found`);
+    });
+  }
+
+  it('rejects a non-function own property on the method map', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ secretConfig: { key: 'x' }, async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcEvent('api.secretConfig'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+  });
+
+  it('still dispatches a real method (regression guard)', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
+    const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
+    assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── ApiNamespace `httpErrorStatus` ──────────────────────────────────────────
+//
+// Opt-in: a 4xx `ApiError` is answered with its HTTP status; the JSON-RPC body
+// is the same either way. Off (the default), every RPC response stays a 200.
+
+function statusBackend(options?: { httpErrorStatus?: boolean }) {
+  const thrown: { current: unknown } = { current: undefined };
+  const api = new ApiNamespace(
+    { id: 'app' },
+    'api',
+    () => ({
+      async echo() {
+        throw thrown.current;
+      },
+    }),
+    options,
+  );
+  return { backend: { api }, thrown };
+}
+
+describe('createLambdaHandler — ApiNamespace httpErrorStatus', () => {
+  it('default: a 401 ApiError is an HTTP 200 carrying the error in the body', async () => {
+    const { backend, thrown } = statusBackend();
+    thrown.current = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+    const result = await invoke(backend, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcError(result).status, 401);
+  });
+
+  for (const status of [400, 401, 403, 404, 409, 429]) {
+    it(`on: a ${status} ApiError is answered with HTTP ${status}, same body`, async () => {
+      const on = statusBackend({ httpErrorStatus: true });
+      const off = statusBackend();
+      on.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      off.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      const result = await invoke(on.backend, makeEvent());
+      const baseline = await invoke(off.backend, makeEvent());
+      assert.strictEqual(result.statusCode, status);
+      assert.strictEqual(result.body, baseline.body, 'the JSON-RPC body is unchanged');
+      const err = decodeRpcError(result);
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.name, 'SomeError');
+    });
+  }
+
+  it('on: a 5xx ApiError, an unbranded throw and a branded BB error stay HTTP 200', async () => {
+    for (const error of [new ApiError('boom', 503), new Error('raw driver text'), blocksError('KVStore.Conflict', 'x')]) {
+      const { backend, thrown } = statusBackend({ httpErrorStatus: true });
+      thrown.current = error;
+      const result = await invoke(backend, makeEvent());
+      assert.strictEqual(result.statusCode, 200, String(error));
+    }
+  });
+
+  it('on: the clearing Set-Cookie still travels with a 401', async () => {
+    const api = new ApiNamespace(
+      { id: 'app' },
+      'api',
+      (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+        },
+      }),
+      { httpErrorStatus: true },
+    );
+    const result = await invoke({ api }, makeV2Event());
+    assert.strictEqual(result.statusCode, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+  });
+
+  it('on: a successful call is unaffected', async () => {
+    const api = new ApiNamespace({ id: 'app' }, 'api', () => ({ async echo(v: string) { return v; } }), { httpErrorStatus: true });
+    const result = await invoke({ api }, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcResponse(JSON.parse(result.body)), 'hello');
+  });
+});
+
+// ── request id in scope ─────────────────────────────────────────────────────
+// Each invocation runs with its Lambda awsRequestId in scope, so Building Blocks
+// (bb-logger) can tag their output with it. Overlapping invocations on one
+// container must each see their own id.
+
+describe('createLambdaHandler — request id in scope', () => {
+  const ctx = (awsRequestId: string): LambdaContext => ({ awsRequestId, getRemainingTimeInMillis: () => 30_000 });
+  const readStore = () =>
+    (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__?.getStore();
+
+  it('makes the invocation awsRequestId visible to the backend method', async () => {
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => backend);
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-111'));
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-111' });
+  });
+
+  it('keeps overlapping invocations apart', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const backend = {
+      api: (_c: BlocksContext) => ({
+        async slow() { await gate; return { id: readStore() ?? null }; },
+        async fast() { return { id: readStore() ?? null }; },
+      }),
+    };
+    const handler = createLambdaHandler(async () => backend);
+    const call = (method: string, id: string) =>
+      handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: [], id: 1 }) }), ctx(id)) as Promise<any>;
+    const slow = call('slow', 'req-slow');
+    const fast = await call('fast', 'req-fast');
+    release();
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(fast.body)), { id: 'req-fast' });
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse((await slow).body)), { id: 'req-slow' });
+  });
+
+  it('has no request id outside an invocation', () => {
+    assert.strictEqual(readStore(), undefined);
+  });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
+  });
 });

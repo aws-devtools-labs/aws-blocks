@@ -13,6 +13,11 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 export type DisconnectReason = 'client' | 'timeout' | 'error' | 'unknown';
 
 // @public
+export interface GetChannelOptions {
+    scope?: 'exact' | 'subtree';
+}
+
+// @public
 export interface NamespaceConfig<T = unknown> {
     // (undocumented)
     schema: StandardSchemaV1<T>;
@@ -32,10 +37,18 @@ export interface RealtimeChannel<T = unknown> {
     subscribe(handler: (message: T) => void): RealtimeSubscription;
     // (undocumented)
     subscribe(options: SubscribeOptions<T>): RealtimeSubscription;
-    // Warning: (ae-forgotten-export) The symbol "RealtimeChannelDescriptor" needs to be exported by the entry point index.aws.d.ts
-    //
     // @internal
     toJSON(): RealtimeChannelDescriptor;
+}
+
+// @public
+export interface RealtimeChannelDescriptor {
+    // (undocumented)
+    __blocks: 'realtime/channel';
+    // (undocumented)
+    [key: string]: unknown;
+    // (undocumented)
+    channel: string;
 }
 
 // @public
@@ -54,7 +67,7 @@ export interface RealtimeOptions<T extends NamespaceDefs> {
 
 // @public
 export interface RealtimeServer<T extends NamespaceDefs> {
-    getChannel<K extends string & keyof T>(namespace: K, channel: string): Promise<RealtimeChannel<InferMessage<T[K]>>>;
+    getChannel<K extends string & keyof T>(namespace: K, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<InferMessage<T[K]>>>;
     // Warning: (ae-forgotten-export) The symbol "InferMessage" needs to be exported by the entry point index.aws.d.ts
     publish<K extends string & keyof T>(namespace: K, channel: string, data: InferMessage<T[K]>): Promise<void>;
     subscribe<K extends string & keyof T>(namespace: K, channel: string, handler: (message: InferMessage<T[K]>) => void): () => void;
@@ -72,6 +85,7 @@ export interface SubscribeOptions<T = unknown> {
     onDisconnect?: (reason: DisconnectReason) => void;
     onMessage: (message: T) => void;
     onReconnect?: () => void;
+    refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 // (No @packageDocumentation comment for this package)

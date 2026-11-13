@@ -18,6 +18,39 @@ String _spec(
 void main() {
   const parser = OpenRpcParser();
 
+  group('spec root', () {
+    Matcher throwsFormat(String needle) => throwsA(
+      isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains(needle),
+      ),
+    );
+
+    test('a missing or non-object info is rejected', () {
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2","methods":[]}'),
+        throwsFormat("Expected 'info' object"),
+      );
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2","info":[],"methods":[]}'),
+        throwsFormat("Expected 'info' object"),
+      );
+    });
+
+    test('a missing or non-array methods is rejected', () {
+      const info = '"info":{"title":"t","version":"1"}';
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2",$info}'),
+        throwsFormat("Expected 'methods' array"),
+      );
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2",$info,"methods":{}}'),
+        throwsFormat("Expected 'methods' array"),
+      );
+    });
+  });
+
   group('result name', () {
     test('captures declared result content-descriptor name', () {
       final model = parser.parse(
@@ -382,6 +415,31 @@ void main() {
     });
   });
 
+  group('empty objects', () {
+    // An object with no properties (`{type: object}`, or `properties: {}`,
+    // which the spec generator writes for an interface whose only fields are
+    // `_`-prefixed) holds any fields: the same `dynamic` value either way. An
+    // empty class doesn't compile (`const X({})`).
+    for (final schema in [
+      {'type': 'object'},
+      {'type': 'object', 'properties': <String, dynamic>{}},
+    ]) {
+      test('parses $schema as a dynamic value', () {
+        final model = parser.parse(
+          _spec([
+            {
+              'name': 'api.get',
+              'params': [],
+              'result': {'name': 'R', 'schema': schema},
+            },
+          ]),
+        );
+        expect(model.methods[0].result, isA<PrimitiveRef>());
+        expect((model.methods[0].result as PrimitiveRef).dartType, 'dynamic');
+      });
+    }
+  });
+
   group('tuples', () {
     test('parses prefixItems as TupleRef', () {
       final model = parser.parse(
@@ -410,26 +468,37 @@ void main() {
       expect((result.items[2] as PrimitiveRef).dartType, 'String');
     });
 
-    test('single-element tuple collapses to inner type', () {
-      final model = parser.parse(
-        _spec([
-          {
-            'name': 'api.get',
-            'params': [],
-            'result': {
-              'name': 'R',
-              'schema': {
-                'type': 'array',
-                'prefixItems': [
-                  {'type': 'string'},
-                ],
-              },
+    // A one-element tuple (`[string]`) is the JSON array `["x"]`, so it is a
+    // one-element list, as in Swift. It used to collapse to its element type:
+    // a result `[5]` failed `as num`, and a parameter `["x"]` was sent as `"x"`.
+    for (final schema in [
+      {
+        'type': 'array',
+        'prefixItems': [
+          {'type': 'string'},
+        ],
+      },
+      {
+        'type': 'array',
+        'items': [
+          {'type': 'string'},
+        ],
+      },
+    ]) {
+      test('a single-element tuple ($schema) is a list of its element', () {
+        final model = parser.parse(
+          _spec([
+            {
+              'name': 'api.get',
+              'params': [],
+              'result': {'name': 'R', 'schema': schema},
             },
-          },
-        ]),
-      );
-      expect(model.methods[0].result, isA<PrimitiveRef>());
-      expect((model.methods[0].result as PrimitiveRef).dartType, 'String');
-    });
+          ]),
+        );
+        final result = model.methods[0].result;
+        expect(result, isA<ArrayRef>());
+        expect(((result as ArrayRef).items as PrimitiveRef).dartType, 'String');
+      });
+    }
   });
 }

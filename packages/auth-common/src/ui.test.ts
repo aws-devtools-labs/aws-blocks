@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { beforeEach, describe, test } from 'node:test';
 import { Window } from 'happy-dom';
-import type { AuthState, AuthAction } from './index.js';
+import type { AuthAction, AuthState, AuthUser } from './index.js';
 import type { AuthStateApi } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -32,8 +32,12 @@ class BroadcastChannelShim {
 			}
 		}
 	}
-	addEventListener(_type: string, fn: any) { this.listeners.push(fn); }
-	removeEventListener(_type: string, fn: any) { this.listeners = this.listeners.filter((f) => f !== fn); }
+	addEventListener(_type: string, fn: any) {
+		this.listeners.push(fn);
+	}
+	removeEventListener(_type: string, fn: any) {
+		this.listeners = this.listeners.filter((f) => f !== fn);
+	}
 	close() {}
 }
 
@@ -51,7 +55,15 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, AccountMenuBar, onAuthChange, broadcastAuthChange } = await import('./ui.js');
+const {
+	Authenticator,
+	AuthenticatedContent,
+	AccountMenuBar,
+	StatusMessage,
+	onAuthChange,
+	broadcastAuthChange,
+	submitAuthAction,
+} = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,14 +73,22 @@ function signedOutState(actions?: AuthAction[]): AuthState {
 	return {
 		state: 'signedOut',
 		actions: actions ?? [
-			{ name: 'signIn', label: 'Sign In', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-				{ name: 'password', label: 'Password', type: 'password', required: true },
-			]},
-			{ name: 'signUp', label: 'Create Account', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-				{ name: 'password', label: 'Password', type: 'password', required: true },
-			]},
+			{
+				name: 'signIn',
+				label: 'Sign In',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'text', required: true },
+					{ name: 'password', label: 'Password', type: 'password', required: true },
+				],
+			},
+			{
+				name: 'signUp',
+				label: 'Create Account',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'text', required: true },
+					{ name: 'password', label: 'Password', type: 'password', required: true },
+				],
+			},
 		],
 	};
 }
@@ -81,11 +101,15 @@ function signedInState(): AuthState {
 	};
 }
 
-function mockApi(initial: AuthState): AuthStateApi & { calls: { action: string; fields: Record<string, string> }[]; nextState: AuthState } {
+function mockApi(
+	initial: AuthState,
+): AuthStateApi & { calls: { action: string; fields: Record<string, string> }[]; nextState: AuthState } {
 	const api = {
 		calls: [] as { action: string; fields: Record<string, string> }[],
 		nextState: initial,
-		async getAuthState() { return api.nextState; },
+		async getAuthState() {
+			return api.nextState;
+		},
 		async setAuthState(input: any) {
 			const { action, ...fields } = input;
 			api.calls.push({ action, fields });
@@ -105,7 +129,6 @@ async function flush() {
 // ---------------------------------------------------------------------------
 
 describe('Authenticator', () => {
-
 	test('renders sign-in form when signed out', async () => {
 		const api = mockApi(signedOutState());
 		const el = Authenticator(api);
@@ -132,7 +155,7 @@ describe('Authenticator', () => {
 		// Find the Sign In button and its sibling inputs
 		const buttons = Array.from(el.querySelectorAll('button'));
 		const signInBtn = buttons.find((b) => b.textContent === 'Sign In');
-		assert.ok(signInBtn, `Should find Sign In button. Found: ${buttons.map(b => b.textContent)}`);
+		assert.ok(signInBtn, `Should find Sign In button. Found: ${buttons.map((b) => b.textContent)}`);
 
 		const actionDiv = signInBtn!.parentElement!;
 		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
@@ -220,7 +243,13 @@ describe('Authenticator', () => {
 				url: 'https://myco.okta.com/authorize',
 				method: 'GET',
 				fields: [
-					{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
+					{
+						name: 'redirect_uri',
+						label: 'Redirect',
+						type: 'hidden',
+						required: true,
+						defaultValue: 'https://myapp.com/callback',
+					},
 				],
 			},
 		]);
@@ -329,14 +358,22 @@ describe('Authenticator', () => {
 		// value flowing on submit even though the visible input is gone.
 		const api = mockApi({
 			state: 'confirmingSignUp',
-			actions: [{
-				name: 'confirmSignUp',
-				label: 'Confirm Account',
-				fields: [
-					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
-					{ name: 'code', label: 'Verification Code', type: 'text', required: true, defaultValue: '111111' },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmSignUp',
+					label: 'Confirm Account',
+					fields: [
+						{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+						{
+							name: 'code',
+							label: 'Verification Code',
+							type: 'text',
+							required: true,
+							defaultValue: '111111',
+						},
+					],
+				},
+			],
 		});
 		const el = Authenticator(api, {
 			actions: { confirmSignUp: { fields: { code: { hidden: true } } } },
@@ -450,7 +487,11 @@ describe('Authenticator', () => {
 						id: 'cred-stub',
 						type: 'public-key',
 						rawId: new ArrayBuffer(2),
-						response: { clientDataJSON: new ArrayBuffer(2), authenticatorData: new ArrayBuffer(2), signature: new ArrayBuffer(2) },
+						response: {
+							clientDataJSON: new ArrayBuffer(2),
+							authenticatorData: new ArrayBuffer(2),
+							signature: new ArrayBuffer(2),
+						},
 						getClientExtensionResults: () => ({}),
 						toJSON: () => ({ id: 'cred-stub', type: 'public-key' }),
 					} as any;
@@ -467,23 +508,31 @@ describe('Authenticator', () => {
 
 		const passkeyState: AuthState = {
 			state: 'confirmingSignIn',
-			actions: [{
-				name: 'confirmSignIn',
-				label: 'Use Passkey',
-				capability: 'webauthn-get',
-				fields: [
-					{ name: 'session', label: 'Session', type: 'hidden', required: true, defaultValue: 'sess-1' },
-					{ name: 'challenge', label: 'Challenge', type: 'hidden', required: true, defaultValue: 'webauthn' },
-					{
-						name: 'credentialRequestOptions',
-						label: 'opts',
-						type: 'hidden',
-						required: true,
-						defaultValue: '{"challenge":"abc","rpId":"localhost"}',
-					},
-					{ name: 'credential', label: 'Credential', type: 'hidden', required: true },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmSignIn',
+					label: 'Use Passkey',
+					capability: 'webauthn-get',
+					fields: [
+						{ name: 'session', label: 'Session', type: 'hidden', required: true, defaultValue: 'sess-1' },
+						{
+							name: 'challenge',
+							label: 'Challenge',
+							type: 'hidden',
+							required: true,
+							defaultValue: 'webauthn',
+						},
+						{
+							name: 'credentialRequestOptions',
+							label: 'opts',
+							type: 'hidden',
+							required: true,
+							defaultValue: '{"challenge":"abc","rpId":"localhost"}',
+						},
+						{ name: 'credential', label: 'Credential', type: 'hidden', required: true },
+					],
+				},
+			],
 		};
 		const api = mockApi(passkeyState);
 		const el = Authenticator(api);
@@ -566,8 +615,115 @@ describe('Authenticator', () => {
 	});
 });
 
-describe('AuthenticatedContent', () => {
+describe('Authenticator forms (password managers)', () => {
+	function actionEl(root: ParentNode, name: string): Element {
+		const el = root.querySelector(`[data-testid="authenticator-action-${name}"]`);
+		assert.ok(el, `action ${name} rendered`);
+		return el;
+	}
 
+	function input(root: ParentNode, field: string): HTMLInputElement {
+		const el = root.querySelector(`[data-testid="authenticator-${field}"]`);
+		assert.ok(el, `field ${field} rendered`);
+		return el as HTMLInputElement;
+	}
+
+	test('each action with fields is its own <form>, holding its inputs and submit button', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		for (const name of ['signIn', 'signUp']) {
+			const form = actionEl(el, name);
+			assert.strictEqual(form.tagName, 'FORM', `${name} is a form`);
+			// Server-side validation stays the source of truth; the browser must not block the submit.
+			assert.strictEqual((form as HTMLFormElement).noValidate, true, `${name} skips native validation`);
+			for (const pw of form.querySelectorAll('input[type="password"]')) {
+				assert.strictEqual(pw.closest('form'), form, 'the password input is inside its form');
+			}
+			const submit = form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement;
+			assert.ok(submit, 'the submit button is inside the form');
+			assert.strictEqual(submit.type, 'submit');
+		}
+	});
+
+	test('submitting the form calls setAuthState once and does not navigate', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		api.nextState = signedInState();
+		const form = actionEl(el, 'signIn') as HTMLFormElement;
+		input(form, 'username').value = 'alice';
+		input(form, 'password').value = 'secret';
+		const event = new Event('submit', { bubbles: true, cancelable: true });
+		form.dispatchEvent(event);
+		await flush();
+		assert.strictEqual(event.defaultPrevented, true, 'the page does not reload');
+		assert.deepStrictEqual(api.calls, [{ action: 'signIn', fields: { username: 'alice', password: 'secret' } }]);
+	});
+
+	test('a click or an Enter submits exactly once', async () => {
+		for (const how of ['click', 'enter'] as const) {
+			const api = mockApi(signedOutState());
+			const el = Authenticator(api);
+			await flush();
+			const form = actionEl(el, 'signIn');
+			input(form, 'username').value = 'alice';
+			input(form, 'password').value = 'secret';
+			if (how === 'click')
+				(form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement).click();
+			else
+				input(form, 'username').dispatchEvent(
+					new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+				);
+			await flush();
+			assert.strictEqual(api.calls.length, 1, `${how}: one setAuthState call`);
+		}
+	});
+
+	test('autocomplete is set for password managers; a field override wins', async () => {
+		const code: AuthAction = {
+			name: 'confirmSignUp',
+			label: 'Confirm',
+			fields: [
+				{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+				{ name: 'code', label: 'Verification Code', type: 'text', required: true },
+			],
+		};
+		const reset: AuthAction = {
+			name: 'confirmResetPassword',
+			label: 'Reset',
+			fields: [
+				{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+				{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+			],
+		};
+		const signUp: AuthAction = {
+			name: 'signUp',
+			label: 'Create Account',
+			fields: [
+				{ name: 'username', label: 'Username', type: 'text', required: true },
+				{ name: 'password', label: 'Password', type: 'password', required: true },
+				{ name: 'email', label: 'Email', type: 'email', required: true },
+			],
+		};
+		const signIn = signedOutState().actions[0];
+		const api = mockApi(signedOutState([signIn, signUp, code, reset]));
+		const el = Authenticator(api, {
+			actions: { resetPassword: {}, confirmSignUp: { fields: { code: { autocomplete: 'off' } } } },
+		});
+		await flush();
+		assert.strictEqual(input(actionEl(el, 'signIn'), 'username').autocomplete, 'username');
+		assert.strictEqual(input(actionEl(el, 'signIn'), 'password').autocomplete, 'current-password');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'username').autocomplete, 'username');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'password').autocomplete, 'new-password');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'email').autocomplete, 'email');
+		assert.strictEqual(input(actionEl(el, 'confirmResetPassword'), 'code').autocomplete, 'one-time-code');
+		assert.strictEqual(input(actionEl(el, 'confirmResetPassword'), 'newPassword').autocomplete, 'new-password');
+		assert.strictEqual(input(actionEl(el, 'confirmSignUp'), 'code').autocomplete, 'off', 'the override wins');
+	});
+});
+
+describe('AuthenticatedContent', () => {
 	test('renders content when signed in', async () => {
 		const api = mockApi(signedInState());
 		const el = AuthenticatedContent(api, (user) => {
@@ -596,11 +752,15 @@ describe('AuthenticatedContent', () => {
 		const api = mockApi(signedOutState());
 		const fallback = document.createElement('div');
 		fallback.textContent = 'Please sign in';
-		const el = AuthenticatedContent(api, (user) => {
-			const span = document.createElement('span');
-			span.textContent = `Hello ${user.username}`;
-			return span;
-		}, fallback);
+		const el = AuthenticatedContent(
+			api,
+			(user) => {
+				const span = document.createElement('span');
+				span.textContent = `Hello ${user.username}`;
+				return span;
+			},
+			fallback,
+		);
 		await flush();
 
 		assert.ok(el.textContent?.includes('Please sign in'));
@@ -610,11 +770,15 @@ describe('AuthenticatedContent', () => {
 		const api = mockApi(signedInState());
 		const fallback = document.createElement('div');
 		fallback.textContent = 'Please sign in';
-		const el = AuthenticatedContent(api, (user) => {
-			const span = document.createElement('span');
-			span.textContent = `Hello ${user.username}`;
-			return span;
-		}, fallback);
+		const el = AuthenticatedContent(
+			api,
+			(user) => {
+				const span = document.createElement('span');
+				span.textContent = `Hello ${user.username}`;
+				return span;
+			},
+			fallback,
+		);
 		await flush();
 
 		assert.ok(el.textContent?.includes('Hello alice'));
@@ -636,11 +800,12 @@ describe('AuthenticatedContent', () => {
 });
 
 describe('onAuthChange', () => {
-
 	test('calls callback immediately with current user', async () => {
 		const api = mockApi(signedInState());
-		let received: any ;
-		const unsub = onAuthChange(api, (user) => { received = user; });
+		let received: any;
+		const unsub = onAuthChange(api, (user) => {
+			received = user;
+		});
 		await flush();
 
 		assert.deepStrictEqual(received, { userId: 'alice', username: 'alice' });
@@ -650,7 +815,9 @@ describe('onAuthChange', () => {
 	test('calls callback with null when signed out', async () => {
 		const api = mockApi(signedOutState());
 		let received: any = 'not-called';
-		const unsub = onAuthChange(api, (user) => { received = user; });
+		const unsub = onAuthChange(api, (user) => {
+			received = user;
+		});
 		await flush();
 
 		assert.strictEqual(received, null);
@@ -664,7 +831,10 @@ describe('onAuthChange', () => {
 		const api = mockApi(signedOutState());
 		let called = false;
 		let received: any = 'sentinel';
-		const unsub = onAuthChange(api, (user) => { called = true; received = user; });
+		const unsub = onAuthChange(api, (user) => {
+			called = true;
+			received = user;
+		});
 		// No `await flush()` here — synchronous emission is the whole point.
 		assert.strictEqual(called, true, 'callback must fire synchronously on subscribe');
 		assert.strictEqual(received, null, 'cold signed-out load emits null synchronously');
@@ -680,7 +850,9 @@ describe('onAuthChange', () => {
 		// A subsequent subscribe must emit the known user synchronously, and must
 		// NOT flash null → user — the dedupe suppresses the redundant refresh.
 		const seen: any[] = [];
-		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			seen.push(user);
+		});
 		assert.strictEqual(seen.length, 1, 'warm-cache subscribe emits exactly once, synchronously');
 		assert.deepStrictEqual(seen[0], { userId: 'alice', username: 'alice' });
 
@@ -693,11 +865,15 @@ describe('onAuthChange', () => {
 
 	test('does not throw or strand the UI when getAuthState rejects', async () => {
 		const api = mockApi(signedOutState());
-		api.getAuthState = async () => { throw new Error('network down'); };
+		api.getAuthState = async () => {
+			throw new Error('network down');
+		};
 
 		const seen: any[] = [];
 		// Subscribing must not throw even though hydration will reject.
-		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			seen.push(user);
+		});
 
 		// Synchronous first frame still painted from the (cold) cache.
 		assert.strictEqual(seen.length, 1, 'sync first frame emitted before the rejection');
@@ -722,7 +898,9 @@ describe('onAuthChange', () => {
 
 		// First subscribe: sync null frame, then the hydration rejects.
 		const seen1: any[] = [];
-		const unsub1 = onAuthChange(api, (user) => { seen1.push(user); });
+		const unsub1 = onAuthChange(api, (user) => {
+			seen1.push(user);
+		});
 		await flush();
 		assert.strictEqual(calls, 1, 'first hydration attempted');
 
@@ -730,7 +908,9 @@ describe('onAuthChange', () => {
 		// cache.hydrating instead of stranding a rejected promise — and resolve
 		// to the now-available signed-in user.
 		const seen2: any[] = [];
-		const unsub2 = onAuthChange(api, (user) => { seen2.push(user); });
+		const unsub2 = onAuthChange(api, (user) => {
+			seen2.push(user);
+		});
 		await flush();
 		assert.strictEqual(calls, 2, 'rejected hydration is retried, not replayed');
 		assert.ok(
@@ -745,7 +925,9 @@ describe('onAuthChange', () => {
 	test('reacts to broadcastAuthChange', async () => {
 		const api = mockApi(signedOutState());
 		const events: any[] = [];
-		const unsub = onAuthChange(api, (user) => { events.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			events.push(user);
+		});
 		await flush();
 
 		broadcastAuthChange({ userId: 'bob', username: 'bob' });
@@ -759,7 +941,9 @@ describe('onAuthChange', () => {
 	test('unsubscribe stops callbacks', async () => {
 		const api = mockApi(signedOutState());
 		let callCount = 0;
-		const unsub = onAuthChange(api, () => { callCount++; });
+		const unsub = onAuthChange(api, () => {
+			callCount++;
+		});
 		await flush();
 
 		const countAfterInit = callCount;
@@ -773,6 +957,157 @@ describe('onAuthChange', () => {
 });
 
 // ---------------------------------------------------------------------------
+// submitAuthAction — the single client-side notifier that closes the
+// setAuthState → onAuthChange gap (issue #185).
+// ---------------------------------------------------------------------------
+
+describe('submitAuthAction (issue #185)', () => {
+	test('sign-in fires onAuthChange exactly once with the new user', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
+		await flush();
+
+		const before = users.length;
+		api.nextState = signedInState();
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedIn');
+		assert.strictEqual(users.length - before, 1, 'onAuthChange should fire exactly once');
+		assert.strictEqual(users[users.length - 1]?.username, 'alice', 'should carry the new user');
+	});
+
+	test('sign-out notifies onAuthChange with null', async () => {
+		const api = mockApi(signedInState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'signedOut', actions: [] };
+		const result = await submitAuthAction(api, { action: 'signOut' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedOut');
+		assert.strictEqual(users.length - before, 1, 'sign-out should notify once');
+		assert.strictEqual(users[users.length - 1], null, 'should carry a null user on sign-out');
+	});
+
+	test('retriable failure does not broadcast and returns the state for inline errors', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'confirmingSignIn', retriable: true, error: 'Wrong code', actions: [] };
+		const result = await submitAuthAction(api, {
+			action: 'confirmSignIn',
+			challenge: 'code',
+			session: 's',
+			code: '000000',
+		});
+		await flush();
+
+		assert.strictEqual(result.retriable, true, 'should return the retriable state');
+		assert.strictEqual(result.error, 'Wrong code', 'should preserve the error for inline feedback');
+		assert.strictEqual(users.length - before, 0, 'a retriable failure must not broadcast');
+	});
+
+	test('mid-flow challenge state does not broadcast', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
+		await flush();
+
+		const before = users.length;
+		api.nextState = {
+			state: 'confirmingSignIn',
+			actions: [{ name: 'confirmSignIn', label: 'Confirm', fields: [] }],
+		};
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'confirmingSignIn');
+		assert.strictEqual(users.length - before, 0, 'a mid-flow challenge state must not broadcast');
+	});
+
+	test('Authenticator advances to the challenge form (updateState) without broadcasting', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
+		await flush();
+
+		const before = users.length;
+		api.nextState = {
+			state: 'confirmingSignIn',
+			actions: [
+				{
+					name: 'confirmSignIn',
+					label: 'Confirm Code',
+					fields: [
+						{ name: 'code', label: 'Code', type: 'text', required: true },
+						{ name: 'session', label: '', type: 'hidden', required: true, defaultValue: 'sess-123' },
+					],
+				},
+			],
+		};
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		// updateState drove the Authenticator's own subscriber, so the form advanced.
+		const confirmBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Code');
+		assert.ok(confirmBtn, 'Authenticator should advance to the confirm-code form');
+		// ...but a mid-flow challenge is not a sign-in/out transition — no broadcast.
+		assert.strictEqual(users.length - before, 0, 'the challenge advance must not broadcast');
+	});
+
+	test('Authenticator sign-in fires exactly one broadcast (no double-fire)', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		let broadcasts = 0;
+		onAuthChange(api, () => {
+			broadcasts++;
+		});
+		await flush();
+
+		const before = broadcasts;
+		api.nextState = signedInState();
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		assert.strictEqual(api.calls.length, 1, 'exactly one setAuthState call');
+		assert.strictEqual(broadcasts - before, 1, 'exactly one broadcast — no double-fire');
+		assert.ok(el.textContent?.includes('alice'), 'Authenticator advanced to the signed-in view');
+	});
+});
+
 // data-testid contract
 //
 // These hooks are documented in CUSTOMIZING-AUTH-UI.md and e2e suites depend
@@ -780,7 +1115,6 @@ describe('onAuthChange', () => {
 // ---------------------------------------------------------------------------
 
 describe('test hooks', () => {
-
 	function testId(root: ParentNode, id: string) {
 		return root.querySelector(`[data-testid="${id}"]`);
 	}
@@ -816,15 +1150,17 @@ describe('test hooks', () => {
 	test('field hooks follow the field names the BB emits, hidden fields included', async () => {
 		const api = mockApi({
 			state: 'confirmingPasswordReset',
-			actions: [{
-				name: 'confirmResetPassword',
-				label: 'Reset Password',
-				fields: [
-					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
-					{ name: 'code', label: 'Reset Code', type: 'text', required: true },
-					{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmResetPassword',
+					label: 'Reset Password',
+					fields: [
+						{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+						{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+						{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+					],
+				},
+			],
 		});
 		const el = Authenticator(api);
 		await flush();
@@ -862,15 +1198,25 @@ describe('test hooks', () => {
 	});
 
 	test('external actions expose the same wrapper, field and submit hooks', async () => {
-		const api = mockApi(signedOutState([{
-			name: 'signIn:google',
-			label: 'Sign in with Google',
-			url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
-			method: 'GET',
-			fields: [
-				{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
-			],
-		}]));
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
+					method: 'GET',
+					fields: [
+						{
+							name: 'redirect_uri',
+							label: 'Redirect',
+							type: 'hidden',
+							required: true,
+							defaultValue: 'https://myapp.com/callback',
+						},
+					],
+				},
+			]),
+		);
 		const el = Authenticator(api);
 		await flush();
 
@@ -881,19 +1227,80 @@ describe('test hooks', () => {
 		assert.strictEqual(testId(form!, 'authenticator-submit')?.textContent, 'Sign in with Google');
 	});
 
+	test('an unavailable external action renders a disabled button with its reason, and never navigates', async () => {
+		const hint =
+			"Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: '/aws-blocks/auth/signin/google',
+					method: 'GET',
+					fields: [],
+					unavailable: hint,
+				},
+				{
+					name: 'signIn:okta',
+					label: 'Sign in with Okta',
+					url: '/aws-blocks/auth/signin/okta',
+					method: 'GET',
+					fields: [],
+				},
+			]),
+		);
+		const el = Authenticator(api);
+		await flush();
+
+		const google = testId(el, 'authenticator-action-signIn:google');
+		assert.ok(google, 'the unavailable action is still rendered, under its usual hook');
+		const button = testId(google!, 'authenticator-submit') as HTMLButtonElement | null;
+		assert.ok(button);
+		assert.strictEqual(button!.disabled, true, 'its button is disabled');
+		assert.ok(google!.textContent?.includes(hint), 'the reason is shown in the action');
+		const describedBy = button!.getAttribute('aria-describedby');
+		assert.ok(describedBy, 'the button is described by the hint');
+		assert.strictEqual(google!.querySelector(`[id="${describedBy}"]`)?.textContent, hint);
+
+		// A submit that slips through (e.g. a script) is cancelled.
+		const event = new window.Event('submit', { cancelable: true });
+		google!.dispatchEvent(event as unknown as Event);
+		assert.strictEqual(event.defaultPrevented, true);
+
+		const okta = testId(el, 'authenticator-action-signIn:okta');
+		assert.strictEqual((testId(okta!, 'authenticator-submit') as HTMLButtonElement).disabled, false);
+		assert.ok(!okta!.textContent?.includes('works after deploy'), 'an available action carries no hint');
+	});
+
 	// Federated action names carry a `<action>:<provider>` suffix, and the hook
 	// keeps it verbatim, so the documented name contains a colon. That is only a
 	// hazard where a locator would parse the value as selector grammar, so pin
 	// the quoted-attribute lookup and the exact-match behavior both here and in
 	// CUSTOMIZING-AUTH-UI.md.
 	test('provider-suffixed action names keep the suffix in the hook', async () => {
-		const api = mockApi(signedOutState([
-			{ name: 'signIn', label: 'Sign In', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-			]},
-			{ name: 'signIn:google', label: 'Sign in with Google', url: 'https://accounts.google.com/o/oauth2/auth', method: 'GET', fields: [] },
-			{ name: 'signIn:okta', label: 'Sign in with Okta', url: 'https://example.okta.com/oauth2/v1/authorize', method: 'POST', fields: [] },
-		]));
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn',
+					label: 'Sign In',
+					fields: [{ name: 'username', label: 'Username', type: 'text', required: true }],
+				},
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: 'https://accounts.google.com/o/oauth2/auth',
+					method: 'GET',
+					fields: [],
+				},
+				{
+					name: 'signIn:okta',
+					label: 'Sign in with Okta',
+					url: 'https://example.okta.com/oauth2/v1/authorize',
+					method: 'POST',
+					fields: [],
+				},
+			]),
+		);
 		const el = Authenticator(api);
 		await flush();
 
@@ -945,5 +1352,98 @@ describe('test hooks', () => {
 		await flush();
 		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
 		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
+	});
+
+	test('the signed-in heading and the menu bar show displayName over a generated username', async () => {
+		const uuid = '815424a9-f32e-4407-b845-d35bf6294725';
+		const state: AuthState = {
+			state: 'signedIn',
+			user: { userId: uuid, username: uuid, displayName: 'alice@example.com' },
+			actions: [{ name: 'signOut', label: 'Sign Out', fields: [] }],
+		};
+		const el = Authenticator(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(el, 'authenticator-signed-in')?.textContent, 'Signed in as: alice@example.com');
+		const bar = AccountMenuBar(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(bar, 'account-menu-username')?.textContent, '👤 alice@example.com');
+	});
+});
+
+describe('StatusMessage', () => {
+	function testId(root: ParentNode, id: string) {
+		return root.querySelector(`[data-testid="${id}"]`);
+	}
+
+	test('defaults to an empty idle polite live region', () => {
+		const status = StatusMessage();
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'status-message');
+		assert.strictEqual(status.element.getAttribute('role'), 'status');
+		assert.strictEqual(status.element.getAttribute('aria-live'), 'polite');
+		assert.ok(status.element.className.includes('bb-status-idle'), 'idle modifier applied');
+		assert.strictEqual(status.element.textContent, '', 'no text by default');
+	});
+
+	test('renders initial kind + text from options', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Loading…');
+	});
+
+	test('loading state renders a decorative spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		const spinner = status.element.querySelector('.bb-spinner');
+		assert.ok(spinner, 'spinner present in loading state');
+		assert.strictEqual(spinner?.getAttribute('aria-hidden'), 'true', 'spinner hidden from AT');
+	});
+
+	test('set transitions kind, swaps the modifier class, and drops the spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		status.set('success', 'Done.');
+		assert.ok(status.element.className.includes('bb-status-success'));
+		assert.ok(!status.element.className.includes('bb-status-loading'), 'old modifier removed');
+		assert.strictEqual(status.element.querySelector('.bb-spinner'), null, 'spinner gone');
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Done.');
+
+		status.set('error', 'Boom');
+		assert.ok(status.element.className.includes('bb-status-error'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Boom');
+	});
+
+	test('empty text leaves the message blank', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('idle', '');
+		assert.strictEqual(status.element.textContent, '');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node when blank');
+	});
+
+	test('custom testId scopes both the root and its text node', () => {
+		const status = StatusMessage({ testId: 'app-status', kind: 'error', text: 'Nope' });
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'app-status');
+		assert.strictEqual(testId(status.element, 'app-status-text')?.textContent, 'Nope');
+	});
+
+	test('set text is optional: a bare spinner and a reset need no text', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('loading');
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.ok(status.element.querySelector('.bb-spinner'), 'bare spinner rendered');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node');
+		status.set('idle');
+		assert.strictEqual(status.element.textContent, '', 'cleared');
+	});
+
+	test('set mutates the text node in place rather than replacing it', () => {
+		const status = StatusMessage({ kind: 'success', text: 'Saved' });
+		const first = testId(status.element, 'status-message-text');
+		assert.ok(first, 'text node present');
+		status.set('error', 'Boom');
+		const second = testId(status.element, 'status-message-text');
+		// assert.ok(identity) rather than assert.strictEqual(second, first): on a
+		// mismatch, strictEqual tries to inspect and diff the two happy-dom nodes,
+		// which hangs the whole test file until the suite timeout instead of
+		// reporting a clean failure.
+		assert.ok(second === first, 'same text node reused across a text change');
+		assert.strictEqual(second?.textContent, 'Boom', 'text updated in place');
 	});
 });

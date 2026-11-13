@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { ApiError, DEFAULT_API_ERROR_NAME, isBlocksError, hasAuthError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME, isBlocksError, hasAuthError, isApiErrorLike, BLOCKS_ERROR_BRAND } from './errors.js';
 
 describe('ApiError constructor', () => {
   it('exposes message and status, and stays a real Error', () => {
@@ -30,6 +30,55 @@ describe('ApiError constructor', () => {
     assert.strictEqual(e.status, 409);
     assert.strictEqual(e.retriable, true);
     assert.strictEqual(e.cause, cause);
+  });
+
+  it('stamps the non-enumerable cross-copy brand so a foreign-copy ApiError is wire-recognizable', () => {
+    const e = new ApiError('boom', 500);
+    // The brand is stamped...
+    assert.strictEqual((e as { [BLOCKS_ERROR_BRAND]?: true })[BLOCKS_ERROR_BRAND], true);
+    // ...but must be NON-ENUMERABLE so it never surfaces in JSON / log dumps.
+    // Object.keys / spread never expose symbol keys regardless of enumerability,
+    // so pin the descriptor directly (that is what actually catches a regression).
+    assert.strictEqual(Object.getOwnPropertyDescriptor(e, BLOCKS_ERROR_BRAND)?.enumerable, false);
+    assert.strictEqual(Object.getOwnPropertySymbols({ ...e }).length, 0);
+  });
+});
+
+describe('isApiErrorLike', () => {
+  it('matches a real ApiError', () => {
+    assert.ok(isApiErrorLike(new ApiError('x', 404)));
+  });
+
+  it('matches an ApiError-shaped error from a SEPARATELY bundled copy of core', () => {
+    // A duplicated @aws-blocks/core defines its own ApiError class, so a real
+    // instanceof check fails. The constructor-stamped brand + numeric status let
+    // the serializer still recognize it. Simulate the foreign instance.
+    const foreign = Object.assign(new Error('stale'), { name: 'ConditionalCheckFailedException', status: 409 });
+    Object.defineProperty(foreign, Symbol.for('aws-blocks.wireSafeError'), { value: true, enumerable: false });
+    assert.ok(!(foreign instanceof ApiError));
+    assert.ok(isApiErrorLike(foreign));
+  });
+
+  it('does NOT match a branded plain Error without a numeric status (stays a 500-class error)', () => {
+    // blocksError() stamps the brand but produces no HTTP status: it must not be
+    // misread as an ApiError, so the serializer still gives it status 500.
+    const branded = new Error('bb failure');
+    branded.name = 'ValidationFailedException';
+    Object.defineProperty(branded, BLOCKS_ERROR_BRAND, { value: true, enumerable: false });
+    assert.ok(!isApiErrorLike(branded));
+  });
+
+  it('does NOT match an unbranded error even when it carries a numeric status', () => {
+    // A raw SDK exception could coincidentally have a numeric `status`; without the
+    // brand it must not be treated as a wire-safe ApiError.
+    const raw = Object.assign(new Error('secret leak'), { name: 'DynamoDBServiceException', status: 400 });
+    assert.ok(!isApiErrorLike(raw));
+  });
+
+  it('does NOT match a non-Error value', () => {
+    assert.ok(!isApiErrorLike({ status: 409, name: 'x' }));
+    assert.ok(!isApiErrorLike('nope'));
+    assert.ok(!isApiErrorLike(null));
   });
 });
 

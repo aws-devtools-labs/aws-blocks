@@ -13,6 +13,7 @@ import type {
 } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import type { FrameworkAdapterFn } from './adapters/index.js';
+import type { WebFunctionOptions } from './constructs/web_function_construct.js';
 
 /**
  * Alarm subscription types supported by Hosting monitoring.
@@ -165,6 +166,36 @@ export type HostingProps = {
    * Ignored for SPA and static site deployments.
    */
   compute?: {
+    /**
+     * Where the SSR server runs. Default: `'lambda'`.
+     *
+     * - `'lambda'` — a Lambda function behind API Gateway (Lambda Web Adapter
+     *   for HTTP-server frameworks). Available in every Region.
+     * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+     *   Node.js server runs directly on Lambda, fronted by CloudFront with
+     *   origin access control. Each execution environment serves many
+     *   concurrent requests and is billed for active CPU, so I/O-bound SSR
+     *   gets fewer cold starts and lower cost. Requires an HTTP-server build
+     *   (Astro, SvelteKit, Nitro `node-server`, OpenNext `node` wrapper /
+     *   `docker` origin — the built-in adapters produce these automatically
+     *   when the run targets Web Functions, see `withComputeTarget`) and a
+     *   Region where Web Functions are available (us-east-1, us-east-2,
+     *   us-west-2, ap-northeast-1, eu-west-1). Runs on Node.js 24, Arm64, with
+     *   2 GB per environment — `memorySize`, `reservedConcurrency`,
+     *   `provisionedConcurrency` and `warmup` don't apply (tune with
+     *   {@link webFunction} instead).
+     *
+     * @example
+     * ```typescript
+     * defineHosting({
+     *   framework: 'astro',
+     *   compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } },
+     * });
+     * ```
+     */
+    type?: 'lambda' | 'web-function';
+    /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+    webFunction?: WebFunctionOptions;
     /** Lambda memory size in MB. Default: 1024 */
     memorySize?: number;
     /**
@@ -313,12 +344,35 @@ export type HostingProps = {
      * `Cache-Control: private`. Synth fails closed if this resolves to > 0
      * and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set.
      *
-     * NOTE: this fail-closed guard covers only `ssrDefaultTtl` — it cannot
+     * NOTE: this synth guard covers only `ssrDefaultTtl` — it cannot
      * detect origin-emitted caching. Routes made cacheable via an origin
      * `s-maxage`/`revalidate` header (e.g. Next `revalidate`, Nuxt/Astro
-     * defaults) with `ssrDefaultTtl` unset are NOT caught by synth, so such
-     * routes must themselves set `cacheKeyCookies`/`cacheKeyHeaders` or emit
-     * `Cache-Control: private`.
+     * defaults) are covered at runtime instead: the SSR server (any
+     * framework; a Lambda handler, or a Node.js server on the Lambda Web
+     * Adapter or a Web Function) runs behind a cache guard that sends `Cache-Control: private, no-store` when the request carries
+     * `Authorization` (unless `'authorization'` is in {@link cacheKeyHeaders})
+     * or a cookie not in the cache key (the Next.js preview cookies, the
+     * skew-protection `__dpl` cookie and {@link cacheKeyCookies}) and not in
+     * {@link cacheGuardIgnoredCookies}, and the response is shared-cacheable
+     * (`s-maxage`, `public`, `max-age` without `private`, a future `Expires`,
+     * no caching headers while this TTL is positive, or an error status
+     * CloudFront caches without caching headers: 404, 414, 500-504). Where the guard cannot be installed (e.g. a Lambda Web
+     * Adapter server that is not Node.js), synth emits a
+     * `@aws-blocks/hosting:SsrCacheGuardNotInstalled` warning instead.
+     * Responses already `private`/`no-store` (or `no-cache` without
+     * `s-maxage`) are left alone. Adding the credential to
+     * `cacheKeyCookies`/`cacheKeyHeaders` puts it in the cache key and keeps
+     * such responses cacheable, keyed per credential. CloudFront uses
+     * `max-age` as its edge TTL when `s-maxage` is absent, so a bare
+     * `max-age` counts as shared-cacheable; a credentialed route meant for
+     * the browser cache only should send `private, max-age=…`, which the
+     * guard leaves unchanged.
+     *
+     * Any SSR response that sets cookies (`Set-Cookie`) is sent with
+     * `Cache-Control: private, no-store` unless it is already `private` or
+     * `no-store`: CloudFront stores `Set-Cookie` with a cached object and
+     * replays it on every hit. Edge TTLs of SSR responses are clamped to at
+     * most 1 day.
      * @default Duration.seconds(0) — no caching unless the origin opts in.
      */
     ssrDefaultTtl?: Duration;
@@ -329,15 +383,37 @@ export type HostingProps = {
      * cached per-session rather than shared. Required (together with or instead
      * of `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`. CloudFront allows
      * at most 10 cookies in the cache key (2 are reserved for Next.js preview
-     * mode).
+     * mode). A request carrying a cookie NOT listed here (or reserved) gets
+     * shared-cacheable SSR responses as `Cache-Control: private, no-store`
+     * (see {@link ssrDefaultTtl}); a bare `max-age` counts as shared-cacheable
+     * because CloudFront caches on it, so send `private, max-age=…` to keep
+     * such a response in the browser cache only.
      */
     cacheKeyCookies?: string[];
+    /**
+     * Cookie names that never affect the rendered output, e.g. client-side
+     * analytics and consent cookies (`_ga`, `_gid`, `_fbp`, a consent
+     * manager's cookie). Most browsers carry one, and without this a
+     * shared-cacheable SSR response (an ISR/SSG page served with `s-maxage`)
+     * is sent as `Cache-Control: private, no-store` to every visitor that
+     * does, so only cookie-less clients get edge hits. The SSR cache guard
+     * treats a request carrying only these (and cache-key) cookies like one
+     * without them, as it does the skew-protection `__dpl` cookie. They are
+     * never in the cache key: listing a name in both this and
+     * {@link cacheKeyCookies} fails synth.
+     *
+     * A listed name must never change what the server renders: a response
+     * that depends on it is cached once and served to every visitor.
+     */
+    cacheGuardIgnoredCookies?: string[];
     /**
      * Header names that vary the SSR response (e.g. `'authorization'`). Listing
      * a name declares that the response differs by that header, so CloudFront
      * keys the SSR cache on it. `'accept-encoding'` is not allowed (handled
      * automatically). Required (together with or instead of `cacheKeyCookies`)
-     * to safely enable `ssrDefaultTtl`.
+     * to safely enable `ssrDefaultTtl`. Listing `'authorization'` keeps
+     * shared-cacheable SSR responses to requests carrying `Authorization`
+     * cacheable, keyed per credential (see {@link ssrDefaultTtl}).
      *
      * On compute deploys the configured cache-key cookies and headers are
      * stripped from static and image routes, so those assets keep a shared
@@ -400,6 +476,52 @@ export type HostingProps = {
     enabled: boolean;
     /** Days to retain access logs. Default: 90. */
     retentionDays?: number;
+    /**
+     * CloudFront logging pipeline to use.
+     *
+     * - `'v1'` (**default**) — legacy CloudFront standard logging. The
+     *   distribution writes logs directly to S3 through the `awslogsdelivery`
+     *   canonical user, so the log bucket must keep ACLs enabled
+     *   (`BUCKET_OWNER_PREFERRED`). No CloudFront charge; you pay only S3
+     *   storage.
+     * - `'v2'` — CloudFront **standard logging v2** via the CloudWatch Logs
+     *   vended-logs delivery pipeline. Delivers through the
+     *   `delivery.logs.amazonaws.com` service principal (authorized by a bucket
+     *   policy), so the log bucket uses the modern, ACL-disabled
+     *   `BUCKET_OWNER_ENFORCED`. Adds a **partitioned S3 key layout** (see
+     *   {@link logging.partitioning}) and a **selectable record format** (see
+     *   {@link logging.format}) with no post-processing Lambda.
+     *
+     * @remarks
+     * v2 delivery bills through CloudWatch vended-logs delivery (per-GB), and
+     * the delivery source for the global CloudFront service must be created in
+     * **us-east-1** — synth throws `LoggingV2RegionError` in any other Region.
+     * Default stays `'v1'` to preserve existing (free, ACL-based) behavior;
+     * opt in explicitly.
+     *
+     * @default 'v1'
+     */
+    version?: 'v1' | 'v2';
+    /**
+     * (v2 only) S3 key layout for delivered logs.
+     *
+     * - `'date'` (default) — `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}/…`.
+     * - `'hive'` — Hive-compatible `year=…/month=…/day=…/hour=…` segments so
+     *   Athena/Glue partition projection works without a crawler.
+     *
+     * Ignored when `version` is `'v1'`.
+     *
+     * @default 'date'
+     */
+    partitioning?: 'date' | 'hive';
+    /**
+     * (v2 only) Delivered log record format: `'w3c'` (legacy-compatible
+     * tab-separated), `'plain'`, `'json'`, or `'parquet'` (columnar, queryable
+     * directly by Athena). Ignored when `version` is `'v1'`.
+     *
+     * @default 'w3c'
+     */
+    format?: 'plain' | 'w3c' | 'json' | 'parquet';
   };
 
   /**
@@ -459,7 +581,9 @@ export type HostingResources = {
   bucket: Bucket;
 
   /**
-   * The CloudFront distribution serving the site.
+   * The CloudFront distribution serving the site. Available for the default
+   * `cloudfront` front door; reading it for any other front door throws
+   * (`FrontDoorNotCloudFrontError`).
    */
   distribution: Distribution;
 

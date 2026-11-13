@@ -8,6 +8,7 @@ export class AsyncJob {
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,

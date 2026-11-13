@@ -16,10 +16,12 @@ import { createServer, type Server } from 'node:http';
 import { connect as netConnect, type AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { WebSocket } from 'ws';
-import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
+import { attach, closeWebSocketServer, localRealtimeBus, isAllowedUpgradeOrigin } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { mintChannelToken } from './utils.js';
 import { hydrate, __resetConnectionsForTest } from './mock-middleware.js';
+import { Realtime } from './index.js';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // The mock middleware uses the browser `WebSocket` global. Provide it from `ws`.
 (globalThis as any).WebSocket = (globalThis as any).WebSocket ?? WebSocket;
@@ -64,6 +66,18 @@ describe('WebSocket server: subscribe authorization', () => {
 		assert.strictEqual(reply.type, 'error');
 		assert.match(reply.message, /Unauthorized: invalid or expired token/);
 		ws.close();
+	});
+
+	it('rejects a subscribe whose channel is not a channel path', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		for (const channel of [42, '__connection__', 'my-app-rt/chat']) {
+			const { ws, reply } = await subscribe({ channel, token });
+			try {
+				assert.deepStrictEqual(reply, { type: 'error', message: 'Invalid channel' });
+			} finally {
+				ws.close();
+			}
+		}
 	});
 
 	it('accepts a subscribe with a valid token', async () => {
@@ -116,7 +130,7 @@ describe('WebSocket server: subscribe authorization', () => {
 		intruder.close();
 	});
 
-	it('uses the data key when forwarding a client publish', async () => {
+	it('uses the data key when broadcasting a server-side publish', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
 		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
 
@@ -127,19 +141,104 @@ describe('WebSocket server: subscribe authorization', () => {
 			});
 		});
 
-		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
-		await new Promise<void>((resolve, reject) => {
-			publisher.on('open', resolve);
-			publisher.on('error', reject);
-		});
-		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'from client' } }));
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'from server' } });
 
 		const message = await received;
-		assert.deepStrictEqual(message.data, { text: 'from client' });
+		assert.deepStrictEqual(message.data, { text: 'from server' });
 		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 
+		subscriber.close();
+	});
+});
+
+// Parity with the deployed WebSocket handler (index.aws.ts), which accepts only
+// subscribe / unsubscribe / ping. A client-originated `publish` used to be
+// broadcast locally with NO authorization of any kind, so any connected client
+// could inject payloads into any channel.
+describe('WebSocket server: channel token scope', () => {
+	const anySchema: StandardSchemaV1<unknown> = {
+		'~standard': { version: 1, vendor: 'test', validate: (value: unknown) => ({ value }) },
+	};
+	const rt = new Realtime({ id: 'ws-scope-test' }, 'rt', { namespaces: { chat: Realtime.namespace(anySchema) } });
+
+	async function descriptorFor(options?: { scope?: 'exact' | 'subtree' }) {
+		const json = (await rt.getChannel('chat', 'a', options)).toJSON();
+		return { channel: String(json.channel), token: String(json.token) };
+	}
+
+	it('an exact token from getChannel() subscribes to its own channel', async () => {
+		const { channel, token } = await descriptorFor({ scope: 'exact' });
+		const { ws, reply } = await subscribe({ channel, token });
+		ws.close();
+		assert.deepStrictEqual(reply, { type: 'subscribe_success', channel });
+	});
+
+	it('an exact token from getChannel() is refused for a sub-channel', async () => {
+		const { channel, token } = await descriptorFor({ scope: 'exact' });
+		const { ws, reply } = await subscribe({ channel: `${channel}/b`, token });
+		ws.close();
+		assert.strictEqual(reply.type, 'error');
+		assert.match(reply.message, /Unauthorized: invalid or expired token/);
+	});
+
+	it('a default token from getChannel() still subscribes to a sub-channel', async () => {
+		const { channel, token } = await descriptorFor();
+		const { ws, reply } = await subscribe({ channel: `${channel}/b`, token });
+		ws.close();
+		assert.deepStrictEqual(reply, { type: 'subscribe_success', channel: `${channel}/b` });
+	});
+});
+
+describe('WebSocket server: client publish is not supported (parity with AWS)', () => {
+	it('never broadcasts a client-originated publish, and tells the sender', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
+		let leaked = false;
+		subscriber.on('message', (data) => { if (JSON.parse(data.toString()).type === 'message') leaked = true; });
+
+		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
+		await new Promise<void>((resolve, reject) => { publisher.on('open', resolve); publisher.on('error', reject); });
+		const reply = new Promise<{ type: string; message: string }>((resolve) => publisher.on('message', (d) => resolve(JSON.parse(d.toString()))));
+		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'injected' } }));
+
+		const r = await reply;
+		assert.strictEqual(r.type, 'error');
+		assert.match(r.message, /publish/i);
+		await new Promise((res) => setTimeout(res, 150));
+		assert.strictEqual(leaked, false, 'a client publish must never reach subscribers');
 		publisher.close();
 		subscriber.close();
+	});
+});
+
+// WebSocket handshakes are exempt from CORS, so without an Origin check any page
+// the developer visits could open ws://localhost:3000/realtime (cross-site
+// WebSocket hijacking).
+describe('WebSocket server: Origin validation on upgrade', () => {
+	const open = (origin?: string) =>
+		new Promise<'open' | number>((resolve) => {
+			const ws = new WebSocket(`ws://localhost:${port}/realtime`, origin ? { origin } : {});
+			ws.on('open', () => { ws.close(); resolve('open'); });
+			ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+			ws.on('error', () => resolve(0));
+		});
+
+	it('rejects a cross-site Origin with 403', async () => {
+		assert.strictEqual(await open('https://evil.example'), 403);
+	});
+
+	it('rejects a lookalike Origin (localhost as a subdomain)', async () => {
+		assert.strictEqual(await open('http://localhost.evil.example:3000'), 403);
+	});
+
+	it('accepts loopback Origins (the dev server and its frontend)', async () => {
+		assert.strictEqual(await open('http://localhost:3000'), 'open');
+		assert.strictEqual(await open('http://127.0.0.1:3100'), 'open');
+		assert.strictEqual(await open('http://[::1]:3000'), 'open');
+	});
+
+	it('accepts a client that sends no Origin (non-browser tools, server-side tests)', async () => {
+		assert.strictEqual(await open(), 'open');
 	});
 });
 
@@ -280,5 +379,37 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 
 		sub.unsubscribe();
 		__resetConnectionsForTest();
+	});
+});
+
+describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
+	it('a WILDCARD opt-in (0.0.0.0 / ::) admits a same-origin page reached by IP address', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', '0.0.0.0', '192.168.1.10:3000'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
+	});
+
+	it('a specific IPv6 opt-in matches its bracketed Origin, with or without brackets', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', 'fd00::1'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '[FD00::1]'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::2]:3000', 'fd00::1'), false);
+	});
+
+	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {
+		// evil.example re-pointed at this machine: the browser sends Origin and Host both = evil.example
+		assert.strictEqual(isAllowedUpgradeOrigin('http://evil.example:3000', '0.0.0.0', 'evil.example:3000'), false);
+	});
+
+	it('a wildcard opt-in rejects a cross-origin IP, and requires a Host to compare against', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', '10.0.0.6:3000'), false);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', undefined), false);
+	});
+
+	it('a concrete opt-in admits exactly that host (case-insensitive) and nothing else', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('https://MyBox.example.com', 'mybox.example.com', 'mybox.example.com'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('https://other.example.com', 'mybox.example.com', 'other.example.com'), false);
+	});
+
+	it('without an opt-in, a LAN origin is rejected', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', undefined, '192.168.1.10:3000'), false);
 	});
 });

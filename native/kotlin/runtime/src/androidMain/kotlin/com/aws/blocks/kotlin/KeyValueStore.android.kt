@@ -1,3 +1,14 @@
+// EncryptedSharedPreferences and MasterKey are deprecated upstream. They stay in use so that
+// values already stored by this store keep their on-disk format and remain readable.
+//
+// MIGRATION NOTE: this suppression is temporary. Moving this store to an Android Keystore-backed
+// AES-GCM key over plain SharedPreferences/DataStore, with a one-time read-old/write-new migration
+// of existing entries, is tracked in https://github.com/aws-devtools-labs/aws-blocks/issues/1409.
+// The migration reads existing entries with this library, so remove the suppression and the
+// androidx.security:security-crypto dependency only after the migration has shipped in at least
+// one release (see #1409, step 4).
+@file:Suppress("DEPRECATION")
+
 package com.aws.blocks.kotlin
 
 import android.content.SharedPreferences
@@ -6,7 +17,8 @@ import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
+/** [applicationId] is ignored on Android: the sandbox is the per-application location. */
+internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore =
     AndroidKeyValueStore(name)
 
 private class AndroidKeyValueStore(

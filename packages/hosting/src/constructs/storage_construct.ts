@@ -8,7 +8,7 @@ import {
   InventoryFrequency,
   ObjectOwnership,
 } from 'aws-cdk-lib/aws-s3';
-import { IKey } from 'aws-cdk-lib/aws-kms';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
 
 // ---- Constants ----
@@ -46,6 +46,16 @@ export type StorageConstructProps = {
   retainOnDelete?: boolean;
   /** Enable CloudFront access logging to a dedicated S3 bucket. Default: false. */
   accessLogging?: boolean;
+  /**
+   * Which CloudFront logging pipeline the access log bucket must support.
+   * Determines bucket object ownership:
+   * - `'v1'` (default) → `BUCKET_OWNER_PREFERRED` (ACLs on) — legacy logging
+   *   delivers via the `awslogsdelivery` canonical user and needs ACLs.
+   * - `'v2'` → `BUCKET_OWNER_ENFORCED` (ACLs off) — standard logging v2
+   *   delivers via a service principal authorized by a bucket policy (wired
+   *   by the CDN construct), so no ACLs are required.
+   */
+  accessLogVersion?: 'v1' | 'v2';
   /** Encryption type for the hosting bucket. Default: S3_MANAGED. */
   encryption?: 'S3_MANAGED' | 'KMS';
   /** BYO KMS key for bucket encryption (requires encryption: 'KMS'). */
@@ -197,15 +207,24 @@ export class StorageConstruct extends Construct {
       const logRetentionDays =
         props.logRetentionDays ?? DEFAULT_ACCESS_LOG_RETENTION_DAYS;
 
-      // CloudFront standard logging requires ACL-based writes via the
-      // awslogsdelivery canonical user. BUCKET_OWNER_ENFORCED disables ACLs
-      // entirely, which would silently prevent log delivery. The hosting
-      // bucket uses BUCKET_OWNER_ENFORCED (modern default) but the access
-      // log bucket must use BUCKET_OWNER_PREFERRED to support CloudFront logging.
+      // Bucket ownership depends on the logging pipeline:
+      //
+      // - v1 (legacy CloudFront standard logging) writes through the
+      //   awslogsdelivery canonical user and requires ACLs, so the bucket must
+      //   use BUCKET_OWNER_PREFERRED — BUCKET_OWNER_ENFORCED disables ACLs
+      //   entirely and would silently prevent log delivery.
+      // - v2 (standard logging v2) delivers via the delivery.logs.amazonaws.com
+      //   service principal authorized by a bucket policy (added in the CDN
+      //   construct), needs no ACLs, and therefore uses the modern, more
+      //   secure BUCKET_OWNER_ENFORCED — matching the hosting bucket.
+      const logObjectOwnership =
+        props.accessLogVersion === 'v2'
+          ? ObjectOwnership.BUCKET_OWNER_ENFORCED
+          : ObjectOwnership.BUCKET_OWNER_PREFERRED;
       this.accessLogBucket = new Bucket(this, 'AccessLogBucket', {
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
         encryption: BucketEncryption.S3_MANAGED,
-        objectOwnership: ObjectOwnership.BUCKET_OWNER_PREFERRED,
+        objectOwnership: logObjectOwnership,
         enforceSSL: true,
         removalPolicy: RemovalPolicy.DESTROY,
         autoDeleteObjects: true,

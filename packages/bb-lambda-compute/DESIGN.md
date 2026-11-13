@@ -4,14 +4,15 @@ Design document for `@aws-blocks/bb-lambda-compute`. For usage, see [README.md](
 
 **Package:** `@aws-blocks/bb-lambda-compute`
 **Type:** Compute (framework infrastructure, not a customer-facing data block)
-**AWS Services:** Lambda (`NodejsFunction`) + API Gateway (REST)
+**AWS Services:** Lambda (`NodejsFunction`). The API Gateway REST API in front of
+it is a single stack-level shared gateway, provisioned by core — not owned per compute.
 
 ## Why a compute is a Building Block
 
 A Blocks app runs its handler code on a *compute*. Modeling compute as a
-first-class type — rather than inlining a Lambda and API Gateway in core — lets
-one app run on multiple compute targets (Lambda, containers, customer-owned) and
-target namespaces and handlers at specific ones.
+first-class type — rather than inlining a Lambda in core — lets one app run on
+multiple compute targets (Lambda, containers, customer-owned) and target
+namespaces and handlers at specific ones.
 
 `Compute` (the abstract base) lives in `@aws-blocks/core` because it is a
 framework primitive: `Scope`, the base every block extends, resolves the compute
@@ -38,12 +39,21 @@ supplies the implementation.
   Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the inherited
   `Scope.handlerLogGroup` accessor. `RemovalPolicy.DESTROY` — the handler's
   operational stdout is not durable state.
-- **An API Gateway REST API** fronting the function:
+The API Gateway REST API is **not** owned here. `LambdaCompute.apiHandler()`
+returns `fn`, and the stack-level **shared REST API** (built by core in
+`packages/core/src/cdk/shared-gateway.ts`) integrates it:
   - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
     function;
   - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
-    endpoint);
+    endpoint), plus a `{proxy+}` for the per-namespace RPC paths
+    (`/aws-blocks/api/{namespace}`);
   - the root gets a catch-all proxy so all other paths reach the function.
+  - **Multi-compute** — those resources all integrate the **default** compute's
+    function. A **non-default** `LambdaCompute` that hosts namespaces gets its
+    own integration plus a literal `/aws-blocks/api/{namespace}` (ANY) resource
+    for each namespace it hosts, keyed by the namespace's **export** name (what
+    the client calls), and a single API-scoped invoke permission however many
+    namespaces that is; a compute hosting no namespace gets no resource.
   - **Throttling** — the stage's method throttle comes from `defaults.throttling`
     (sandbox 200/400, production 1000/2000).
   - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
@@ -61,18 +71,85 @@ supplies the implementation.
     fresh name and can't collide — do not pin a stable `logGroupName`, or a
     RETAINed group from a prior delete would fail the next create.
 
+The shared gateway is built in the **default compute's** construct scope with the
+ids this compute used when it owned the gateway (`API`, `ApiAccessLogs`), so its
+logical IDs are unchanged: an app deployed before the gateway moved keeps its
+REST API and `execute-api` URL on upgrade. `umbrella-compute.test.ts` pins those
+logical IDs for both `BlocksStack` and `BlocksBackend`.
+
+The gateway's access-log group takes its retention from the stack-wide
+`defaults.logRetention`, not from a compute's `logRetention` option. The gateway
+fronts every compute, so a stack-level setting governs it; a compute's
+`logRetention` governs that compute's own handler log group. (When the compute
+owned the gateway, its `logRetention` covered both. The default compute is built
+without options, so nothing changes for existing apps.)
+
 Public surface (CDK layer):
 
 | Member | Type | Description |
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The function backing this compute. |
-| `apiGateway` | `RestApi` | The REST API fronting `fn`. |
-| `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from `defaults.logRetention`). |
+| `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from the `logRetention` option, else `defaults.logRetention`). |
+| `apiHandler()` | `IFunction` | The function the stack's shared REST API gateway integrates (the `Compute` contract; returns `fn`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
+| `LambdaCompute.isLambdaCompute(x)` | `x is LambdaCompute` | Type guard keyed on a `Symbol.for` brand, so it holds across duplicate copies of this package (where `instanceof` fails). Event blocks use it to narrow a resolved compute to Lambda. |
 
-`fn` and `apiGateway` exist only on the CDK layer (they are `aws-cdk-lib`
-constructs); `setEnv` is part of the `Compute` contract present in every layer
-(a no-op in the non-CDK layers — see below).
+`fn`, `logGroup`, `apiHandler`, and `isLambdaCompute` exist only on the CDK layer (they are `aws-cdk-lib`
+constructs/contracts); `setEnv` is part of the `Compute` contract present in every
+layer (a no-op in the non-CDK layers — see below).
+
+## Options
+
+`LambdaComputeProps` (all optional):
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `memory` | `2048` MB | One shared handler serves both the synchronous API path and async workers, so the default is sized for the heavier async path. A request/response-only compute can lower it to cut cost. |
+| `maxTimeoutSeconds` | `900` | The Lambda function timeout. It bounds async invocations (SQS / `AsyncJob`); it does **not** extend the synchronous API path, which is cut off at the shared gateway's 29s integration timeout. |
+| `logRetention` | `defaults.logRetention` | Retention of this compute's handler log group only; the shared gateway's access logs follow the stack-wide default. |
+| `architecture` | `ARM_64` | Graviton, ~20% cheaper per GB-second at equal performance. Only settable on a directly constructed `LambdaCompute`; the `Compute` block does not expose it. |
+
+The `Compute` block (`@aws-blocks/bb-compute`) maps `{ type: 'serverless' }` to
+a `LambdaCompute` it owns, forwarding `memory`, `maxTimeoutSeconds`, and
+`logRetention`. The default compute is built without options.
+
+## Stack-derived configuration
+
+Besides identity (below), two settings come from the owning stack rather than
+from options:
+
+- **VPC placement.** The compute reads the shared VPC context with
+  `getVpcContext(this)` **once, in its constructor**. When context exists, the
+  function is placed in its `computeSubnets` with the shared
+  `computeSecurityGroup`, and core grants the shared execution role the ENI
+  permissions. With no context, `vpc` / `vpcSubnets` / `securityGroups` are left
+  unset and the function runs in the AWS-managed network.
+
+  Only `defaults.vpc` is initialized before the default compute is built
+  (`BlocksStack` / `BlocksBackend` construction), so it is the one VPC every
+  `LambdaCompute` honors. A VPC Blocks derives on its own — by a container
+  compute during the backend import, or at finalize because a block
+  `requiresVpc` — arrives after the default compute exists and does not move it;
+  only a `LambdaCompute` constructed after the derivation sees it. Creating and
+  wiring the VPC (endpoints, subnet roles) is core's job; this package only
+  consumes the context.
+- **CORS origins.** A non-empty `defaults.allowedOrigins` (plain origins,
+  matched exactly and case-insensitively, or regex patterns with escaped dots;
+  core validates the entries at synth) is set on the function as
+  `CORS_ALLOWED_ORIGINS`, comma-joined to match how the runtime's
+  `getCorsPatterns()` parses it. The `production` preset allows no origins, so
+  the variable is absent there unless the app sets its own.
+
+## Observability
+
+- **Tracing.** `applyTracing()` switches the function to X-Ray Active mode. Core
+  calls it from `finalizeTracing` for every compute once any `Tracer` is
+  registered, and grants X-Ray publish once on the shared role.
+- **Dashboard.** The compute contributes rows to `bb-dashboard`: health
+  (invocations, errors, average/p99 duration, concurrent executions) and logging
+  (recent errors, log volume) always, queried against `logGroup` rather than the
+  AWS default `/aws/lambda/<fn>` name; trace widgets only once a `Tracer` is
+  attached.
 
 ## Owner-derived identity
 
@@ -102,7 +179,7 @@ exports:
 
 | Condition | Entry | Role |
 |-----------|-------|------|
-| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` + API Gateway (above). The only layer that touches `aws-cdk-lib`. |
+| `cdk` | `index.cdk.ts` | Provisions the `NodejsFunction` (above) and exposes it via `apiHandler()` for the stack's shared REST API gateway. The only layer that touches `aws-cdk-lib`. |
 | `aws-runtime` | `index.aws.ts` | An **inert handle**. At runtime the infrastructure already exists and the handler already runs on it, so the compute provisions nothing; it constructs (so the import succeeds and `{ compute }` references resolve) and `setEnv` is a no-op — config is injected at synth. |
 | `default` / `types` | `index.mock.ts` | Local dev runs the backend in-process with no Lambda, so it reuses the same inert handle. Also backs the public `types`, so the customer-facing type is the CDK-free `Compute` handle. |
 | `browser` | `index.browser.ts` | A stub. The backend module is type-imported by frontends; this keeps `aws-cdk-lib` out of the browser bundle. |
@@ -130,16 +207,17 @@ framework's default compute. It slots into the broader model as follows:
 - **Compute resolution.** `Scope.compute` resolves the compute a handler runs
   on: an explicit assignment on the block or an ancestor scope, else the app's
   default compute.
-- **Resource ownership.** The default compute owns the Lambda function and API
-  Gateway that back a stack's `handler` / `gateway` / `apiUrl`; those stack
-  accessors delegate to it.
+- **Resource ownership.** The default compute owns the Lambda function that backs
+  a stack's `handler`; `gateway` / `apiUrl` resolve to the stack-level shared
+  REST API that integrates the compute's `apiHandler()`.
 - **Other compute types.** Sibling packages provide container and
   customer-owned `Compute` implementations; event blocks that need
   compute-specific delivery narrow on the concrete type.
 
 The broader multi-compute model also covers request routing across computes,
-per-compute event delivery, the IAM and trust model, and VPC networking — none
-of which live in this package.
+per-compute event delivery, the IAM and trust model, and VPC creation — none
+of which live in this package (it only consumes the VPC context; see
+[Stack-derived configuration](#stack-derived-configuration)).
 
 ## How the default compute is injected
 
@@ -219,9 +297,12 @@ supplies a concrete factory through a normal `import`.
    runs **before** importing the backend module — so a block that reads
    `this.compute` in its constructor (during that import) resolves to it. That
    call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
-   function + API Gateway.
-4. `Scope.compute` and the delegating `handler` / `gateway` / `apiUrl` accessors
-   read from `_defaultCompute`.
+   function. After the backend import, `create()` builds the single shared REST
+   API in the default compute's scope — catch-all resources to the default
+   compute's `apiHandler()`, and per-namespace resources (by export name, read
+   from the imported backend module) to the other computes'.
+4. `Scope.compute` and the delegating `handler` accessor read from
+   `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 
 A bare-`@aws-blocks/core` caller must supply `defaultComputeFactory` on the props
 (it is required); any app using `@aws-blocks/blocks` gets it injected for free.

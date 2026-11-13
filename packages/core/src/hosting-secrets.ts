@@ -28,7 +28,6 @@ import {
 	wireByo as leafWireByo,
 	wireManagedValue as leafWireManagedValue,
 } from '@aws-blocks/hosting/constructs';
-import type * as cdk from 'aws-cdk-lib';
 import { blocksStoreConfig } from './secret-naming.js';
 
 /**
@@ -92,15 +91,18 @@ export async function assertMarkersExistAtSynth(markers: ManagedValue[], storeCo
 	return leafAssertMarkersExistAtSynth(markers, mergeBlocksStoreConfig(storeConfig));
 }
 
+/** A compute that takes env vars + role statements: a Lambda function or a Lambda Web Function. */
+type EnvGrantTarget = Parameters<typeof leafWireManagedValue>[0];
+
 /**
  * Wire a runtime managed marker under the Blocks namespace (store from kind). An
  * optional `storeConfig` overrides the pinned prefix/stage/cacheTtlSeconds per kind.
  */
-export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, storeConfig?: StoreConfig): void {
+export function wireManagedValue(fn: EnvGrantTarget, marker: ManagedValue, storeConfig?: StoreConfig): void {
 	leafWireManagedValue(fn, marker, mergeBlocksStoreConfig(storeConfig));
 }
 
 /** Wire a runtime BYO handle (grant + inject locator). Honors an optional `storeConfig`. */
-export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, storeConfig?: StoreConfig): void {
+export function wireByo(fn: EnvGrantTarget, binding: ByoBinding, storeConfig?: StoreConfig): void {
 	leafWireByo(fn, binding, mergeBlocksStoreConfig(storeConfig));
 }

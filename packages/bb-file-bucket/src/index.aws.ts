@@ -15,22 +15,32 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers, blocksError, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { validatePresignedUrlExpiry } from './presigned-url.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef,
+	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { assertValidKey } from './validation.js';
+import { VERSION_NOT_FOUND_MESSAGE, assertValidKey, assertValidPrefix, presignedUploadUnsupportedMessage } from './validation.js';
+import {
+	resolvePresignedUpload, resolvePutUpload, uploadConstraintsFrom, validateUploadConstraintOptions,
+} from './upload-constraints.js';
+import type { UploadConstraints } from './upload-constraints.js';
+import { resolveContentDisposition } from './content-disposition.js';
+import { deriveBucketName } from './bucket-name.js';
+
+/** Headers a presigned upload must sign in addition to the presigner's defaults. */
+const SIGNED_UPLOAD_HEADERS = new Set(['content-type']);
 
 // Re-export public types
 import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -61,6 +71,10 @@ export type {
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	readonly bbName = BB_NAME;
 	private s3: S3Client;
+	/** Set when this bucket was declared with `objectLock` (presigned uploads can't satisfy its checksum requirement). */
+	private readonly objectLocked: boolean;
+	/** `allowedContentTypes` / `maxUploadBytes`, enforced identically by the mock (see upload-constraints.ts). */
+	private readonly uploadConstraints: UploadConstraints;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -69,7 +83,14 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
-		const bucketName = options?.bucket ? options.bucket.bucketName : this.fullId;
+		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
+		// Upload constraints are enforced here at runtime (not by S3 bucket
+		// configuration), so validate their shape and keep them for every bucket,
+		// wrapped or not — matching the mock and the CDK synth check.
+		validateUploadConstraintOptions(this.fullId, options);
+		this.uploadConstraints = uploadConstraintsFrom(options);
+		// Same name the CDK layer provisions: `fullId` when it fits S3's 63 characters, else shortened.
+		const bucketName = options?.bucket ? options.bucket.bucketName : deriveBucketName(this.fullId);
 		registerSdkIdentifiers(this.fullId, { bucketName });
 		this.s3 = new S3Client({
 			customUserAgent: this.buildUserAgentChain(),
@@ -79,11 +100,15 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	async put(path: string, body: Buffer | string, options?: PutOptions): Promise<void> {
 		assertValidKey(path);
+		const buf = typeof body === 'string' ? Buffer.from(body) : body;
+		// Resolve the stored content type (default application/octet-stream, as
+		// the mock stores) and enforce allowedContentTypes / maxUploadBytes.
+		const contentType = resolvePutUpload(this.uploadConstraints, options?.contentType, buf.length);
 		await this.s3.send(new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName,
 			Key: path,
-			Body: typeof body === 'string' ? Buffer.from(body) : body,
-			ContentType: options?.contentType,
+			Body: buf,
+			ContentType: contentType,
 			Metadata: options?.metadata,
 			CacheControl: options?.cacheControl,
 		}));
@@ -164,19 +189,21 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
 		assertValidKey(path);
 		const opts = options as any;
+		const expiresIn = validatePresignedUrlExpiry(opts?.expiresIn ?? 3600);
+		const contentDisposition = resolveContentDisposition(opts?.attachment);
 		return getSignedUrl(this.s3, new GetObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path,
 			...(opts?.versionId ? { VersionId: opts.versionId } : {}),
+			// Signed as `response-content-disposition`, so S3 serves the download
+			// with this header and the URL can't be altered to drop it.
+			...(contentDisposition ? { ResponseContentDisposition: contentDisposition } : {}),
 		}), {
-			expiresIn: opts?.expiresIn ?? 3600,
+			expiresIn,
 		});
 	}
 
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
-		assertValidKey(path);
-		return getSignedUrl(this.s3, new PutObjectCommand({
-			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: options?.contentType,
-		}), { expiresIn: options?.expiresIn ?? 3600 });
+		return (await this.signUpload(path, options)).url;
 	}
 
 	async getFileHandle(path: string, options?: GetUrlOptionsFor<O>): Promise<FileDownloadClient> {
@@ -193,12 +220,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
-		const url = await this.putUrl(path, options);
-		const contentType = options?.contentType;
+		const { url, contentType } = await this.signUpload(path, options);
 		return {
 			upload: async (body: Blob | File | ArrayBuffer) => {
-				const headers: Record<string, string> = {};
-				if (contentType) headers['Content-Type'] = contentType;
+				// Always send the signed Content-Type: S3 rejects a mismatch.
+				const headers: Record<string, string> = { 'Content-Type': contentType };
 				const res = await fetch(url, { method: 'PUT', body, headers });
 				if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
 			},
@@ -208,6 +234,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	async *scan(options?: ScanOptions): AsyncIterable<FileInfo> {
+		assertValidPrefix(options?.prefix);
 		let continuationToken: string | undefined;
 		do {
 			const result = await this.s3.send(new ListObjectsV2Command({
@@ -276,13 +303,55 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 					e.name === 'InvalidRequest' ||
 					e.name === 'InvalidArgument')
 			) {
-				throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
+				throw blocksError(FileBucketErrors.VersionNotFound, VERSION_NOT_FOUND_MESSAGE);
 			}
 			throw e;
 		}
 	}
 
+	/**
+	 * Sign a presigned PUT for `path`. The Content-Type is always signed (the
+	 * caller's, or application/octet-stream), and `contentLength` when given, so
+	 * S3 rejects an upload that sends a different type or size. Shared by
+	 * `putUrl()` and `createUploadHandle()`.
+	 */
+	private async signUpload(path: string, options?: PutUrlOptions): Promise<{ url: string; contentType: string }> {
+		assertValidKey(path);
+		this.assertPresignedUploadSupported();
+		const { contentType, contentLength } = resolvePresignedUpload(this.uploadConstraints, options);
+		const expiresIn = validatePresignedUrlExpiry(options?.expiresIn ?? 3600);
+		const url = await getSignedUrl(this.s3, new PutObjectCommand({
+			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: contentType,
+			...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
+		}), {
+			expiresIn,
+			// The presigner leaves `content-type` out of the signed headers by
+			// default, which would let the uploader send any Content-Type. Sign
+			// it so S3 rejects a mismatch. (`content-length` is signed by default
+			// whenever ContentLength is set.)
+			signableHeaders: SIGNED_UPLOAD_HEADERS,
+		});
+		return { url, contentType };
+	}
+
+	private assertPresignedUploadSupported(): void {
+		if (this.objectLocked) {
+			throw blocksError(FileBucketErrors.PresignedUploadUnsupported, presignedUploadUnsupportedMessage(this.fullId));
+		}
+	}
+
 	static fromExisting(bucketName: string): ExternalBucketRef {
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option. Encryption is applied at deploy time; the
+	 * runtime only needs the reference to keep code shared with the CDK build.
+	 *
+	 * @param keyArn - The ARN of the existing KMS key.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 }

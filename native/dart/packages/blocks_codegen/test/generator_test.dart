@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
@@ -84,6 +85,72 @@ void main() {
     });
   });
 
+  test('the header names the minimum blocks_runtime', () {
+    final output = gen.generate(
+      const CodegenModel(
+        title: 'test',
+        version: '1.0',
+        namespaces: [],
+        types: {},
+      ),
+    );
+    expect(
+      output,
+      contains('// Requires blocks_runtime $minimumRuntimeVersion or later.\n'),
+    );
+  });
+
+  test('_atLeast follows semver precedence, ignoring build metadata', () {
+    expect(_atLeast('0.1.5', '0.1.5'), isTrue);
+    expect(_atLeast('0.1.10', '0.1.5'), isTrue);
+    expect(_atLeast('0.1.4', '0.1.5'), isFalse);
+    expect(_atLeast('0.1.4-dev.1+build.7', '0.1.5'), isFalse);
+    expect(_atLeast('0.2.0+1', '0.1.5-dev'), isTrue);
+    // A pre-release is below its release, as pub orders it.
+    expect(_atLeast('0.1.5-dev', '0.1.5'), isFalse);
+    expect(_atLeast('0.1.5', '0.1.5-dev'), isTrue);
+    expect(_atLeast('0.1.5-dev', '0.1.5-dev'), isTrue);
+    // Pre-release identifiers: numeric by value, below alphanumeric, and a
+    // shorter prefix first.
+    expect(_atLeast('0.1.5-dev.10', '0.1.5-dev.2'), isTrue);
+    expect(_atLeast('0.1.5-dev.2', '0.1.5-dev.10'), isFalse);
+    expect(_atLeast('0.1.5-1', '0.1.5-alpha'), isFalse);
+    expect(_atLeast('0.1.5-beta', '0.1.5-alpha'), isTrue);
+    expect(_atLeast('0.1.5-dev', '0.1.5-dev.1'), isFalse);
+    expect(_atLeast('0.1.5-rc-1', '0.1.5-rc'), isTrue);
+    // Build metadata never counts.
+    expect(_atLeast('0.1.5', '0.1.5+1'), isTrue);
+    expect(_atLeast('0.1.5-dev+1', '0.1.5-dev+2'), isTrue);
+    expect(_atLeast('0.1.5-dev+9', '0.1.5'), isFalse);
+  });
+
+  test('minimumRuntimeVersion and the blocks_runtime constraint agree with '
+      'the runtime package', () {
+    String field(String path, String pattern) => RegExp(
+      pattern,
+      multiLine: true,
+    ).firstMatch(File(path).readAsStringSync())![1]!;
+    final runtime = field(
+      '../blocks_runtime/pubspec.yaml',
+      r'^version: (\S+)$',
+    );
+    final constraint = field('pubspec.yaml', r'^  blocks_runtime: (\S+)$');
+    if (_atLeast(runtime, minimumRuntimeVersion)) {
+      // Released: depend on the minimum.
+      expect(constraint, '^$minimumRuntimeVersion');
+    } else {
+      // The minimum is the runtime's pending release, which pub can't
+      // resolve yet, so the constraint stays on the released runtime. The
+      // release that bumps blocks_runtime's version fails this until the
+      // constraint is raised to match.
+      expect(
+        File('../blocks_runtime/CHANGELOG.md').readAsStringSync(),
+        startsWith('## Unreleased'),
+      );
+      expect(constraint, '^$runtime');
+    }
+  });
+
   group('transferable hydration', () {
     test('emits RealtimeChannel.fromJson for realtime/channel', () {
       final output = gen.generate(
@@ -110,9 +177,46 @@ void main() {
         ),
       );
       expect(output, contains('Future<RealtimeChannel<dynamic>> getChannel()'));
+      // An `unknown` message can be any JSON value, so the raw payload is
+      // passed through (this used to emit `dynamic.fromJson(json)`).
       expect(
         output,
-        contains('RealtimeChannel.fromJson(result as Map<String, dynamic>'),
+        contains(
+          'RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload)',
+        ),
+      );
+    });
+
+    test('a channel with no type args decodes any JSON payload', () {
+      final output = gen.generate(
+        CodegenModel(
+          title: 'test',
+          version: '1.0',
+          namespaces: [
+            Namespace(
+              name: 'api',
+              operations: [
+                Operation(
+                  name: 'getChannel',
+                  fullName: 'api.getChannel',
+                  params: [],
+                  result: const TransferableType(
+                    blocksType: 'realtime/channel',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          types: {},
+        ),
+      );
+      expect(output, contains('Future<RealtimeChannel<dynamic>> getChannel()'));
+      // The map-typed `fromJson` would throw on a non-object message.
+      expect(
+        output,
+        contains(
+          'RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload)',
+        ),
       );
     });
 
@@ -144,6 +248,615 @@ void main() {
         output,
         contains('FileDownloadHandle.fromJson(result as Map<String, dynamic>)'),
       );
+    });
+
+    test(
+      'hydrates a nullable bound transferable to its optional concrete type',
+      () {
+        final output = gen.generate(
+          const CodegenModel(
+            title: 'test',
+            version: '1.0',
+            namespaces: [
+              Namespace(
+                name: 'api',
+                operations: [
+                  Operation(
+                    name: 'maybeChannel',
+                    fullName: 'api.maybeChannel',
+                    params: [],
+                    result: NullableType(
+                      TransferableType(
+                        blocksType: 'realtime/channel',
+                        typeArgs: [],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            types: {},
+          ),
+        );
+        expect(
+          output,
+          contains('Future<RealtimeChannel<dynamic>?> maybeChannel()'),
+        );
+        expect(
+          output,
+          contains(
+            'result == null ? null : RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload)',
+          ),
+        );
+      },
+    );
+
+    test('hydrates a nullable bound file handle via its fromJson', () {
+      final output = gen.generate(
+        const CodegenModel(
+          title: 'test',
+          version: '1.0',
+          namespaces: [
+            Namespace(
+              name: 'api',
+              operations: [
+                Operation(
+                  name: 'maybeFile',
+                  fullName: 'api.maybeFile',
+                  params: [],
+                  result: NullableType(
+                    TransferableType(blocksType: 'file-bucket/download'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          types: {},
+        ),
+      );
+      expect(output, contains('Future<FileDownloadHandle?> maybeFile()'));
+      expect(
+        output,
+        contains(
+          'result == null ? null : FileDownloadHandle.fromJson(result as Map<String, dynamic>)',
+        ),
+      );
+    });
+
+    test('hydrates a nullable bound transferable with a type argument', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.op',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [
+                        {r'$ref': '#/components/schemas/Telemetry'},
+                      ],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Telemetry': {
+                'type': 'object',
+                'properties': {
+                  'v': {'type': 'number'},
+                },
+                'required': ['v'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, contains('class Telemetry'));
+      expect(output, contains('Future<RealtimeChannel<Telemetry>?> op()'));
+      expect(
+        output,
+        contains(
+          'result == null ? null : RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Telemetry.fromJson(json))',
+        ),
+      );
+    });
+
+    test('a nullable object channel type argument hydrates its object', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.ch',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'oneOf': [
+                        {r'$ref': '#/components/schemas/Msg'},
+                        {'type': 'null'},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Msg': {
+                'type': 'object',
+                'properties': {
+                  'x': {'type': 'number'},
+                },
+                'required': ['x'],
+              },
+            },
+          },
+        }),
+      );
+      expect(output, contains('Future<RealtimeChannel<Msg?>> ch()'));
+      // A `Msg?` message can be null, so each payload decodes through
+      // `fromJsonValue` with a null guard rather than the map-typed `fromJson`.
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload == null ? null : Msg.fromJson(payload as Map<String, dynamic>))',
+        ),
+      );
+    });
+
+    test('a dynamic channel type argument passes the value through', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.nullableDyn',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [<String, dynamic>{}],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+            {
+              'name': 'api.directDyn',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'S',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [<String, dynamic>{}],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(output, isNot(contains('dynamic.fromJson')));
+      // An `unknown` message is handed over as is, whatever JSON it is.
+      expect(
+        output,
+        contains(
+          'result == null ? null : RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload)',
+        ),
+      );
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload)',
+        ),
+      );
+    });
+
+    test('a concrete non-object channel message type hydrates through '
+        'fromJsonValue', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.nullableStr',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [
+                        {'type': 'string'},
+                      ],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+            {
+              'name': 'api.directStr',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'S',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {'type': 'string'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      // A primitive message is decoded per payload by `fromJsonValue`, which
+      // takes the raw payload (not only a map), so the channel is hydrated,
+      // directly and behind the nullable result's null guard. The value is
+      // never returned as the raw descriptor.
+      expect(
+        output,
+        contains('Future<RealtimeChannel<String>?> nullableStr()'),
+      );
+      expect(output, contains('Future<RealtimeChannel<String>> directStr()'));
+      expect(
+        output,
+        contains(
+          'return result == null ? null : RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload as String)',
+        ),
+      );
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload as String)',
+        ),
+      );
+      expect(output, isNot(contains('result == null ? null : result')));
+      expect(output, isNot(contains('return result;')));
+    });
+
+    test('a sealed-union channel message type hydrates via fromJson', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.events',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {r'$ref': '#/components/schemas/Event'},
+                  ],
+                },
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Event': {
+                'oneOf': [
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'kind': {
+                        'type': 'string',
+                        'enum': ['added'],
+                      },
+                      'id': {'type': 'string'},
+                    },
+                    'required': ['kind', 'id'],
+                  },
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'kind': {
+                        'type': 'string',
+                        'enum': ['removed'],
+                      },
+                      'id': {'type': 'string'},
+                    },
+                    'required': ['kind', 'id'],
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      );
+      // The sealed union is a decodable object, so the channel hydrates it.
+      expect(output, contains('sealed class Event'));
+      expect(output, contains('Future<RealtimeChannel<Event>> events()'));
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Event.fromJson(json))',
+        ),
+      );
+    });
+
+    test('a Map channel message type hydrates per value', () {
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.metrics',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'type': 'object',
+                      'additionalProperties': {'type': 'number'},
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(
+        output,
+        contains('Future<RealtimeChannel<Map<String, num>>> metrics()'),
+      );
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => (payload as Map<String, dynamic>).map((k1, v1) => MapEntry(k1, v1 as num)))',
+        ),
+      );
+    });
+
+    test('a nullable dynamic channel type argument uses an identity decoder', () {
+      // `oneOf: [{}, {type: null}]` renders the type arg as `dynamic?`; the
+      // structural check must still treat it as the identity/dynamic case.
+      final output = _generate(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.dynQ',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {
+                      'oneOf': [
+                        <String, dynamic>{},
+                        {'type': 'null'},
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(output, isNot(contains('.fromJson(json)')));
+      expect(output, contains('Future<RealtimeChannel<dynamic>> dynQ()'));
+      expect(
+        output,
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload as dynamic)',
+        ),
+      );
+    });
+
+    test('a primitive-message bound channel emits no diagnostic and is '
+        'hydrated', () {
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.liveCount',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'x-blocks-transferable': 'realtime/channel',
+                  'x-blocks-type-args': [
+                    {'type': 'string'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      // Every message type hydrates (see `fromJsonValue`), so there is nothing
+      // to warn about: no `AWSBLOCKS-NATIVE-002`, and no warning at all.
+      expect(model.warnings, isEmpty);
+      expect(
+        _generateModel(model),
+        contains(
+          'return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload as String)',
+        ),
+      );
+    });
+
+    test('a nullable primitive-message bound channel emits no diagnostic and is '
+        'hydrated', () {
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.liveCount',
+              'params': <Map<String, dynamic>>[],
+              'result': {
+                'name': 'R',
+                'schema': {
+                  'oneOf': [
+                    {
+                      'x-blocks-transferable': 'realtime/channel',
+                      'x-blocks-type-args': [
+                        {'type': 'string'},
+                      ],
+                    },
+                    {'type': 'null'},
+                  ],
+                },
+              },
+            },
+          ],
+        }),
+      );
+      expect(model.warnings, isEmpty);
+      expect(
+        _generateModel(model),
+        contains(
+          'return result == null ? null : RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => payload as String)',
+        ),
+      );
+    });
+
+    test('every bound channel body is hydrated, and none is diagnosed', () {
+      // Across the type-arg matrix (direct and nullable), no channel body
+      // stays the raw descriptor (`return result;`): an object message
+      // decodes through `fromJson`, any other (a map, `unknown`, primitive,
+      // list or enum) through `fromJsonValue`. So `AWSBLOCKS-NATIVE-002`
+      // (raw channel) is never emitted.
+      Map<String, dynamic> channelOp(
+        String name,
+        Map<String, dynamic> arg, {
+        bool nullable = false,
+      }) {
+        final channel = {
+          'x-blocks-transferable': 'realtime/channel',
+          'x-blocks-type-args': [arg],
+        };
+        return {
+          'name': name,
+          'params': <Map<String, dynamic>>[],
+          'result': {
+            'name': 'R_$name',
+            'schema': nullable
+                ? {
+                    'oneOf': [
+                      channel,
+                      {'type': 'null'},
+                    ],
+                  }
+                : channel,
+          },
+        };
+      }
+
+      final model = _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            channelOp('api.obj', {r'$ref': '#/components/schemas/Msg'}),
+            channelOp('api.map', {
+              'type': 'object',
+              'additionalProperties': {'type': 'number'},
+            }),
+            channelOp('api.dyn', {
+              'oneOf': [
+                <String, dynamic>{},
+                {'type': 'null'},
+              ],
+            }),
+            channelOp('api.str', {'type': 'string'}),
+            channelOp('api.list', {
+              'type': 'array',
+              'items': {'type': 'string'},
+            }),
+            channelOp('api.enumArg', {r'$ref': '#/components/schemas/Color'}),
+            channelOp('api.strNull', {'type': 'string'}, nullable: true),
+            channelOp('api.mapNull', {
+              'type': 'object',
+              'additionalProperties': {'type': 'number'},
+            }, nullable: true),
+          ],
+          'components': {
+            'schemas': {
+              'Msg': {
+                'type': 'object',
+                'properties': {
+                  'x': {'type': 'number'},
+                },
+                'required': ['x'],
+              },
+              'Color': {
+                'type': 'string',
+                'enum': ['red', 'blue'],
+              },
+            },
+          },
+        }),
+      );
+      final output = _generateModel(model);
+
+      // Ops whose generated body stays raw (`return result;`), keyed by the
+      // `_client.call('<fullName>', ...)` that precedes the return.
+      final rawOps = <String>{};
+      final allOps = <String>{};
+      final re = RegExp(r"_client\.call\('([^']+)'[^;]*\);\s*return ([^\n]*);");
+      for (final m in re.allMatches(output)) {
+        final fullName = m.group(1)!;
+        allOps.add(fullName);
+        if (m.group(2)!.trim() == 'result') rawOps.add(fullName);
+      }
+
+      final warnedOps = model.warnings
+          .where((w) => w.startsWith('AWSBLOCKS-NATIVE-002:'))
+          .map(
+            (w) => w.split(' returns realtime/channel').first.split(': ').last,
+          )
+          .toSet();
+
+      expect(warnedOps, isEmpty);
+      expect(rawOps, isEmpty);
+      expect(model.warnings, isEmpty);
+      expect(allOps.length, 8);
+      // The primitive, list and enum shapes main's Map-only runtime left raw.
+      for (final decode in [
+        '(payload) => payload as String)',
+        '(payload) => (payload as List<dynamic>).cast<String>())',
+        '(payload) => Color.fromJson(payload as String))',
+      ]) {
+        expect(output, contains(decode));
+      }
     });
   });
 
@@ -179,6 +892,45 @@ void main() {
       expect(output, contains('(result as List<dynamic>)[2] as String'));
     });
 
+    // An optional element (TypeScript `[string, number?]`) may be missing
+    // from a shorter array (`["c"]`): it decodes as null. Reading it as
+    // `list[1]` threw a RangeError.
+    test('decodes a missing optional element as null', () {
+      final output = gen.generate(
+        CodegenModel(
+          title: 'test',
+          version: '1.0',
+          namespaces: [
+            Namespace(
+              name: 'api',
+              operations: [
+                Operation(
+                  name: 'getCursor',
+                  fullName: 'api.getCursor',
+                  params: [],
+                  result: TupleType([
+                    const PrimitiveType('String'),
+                    const NullableType(PrimitiveType('int')),
+                  ]),
+                ),
+              ],
+            ),
+          ],
+          types: {},
+        ),
+      );
+      expect(output, contains('Future<(String, int?)> getCursor()'));
+      expect(output, contains('(result as List<dynamic>)[0] as String'));
+      expect(
+        output,
+        contains(
+          '((result as List<dynamic>).length > 1 '
+          '? (result as List<dynamic>)[1] : null)',
+        ),
+      );
+      expect(output, isNot(contains('(result as List<dynamic>)[1] as')));
+    });
+
     test('emits tuple toJson as list for params', () {
       final output = gen.generate(
         CodegenModel(
@@ -209,7 +961,13 @@ void main() {
           types: {},
         ),
       );
-      expect(output, contains(r"'coords': [coords.$1, coords.$2]"));
+      expect(
+        output,
+        contains(
+          r'      [coords.$1, coords.$2],'
+          '\n',
+        ),
+      );
     });
   });
 
@@ -478,7 +1236,9 @@ void main() {
         }),
       );
       final output = _generateModel(model);
-      expect(output, contains('Future<dynamic?> get'));
+      expect(output, contains('Future<dynamic> get'));
+      expect(output, isNot(contains('dynamic?')));
+      expect(output, contains('return result;'));
       expect(output, isNot(contains('UnknownTransferable')));
       expect(model.warnings, isEmpty);
     });
@@ -492,6 +1252,522 @@ void main() {
       expect(output, contains('.cast<dynamic>()'));
       expect(output, isNot(contains('UnknownTransferable')));
       expect(model.warnings, isEmpty);
+    });
+  });
+
+  group('nullable unknown stays dynamic (already nullable)', () {
+    // `dynamic?` trips `unnecessary_question_mark`, so a nullable or optional
+    // `unknown` is emitted as plain `dynamic`, in collections too.
+    const unknown = {'type': 'unknown'};
+    const nullableUnknown = {
+      'oneOf': [
+        {'type': 'unknown'},
+        {'type': 'null'},
+      ],
+    };
+    final output = _generateModel(
+      _build(
+        jsonEncode({
+          'openrpc': '1.3.2',
+          'info': {'title': 'test', 'version': '1.0.0'},
+          'methods': [
+            {
+              'name': 'api.collect',
+              'params': [
+                {'name': 'maybe', 'required': true, 'schema': nullableUnknown},
+                {
+                  'name': 'holes',
+                  'required': true,
+                  'schema': {'type': 'array', 'items': nullableUnknown},
+                },
+                {
+                  'name': 'sparse',
+                  'required': true,
+                  'schema': {
+                    'type': 'object',
+                    'additionalProperties': nullableUnknown,
+                  },
+                },
+                {'name': 'extra', 'required': false, 'schema': unknown},
+              ],
+              'result': {
+                'name': 'R',
+                'schema': {r'$ref': '#/components/schemas/Entry'},
+              },
+            },
+          ],
+          'components': {
+            'schemas': {
+              'Entry': {
+                'type': 'object',
+                'properties': {
+                  'optionalPayload': unknown,
+                  'nullablePayload': nullableUnknown,
+                },
+                'required': ['nullablePayload'],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    test('never emits dynamic?', () {
+      expect(output, isNot(contains('dynamic?')));
+    });
+
+    test('fields', () {
+      expect(output, contains('final dynamic optionalPayload;'));
+      expect(output, contains('final dynamic nullablePayload;'));
+      expect(output, contains("json['optionalPayload'] as dynamic,"));
+      expect(output, contains("json['nullablePayload'] as dynamic,"));
+    });
+
+    test('parameters and collections', () {
+      expect(output, contains('required dynamic maybe'));
+      expect(output, contains('required List<dynamic> holes'));
+      expect(output, contains('required Map<String, dynamic> sparse'));
+      expect(output, contains('dynamic extra}'));
+    });
+  });
+
+  group('constraint checks on nullable fields', () {
+    // A public field can't be promoted by a null check in the constructor
+    // body, so `x == null || x.length >= 2` doesn't compile. Checks on a
+    // nullable field bind a local first, as Swift's `if let` and Kotlin's
+    // `?.let` do.
+    final output = _generate(
+      jsonEncode({
+        'openrpc': '1.3.2',
+        'info': {'title': 'test', 'version': '1.0.0'},
+        'methods': [
+          {
+            'name': 'api.create',
+            'params': [
+              {
+                'name': 'input',
+                'required': true,
+                'schema': {
+                  'type': 'object',
+                  'properties': {
+                    'name': {'type': 'string', 'minLength': 1},
+                    'nickname': {
+                      'type': 'string',
+                      'minLength': 2,
+                      'maxLength': 30,
+                      'pattern': r'^[a-z]+$',
+                    },
+                    'score': {'type': 'number', 'minimum': 0, 'maximum': 1},
+                    'step': {
+                      'type': 'integer',
+                      'exclusiveMinimum': 0,
+                      'exclusiveMaximum': 10,
+                      'multipleOf': 2,
+                    },
+                    'tags': {
+                      'type': 'array',
+                      'items': {'type': 'string'},
+                      'minItems': 1,
+                      'maxItems': 5,
+                    },
+                    'class': {'type': 'string', 'minLength': 1},
+                    'motto': {
+                      'oneOf': [
+                        {'type': 'string', 'minLength': 3},
+                        {'type': 'null'},
+                      ],
+                    },
+                  },
+                  'required': ['name', 'motto', 'class'],
+                },
+              },
+            ],
+            'result': {
+              'name': 'R',
+              'schema': {'type': 'boolean'},
+            },
+          },
+        ],
+      }),
+    );
+
+    test('never null-checks a field inline', () {
+      expect(output, isNot(contains('== null ||')));
+    });
+
+    test('a required non-null field is checked directly', () {
+      expect(
+        output,
+        contains(
+          "    if (!(name.length >= 1)) throw ArgumentError('name must be at least 1 characters');",
+        ),
+      );
+    });
+
+    test('an optional field binds a non-null local for every check', () {
+      expect(
+        output,
+        contains(
+          '    if (nickname case final nickname?) {\n'
+          "      if (!(nickname.length >= 2)) throw ArgumentError('nickname must be at least 2 characters');\n"
+          "      if (!(nickname.length <= 30)) throw ArgumentError('nickname must be at most 30 characters');\n"
+          "      if (!(RegExp(r'^[a-z]+\$').hasMatch(nickname))) throw ArgumentError('nickname must match pattern');\n"
+          '    }\n',
+        ),
+      );
+      expect(output, contains('    if (score case final score?) {\n'));
+      expect(output, contains('if (!(score >= 0)) throw'));
+      expect(output, contains('if (!(score <= 1)) throw'));
+      expect(output, contains('    if (step case final step?) {\n'));
+      expect(output, contains('if (!(step > 0)) throw'));
+      expect(output, contains('if (!(step < 10)) throw'));
+      expect(output, contains('if (!(step % 2 == 0)) throw'));
+      expect(output, contains('    if (tags case final tags?) {\n'));
+      expect(output, contains('if (!(tags.length >= 1)) throw'));
+      expect(output, contains('if (!(tags.length <= 5)) throw'));
+    });
+
+    test('a keyword-escaped field name is escaped in the message', () {
+      expect(
+        output,
+        contains(
+          r"    if (!(class$.length >= 1)) throw ArgumentError('class\$ must be at least 1 characters');",
+        ),
+      );
+    });
+
+    test('a required but nullable field binds a local too', () {
+      expect(output, contains('  final String? motto;'));
+      expect(output, contains('    required this.motto,'));
+      expect(
+        output,
+        contains(
+          '    if (motto case final motto?) {\n'
+          "      if (!(motto.length >= 3)) throw ArgumentError('motto must be at least 3 characters');\n"
+          '    }\n',
+        ),
+      );
+    });
+  });
+
+  group('realtime channels are hydrated and typed wherever they appear', () {
+    // A record field used to pass the raw descriptor (`dynamic`) where a
+    // `RealtimeChannel<…>` was expected, and a channel whose message type
+    // isn't an object generated `List<String>.fromJson(json)`.
+    Map<String, dynamic> channelOf(Map<String, dynamic> message) => {
+      'x-blocks-transferable': 'realtime/channel',
+      'x-blocks-type-args': [message],
+    };
+    const textMessage = {
+      'type': 'object',
+      'properties': {
+        'text': {'type': 'string'},
+      },
+      'required': ['text'],
+    };
+    const stringList = {
+      'type': 'array',
+      'items': {'type': 'string'},
+    };
+    final output = _generate(
+      jsonEncode({
+        'openrpc': '1.3.2',
+        'info': {'title': 'test', 'version': '1.0.0'},
+        'methods': [
+          {
+            'name': 'api.session',
+            'params': <Map<String, dynamic>>[],
+            'result': {
+              'name': 'SessionResult',
+              'schema': {
+                'type': 'object',
+                'properties': {
+                  'chat': channelOf(textMessage),
+                  'tags': channelOf(stringList),
+                  'counts': channelOf({
+                    'type': 'array',
+                    'items': {'type': 'integer'},
+                  }),
+                  'ticks': channelOf({'type': 'integer'}),
+                  'anything': channelOf({'type': 'unknown'}),
+                  'maybe': channelOf({
+                    'type': 'object',
+                    'properties': {
+                      'note': {'type': 'string'},
+                    },
+                    'required': ['note'],
+                  }),
+                  'nullable': {
+                    'oneOf': [
+                      channelOf(stringList),
+                      {'type': 'null'},
+                    ],
+                  },
+                  'file': {'x-blocks-transferable': 'file-bucket/download'},
+                  'upload': {'x-blocks-transferable': 'file-bucket/upload'},
+                },
+                'required': [
+                  'chat',
+                  'tags',
+                  'counts',
+                  'ticks',
+                  'anything',
+                  'nullable',
+                  'file',
+                  'upload',
+                ],
+              },
+            },
+          },
+          {
+            'name': 'api.tagChannel',
+            'params': <Map<String, dynamic>>[],
+            'result': {'name': 'TagChannel', 'schema': channelOf(stringList)},
+          },
+          {
+            'name': 'api.maybeTagChannel',
+            'params': <Map<String, dynamic>>[],
+            'result': {
+              'name': 'MaybeTagChannel',
+              'schema': {
+                'oneOf': [
+                  channelOf(stringList),
+                  {'type': 'null'},
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    test('fields keep their channel types', () {
+      expect(
+        output,
+        contains('  final RealtimeChannel<SessionResultChatMessage> chat;'),
+      );
+      expect(output, contains('  final RealtimeChannel<List<String>> tags;'));
+      expect(output, contains('  final RealtimeChannel<List<int>> counts;'));
+      expect(output, contains('  final RealtimeChannel<int> ticks;'));
+      expect(output, contains('  final RealtimeChannel<dynamic> anything;'));
+      expect(
+        output,
+        contains('  final RealtimeChannel<SessionResultMaybeMessage>? maybe;'),
+      );
+      expect(
+        output,
+        contains('  final RealtimeChannel<List<String>>? nullable;'),
+      );
+    });
+
+    test('a field with an object message uses fromJson', () {
+      expect(
+        output,
+        contains(
+          "      chat: RealtimeChannel.fromJson(json['chat'] as Map<String, dynamic>, (json) => SessionResultChatMessage.fromJson(json)),",
+        ),
+      );
+    });
+
+    test('a field with any other message decodes the payload value', () {
+      expect(
+        output,
+        contains(
+          "      tags: RealtimeChannel.fromJsonValue(json['tags'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>()),",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      counts: RealtimeChannel.fromJsonValue(json['counts'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<int>()),",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      ticks: RealtimeChannel.fromJsonValue(json['ticks'] as Map<String, dynamic>, (payload) => (payload as num).toInt()),",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      anything: RealtimeChannel.fromJsonValue(json['anything'] as Map<String, dynamic>, (payload) => payload),",
+        ),
+      );
+    });
+
+    test('optional and nullable fields hydrate only when present', () {
+      expect(
+        output,
+        contains(
+          "      maybe: json['maybe'] != null ? RealtimeChannel.fromJson(json['maybe'] as Map<String, dynamic>, (json) => SessionResultMaybeMessage.fromJson(json)) : null,",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      nullable: json['nullable'] != null ? RealtimeChannel.fromJsonValue(json['nullable'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>()) : null,",
+        ),
+      );
+    });
+
+    test('file handle fields are hydrated too', () {
+      expect(
+        output,
+        contains(
+          "      file: FileDownloadHandle.fromJson(json['file'] as Map<String, dynamic>),",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      upload: FileUploadHandle.fromJson(json['upload'] as Map<String, dynamic>),",
+        ),
+      );
+    });
+
+    test('a direct result with a non-object message decodes the value', () {
+      expect(
+        output,
+        contains('Future<RealtimeChannel<List<String>>> tagChannel()'),
+      );
+      expect(
+        output,
+        contains(
+          '    return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>());',
+        ),
+      );
+      expect(output, isNot(contains('List<String>.fromJson')));
+    });
+
+    test('a nullable direct result hydrates only when present', () {
+      expect(
+        output,
+        contains('Future<RealtimeChannel<List<String>>?> maybeTagChannel()'),
+      );
+      expect(
+        output,
+        contains(
+          '    return result == null ? null : RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>());',
+        ),
+      );
+    });
+  });
+
+  group('map-valued model fields decode their values', () {
+    // A model field `Map<String, Record>` cast each value with `v as Record`,
+    // which compiles but throws at runtime: the value is a JSON object.
+    const entry = {
+      'type': 'object',
+      'properties': {
+        'code': {'type': 'string'},
+      },
+      'required': ['code'],
+    };
+    final output = _generate(
+      jsonEncode({
+        'openrpc': '1.3.2',
+        'info': {'title': 'test', 'version': '1.0.0'},
+        'methods': [
+          {
+            'name': 'api.get',
+            'params': <Map<String, dynamic>>[],
+            'result': {
+              'name': 'R',
+              'schema': {r'$ref': '#/components/schemas/Holder'},
+            },
+          },
+        ],
+        'components': {
+          'schemas': {
+            'Entry': entry,
+            'Level': {
+              'type': 'string',
+              'enum': ['low', 'high'],
+            },
+            'Holder': {
+              'type': 'object',
+              'properties': {
+                'byName': {
+                  'type': 'object',
+                  'additionalProperties': {
+                    r'$ref': '#/components/schemas/Entry',
+                  },
+                },
+                'maybeByName': {
+                  'type': 'object',
+                  'additionalProperties': {
+                    r'$ref': '#/components/schemas/Entry',
+                  },
+                },
+                'levels': {
+                  'type': 'object',
+                  'additionalProperties': {
+                    r'$ref': '#/components/schemas/Level',
+                  },
+                },
+                'counts': {
+                  'type': 'object',
+                  'additionalProperties': {'type': 'integer'},
+                },
+                'moods': {
+                  'type': 'object',
+                  'additionalProperties': {
+                    'type': 'string',
+                    'enum': ['up', 'down'],
+                  },
+                },
+              },
+              'required': ['byName', 'levels', 'counts', 'moods'],
+            },
+          },
+        },
+      }),
+    );
+
+    test('record values decode through fromJson', () {
+      expect(
+        output,
+        contains(
+          "      byName: (json['byName'] as Map<String, dynamic>).map((k, v) => MapEntry(k, Entry.fromJson(v as Map<String, dynamic>))),",
+        ),
+      );
+      expect(
+        output,
+        contains(
+          "      maybeByName: (json['maybeByName'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, Entry.fromJson(v as Map<String, dynamic>))),",
+        ),
+      );
+      expect(output, isNot(contains('v as Entry')));
+    });
+
+    test('enum values decode through fromJson', () {
+      expect(
+        output,
+        contains(
+          "      levels: (json['levels'] as Map<String, dynamic>).map((k, v) => MapEntry(k, Level.fromJson(v as String))),",
+        ),
+      );
+    });
+
+    test('inline enum values decode through fromJson', () {
+      expect(
+        output,
+        matches(
+          RegExp(
+            r"      moods: \(json\['moods'\] as Map<String, dynamic>\)\.map\(\(k, v\) => MapEntry\(k, \w+\.fromJson\(v as String\)\)\),",
+          ),
+        ),
+      );
+    });
+
+    test('primitive values keep the plain cast', () {
+      expect(
+        output,
+        contains(
+          "      counts: (json['counts'] as Map<String, dynamic>).map((k, v) => MapEntry(k, v as int)),",
+        ),
+      );
     });
   });
 
@@ -598,3 +1874,35 @@ String _generateModel(CodegenModel model) =>
     const DartCodeGenerator().generate(model);
 
 String _generate(String spec) => _generateModel(_build(spec));
+
+/// Whether version [x] is at least [y] in semver precedence, as pub orders
+/// versions: a pre-release is below its release (`0.1.5-dev` < `0.1.5`).
+/// Build metadata is ignored (`0.1.5+1` is `0.1.5`).
+bool _atLeast(String x, String y) {
+  (List<int>, List<String>?) parse(String v) {
+    final s = v.split('+').first;
+    final dash = s.indexOf('-');
+    return (
+      (dash < 0 ? s : s.substring(0, dash)).split('.').map(int.parse).toList(),
+      dash < 0 ? null : s.substring(dash + 1).split('.'),
+    );
+  }
+
+  final (a, aPre) = parse(x);
+  final (b, bPre) = parse(y);
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return a[i] > b[i];
+  }
+  if (aPre == null || bPre == null) return aPre == null;
+  for (var i = 0; i < aPre.length && i < bPre.length; i++) {
+    final (m, n) = (int.tryParse(aPre[i]), int.tryParse(bPre[i]));
+    final c = switch ((m, n)) {
+      (final m?, final n?) => m.compareTo(n),
+      (_?, null) => -1, // a numeric identifier is below an alphanumeric one
+      (null, _?) => 1,
+      _ => aPre[i].compareTo(bPre[i]),
+    };
+    if (c != 0) return c > 0;
+  }
+  return aPre.length >= bPre.length;
+}

@@ -22,6 +22,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { Logger } from './index.cdk.js';
+import type { LogEntry } from './types.js';
 
 /** A spy compute that fails the test if the Logger ever pokes it. The new model
  * forbids the Logger from touching the compute — logging is always on. */
@@ -77,5 +78,70 @@ describe('Logger CDK (no-op placeholder)', () => {
 		new Logger(parent, 'second', { level: 'warn' });
 		// Still no infrastructure, regardless of how many Loggers exist.
 		Template.fromStack(stack).resourceCountIs('AWS::Logs::LogGroup', 0);
+	});
+});
+
+/** Run `fn` with stdout/stderr captured, returning the parsed JSON lines from each. */
+function captureOutput(fn: () => void): { stdout: LogEntry[]; stderr: LogEntry[] } {
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	const origStdout = process.stdout.write;
+	const origStderr = process.stderr.write;
+	process.stdout.write = ((chunk: unknown) => stdout.push(String(chunk)) > 0) as typeof process.stdout.write;
+	process.stderr.write = ((chunk: unknown) => stderr.push(String(chunk)) > 0) as typeof process.stderr.write;
+	try {
+		fn();
+	} finally {
+		process.stdout.write = origStdout;
+		process.stderr.write = origStderr;
+	}
+	const parse = (lines: string[]) => lines.map((line): LogEntry => JSON.parse(line));
+	return { stdout: parse(stdout), stderr: parse(stderr) };
+}
+
+// A top-level `log.info(...)` in a backend module also runs under `cdk synth`,
+// so the CDK Logger writes the same lines as the runtime one instead of crashing.
+describe('Logger CDK logging during synth', () => {
+	test('info() writes a structured JSON line to stdout', () => {
+		const { parent } = setup();
+		const log = new Logger(parent, 'app', { defaultContext: { service: 'api' } });
+		const { stdout, stderr } = captureOutput(() => log.info('cold start', { region: 'us-east-1' }));
+		assert.strictEqual(stderr.length, 0);
+		assert.strictEqual(stdout.length, 1);
+		assert.strictEqual(stdout[0].level, 'info');
+		assert.strictEqual(stdout[0].message, 'cold start');
+		assert.strictEqual(stdout[0].logger, 'app');
+		assert.strictEqual(stdout[0].service, 'api');
+		assert.strictEqual(stdout[0].region, 'us-east-1');
+	});
+
+	test('error() writes to stderr', () => {
+		const { parent } = setup();
+		const log = new Logger(parent, 'app');
+		const { stdout, stderr } = captureOutput(() => log.error('boom'));
+		assert.strictEqual(stdout.length, 0);
+		assert.strictEqual(stderr.length, 1);
+		assert.strictEqual(stderr[0].level, 'error');
+	});
+
+	test('honors the configured level', () => {
+		const { parent } = setup();
+		const log = new Logger(parent, 'app', { level: 'warn' });
+		const { stdout } = captureOutput(() => {
+			log.debug('hidden');
+			log.info('hidden');
+			log.warn('shown');
+		});
+		assert.deepStrictEqual(stdout.map((e) => e.message), ['shown']);
+	});
+
+	test('child() merges context', () => {
+		const { parent } = setup();
+		const log = new Logger(parent, 'app', { defaultContext: { service: 'api' } });
+		const { stdout } = captureOutput(() => log.child({ requestId: 'r1' }).child({ step: 2 }).info('nested'));
+		assert.strictEqual(stdout.length, 1);
+		assert.strictEqual(stdout[0].service, 'api');
+		assert.strictEqual(stdout[0].requestId, 'r1');
+		assert.strictEqual(stdout[0].step, 2);
 	});
 });

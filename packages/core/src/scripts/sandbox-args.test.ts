@@ -1,11 +1,30 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
-
-import { buildSandboxDeployArgs, sandboxFailureRecoveryHint } from './sandbox.js';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import {
+  buildSandboxCdkEnv,
+  buildDevServerSpawn,
+  buildSandboxDeployArgs,
+  buildSandboxSynthArgs,
+  buildSandboxWatchArgs,
+  sandboxIsDeployOnly,
+  findHostingUrl,
+  previewRemovalWarning,
+  PREVIEW_MODE_CONTEXT,
+  findExpressUnsafeStacks,
+  quoteCdkAppPath,
+  sandboxFailureRecoveryHint,
+  stacksWithExpressUnsafeResources,
+} from './sandbox.js';
+import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 /**
  * Return the value that follows `flag` in `args`, failing with a clear message
@@ -55,7 +74,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
     assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), 'npm exec tsx -- -C cdk aws-blocks/index.ts');
+    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
   });
 
   it('interpolates the provided outDir and projectRoot', () => {
@@ -68,7 +87,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     // A production deploy must keep a reviewable change set and full
     // stabilization with rollback: neither `--express` nor `--method direct`
     // (both sandbox-only speedups) may appear in buildCdkDeployArgs.
-    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: OUTPUTS_FILE.production });
     assert.ok(!prod.includes('--express'), `production deploy must not use --express: ${prod.join(' ')}`);
     assert.ok(!prod.includes('--method'), `production deploy must not use --method: ${prod.join(' ')}`);
   });
@@ -88,5 +107,280 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
 
   it('explains why (rollback is off under express mode)', () => {
     assert.match(hint, /rollback is off|automatic rollback/i);
+  });
+
+  it('names the commands the user runs, when the caller passes them, aligned', () => {
+    const named = sandboxFailureRecoveryHint('cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
+    assert.match(named, /If the next `cdk-blocks sandbox deploy` reports/);
+    assert.match(named, /^ {5}cdk-blocks sandbox destroy {3}# tears/m);
+    assert.match(named, /^ {5}cdk-blocks sandbox deploy {4}# redeploy/m);
+    assert.doesNotMatch(named, /npm run/);
+  });
+});
+
+describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
+  it('drops --express (keeping --method direct, rollback on) when express is false', () => {
+    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts', express: false });
+    assert.ok(!args.includes('--express'), `unexpected --express in: ${args.join(' ')}`);
+    assert.strictEqual(valueAfter(args, '--method'), 'direct');
+    assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
+  });
+
+  it('synthesizes once into <outDir>/cdk.out and deploys that assembly', () => {
+    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'aws-blocks/index.cdk.ts' });
+    assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
+    assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
+    assert.ok(synth.includes('sandboxMode=true'));
+    assert.strictEqual(valueAfter(synth, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.cdk.ts')}`);
+    const deploy = buildSandboxDeployArgs({
+      outDir: '.blocks-sandbox',
+      projectRoot: '/app',
+      backendPath: 'aws-blocks/index.cdk.ts',
+      assemblyDir: '.blocks-sandbox/cdk.out',
+    });
+    assert.strictEqual(valueAfter(deploy, '--app'), '.blocks-sandbox/cdk.out', 'no second synth/framework build');
+  });
+
+  it('finds stacks whose synthesized template has a Web Function endpoint', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sandbox-assembly-'));
+    try {
+      writeFileSync(
+        join(dir, 'manifest.json'),
+        JSON.stringify({
+          artifacts: {
+            WfStack: { type: 'aws:cloudformation:stack', environment: 'aws://123456789012/us-east-1', properties: { templateFile: 'WfStack.template.json', stackName: 'wf-stack' } },
+            PlainStack: { type: 'aws:cloudformation:stack', environment: 'aws://unknown-account/unknown-region', properties: { templateFile: 'PlainStack.template.json' } },
+            Tree: { type: 'cdk:tree' },
+          },
+        }),
+      );
+      writeFileSync(join(dir, 'WfStack.template.json'), JSON.stringify({ Resources: { E: { Type: 'AWS::Lambda::WebFunctionEndpoint' } } }));
+      writeFileSync(join(dir, 'PlainStack.template.json'), JSON.stringify({ Resources: { F: { Type: 'AWS::Lambda::Function' } } }));
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(dir), [{ stackName: 'wf-stack', region: 'us-east-1' }]);
+      assert.deepStrictEqual(stacksWithExpressUnsafeResources(join(dir, 'missing')), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const fakeCfn = (byStack: Record<string, string | Error>) => (): CloudFormationClient =>
+    ({
+      send: async (cmd: { input: { StackName: string } }) => {
+        const r = byStack[cmd.input.StackName];
+        if (r instanceof Error) throw r;
+        return { Stacks: [{ StackStatus: r }] };
+      },
+    }) as unknown as CloudFormationClient;
+
+  it('turns Express off for an existing stack, keeps it for a create, and fails closed on errors', async () => {
+    const unsafe = await findExpressUnsafeStacks(
+      [{ stackName: 'existing' }, { stackName: 'new' }, { stackName: 'throttled' }, { stackName: 'deleted' }],
+      fakeCfn({
+        existing: 'UPDATE_COMPLETE',
+        new: new Error('Stack with id new does not exist'),
+        throttled: new Error('Rate exceeded'),
+        deleted: 'DELETE_COMPLETE',
+      }),
+    );
+    assert.deepStrictEqual(unsafe, ['existing', 'throttled']);
+  });
+
+  it('keeps Express Mode when no stack has an unsafe resource', async () => {
+    assert.deepStrictEqual(await findExpressUnsafeStacks([], fakeCfn({})), []);
+  });
+});
+
+describe('buildSandboxCdkEnv — framework sink reaches the synth child, and honours opt-out', () => {
+  const originalEnv = { ...process.env };
+  const originalCwd = process.cwd();
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    process.chdir(originalCwd);
+  });
+
+  function inCleanProject(): void {
+    // No .blocks/config.json, so consent falls back to the enabled default.
+    const tmp = join(tmpdir(), `sandbox-env-test-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+    process.chdir(tmp);
+  }
+
+  it('carries the framework sink path and the cdk resolution condition', () => {
+    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    inCleanProject();
+
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+
+    assert.strictEqual(env[FRAMEWORK_SINK_ENV], '/tmp/blocks-framework-sink');
+    assert.strictEqual(env.NODE_OPTIONS, '--conditions=cdk');
+  });
+
+  it('omits the sink when the user opted out, so nothing is written to disk', () => {
+    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+
+    assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
+  });
+});
+
+describe('quoteCdkAppPath', () => {
+  it('double-quotes on Windows, where cmd.exe keeps single quotes as part of the path', () => {
+    assert.strictEqual(
+      quoteCdkAppPath('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'),
+      '"D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
+    );
+  });
+
+  it('single-quotes on POSIX so a path with a space stays one argument', () => {
+    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
+  });
+
+  it('escapes a single quote inside a POSIX path', () => {
+    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
+  });
+});
+
+describe('buildDevServerSpawn', () => {
+  // The dev server runs under `shell: true`. Node 24 emits DEP0190 whenever a
+  // non-empty args array is passed alongside `shell: true` (the args are only
+  // concatenated, not escaped), so the whole command must go to the shell as
+  // one string with no separate args.
+  it('passes the default command as one shell string with no args', () => {
+    assert.deepStrictEqual(buildDevServerSpawn(undefined), {
+      command: 'npx tsx watch aws-blocks/scripts/server.ts',
+      args: [],
+    });
+  });
+
+  it('passes a custom devCommand through unsplit', () => {
+    assert.deepStrictEqual(buildDevServerSpawn('npx next dev --port 3100'), {
+      command: 'npx next dev --port 3100',
+      args: [],
+    });
+  });
+});
+
+
+describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+
+  it('adds --hotswap-fallback; the fallback CloudFormation deploy stays direct and in Express Mode', () => {
+    const args = buildSandboxDeployArgs({ ...base, hotswap: true });
+    assert.ok(args.includes('--hotswap-fallback'));
+    // The CDK CLI deploys a fallback with the `--method` given; without one it
+    // creates and executes a change set, which adds its own wait to the deploy.
+    assert.strictEqual(valueAfter(args, '--method'), 'direct', 'the fallback calls UpdateStack directly, no change set');
+    assert.ok(args.includes('--express'), 'a fallback CloudFormation deploy still runs in Express Mode');
+  });
+
+  it('is off by default', () => {
+    const args = buildSandboxDeployArgs(base);
+    assert.ok(!args.includes('--hotswap-fallback'));
+    assert.strictEqual(valueAfter(args, '--method'), 'direct');
+  });
+});
+
+describe('buildSandboxWatchArgs — infrastructure changes are deployed, not skipped', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: '/proj/aws-blocks/index.cdk.ts' };
+
+  // `cdk watch` defaults to --hotswap, which ignores changes it can't hotswap
+  // (a new Database or Realtime). The fallback deploys them in full instead.
+  it('watches with --hotswap-fallback', () => {
+    const args = buildSandboxWatchArgs(base);
+    assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'watch']);
+    assert.ok(args.includes('--hotswap-fallback'), `missing --hotswap-fallback: ${args.join(' ')}`);
+  });
+
+  it('never passes plain --hotswap or --no-hotswap, which would skip or slow every change', () => {
+    const args = buildSandboxWatchArgs(base);
+    assert.ok(!args.includes('--hotswap'));
+    assert.ok(!args.includes('--no-hotswap'));
+  });
+});
+
+describe('preview sandbox — the previewMode context', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+  const contexts = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '--context' ? [a] : []));
+
+  it('synth and deploy both pass previewMode=true next to sandboxMode=true', () => {
+    for (const args of [buildSandboxSynthArgs({ ...base, preview: true }), buildSandboxDeployArgs({ ...base, preview: true })]) {
+      assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true', 'previewMode=true']);
+    }
+  });
+
+  it('a preview sandbox is deploy-only: no cdk watch re-deploys the hosted preview', () => {
+    assert.strictEqual(sandboxIsDeployOnly({ preview: true }), true);
+    assert.strictEqual(sandboxIsDeployOnly({ preview: true, deployOnly: false }), true);
+    assert.strictEqual(sandboxIsDeployOnly({ deployOnly: true }), true);
+    assert.strictEqual(sandboxIsDeployOnly({}), false);
+  });
+
+  it('a plain sandbox passes no previewMode context', () => {
+    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base), buildSandboxWatchArgs(base)]) {
+      assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true']);
+    }
+  });
+
+  it('exports the context key the app reads', () => {
+    assert.strictEqual(PREVIEW_MODE_CONTEXT, 'previewMode');
+  });
+});
+
+describe('findHostingUrl — the URL a preview sandbox prints', () => {
+  it('reads the Hosting construct output whatever its hash suffix, adding a scheme when missing', () => {
+    assert.strictEqual(
+      findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api', HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com' }),
+      'https://abc.execute-api.us-west-2.amazonaws.com',
+    );
+    assert.strictEqual(findHostingUrl({ HostingHostingUrl99: 'd111.cloudfront.net' }), 'https://d111.cloudfront.net');
+  });
+
+  it('is undefined for a backend-only sandbox', () => {
+    assert.strictEqual(findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api' }), undefined);
+  });
+});
+
+describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview', () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+  const outputsWith = (outputs: unknown): string => {
+    dir = mkdtempSync(join(tmpdir(), 'sandbox-preview-warning-'));
+    const file = join(dir, 'outputs.json');
+    writeFileSync(file, typeof outputs === 'string' ? outputs : JSON.stringify(outputs));
+    return file;
+  };
+  const withPreview = {
+    'MyApp-sandbox-me': {
+      ApiUrl: 'https://api.example/prod/aws-blocks/api',
+      HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com',
+    },
+  };
+
+  it('warns, naming the preview URL, when the previous deploy had hosting', () => {
+    const warning = previewRemovalWarning(outputsWith(withPreview), false);
+    assert.match(warning ?? '', /hosted preview at https:\/\/abc\.execute-api\.us-west-2\.amazonaws\.com/);
+    assert.match(warning ?? '', /removes it/);
+    assert.match(warning ?? '', /npm run sandbox:preview/);
+  });
+
+  it('names the command that deploys a preview, when the launcher passes it', () => {
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- cdk-blocks sandbox preview');
+    assert.match(warning ?? '', /Run npx --no -- cdk-blocks sandbox preview to keep it/);
+    assert.doesNotMatch(warning ?? '', /npm run/);
+  });
+
+  it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {
+    assert.strictEqual(previewRemovalWarning(outputsWith(withPreview), true), undefined);
+    assert.strictEqual(
+      previewRemovalWarning(outputsWith({ 'MyApp-sandbox-me': { ApiUrl: 'https://api.example/prod/aws-blocks/api' } }), false),
+      undefined,
+    );
+    assert.strictEqual(previewRemovalWarning(join(tmpdir(), 'no-such-dir', 'outputs.json'), false), undefined);
+    assert.strictEqual(previewRemovalWarning(outputsWith('{not json'), false), undefined);
   });
 });

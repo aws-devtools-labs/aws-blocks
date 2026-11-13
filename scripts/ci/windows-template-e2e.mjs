@@ -5,13 +5,16 @@
 // repo root after `npm ci`, `npm run build`, and `npm run publish:local`,
 // with AWS creds in the env. Fail-fast; always tears down what it deployed.
 
-import { spawn, spawnSync, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isWin, killTree, runOrThrow, runTeardown, httpUp, startRegistry } from './_proc.mjs';
+import { WINDOWS_E2E_PURPOSE, addPurposeTag } from './_scaffold-tag.mjs';
 
-const isWin = process.platform === 'win32';
+import { makeProductionDeployDisposable } from './_scaffold-teardown.mjs';
+
 const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
 
@@ -22,48 +25,26 @@ if (!existsSync(join(ROOT, 'dist-registry'))) {
 
 const children = [];
 
-function killTree(pid) {
-  if (!pid) return;
-  try {
-    if (isWin) execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-    else process.kill(-pid, 'SIGKILL');
-  } catch { /* already gone */ }
-}
-
 function shutdown() {
   for (const c of children) killTree(c.pid);
 }
 
 /** Run a one-shot command; throw on non-zero exit. */
-function run(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (cwd: ${opts.cwd ?? ROOT})`);
-  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts });
-  if (r.error) throw r.error;
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited with ${r.status}`);
-}
+const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 
-/** Run a one-shot command; never throw (best-effort cleanup). */
-function runBestEffort(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (best-effort, cwd: ${opts.cwd ?? ROOT})`);
-  try {
-    spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts });
-  } catch (e) {
-    console.warn(`  (cleanup ignored: ${e?.message ?? e})`);
-  }
-}
+/** Teardown commands that failed; a failed teardown leaves a stack deployed. */
+const teardownFailures = [];
+const TEARDOWN_FAILED = 'teardown failed, stack(s) may be left deployed:';
 
-async function httpUp(url) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-    return res.status > 0;
-  } catch { return false; }
-}
+/** Run a teardown command; a failure is recorded and fails the job at the end. */
+const teardown = (cmd, args, opts = {}) => runTeardown(cmd, args, opts, ROOT, teardownFailures);
 
 /**
  * Spawn a long-running command and poll `ready()` until it returns true.
  * Readiness is based on product artifacts (config/outputs files, ports), NOT
  * console log strings, so it doesn't break when log wording changes. Rejects if
- * the child exits early or the timeout elapses. Returns the child to kill.
+ * the child exits early or the timeout elapses; on timeout it kills the child's
+ * tree first, so the caller's teardown doesn't race it. Returns the child to kill.
  */
 async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
   console.log(`\n$ ${cmd} ${args.join(' ')}`);
@@ -75,6 +56,10 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
     if (await ready()) return child;
     await sleep(2000);
   }
+  // Stop it before the caller's teardown runs, so the local sandbox process
+  // can't race (or redeploy in watch mode after) the destroy. A CloudFormation
+  // operation it already started may still be in progress.
+  killTree(child.pid);
   throw new Error(`${cmd} ${args.join(' ')} did not become ready within ${timeoutMs / 1000}s`);
 }
 
@@ -89,15 +74,7 @@ function devOrigin(appDir) {
 
 async function main() {
   // ── Local registry (node.exe + tsx loader — no shim needed) ──────────────
-  const registry = spawn(process.execPath, ['--import', 'tsx', 'scripts/publish/serve-local-registry.ts'], {
-    cwd: ROOT, stdio: 'inherit', detached: !isWin,
-  });
-  children.push(registry);
-  for (let i = 0; ; i++) {
-    if (await httpUp(`${REGISTRY}@aws-blocks/blocks`)) break;
-    if (i > 30) throw new Error('Local registry did not start on :4873');
-    await sleep(1000);
-  }
+  await startRegistry({ root: ROOT, registryUrl: REGISTRY, children });
   console.log('Local registry is up.');
 
   // Scaffold under RUNNER_TEMP (a long path) — os.tmpdir() on Windows runners
@@ -106,21 +83,41 @@ async function main() {
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
   writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
-  const env = { ...process.env, NPM_CONFIG_USERCONFIG: userNpmrc, npm_config_cache: join(work, '.npm-cache') };
+  // This harness is test traffic, not real usage; suppress CLI telemetry so a
+  // local run (no CI env var set) is not counted as a real user. See the
+  // cross-platform driver templates-e2e.mjs for the full rationale.
+  const env = {
+    ...process.env,
+    NPM_CONFIG_USERCONFIG: userNpmrc,
+    npm_config_cache: join(work, '.npm-cache'),
+    AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+  };
 
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
-  const app = join(work, 'my-app');
+  // The app name becomes the stack-name prefix (.blocks/config.json stackId).
+  // Keep it under `bb-test-`: the CI role can only delete stacks with the test
+  // prefixes, so cleanup-stacks.yml can reclaim a stack a failed run leaves.
+  const app = join(work, 'bb-test-win');
   // `backend` template is backend-only (no DynamoDB/GSI/Aurora) → fast deploy.
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
+  // The prefix alone isn't enough: cleanup-stacks.yml only deletes a `bb-test-*`
+  // stack whose `blocks:purpose` tag is an e2e marker. Tag the scaffold so a
+  // stack a failed teardown leaves behind is reclaimed instead of skipped.
+  addPurposeTag(join(app, 'aws-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
 
   const inApp = { cwd: app, env };
+  // The production preset retains the config access-log bucket on destroy (by
+  // design, for customers). Make the production deploy below fully deletable,
+  // keeping its other defaults, so this CI stack leaves nothing behind. Done up
+  // front so a template change fails the run before anything is deployed.
+  makeProductionDeployDisposable(join(app, 'aws-blocks', 'index.cdk.ts'));
 
   // Phase 1: dev — ready when config.json's bound port answers HTTP.
   {
     const dev = await startUntilReady('npm', ['run', 'dev'], inApp, async () => {
       const origin = devOrigin(app);
-      return origin ? await httpUp(origin) : false;
+      return origin ? await httpUp(origin, { okOnly: false }) : false;
     }, 3 * 60_000);
     killTree(dev.pid);
     console.log('OK: npm run dev booted and is reachable');
@@ -134,7 +131,7 @@ async function main() {
     killTree(sb.pid);
     console.log('OK: npm run sandbox deployed');
   } finally {
-    runBestEffort('npm', ['run', 'sandbox:destroy'], inApp);
+    teardown('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
   // Phase 3: production deploy → destroy.
@@ -142,12 +139,24 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    runBestEffort('npm', ['run', 'destroy'], inApp);
+    // `cdk-blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    teardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 
+  if (teardownFailures.length > 0) {
+    throw new Error(`${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
+  }
   console.log(`\nOK: scaffolded backend template dev + sandbox + deploy all work on ${process.platform}.`);
 }
 
 main()
   .then(() => { shutdown(); process.exit(0); })
-  .catch((err) => { console.error(`\nFAIL: ${err?.message ?? err}`); shutdown(); process.exit(1); });
+  .catch((err) => {
+    console.error(`\nFAIL: ${err?.message ?? err}`);
+    // A phase error replaces the end-of-run teardown check; still name the leak.
+    if (teardownFailures.length > 0 && !String(err?.message).startsWith(TEARDOWN_FAILED)) {
+      console.error(`Also, ${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
+    }
+    shutdown();
+    process.exit(1);
+  });

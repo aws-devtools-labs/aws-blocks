@@ -23,14 +23,9 @@ import {
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
 import { beginWorkspaceDiff, finishWorkspaceDiff } from './lib/workspace-diff.mjs';
-import {
-	BENCH_AGENT_USER,
-	WorkspaceSandbox,
-	describeError,
-	isolationAvailable,
-	prepareWorkspaceIsolation,
-	required,
-} from './lib/run-shell.ts';
+import { BENCH_AGENT_USER, enterAgentPhase, reapAgentProcesses } from './lib/isolation.mjs';
+import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
+import { stringifyRedacted } from './lib/secrets.mjs';
 
 const WORKSPACE = required('WORKSPACE', '[bench]');
 const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
@@ -67,15 +62,42 @@ const BASH_MIN_TIMEOUT_SEC = 600;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
-// Resolve agent-shell UID isolation (issue #184) ONCE (the ACL grant must run a single time, not
-// per invoke-retry). Not a hard failure when unavailable — this line records whether containment was
-// active for the cell. On the GitHub-hosted runner benchagent has passwordless sudo, so expect ACTIVE.
-const ISOLATE = isolationAvailable() && prepareWorkspaceIsolation(WORKSPACE);
+// Enter the agent-user boundary ONCE (the ACL grant must run a single time, not per invoke-retry):
+// reap leftovers, lock down the runner temp dirs and verify the agent user can't reach them or the
+// harness's environ. Fail closed — under CI the agent never runs as the harness uid; the refusal
+// is recorded as `isolation_failure` so scoring classes the cell harness_error (infra), not the agent.
+const phase = enterAgentPhase(WORKSPACE);
+const ISOLATE = phase.isolated;
+if (phase.error) {
+	process.stderr.write(`[bench] REFUSING to run the agent: ${phase.error}\n`);
+	writeFileSync(
+		OUTPUT,
+		JSON.stringify(
+			{
+				model: MODEL_ID,
+				duration_sec: 0,
+				tokens_in: 0,
+				tokens_out: 0,
+				cache_read_tokens: 0,
+				cache_write_tokens: 0,
+				stop_reason: 'error',
+				cycle_count: 0,
+				final_message: '',
+				builder_error: `agent isolation unavailable: ${phase.error}`,
+				isolation_active: false,
+				isolation_failure: phase.error,
+			},
+			null,
+			2,
+		),
+	);
+	process.exit(1);
+}
 process.stderr.write(
 	`[bench] agent shell isolation: ${
 		ISOLATE
-			? `ACTIVE (agent shell runs as ${BENCH_AGENT_USER} — cross-uid EPERM means it cannot signal the harness)`
-			: 'DISABLED (no passwordless sudo+runuser for benchagent or ACL grant failed; falling back to bare bash)'
+			? `ACTIVE (agent shell runs as ${BENCH_AGENT_USER}; runner temp + harness environ verified unreachable)`
+			: 'BARE (local dev opt-in BENCH_ALLOW_BARE_SHELL=1; the shell can read this harness env)'
 	}\n`,
 );
 
@@ -204,6 +226,8 @@ function writePartialEnvelopeAndExit(signal: string): void {
 			`[bench] partial-spend tokens_in=${partialTokensIn} tokens_out=${partialTokensOut} cycles=${partialCycles}\n`,
 		);
 	}
+	// Kill the agent's processes on the way out too (staging reaps and verifies again before upload).
+	reapAgentProcesses();
 	// No trace on the timeout path: the Strands trace/metrics only exist once invoke() RETURNS and the
 	// SDK exposes no mid-run accessor, so a timed-out cell emits only this partial envelope.
 	// Exit 124 = clean timeout with the envelope flushed; 125 = the envelope write itself failed.
@@ -263,6 +287,11 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 		await sleep(delayMs);
 	}
 }
+
+// End of the agent phase: kill every agent-user process (setsid dev servers included) before the
+// harness diffs the workspace or writes artifacts. Step 3, the judge and the pre-upload staging reap
+// (and verify) again, so a survivor here is logged rather than fatal.
+if (!reapAgentProcesses()) process.stderr.write(`[bench] WARNING: ${BENCH_AGENT_USER} processes survived the reap\n`);
 
 if (!result) {
 	finished = true;
@@ -342,16 +371,17 @@ process.stderr.write(
 
 // Persist the trace tree + run metrics as SEPARATE artifacts. NEVER serialize `result` directly:
 // AgentResult.toJSON() strips traces/metrics, so access the properties (traces need per-item toJSON()).
+// Both are uploaded publicly and the trace holds every tool call/result, so every string is redacted.
 if (TRACE_PATH) {
 	try {
-		writeFileSync(TRACE_PATH, JSON.stringify(result.traces?.map((t) => t.toJSON()) ?? [], null, 2));
+		writeFileSync(TRACE_PATH, stringifyRedacted(result.traces?.map((t) => t.toJSON()) ?? []));
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write trace to ${TRACE_PATH}: ${describeError(err)}\n`);
 	}
 }
 if (METRICS_PATH) {
 	try {
-		writeFileSync(METRICS_PATH, JSON.stringify(result.metrics ?? {}, null, 2));
+		writeFileSync(METRICS_PATH, stringifyRedacted(result.metrics ?? {}));
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write metrics to ${METRICS_PATH}: ${describeError(err)}\n`);
 	}

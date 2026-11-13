@@ -152,9 +152,37 @@ The OpenRPC document is emitted as a single self-contained file (`blocks.spec.js
 
 ### Blocks-specific extensions
 
-Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't capture Blocks semantics: `x-blocks-transferable` and `x-blocks-type-args` (on result schemas for Realtime / FileBucket handles).
+Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't capture Blocks semantics: `x-blocks-transferable` and `x-blocks-type-args` (on result schemas for Realtime / FileBucket / OIDC handles).
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
+
+#### Declared native packages and bindings
+
+Two top-level extension objects let a block declare its own native package instead of relying on a generator's hard-coded tag switch.
+
+`x-blocks-native-packages` is keyed by logical package identity. Each entry holds a `platforms` object whose `dart`, `swift`, and `android` fields are independently optional; a present field carries a `package` object naming the package-manager identity and the import or module name.
+
+`x-blocks-native-bindings` holds an array of bindings. Each carries a stable `id`, a `kind` (only `transferable` in schema 1), and maps an exact `tag` to a package `export`, a factory `abi`, and a `genericArity` of 0 or 1.
+
+A binding whose `kind` schema 1 does not define is skipped rather than rejected, and reported as `AWSBLOCKS-NATIVE-004`. The package-existence, tag-presence and tag-uniqueness checks run whatever the kind, so a binding naming an undeclared package, or re-binding a tag another binding already took, is a generation error regardless. A package a binding names is referenced whatever that binding's kind, so it alone does not raise `AWSBLOCKS-NATIVE-003`. `genericArity` is required, and a result whose `x-blocks-type-args` count disagrees with it is a generation error for the binding that emits. The remaining per-binding fields diverge on an undefined kind, because each generator validates only what its own emission reads (D-020) and a skipped binding emits nothing. Swift decodes the whole catalog before any kind gate and types `export` and `abi` as required strings with `genericArity` as an optional `Int`, and Dart's parser reads `abi` and `genericArity` before it reads `kind`, so a missing `abi` or `export` or a malformed `genericArity` is a generation error on both whatever the kind. An absent or out-of-range `genericArity` is an error on Dart alone, since Swift's presence and range guards sit behind its kind gate, and an `export` that fails the export grammar is caught on all three, each reaching that check only where a binding applies. Kotlin reaches none of the fields for a kind it does not emit, so the same binding generates with only `AWSBLOCKS-NATIVE-004`. The producer owns these fields for every kind: `validate-native-catalogs.ts` rejects such a catalog before `blocks.spec.json` is written. It also bounds `export` at 64 characters, which Kotlin's parser mirrors and Swift and Dart do not.
+
+Both objects carry `schemaVersion: 1` and are emitted only when non-empty. An absent platform field means the package is not offered there, and that result degrades to `UnknownTransferable` on that platform alone.
+
+A block authors both catalogs as static JSON under an `aws-blocks.native` key in its own `package.json`, rather than in a TypeScript registration call.
+
+This supersedes the `Scope.registerNativePackage()` / `Scope.registerNativeBinding()` API specified in the native client codegen design. Declarations are carried in `package.json` because they are build-time dependencies; field names and nesting are unchanged, only the carrier moved.
+
+See [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies) for the scan's trust boundary.
+
+`blocks-generate-spec` reads that key from every `node_modules` level from the spec project up to the filesystem root, resolving each import specifier to its nearest installed copy, and passes what it finds as `nativeDeclarations`.
+
+#### Unbound transferables: the `UnknownTransferable` carrier
+
+When a bare direct result's `x-blocks-transferable` tag has no known runtime binding, the native clients degrade it to a typed `UnknownTransferable` carrier, validated against the declared `__blocks` tag. A malformed descriptor raises the platform's standard decoding error: Dart `FormatException`, Swift `DecodingError`, Kotlin `TransferableException`.
+
+The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
+
+A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding reaches a nullable result on Swift and Kotlin, which unwrap the optional and emit the optional declared type, while Dart applies a declared binding to a bare direct result only, so on Dart alone a nullable result keeps the pre-fallback type. A nested or list-wrapped result keeps the pre-fallback type on all three, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
 
 ---
 
@@ -255,6 +283,46 @@ Two pieces native SDK authors need that the spec deliberately does not carry:
 1. **Wire-level protocol details** for non-RPC transports — WebSocket subprotocol names, message frames, auth flow for Realtime. These live in per-BB protocol docs (`packages/bb-realtime/PROTOCOL.md` and similar). Embedding them in the spec as static JSON would be docs-with-extra-steps: same content, harder to read, no machine consumer to justify the format.
 
 2. **Per-environment endpoint URLs.** The `servers` array is populated from the local sandbox config when available, but it's a single snapshot — not a multi-environment registry. Production, staging, and local URLs are managed by the platform SDK's runtime config, not baked into the spec.
+
+---
+
+## Spec trust model
+
+The native generators (Dart, Swift, Kotlin) treat `blocks.spec.json` as the source of truth and copy schema-controlled strings from it into generated source: field and parameter names used as JSON keys, descriptions (where a generator emits them), patterns, enum values, discriminator properties and tags, RPC method names, server URLs, and defaults. Each generator routes every such value through its own string-literal escaper, so any character in a spec value produces well-formed generated code that carries the value verbatim at runtime and does not change the structure of the generated program.
+
+The spec is a build input with the same trust as the backend source it is generated from: a developer generates it locally from their own backend, and the generated client compiles into their own app. The generators do not rely on that, though. Names the spec supplies that become identifiers (type and schema names, field and property names, enum cases, operation, parameter, namespace and server names) are turned into identifiers by each generator: Kotlin keeps a name it can declare in backticks and otherwise builds one from the name's letters and digits; Dart builds one from the name's letters and digits and escapes the rest with `$`; Swift replaces every character that isn't a letter, digit or `_` with `_`, prefixes `_` to a leading digit, and gives a name left empty or holding only underscores an `unnamed` suffix. Where two names in one scope end up the same, the later one steps aside (`_2`, `_3`, … on Kotlin and Swift, a trailing `$` on Dart). The original name still reaches the wire, emitted only as an escaped string literal (`@SerialName` on Kotlin, a `CodingKeys` raw value on Swift, the JSON map key on Dart). The `43-non-identifier-names` fixture compiles each generator's output for a spec whose names are not identifiers.
+
+### Where the spec comes from today
+
+```mermaid
+flowchart LR
+  DB[(Postgres<br/>information_schema)] -. "npx bb-data pull" .-> TS
+  App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
+  TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
+  Sandbox[.blocks-sandbox/config.json] -- servers URL --> Spec
+  Spec -- local file read --> Dart[blocks_codegen]
+  Spec -- local file read --> Swift[BlocksCodegen plugins]
+  Spec -- local file read --> Kotlin[Gradle codegen task]
+```
+
+- **Generated locally.** `generate-spec-cli.ts` (`blocks-generate-spec`, the `spec` script in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
+- **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
+- **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
+- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `awsBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
+
+### `db pull`: spec values from database schema
+
+`npx bb-data pull` (`packages/bb-data/src/db-pull/`) connects to a Postgres database, reads the `public` schema from `information_schema` and `pg_catalog`, and writes TypeScript into `aws-blocks/`:
+
+- `database.types.ts` — one interface per table; column names become property keys.
+- `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
+- `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
+
+When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator.
+
+### Sharing a spec
+
+The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), or when the spec is derived from `db pull` against a database that others can change, treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
 
 ---
 

@@ -103,6 +103,17 @@ export interface RegisteredRoute {
   /** Extracted parameter names in capture-group order. */
   paramNames: string[];
   handler: (context: BlocksContext) => Promise<void>;
+  /**
+   * `node.path` of the backend root that owns this route, stamped at synth time
+   * (see `raw-route.cdk.ts`). Lets `Hosting` filter the process-global registry
+   * to just the backend its distribution fronts — otherwise every stack's
+   * CloudFront picks up every other stack's route behaviors in a multi-stack
+   * synth. `undefined` for routes registered without an owner (framework
+   * built-ins, and the runtime path, which never sets it) — those match every
+   * owner filter, preserving the pre-ownership behavior. The dedup guard is also
+   * scoped per-owner, so two backends may register the same method+path.
+   */
+  ownerRootId?: string;
 }
 
 /**
@@ -236,9 +247,9 @@ export function unlockRouteRegistry(): void {
  * @throws If registration is locked (after handler creation).
  * @throws If the HTTP method is invalid.
  * @throws If the path is under the reserved namespace (`/aws-blocks` or `/aws-blocks/api/*`).
- * @throws {RawRouteErrors.DuplicateRoute} If the same method+path is registered twice.
+ * @throws {RawRouteErrors.DuplicateRoute} If the same method+path is registered twice under the same owner.
  */
-export function registerRoute(options: RawRouteOptions & { path: string }): void {
+export function registerRoute(options: RawRouteOptions & { path: string; ownerRootId?: string }): void {
   const state = getState();
   if (state.locked) {
     throw new Error('Routes must be registered during initialization. Cannot register routes after handler creation.');
@@ -258,8 +269,12 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
     throw new Error(`Cannot register RawRoute at ${BLOCKS_NAMESPACE} or ${BLOCKS_RPC_PREFIX}/* — these paths are reserved for RPC dispatch`);
   }
 
+  // Dedup is scoped per owner: two backends in one synth process share this
+  // process-global registry, so the same method+path may legitimately appear
+  // once per backend. A collision within one owner (or among owner-less
+  // built-ins) is still a real double-registration and throws.
   const existing = state.routes.find(
-    (r) => r.method === options.method && r.path === normalizedPath,
+    (r) => r.method === options.method && r.path === normalizedPath && r.ownerRootId === options.ownerRootId,
   );
   if (existing) {
     const err = new Error(
@@ -277,6 +292,7 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
     pattern,
     paramNames,
     handler: options.handler,
+    ownerRootId: options.ownerRootId,
   });
 }
 

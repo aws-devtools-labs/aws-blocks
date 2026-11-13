@@ -164,11 +164,16 @@ class UnionVariant {
   /// their own fields with a further `oneOf`.
   final DiscriminatedUnionRef? embeddedUnion;
 
+  /// The value type of the arm's extra keys when the arm is an open record
+  /// (`additionalProperties`), as on [InlineObjectRef]. Null for a closed arm.
+  final TypeRef? additionalProperties;
+
   const UnionVariant({
     required this.discriminantValue,
     required this.properties,
     required this.required,
     this.embeddedUnion,
+    this.additionalProperties,
   });
 }
 
@@ -182,6 +187,46 @@ class TransferableRef extends TypeRef {
   final List<TypeRef> typeArgs;
 
   const TransferableRef({required this.blocksType, this.typeArgs = const []});
+}
+
+/// The `platforms.dart` entry of an `x-blocks-native-packages` package.
+class DartNativePackage {
+  const DartNativePackage({required this.name, required this.library});
+
+  /// pub package name: the key under `dependencies` in `pubspec.yaml`.
+  final String name;
+
+  /// Entry library in `lib/`, imported as `package:<name>/<library>`.
+  final String library;
+}
+
+/// An `x-blocks-native-bindings` entry, before validation.
+class NativeBinding {
+  const NativeBinding({
+    required this.id,
+    required this.kind,
+    required this.tag,
+    required this.package,
+    required this.export,
+    required this.abi,
+    required this.genericArity,
+  });
+
+  final String id;
+
+  /// Open enumeration; only `transferable` is defined in schema 1.
+  final String kind;
+
+  final String tag;
+
+  /// A key of [RpcModel.nativePackages].
+  final String package;
+
+  final String export;
+
+  final String abi;
+
+  final int genericArity;
 }
 
 /// A parameter in an RPC method.
@@ -234,11 +279,21 @@ class RpcModel {
   final Map<String, TypeRef> schemas;
 
   final List<Server> servers;
+
+  /// Null for a package the spec declares with no `platforms.dart` entry, an
+  /// intentional absence: a binding on a tag with no built-in falls back to
+  /// `UnknownTransferable`; a built-in tag is unaffected.
+  final Map<String, DartNativePackage?> nativePackages;
+
+  final List<NativeBinding> nativeBindings;
+
   const RpcModel({
     required this.title,
     required this.version,
     required this.methods,
     required this.schemas,
     this.servers = const [],
+    this.nativePackages = const {},
+    this.nativeBindings = const [],
   });
 }

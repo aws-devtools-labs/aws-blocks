@@ -14,7 +14,7 @@ import {
 	BlocksBackend as CoreBlocksBackend,
 	BlocksStack as CoreBlocksStack,
 } from '@aws-blocks/core/cdk';
-import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import type { ComputeBase, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import type { Construct } from 'constructs';
 
 // The umbrella is the one package that depends on both core and a concrete
@@ -30,7 +30,7 @@ import type { Construct } from 'constructs';
 // is the CDK `LambdaCompute` that extends `Compute`. The cast bridges that
 // condition-vs-value gap; it is not a public-API cast.
 const lambdaDefaultComputeFactory: DefaultComputeFactory = (root) =>
-	new LambdaCompute(root as never, 'DefaultCompute') as unknown as Compute;
+	new LambdaCompute(root as never, 'DefaultCompute') as unknown as ComputeBase;
 
 /**
  * `BlocksStack` with the Lambda default compute wired in. Same API and instance
@@ -54,21 +54,35 @@ export const BlocksBackend = {
 };
 export type BlocksBackend = CoreBlocksBackend;
 
-export type { AuthAction, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type {
+	AuthAction,
+	AuthActionInput,
+	AuthField,
+	AuthState,
+	AuthUser,
+	AuthUserOf,
+	BlocksAuth,
+} from '@aws-blocks/auth-common';
 export type {
 	AgentConfig,
 	AgentResult,
 	AgentStreamChunk,
+	AgentTool,
+	DefaultToolContext,
 	ModelConfig,
 	StreamOptions,
 	TokenUsage,
 	ToolCallRecord,
 	ToolDefinition,
+	ToolFactory,
+	ToolHandlerArgs,
+	ToolsConfig,
 } from '@aws-blocks/bb-agent';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
@@ -79,45 +93,19 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-// Building Blocks (CDK versions)
-export {
-	AuthBasic,
-	AuthBasicErrors,
-	type AuthBasicOptions,
-	type AuthBasicUser,
-	type PasswordPolicy,
-} from '@aws-blocks/bb-auth-basic';
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
 export type {
-	AuthCognitoOptions,
-	AuthFlowType,
-	CodeDeliveryDetails,
-	CognitoUser,
-	ConfirmSignInOptions,
-	DeviceRecord,
-	ExternalUserPoolRef,
-	MFAPreference,
-	ResetPasswordResult,
-	SignInNextStep,
-	SignInOptions,
-	SignInResult,
-	SignUpOptions,
-	SignUpResult,
-	UpdateAttributeOutcome,
-	UserAttribute,
-} from '@aws-blocks/bb-auth-cognito';
-export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
-export type { AuthOIDCErrorName, MappedClaims, OIDCUser, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
-export {
-	AuthOIDC,
-	AuthOIDCErrors,
-	cognitoFederated,
-	customOauth2,
-	customOidc,
-	github,
-	google,
-	relayOrigin,
-	stubIdp,
-} from '@aws-blocks/bb-auth-oidc';
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
+// Building Blocks (CDK versions)
+export type * from '@aws-blocks/bb-auth';
+export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {
@@ -135,6 +123,7 @@ export type {
 	DeleteOptions as DTDeleteOptions,
 	DistributedTableOptions,
 	ExternalKmsKeyRef as DTExternalKmsKeyRef,
+	GetOptions as DTGetOptions,
 	PutOptions as DTPutOptions,
 	QueryOptions as DTQueryOptions,
 	ReadValidationMode,
@@ -148,11 +137,13 @@ export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
 	CorsRule,
 	ExternalBucketRef as FBExternalBucketRef,
+	ExternalKmsKeyRef as FBExternalKmsKeyRef,
 	FileBucketOptions,
 	FileContent,
 	FileInfo,
 	GetUrlOptions,
 	LifecycleRule,
+	ObjectLockOptions,
 	PutOptions as FBPutOptions,
 	PutUrlOptions,
 	ScanOptions as FBScanOptions,
@@ -161,6 +152,9 @@ export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
 	ChunkingConfig,
 	ChunkingStrategy,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentToolResult,
 	KnowledgeBaseOptions,
 	MetadataFilter,
 	RetrieveOptions,
@@ -190,7 +184,16 @@ export type {
 	MetricUnit,
 } from '@aws-blocks/bb-metrics';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+export type {
+	DisconnectReason,
+	GetChannelOptions,
+	RealtimeChannel,
+	RealtimeSubscription,
+	SubscribeOptions,
+} from '@aws-blocks/bb-realtime';
 export { Realtime } from '@aws-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
+export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
 export { Tracer } from '@aws-blocks/bb-tracer';
 // Override core's untyped getSdkIdentifiers with typed overloads

@@ -1,0 +1,101 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "name": "primary",
+      "url": "https://example.com/a'b$c${x}\"d\\e"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Widget": {
+        "type": "object",
+        "description": "A widget */ with /* \"double\" and 'single' quotes, $x ${y} and \\( paren\nsecond line",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identifier */ end /* start \"q\" 'q' $id ${id} \\(id)\nnext"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^a'b\"c\\$d[${x}]+$",
+            "description": "Code matching a pattern with \"quotes\" and $"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["cost$", "a$b", "x$$y", "b-$c", "d_$e"],
+            "description": "Kind */ of widget, $ values"
+          },
+          "note$": {
+            "type": "string",
+            "default": "a/b \u00e9 $x ${y} \"q\" 'q' \\ \\(z) */ end",
+            "description": "Optional note; key and default hold special characters"
+          },
+          "count": { "type": "integer", "default": 7 },
+          "limit": { "type": "integer", "default": 99999999999 },
+          "ratio": { "type": "number", "default": 1.5 },
+          "scale": { "type": "number", "default": 3 },
+          "flag": { "type": "boolean", "default": true }
+        },
+        "required": ["id", "code", "kind"]
+      }
+    }
+  },
+  "methods": [
+    {
+      "name": "api.get$x",
+      "description": "Gets */ a widget /* with \"quotes\" 'single' $x ${y} and \\( paren\nsecond line",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "description": "Param */ id /* \"q\" 'q' $x ${y} \\(z)\nnext",
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "GetResult",
+        "description": "Result */ widget /* \"q\" 'q' $x ${y} \\(z)\nnext",
+        "schema": { "$ref": "#/components/schemas/Widget" }
+      }
+    },
+    {
+      "name": "api.doAction",
+      "description": "Runs an action; tag values contain $",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": { "type": "string", "enum": ["create$"] },
+                  "title": { "type": "string" }
+                },
+                "required": ["action", "title"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": { "type": "string", "enum": ["re$move"] },
+                  "id": { "type": "string" }
+                },
+                "required": ["action", "id"]
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "DoActionResult",
+        "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] }
+      }
+    }
+  ]
+}

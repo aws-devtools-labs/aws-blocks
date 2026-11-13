@@ -17,6 +17,28 @@ export type BlocksContext = {
      * In AWS: derived from `event.path`, `event.queryStringParameters`,
      * and `event.headers.host`. May include a trusted `x-forwarded-proto`
      * to pick http vs https.
+     *
+     * On a container compute: the host the front door the request came through
+     * stamped on it (`x-blocks-forwarded-host`), so the URL is the one the Lambda
+     * handler reports for the same request. The stamped stage
+     * (`x-blocks-forwarded-stage`) is not part of the path, as on Lambda.
+     *
+     * `url.pathname` is the route path: the same for a request under `npm run dev`
+     * and on AWS, and never prefixed with the API Gateway stage (e.g. `/prod`).
+     * Every front door adds the stage on its way to the gateway, so it is not part
+     * of the path the app routes on. To sub-route under a wildcard, use
+     * `params['*']`.
+     *
+     * Behind a Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
+     * distribution, or `Hosting`'s CloudFront door), Lambda and container handlers
+     * alike see the URL the client called: the distribution's domain or the custom
+     * domain it was called at (`https://app.example.com/aws-blocks/api/orders`).
+     * The door stamps the viewer's host, and a handler takes it only when it is one
+     * of the backend's own front-door hosts. Behind `Hosting`'s other doors (ALB,
+     * API Gateway, stacked, bring-your-own), and for a request sent to the
+     * `execute-api` URL directly, `url.origin` is the API Gateway host the backend
+     * received, not the browser's: build public links from the app's own
+     * configured origin there, not from this URL.
      */
     url: URL;
     /**
@@ -35,6 +57,9 @@ export type BlocksContext = {
      * after the client has already received a timeout.
      *
      * `undefined` in local dev or when no deadline is configured.
+     *
+     * On a container compute there is no deadline: it fires when the client
+     * disconnects before the response is written.
      */
     signal?: AbortSignal;
   };
@@ -60,39 +85,182 @@ export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 import type { ScopeParent } from './common/index.js';
 
 /**
- * Structural view of a scope that resolves a compute carrying a recordable
- * namespace list. Only the CDK `Scope` satisfies this at runtime (via its
- * `compute` getter); in the mock/runtime bundles the property is absent.
+ * Symbol under which an `ApiNamespace` exposes a resolver for the compute that
+ * hosts it. Outside CDK synth it returns `undefined` for a namespace without its
+ * own `compute` (the mock/runtime `Scope` has no `compute`), else that compute's
+ * inert backing; nothing reads it there.
+ *
+ * The shared API gateway routes each exported namespace to its compute. It calls
+ * the resolver at synth, after the backend module has been imported — not at
+ * construction — so routing reflects compute assignments made in any order. The
+ * precedence lives here, with the options that define it, so the gateway never
+ * needs to know where a namespace's compute comes from: the namespace's own
+ * {@link ApiNamespaceOptions.compute} when given, else the scope's compute
+ * (`scope.compute` — the nearest compute assigned up the scope chain, else the
+ * default). Routes key on the **export** name (what the client sends and
+ * dispatch resolves), not the constructor's `label`.
+ *
+ * A symbol key, like {@link API_NAMESPACE_MARKER}, so `Object.entries`,
+ * `JSON.stringify` and the client/spec generators never see it.
+ *
+ * @internal
  */
-type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
+export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
 
 /**
- * Record this namespace on its resolved compute so request routing can later
- * map a namespace to the compute that hosts it.
+ * Symbol under which an `ApiNamespace` records `true` when it was given its own
+ * {@link ApiNamespaceOptions.compute}. The shared API gateway reads it to warn
+ * when that compute belongs to another backend, which it can't route to; a
+ * compute inherited from the scope is skipped there silently by design.
  *
- * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
- * namespace's compute (the stack default today), and we append the name to its
- * `namespaces` list. In the mock/runtime bundles — or a scopeless test — the
- * property is absent, so `scope.compute` is `undefined` and this is a silent
- * no-op. The public `ApiNamespace` signature is unchanged; this is a purely
- * internal side effect.
- *
- * No `try/catch`: `BlocksBackend.create()` initializes the default compute
- * before it imports the backend module that constructs any `ApiNamespace`, so
- * the `compute` getter always resolves at this call site. If it ever threw
- * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
- * before `create()` resolved), which should surface rather than be swallowed.
+ * @internal
  */
-function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
-  // An API created without a Scope stays unrecorded and routes to the
-  // default compute.
-  if (!scope || typeof scope !== 'object') return;
-  const compute = (scope as ComputeResolvingScope).compute;
-  // Guard against duplicates so `namespaces` stays a set of names: a namespace
-  // could otherwise be recorded twice (e.g. a re-imported module during synth).
-  if (compute && Array.isArray(compute.namespaces) && !compute.namespaces.includes(name)) {
-    compute.namespaces.push(name);
-  }
+export const API_NAMESPACE_EXPLICIT_COMPUTE = Symbol.for('blocks:ApiNamespaceExplicitCompute');
+
+/**
+ * Symbol under which a namespace may expose a **discovery** handler: called by
+ * the OpenRPC spec generator (`blocks-generate-spec`) with a stub context, in
+ * place of the namespace's own handler, to list every method. Never called to
+ * serve a request.
+ *
+ * It is for a namespace whose handler can't list all its methods before a
+ * request is authorized — `auth.protect(...)` builds its protected methods only
+ * after the session check — so the spec still describes every method. A
+ * namespace without one is discovered through its handler, as before.
+ *
+ * A symbol key, like {@link API_NAMESPACE_MARKER}, so no RPC method name can
+ * reach it.
+ *
+ * @internal
+ */
+export const API_NAMESPACE_DISCOVER = Symbol.for('blocks:ApiNamespaceDiscover');
+
+/**
+ * Symbol under which an `ApiNamespace` records `true` when it was created with
+ * {@link ApiNamespaceOptions.httpErrorStatus}. The Lambda handler and the local
+ * dev server read it (through `rpcErrorHttpStatus` in `rpc-dispatch.ts`) to pick
+ * the HTTP status of a failed call. A symbol key, so client and spec generators
+ * never see it.
+ *
+ * @internal
+ */
+export const API_NAMESPACE_HTTP_ERROR_STATUS = Symbol.for('blocks:ApiNamespaceHttpErrorStatus');
+
+/** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
+type ComputeResolvingScope = { compute?: unknown };
+
+/**
+ * Options for an {@link ApiNamespace}.
+ */
+export interface ApiNamespaceOptions {
+  /**
+   * The compute this namespace's methods run on. Omit to run on the app's
+   * default compute, like every namespace before.
+   *
+   * Pass a `Compute` block (from `@aws-blocks/blocks`) to give a namespace its
+   * own function — for example more memory (and CPU) than the rest of the API,
+   * or its own scaling separate from the other namespaces:
+   *
+   * ```ts
+   * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
+   * export const reports = new ApiNamespace(scope, 'reports', (context) => ({ … }), { compute: reportsCompute });
+   * ```
+   *
+   * The TypeScript, Swift, Kotlin and Dart clients call the namespace exactly as
+   * before: the shared API gateway routes `/aws-blocks/api/<export name>` to the
+   * namespace's compute, on every `apiFrontDoor` tier and behind `Hosting`. A
+   * call to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a
+   * native client released before per-namespace paths — still runs on the
+   * default compute. API calls stay capped at ~29 seconds by
+   * the gateway whatever the compute's `maxTimeoutSeconds` (except a container
+   * namespace that CloudFront reaches directly, below); run longer work in an
+   * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). In
+   * local dev every namespace still runs in the one dev server process.
+   *
+   * A `container` compute serves its namespaces from its long-running tasks — no
+   * cold starts, and CPU and memory sized for the workload:
+   *
+   * ```ts
+   * const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+   * export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+   * ```
+   *
+   * The gateway reaches the container's tasks through an internal load balancer
+   * the compute provisions in the app's VPC; the same ~29-second cap applies.
+   * The compute keeps at least one task running (`scaling.minInstances: 0` fails
+   * synth). Moving a namespace that already serves traffic onto a container: during
+   * that deploy, its calls can get 503s until the new tasks are healthy.
+   * On the `apiFrontDoor: 'cloudfront'` tier, the CloudFront distribution that
+   * fronts the API (the managed one, or `Hosting`'s default CloudFront door) routes
+   * the namespace's path straight to that load balancer instead, so a call can run
+   * up to 60 seconds. `RawRoute`s always run on the default compute.
+   *
+   * Typed structurally — anything whose `resolve()` yields a compute, which is
+   * what a `Compute` block is — so this entry carries no CDK types.
+   */
+  compute?: { resolve(): { readonly type: 'serverless' | 'container' } };
+
+  /**
+   * Send a failed call with the HTTP status of its error instead of `200`.
+   *
+   * By default every JSON-RPC response is HTTP `200`, and a failure is the
+   * `error` member of the body: `requireAuth()`'s `401` arrives as a `200`
+   * whose body says `401`. Anything that only sees status codes — API Gateway
+   * and CloudFront metrics, access logs, WAF rate rules, an alarm on 4xx — then
+   * cannot tell a rejected call from a successful one.
+   *
+   * With `httpErrorStatus: true`, a call that throws an `ApiError` with a
+   * `4xx` status (`401`, `403`, `404`, `409`, `429`, …) is answered with that
+   * HTTP status. The body is the same JSON-RPC error either way, and the
+   * TypeScript client reads the body whatever the status, so `isBlocksError()`
+   * and `error.status` behave exactly as without the option. Every other
+   * failure (a `5xx`, an uncaught exception, a malformed request) stays a
+   * `200`, as before. Applies on AWS and in the local dev server alike.
+   *
+   * ```ts
+   * export const api = new ApiNamespace(scope, 'api', (context) => ({
+   *   async getNote() {
+   *     const user = await auth.requireAuth(context); // HTTP 401 when signed out
+   *     return notes.get(user.userId);
+   *   },
+   * }), { httpErrorStatus: true });
+   * ```
+   *
+   * Before turning it on, check every client of the namespace reads the body
+   * of a non-2xx response: a hand-written `fetch` that throws on `!response.ok`,
+   * or a native client that treats a 4xx as a transport failure, would see a
+   * different error. Behind `Hosting`, a configured `errorPages.notFound` page
+   * replaces any `404` response — including this one — at CloudFront.
+   *
+   * Clients and front doors to plan for:
+   * - **Native clients.** The Swift and Kotlin clients (Kotlin from the release
+   *   that ships this option) decode the JSON-RPC error the same way on a 4xx.
+   *   The **Dart** client, when it has an `authProvider` (bearer tokens), treats
+   *   *any* HTTP 401 as an expired token: it calls `onAuthFailure()` (a refresh)
+   *   and runs the method **once more**. Without this option an `ApiError` 401
+   *   arrives as HTTP 200 and is not retried; with it, a method that throws 401
+   *   after a side effect runs twice for such a client. Put the guard first —
+   *   `await auth.requireAuth(context)` as the method's first statement, or
+   *   wrap the method with `auth.protect` (`Auth`), which runs the guard before
+   *   any of the method's code — so a rejected call has done nothing; and keep
+   *   methods that can still fail with 401 later idempotent.
+   * - **`Hosting` error pages.** CloudFront custom error responses apply to the
+   *   whole distribution, the proxied `/aws-blocks/*` paths included. When the
+   *   distribution maps 403 or 404 to a page — `errorPages.notFound`, a static
+   *   build's own `404.html`, or the default not-found page of a static
+   *   multi-page site (no server, no SPA fallback, no 404 page of its own) — a
+   *   403 / 404 from this namespace reaches the browser as that HTML page, and
+   *   the typed client rejects with a bare `ApiError` carrying only the HTTP
+   *   status (message `HTTP 404`) instead of the namespace's error name and
+   *   message. `Hosting` fails synth for that combination with a
+   *   `HostingError` named `HttpErrorStatusErrorPagesError`: CloudFront
+   *   cannot scope error responses away from `/aws-blocks/*`. Remove the 4xx
+   *   error pages, or leave this option off for the namespace. A 401, a 409 or
+   *   a 429 is not mapped and is unaffected.
+   *
+   * @default false
+   */
+  httpErrorStatus?: boolean;
 }
 
 /**
@@ -126,6 +294,22 @@ function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: s
  * const result = await api.greet('World'); // Fully typed
  * ```
  * 
+ * ## Running a namespace on its own compute
+ * 
+ * Every namespace runs on the app's default compute unless you pass one. Give a
+ * namespace its own (for example, more memory) with the `compute` option — the
+ * frontend call doesn't change:
+ * 
+ * ```typescript
+ * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
+ * 
+ * export const reports = new ApiNamespace(scope, 'reports', (context) => ({
+ *   async build(month: string) {
+ *     // …
+ *   },
+ * }), { compute: reportsCompute });
+ * ```
+ * 
  * ## Authentication — every method is a public endpoint
  * 
  * Each method becomes a public, internet-reachable RPC endpoint with **no
@@ -152,8 +336,37 @@ function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: s
  * ```
  * 
  * The local mock applies no auth either, so an ungated method passes every
- * local check and still ships callable by anyone. See your auth block's README
- * (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
+ * local check and still ships callable by anyone. See the `Auth` README
+ * (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+ *
+ * A guard protects only when awaited: `auth.requireRole(context, 'admins')`
+ * without `await` lets the method return before the check fails. To make a
+ * whole namespace deny by default, define it with `auth.protect(...)` instead:
+ * its `methods` run only after the session check, with the signed-in user, and
+ * only its `public` methods are callable without one:
+ *
+ * ```typescript
+ * export const posts = auth.protect(scope, 'posts', {
+ *   public: (context) => ({
+ *     async listPublicPosts() {
+ *       return db.posts.findPublished();
+ *     },
+ *   }),
+ *   methods: (context, user) => ({
+ *     async createPost(input: NewPost) {
+ *       return db.posts.create({ ...input, authorId: user.userId });
+ *     },
+ *   }),
+ * });
+ * ```
+ *
+ * The functions on the handler's returned object are callable: its own
+ * enumerable properties (including spread-in ones) and, for a class instance,
+ * methods on its prototype chain (other than names `Object.prototype` defines,
+ * unless set as own properties). Members inherited from `Object.prototype`
+ * (`toString`, `hasOwnProperty`, …), `constructor`, `__proto__` and
+ * non-enumerable own properties are never endpoints — calling one returns the
+ * same "Method not found" error as an unknown name.
  * 
  * ## Context
  * 
@@ -162,7 +375,16 @@ function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: s
  * - `context.request.json()` - Parse request body as JSON
  * - `context.response.headers` - Set response headers (e.g., cookies)
  * - `context.response.status` - Set HTTP status code
- * 
+ *
+ * Every `Set-Cookie` you set or append is delivered, locally and on AWS.
+ * If the method then throws, only cookies that are being **deleted**
+ * (an integer `Max-Age` of 0 or less, or an `Expires` in the past written as an
+ * IMF-fixdate such as `Thu, 01 Jan 1970 00:00:00 GMT`) are delivered with the
+ * error — so a method can reject with a 401 *and* clear a session cookie, but a
+ * method that signs a user in and then throws (e.g. a post-sign-in policy
+ * check) never hands out a live session. Other response headers are not sent
+ * with an error.
+ *
  * ## Local vs Deployed
  * 
  * - **Local**: APIs run in-process. Calls are direct function invocations.
@@ -187,15 +409,37 @@ function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: s
  * - Use Building Blocks (KVStore, DistributedTable) for state
  */
 export interface ApiNamespaceConstructor {
-  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, name: string, handler: ApiHandler<T>): AsyncAPI<T>;
+  /**
+   * @param label - Marks the handler as an API namespace. Clients never send it: they call the
+   *   namespace by the name it is exported under from the backend module, so
+   *   `export const api = new ApiNamespace(scope, 'todos', handler)` is called as `api.list()`.
+   */
+  new <T extends Record<string, (...args: any[]) => any>>(
+    scope: ScopeParent,
+    label: string,
+    handler: ApiHandler<T>,
+    options?: ApiNamespaceOptions,
+  ): AsyncAPI<T>;
 }
 
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
-  constructor(scope: ScopeParent, name: string, handler: any) {
-    handler[API_NAMESPACE_MARKER] = name;
-    // Record the namespace → compute association for per-compute routing.
-    // No-op outside CDK synth. Signature and returned handler are unchanged.
-    recordNamespaceOnCompute(scope, name);
+  constructor(scope: ScopeParent, label: string, handler: any, options?: ApiNamespaceOptions) {
+    handler[API_NAMESPACE_MARKER] = label;
+    // How synth-time routing finds this namespace's compute (see
+    // API_NAMESPACE_COMPUTE): resolved when called, never here. The namespace's
+    // own `compute` wins; otherwise the scope's (nearest assigned, else the
+    // default). A scopeless namespace without one resolves to undefined and
+    // routes to the default compute. The returned handler is unchanged.
+    const compute = options?.compute;
+    handler[API_NAMESPACE_COMPUTE] = () =>
+      compute
+        ? compute.resolve()
+        : scope && typeof scope === 'object'
+          ? (scope as ComputeResolvingScope).compute
+          : undefined;
+    if (compute) handler[API_NAMESPACE_EXPLICIT_COMPUTE] = true;
+    if (options?.httpErrorStatus === true) handler[API_NAMESPACE_HTTP_ERROR_STATUS] = true;
+    // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }
 } as any;

@@ -5,13 +5,13 @@ import com.squareup.kotlinpoet.MemberName
 
 object ClassNames {
     // kotlinx.serialization
+    val contextual = ClassName("kotlinx.serialization", "Contextual")
     val decoder = ClassName("kotlinx.serialization.encoding", "Decoder")
-    val deserializationStrategy = ClassName("kotlinx.serialization", "DeserializationStrategy")
     val discriminator = ClassName("kotlinx.serialization.json", "JsonClassDiscriminator")
     val encoder = ClassName("kotlinx.serialization.encoding", "Encoder")
     val experimentalSerializationApi = ClassName("kotlinx.serialization", "ExperimentalSerializationApi")
-    val jsonContentPolymorphicSerializer = ClassName("kotlinx.serialization.json", "JsonContentPolymorphicSerializer")
     val jsonDecoder = ClassName("kotlinx.serialization.json", "JsonDecoder")
+    val jsonEncoder = ClassName("kotlinx.serialization.json", "JsonEncoder")
     val jsonElement = ClassName("kotlinx.serialization.json", "JsonElement")
     val jsonNull = ClassName("kotlinx.serialization.json", "JsonNull")
     val jsonObject = ClassName("kotlinx.serialization.json", "jsonObject")
@@ -31,8 +31,11 @@ object ClassNames {
 
     // kotlin.uuid
     val uuid = ClassName("kotlin.uuid", "Uuid")
+    val experimentalUuidApi = ClassName("kotlin.uuid", "ExperimentalUuidApi")
 
     // Runtime classes
+    val blocks = ClassName("com.aws.blocks.kotlin", "Blocks")
+    val blocksCompanion = blocks.nestedClass("Companion")
     val blocksClient = ClassName("com.aws.blocks.kotlin", "BlocksClient")
     val blocksJson = ClassName("com.aws.blocks.kotlin.json", "BlocksJson")
     val blocksRequest = ClassName("com.aws.blocks.kotlin", "BlocksRequest")
@@ -40,6 +43,8 @@ object ClassNames {
     val fileDownloadHandle = ClassName("com.aws.blocks.kotlin.filebucket", "FileDownloadHandle")
     val fileUploadHandle = ClassName("com.aws.blocks.kotlin.filebucket", "FileUploadHandle")
     val oidcClient = ClassName("com.aws.blocks.kotlin.oidc", "OidcClient")
+    val oidcProvider = ClassName("com.aws.blocks.kotlin.oidc", "OidcProvider")
+    val anyProvider = ClassName("com.aws.blocks.kotlin.oidc", "AnyProvider")
     val realtimeChannel = ClassName("com.aws.blocks.kotlin.realtime", "RealtimeChannel")
     val unknownTransferable = ClassName("com.aws.blocks.kotlin", "UnknownTransferable")
 }
@@ -54,6 +59,14 @@ object MemberNames {
     val encode = MemberName("kotlinx.serialization.json", "encodeToJsonElement")
     val put = MemberName("kotlinx.serialization.json", "put")
 
+    // kotlinx.serialization.builtins
+    val listSerializer = MemberName("kotlinx.serialization.builtins", "ListSerializer")
+    val mapSerializer = MemberName("kotlinx.serialization.builtins", "MapSerializer")
+    val nullable = MemberName("kotlinx.serialization.builtins", "nullable")
+    val builtinSerializer = MemberName("kotlinx.serialization.builtins", "serializer")
+
     // kotlinx.serialization.descriptors
     val buildClassSerialDescriptor = MemberName("kotlinx.serialization.descriptors", "buildClassSerialDescriptor")
+
+    val validateTransferableDescriptor = MemberName("com.aws.blocks.kotlin", "validateTransferableDescriptor")
 }

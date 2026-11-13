@@ -19,6 +19,51 @@ export const BLOCKS_NAMESPACE = '/aws-blocks';
 export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
 
 /**
+ * Whether a request path targets the RPC endpoint or any namespace under it.
+ *
+ * True for {@link BLOCKS_RPC_PREFIX} itself (the back-compat body-addressed
+ * endpoint) and for every per-namespace path beneath it
+ * (`/aws-blocks/api/{namespace}`). The whole subtree is RPC: dispatch takes the
+ * namespace from the JSON-RPC body, and a per-namespace path must name the same
+ * one (see `parseRpcRequest`), so a caller matching against it must treat the
+ * prefix and its descendants identically — e.g. the handler skips RawRoute
+ * matching for the entire subtree.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function isRpcPath(pathname: string): boolean {
+	return pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`);
+}
+
+/**
+ * Extract the API namespace from a per-namespace RPC path, or `undefined` for
+ * the bare {@link BLOCKS_RPC_PREFIX} endpoint.
+ *
+ * The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can route
+ * each namespace to the compute that hosts it; this reads that `{namespace}`
+ * segment back out on the server, where it is checked against the body's
+ * `namespace.method` prefix. Only the first segment after the prefix is the
+ * namespace; `parseRpcRequest` rejects a path that goes any deeper. Returns `undefined` for the bare
+ * `/aws-blocks/api` path (and a trailing-slash-only variant), where the body's
+ * prefix alone names the namespace.
+ *
+ * The segment is percent-decoded defensively (matching RawRoute param handling),
+ * falling back to the raw value on malformed encoding.
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function rpcNamespaceFromPath(pathname: string): string | undefined {
+	if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+	const segment = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).split('/')[0];
+	if (!segment) return undefined;
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		return segment;
+	}
+}
+
+/**
  * Reserved subtree for the auth Building Block's HTTP routes.
  *
  * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/aws-blocks`
@@ -51,3 +96,82 @@ export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
  * @internal Read by the Lambda handler and both CORS preflight responders; not public API.
  */
 export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
+
+/**
+ * The public host a request to a container compute was made to. The container
+ * builds `ctx.request.url` from it, since the request it receives carries the
+ * load balancer's host.
+ *
+ * Set by every front door, overwriting any client-sent value — which is what
+ * makes it trustworthy (the load balancer is internal, reachable only through
+ * them): the shared gateway's integration maps it from `context.domainName`, and
+ * a CloudFront behavior that routes straight to the load balancer sets it from
+ * the viewer's host in a viewer-request function. The container server accepts
+ * it only as a single host value, so a client copy sent under another letter
+ * case is refused rather than merged in.
+ *
+ * @internal Read by the container HTTP server, written by the front doors; not public API.
+ */
+export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
+
+/**
+ * Companion to {@link FORWARDED_HOST_HEADER}: the API Gateway stage that prefixes
+ * public paths (`context.stage`). Set by the gateway, removed by a CloudFront
+ * behavior that routes straight to the load balancer (CloudFront serves the API
+ * from the origin root); either way any client-sent value is overwritten.
+ *
+ * @internal Read by the container HTTP server, written by the front doors; not public API.
+ */
+export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
+
+/**
+ * The host a viewer called a Blocks CloudFront front door at (the distribution's
+ * domain or one of its custom domains), stamped by a viewer-request function on
+ * every API request the door forwards — to the shared gateway (and from there to
+ * a Lambda or a container) or straight to a container's load balancer. CloudFront
+ * drops the viewer's `Host` on the way, so this is how a handler behind it learns
+ * the public URL.
+ *
+ * Unlike {@link FORWARDED_HOST_HEADER} it is never trusted as such: the gateway is
+ * reachable directly, and a direct caller can send any value. A handler takes it
+ * only when it names one of the backend's own front-door hosts
+ * ({@link PUBLIC_HOSTS_CONFIG_KEY}), so a forged value can at most pick another of
+ * the app's own domains.
+ *
+ * @internal Read by the Lambda handler and the container HTTP server, written by the CloudFront front doors; not public API.
+ */
+export const PUBLIC_HOST_HEADER = 'x-blocks-public-host';
+
+/**
+ * Config key (and so environment variable) listing the hosts of every Blocks
+ * CloudFront front door of a backend, comma-separated: the hosts
+ * {@link PUBLIC_HOST_HEADER} may name.
+ *
+ * @internal Registered by the CloudFront front doors at synth, read at runtime; not public API.
+ */
+export const PUBLIC_HOSTS_CONFIG_KEY = 'BLOCKS_PUBLIC_HOSTS';
+
+/**
+ * Container port a container compute's HTTP server listens on: the backend's API
+ * when the compute serves API traffic, a health check otherwise.
+ *
+ * @internal Shared by the container runtime and the container compute's CDK; not public API.
+ */
+export const CONTAINER_HTTP_PORT = 8080;
+
+/**
+ * Container port the API server reports readiness on — the load balancer's health
+ * check — when the compute serves API traffic.
+ *
+ * @internal Shared by the container runtime and the container compute's CDK; not public API.
+ */
+export const CONTAINER_READINESS_PORT = 8081;
+
+/**
+ * Environment variable a container compute that serves API traffic sets (to
+ * `true`) on its tasks. The image entry serves the backend's API only then; a
+ * container that only runs jobs keeps a plain health check.
+ *
+ * @internal Shared by the container compute's CDK and its image entry; not public API.
+ */
+export const CONTAINER_SERVES_API_ENV = 'BLOCKS_CONTAINER_SERVES_API';

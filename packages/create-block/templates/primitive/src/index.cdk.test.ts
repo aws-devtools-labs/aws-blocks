@@ -9,19 +9,18 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { Scope } from '@aws-blocks/core/cdk';
 import { __BB_CLASS__ } from './index.cdk.js';
 
-// Minimal BlocksStack-shaped parent so __BB_CLASS__ can grant IAM on this.handler
-// and synth into a real stack. Mirrors the shape a real BlocksStack exposes.
+// Minimal BlocksStack-shaped parent so __BB_CLASS__ can grant IAM on
+// this.executionRole and synth into a real stack. Mirrors the shape a real
+// BlocksStack exposes.
 class StubBlocksStack extends cdk.Stack {
-	public readonly handler: cdk.aws_lambda.Function;
+	public readonly executionRole: cdk.aws_iam.Role;
 	public readonly id: string;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
 		(globalThis as { CURRENT_BLOCKS_STACK?: unknown }).CURRENT_BLOCKS_STACK = this;
-		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
-			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
-			handler: 'index.handler',
-			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+		this.executionRole = new cdk.aws_iam.Role(this, 'StubExecutionRole', {
+			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
 		});
 	}
 }

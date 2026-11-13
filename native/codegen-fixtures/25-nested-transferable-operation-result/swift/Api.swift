@@ -1,11 +1,16 @@
 import Foundation
 import BlocksRuntime
 
-public class Api {
+public final nonisolated class Api: Sendable {
     private let client: BlocksClient
 
-    public init(server: BlocksServer = Servers.local) {
-        self.client = BlocksClient(server: server)
+    public init(client: BlocksClient) {
+        self.client = client
+    }
+
+    @available(*, deprecated, message: "Use blocks.api from one Blocks() or Blocks(server:) you hold")
+    public convenience init(server: BlocksServer = Servers.local) {
+        self.init(client: BlocksClient(server: server))
     }
 
     /// Calls `api.getSession`.
@@ -34,23 +39,52 @@ public class Api {
             public let sessionId: String
             public let stringValues: RealtimeChannel<[String]>
 
+            public init(channel: RealtimeChannel<ChannelMessage>, event: Event, inner: Inner, integerValues: RealtimeChannel<[Int]>, sessionId: String, stringValues: RealtimeChannel<[String]>) {
+                self.channel = channel
+                self.event = event
+                self.inner = inner
+                self.integerValues = integerValues
+                self.sessionId = sessionId
+                self.stringValues = stringValues
+            }
+
             public struct ChannelMessage: Codable {
                 public let text: String
+
+                public init(text: String) {
+                    self.text = text
+                }
             }
 
             public struct Message: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let body: String
+
+                    public init(body: String) {
+                        self.body = body
+                    }
                 }
             }
 
             public struct Presence: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let online: Bool
+
+                    public init(online: Bool) {
+                        self.online = online
+                    }
                 }
             }
 
@@ -89,8 +123,16 @@ public class Api {
             public struct Inner: Codable {
                 public let channel: RealtimeChannel<ChannelMessage>
 
+                public init(channel: RealtimeChannel<ChannelMessage>) {
+                    self.channel = channel
+                }
+
                 public struct ChannelMessage: Codable {
                     public let count: Int
+
+                    public init(count: Int) {
+                        self.count = count
+                    }
                 }
             }
         }
@@ -101,16 +143,53 @@ public class Api {
         public struct Result: Codable {
             public let channel: RealtimeChannel<ChannelMessage>
 
+            public init(channel: RealtimeChannel<ChannelMessage>) {
+                self.channel = channel
+            }
+
             public struct ChannelMessage: Codable {
                 public let count: Int
+
+                public init(count: Int) {
+                    self.count = count
+                }
             }
         }
     }
 }
 
 
+// MARK: - Blocks
+
+/// One BlocksClient, so one URLSession (RPC and OIDC calls) and one token store, for every namespace in this spec;
+/// file transfers and realtime use the shared runtime session. Hold one while the backend is in use: `let blocks = Blocks()`.
+public final nonisolated class Blocks: Sendable {
+    /// The server every API calls.
+    public let server: BlocksRuntime.BlocksServer
+    /// The client every API runs on.
+    public let client: BlocksRuntime.BlocksClient
+
+    public let api: Api
+
+    /// Defaults to the spec's first server; a `session` you pass stays yours.
+    public init(
+        server: BlocksRuntime.BlocksServer = Servers.local,
+        session: URLSession? = nil,
+        tokenStore: any BlocksRuntime.TokenStore = BlocksRuntime.InMemoryTokenStore()
+    ) {
+        self.server = server
+        self.client = BlocksRuntime.BlocksClient(server: server, session: session, tokenStore: tokenStore)
+        self.api = .init(client: client)
+    }
+
+    /// Later calls throw ClientClosedError; calls in flight finish, then the session this instance created is released.
+    public func close() {
+        client.close()
+    }
+}
+
 // MARK: - Servers
 
-public enum Servers {
+public nonisolated enum Servers {
     public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
 }

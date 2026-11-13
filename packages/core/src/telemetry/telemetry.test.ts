@@ -1,12 +1,12 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert';
-import { createServer, type Server } from 'node:http';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { isTelemetryEnabled } from './consent.js';
+import { isDisableValue, isTelemetryEnabled } from './consent.js';
 import { detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
@@ -17,6 +17,94 @@ import { Scope, OFFICIAL_BB_NAMES } from '../common/index.js';
 import type { ScopeParent } from '../common/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function writeTelemetryConfig(dir: string, enabled: boolean): void {
+  mkdirSync(join(dir, '.blocks'), { recursive: true });
+  writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
+}
+
+interface DisableValueCase {
+  value: string | null;
+  expected: boolean;
+}
+
+const { cases }: { cases: DisableValueCase[] } = JSON.parse(
+  readFileSync(new URL('../../src/telemetry/disable-value-cases.test.json', import.meta.url), 'utf-8'),
+);
+
+const DEAD_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+/** Bound for tests that wait on the detached send worker to reach the local collector. */
+const DELIVERY_TIMEOUT = { timeout: 10_000 };
+
+/**
+ * Starts a local telemetry collector on an ephemeral port. Cleanup (dropping
+ * open connections, awaiting server close) is registered on `t` before the
+ * server listens, so it runs even when an assertion fails or the test times
+ * out; otherwise the open listener would keep the test process alive.
+ *
+ * `delivered` resolves once `expected` requests have been fully read and
+ * answered, so positive tests can wait for delivery instead of sleeping.
+ */
+async function startCollector(t: TestContext, expected = 1) {
+  const received: string[] = [];
+  const server = createServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  const delivered = new Promise<void>((resolve) => {
+    server.on('request', (req, res) => {
+      let body = '';
+      req.on('data', (chunk: string) => { body += chunk; });
+      req.on('end', () => {
+        received.push(body);
+        res.writeHead(200);
+        res.end(() => { if (received.length >= expected) resolve(); });
+      });
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address() as { port: number };
+  return { received, delivered, endpoint: `http://127.0.0.1:${port}/collect` };
+}
+
+function spawnTelemetryChild(
+  script: string,
+  argv: string[],
+  options: { home: string; cwd?: string; disable?: string; timeout?: number; env?: Record<string, string> },
+) {
+  return spawnSync(process.execPath, ['--input-type=module', '-e', script, ...argv], {
+    encoding: 'utf-8',
+    cwd: options.cwd ?? options.home,
+    timeout: options.timeout ?? 30_000,
+    env: {
+      ...process.env,
+      HOME: options.home,
+      USERPROFILE: options.home,
+      AWS_BLOCKS_DISABLE_TELEMETRY: options.disable ?? '',
+      BLOCKS_TELEMETRY_ENDPOINT: DEAD_ENDPOINT,
+      ...options.env,
+    },
+  });
+}
+
+describe('telemetry/isDisableValue (shared case table)', () => {
+  it('loads the shared case table', () => {
+    assert.ok(cases.length > 10, `expected the shared disable-value cases, got ${cases.length}`);
+  });
+
+  for (const testCase of cases) {
+    it(`${JSON.stringify(testCase.value)} → ${testCase.expected}`, () => {
+      assert.strictEqual(isDisableValue(testCase.value ?? undefined), testCase.expected);
+    });
+  }
+});
 
 describe('telemetry/consent', () => {
   const originalEnv = { ...process.env };
@@ -33,21 +121,39 @@ describe('telemetry/consent', () => {
     assert.strictEqual(isTelemetryEnabled(), false);
   });
 
-  it('returns true when AWS_BLOCKS_DISABLE_TELEMETRY is not 1', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '0';
-    delete process.env.CI;
-    delete process.env.CONTINUOUS_INTEGRATION;
-    delete process.env.BUILD_NUMBER;
-    delete process.env.CODEBUILD_BUILD_ID;
-    delete process.env.GITHUB_ACTIONS;
-    delete process.env.GITLAB_CI;
-    delete process.env.CIRCLECI;
-    delete process.env.JENKINS_URL;
-    delete process.env.TF_BUILD;
-    delete process.env.BITBUCKET_BUILD_NUMBER;
-    delete process.env.BUILDKITE;
-    assert.strictEqual(isTelemetryEnabled(), true);
-  });
+  for (const value of ['true', 'TRUE', 'yes', ' true ']) {
+    it(`returns false when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = value;
+      delete process.env.CI;
+      assert.strictEqual(isTelemetryEnabled(), false);
+    });
+  }
+
+  // Driven in a child process: afterEach replaces `process.env`, severing HOME.
+  const CONSENT_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { isTelemetryEnabled } = await import(moduleUrl);
+  process.stdout.write(String(isTelemetryEnabled()));
+  `;
+
+  for (const value of ['0', 'false', '']) {
+    it(`stays enabled when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      const home = mkdtempSync(join(tmpdir(), 'blocks-consent-home-'));
+      const consentUrl = new URL('./consent.js', import.meta.url).href;
+
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
+        encoding: 'utf-8',
+        cwd: home,
+        timeout: 30_000,
+        env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: value, PATH: process.env.PATH ?? '' },
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(result.stdout, 'true');
+
+      rmSync(home, { recursive: true, force: true });
+    });
+  }
 
   it('returns true in CI (CI does not suppress telemetry)', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
@@ -57,6 +163,117 @@ describe('telemetry/consent', () => {
     process.chdir(tmp);
     assert.strictEqual(isTelemetryEnabled(), true);
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe('global × project precedence (shared case table)', () => {
+    interface PrecedenceCase {
+      name: string;
+      global: boolean | null;
+      project: boolean | null;
+      expected: boolean;
+    }
+
+    const { cases }: { cases: PrecedenceCase[] } = JSON.parse(
+      readFileSync(new URL('../../src/telemetry/consent-precedence-cases.test.json', import.meta.url), 'utf-8'),
+    );
+
+    it('pins the shared case table contents', () => {
+      assert.deepStrictEqual(
+        cases.map((c) => [c.name, c.global, c.project, c.expected]),
+        [
+          ['no config either side', null, null, true],
+          ['project enables, no global', null, true, true],
+          ['project disables, no global', null, false, false],
+          ['global enables, no project', true, null, true],
+          ['both enable', true, true, true],
+          ['project disables over a global enable', true, false, false],
+          ['global disables, no project', false, null, false],
+          ['project cannot re-enable a global disable', false, true, false],
+          ['both disable', false, false, false],
+        ],
+      );
+    });
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-home-'));
+        const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-proj-'));
+        if (testCase.global !== null) writeTelemetryConfig(home, testCase.global);
+        if (testCase.project !== null) writeTelemetryConfig(project, testCase.project);
+
+        const consentUrl = new URL('./consent.js', import.meta.url).href;
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
+          encoding: 'utf-8',
+          cwd: project,
+          timeout: 30_000,
+          env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: '', CI: '', PATH: process.env.PATH ?? '' },
+        });
+
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(result.stdout, String(testCase.expected));
+
+        rmSync(home, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+      });
+    }
+
+    const EMIT_CHILD = `
+    const [moduleUrl] = process.argv.slice(1);
+    const { buildAndSendEvent } = await import(moduleUrl);
+    buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
+    `;
+
+    /**
+     * Emits one event from a child process and returns how many requests the
+     * collector received. With `expectRequest`, waits for delivery; otherwise
+     * observes a fixed 1 s window to show nothing arrives.
+     */
+    async function countHttpRequests(
+      t: TestContext,
+      options: { global?: boolean; project?: boolean },
+      expectRequest: boolean,
+    ): Promise<number> {
+      const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-home-'));
+      const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-proj-'));
+      t.after(() => {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+      });
+      const collector = await startCollector(t);
+      if (options.global !== undefined) writeTelemetryConfig(home, options.global);
+      if (options.project !== undefined) writeTelemetryConfig(project, options.project);
+
+      const clientUrl = new URL('./client.js', import.meta.url).href;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', EMIT_CHILD, clientUrl], {
+        encoding: 'utf-8',
+        cwd: project,
+        timeout: 30_000,
+        env: {
+          HOME: home,
+          USERPROFILE: home,
+          AWS_BLOCKS_DISABLE_TELEMETRY: '',
+          CI: '',
+          PATH: process.env.PATH ?? '',
+          BLOCKS_TELEMETRY_ENDPOINT: collector.endpoint,
+        },
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+
+      if (expectRequest) {
+        await collector.delivered;
+      } else {
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+      return collector.received.length;
+    }
+
+    it('sends an HTTP request when only the project config enables (positive control)', DELIVERY_TIMEOUT, async (t) => {
+      assert.strictEqual(await countHttpRequests(t, { project: true }, true), 1);
+    });
+
+    it('sends no HTTP request when the global config disables and the project config enables', async (t) => {
+      assert.strictEqual(await countHttpRequests(t, { global: false, project: true }, false), 0);
+    });
   });
 
   it('returns true in CI when project config explicitly enables telemetry', () => {
@@ -110,6 +327,140 @@ describe('telemetry/consent', () => {
     process.chdir(tmp);
     assert.strictEqual(isTelemetryEnabled(), false);
     rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('telemetry/opt-out persists no identifiers even with --telemetry-file', () => {
+  // Driven in a child process: the id helpers write to the real HOME and cwd.
+  const EMIT_CHILD = `
+  const [moduleUrl] = process.argv.slice(1);
+  const { buildAndSendEvent } = await import(moduleUrl);
+  buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
+  `;
+
+  const moduleUrl = new URL('./client.js', import.meta.url).href;
+
+  const disableValues = cases.filter(c => c.expected && c.value !== null).map(c => c.value as string);
+
+  it('pins the shared disable values', () => {
+    assert.deepStrictEqual(disableValues, ['1', 'true', 'TRUE', 'yes', 'YES', ' true ', ' 1 ']);
+  });
+
+  it('writes the identifiers and the file when telemetry is enabled', () => {
+    const home = mkdtempSync(join(tmpdir(), 'blocks-optin-home-'));
+    const project = mkdtempSync(join(tmpdir(), 'blocks-optin-proj-'));
+    const sink = mkdtempSync(join(tmpdir(), 'blocks-optin-sink-'));
+    const telemetryFile = join(sink, 'events.json');
+
+    const result = spawnTelemetryChild(EMIT_CHILD, [moduleUrl, `--telemetry-file=${telemetryFile}`], {
+      cwd: project,
+      home,
+    });
+
+    try {
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.ok(existsSync(join(home, '.blocks', 'telemetry', 'installation-id')), 'installation-id must be written');
+      assert.ok(existsSync(join(project, '.blocks', 'config.json')), 'project config.json must be written');
+      assert.ok(existsSync(telemetryFile), '--telemetry-file must be written');
+      assert.strictEqual(JSON.parse(readFileSync(telemetryFile, 'utf-8')).length, 1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+      rmSync(sink, { recursive: true, force: true });
+    }
+  });
+
+  for (const value of disableValues) {
+    it(`writes no identifiers and sends nothing when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+      const home = mkdtempSync(join(tmpdir(), 'blocks-optout-home-'));
+      const project = mkdtempSync(join(tmpdir(), 'blocks-optout-proj-'));
+      const sink = mkdtempSync(join(tmpdir(), 'blocks-optout-sink-'));
+      const telemetryFile = join(sink, 'events.json');
+
+      const result = spawnTelemetryChild(EMIT_CHILD, [moduleUrl, `--telemetry-file=${telemetryFile}`], {
+        cwd: project,
+        home,
+        disable: value,
+        env: { NODE_DEBUG: 'blocks-telemetry' },
+      });
+
+      try {
+        assert.strictEqual(result.status, 0, result.stderr);
+        const idFile = join(home, '.blocks', 'telemetry', 'installation-id');
+        assert.ok(!existsSync(idFile), 'installation-id must not be written');
+        assert.ok(!existsSync(join(project, '.blocks', 'config.json')), 'project config.json must not be written');
+        assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
+        assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
+        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+        rmSync(sink, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe('telemetry/trackCommand honors a mid-run opt-out', () => {
+  // D-018 claims core needs no second consent check because trackCommand's finally
+  // re-enters buildAndSendEvent.
+  it('writes no identifiers and no file when the opt-out lands while the command runs', () => {
+    const home = mkdtempSync(join(tmpdir(), 'blocks-midrun-home-'));
+    const project = mkdtempSync(join(tmpdir(), 'blocks-midrun-proj-'));
+    const telemetryFile = join(project, 'events.json');
+
+    const CHILD = `
+    import { mkdirSync, writeFileSync } from 'node:fs';
+    import { homedir } from 'node:os';
+    import { join } from 'node:path';
+    const [moduleUrl] = process.argv.slice(1);
+    const { trackCommand } = await import(moduleUrl);
+    await trackCommand('deploy', async () => {
+      const d = join(homedir(), '.blocks');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
+    });
+    `;
+
+    const result = spawnTelemetryChild(
+      CHILD,
+      [new URL('./trackCommand.js', import.meta.url).href, `--telemetry-file=${telemetryFile}`],
+      { cwd: project, home },
+    );
+
+    try {
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.ok(
+        !existsSync(join(home, '.blocks', 'telemetry', 'installation-id')),
+        'installation-id must not be written',
+      );
+      assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
+      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('telemetry/buildEvent is not reachable through the package surface', () => {
+  const pkg: { exports: Record<string, unknown> } = JSON.parse(
+    readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),
+  );
+
+  it('core exposes no ./telemetry subpath and no wildcard export', () => {
+    const keys = Object.keys(pkg.exports);
+    assert.ok(!keys.includes('./telemetry'), `./telemetry must not be exported, got ${keys.join(', ')}`);
+    assert.deepStrictEqual(keys.filter(k => k.includes('*')), [], 'no wildcard subpath may be exported');
+  });
+
+  it('the ./scripts entry point re-exports buildAndSendEvent but not buildEvent', () => {
+    const src = readFileSync(new URL('../../src/scripts/index.ts', import.meta.url), 'utf-8');
+    assert.match(src, /\bbuildAndSendEvent\b/, 'buildAndSendEvent is the sanctioned entry point');
+    assert.doesNotMatch(
+      src, /\bbuildEvent\b/,
+      'buildEvent must not be re-exported — consent is enforced at its caller',
+    );
   });
 });
 
@@ -387,24 +738,11 @@ describe('telemetry/trackCommand', () => {
 });
 
 describe('telemetry/client', () => {
-  it('buildAndSendEvent sends event when telemetry is enabled', async () => {
+  it('buildAndSendEvent sends event when telemetry is enabled', DELIVERY_TIMEOUT, async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -417,11 +755,11 @@ describe('telemetry/client', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1234 });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]);
@@ -434,61 +772,29 @@ describe('telemetry/client', () => {
     assert.ok(parsed.identifiers.eventId);
     assert.ok(parsed.product.blocksVersion);
     assert.ok(parsed.environment.os);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
-  it('buildAndSendEvent does not send HTTP when telemetry is disabled', async () => {
+  it('buildAndSendEvent does not send HTTP when telemetry is disabled', async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 500 });
 
     await new Promise((r) => setTimeout(r, 200));
 
     assert.strictEqual(received.length, 0);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
-  it('sendEvent fires HTTP POST to configured endpoint', async () => {
+  it('sendEvent fires HTTP POST to configured endpoint', DELIVERY_TIMEOUT, async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     const event: BlocksTelemetryEvent = {
       telemetryVersion: '1.0.0',
@@ -504,7 +810,7 @@ describe('telemetry/client', () => {
 
     sendEvent(event);
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]);
@@ -518,14 +824,11 @@ describe('telemetry/client', () => {
     assert.strictEqual(parsed.environment.os, 'linux');
     assert.strictEqual(parsed.environment.nodeVersion, '22.0.0');
     assert.strictEqual(parsed.environment.ci, false);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
   it('sendEvent does not throw on network error', () => {
     const originalEnv = { ...process.env };
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/unreachable';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     const event: BlocksTelemetryEvent = {
       telemetryVersion: '1.0.0',
@@ -546,24 +849,9 @@ describe('telemetry/client', () => {
 });
 
 describe('telemetry/send-worker', () => {
-  it('worker POSTs payload from stdin to endpoint', async () => {
-    const received: string[] = [];
+  it('worker POSTs payload from stdin to endpoint', async (t) => {
+    const { received, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
-    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
     const payload = JSON.stringify({ test: true, command: 'dev' });
     const workerPath = join(__dirname, 'telemetry-send-worker.js');
 
@@ -580,8 +868,6 @@ describe('telemetry/send-worker', () => {
     assert.strictEqual(exitCode, 0);
     assert.strictEqual(received.length, 1);
     assert.deepStrictEqual(JSON.parse(received[0]), { test: true, command: 'dev' });
-
-    server.close();
   });
 
   it('worker exits with 1 on unreachable endpoint', async () => {
@@ -589,7 +875,7 @@ describe('telemetry/send-worker', () => {
     const workerPath = join(__dirname, 'telemetry-send-worker.js');
 
     const exitCode = await new Promise<number | null>((resolve) => {
-      const proc = spawnChild(process.execPath, [workerPath, 'http://127.0.0.1:1/unreachable'], {
+      const proc = spawnChild(process.execPath, [workerPath, DEAD_ENDPOINT], {
         stdio: ['pipe', 'ignore', 'ignore'],
         env: { ...process.env, NODE_OPTIONS: '' },
       });
@@ -601,18 +887,9 @@ describe('telemetry/send-worker', () => {
     assert.strictEqual(exitCode, 1);
   });
 
-  it('worker writes debug output to stderr when NODE_DEBUG is set', async () => {
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => { res.writeHead(200); res.end(); });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
+  it('worker writes debug output to stderr when NODE_DEBUG is set', async (t) => {
+    const { endpoint } = await startCollector(t);
 
-    const addr = server.address() as { port: number };
-    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
     const payload = JSON.stringify({ test: true });
     const workerPath = join(__dirname, 'telemetry-send-worker.js');
 
@@ -630,8 +907,6 @@ describe('telemetry/send-worker', () => {
 
     assert.strictEqual(result.code, 0);
     assert.ok(result.stderr.includes('BLOCKS-TELEMETRY: sent (status=200)'), `Expected debug output, got: ${result.stderr}`);
-
-    server.close();
   });
 });
 
@@ -642,23 +917,9 @@ describe('telemetry/trackCommand integration', () => {
     process.env = { ...originalEnv };
   });
 
-  it('sends telemetry event matching server schema on successful command', async () => {
-    const received: string[] = [];
+  it('sends telemetry event matching server schema on successful command', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -671,13 +932,13 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await trackCommand('deploy', async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -700,27 +961,11 @@ describe('telemetry/trackCommand integration', () => {
     for (const key of Object.keys(parsed)) {
       assert.ok(allowedTopLevel.includes(key), `Unexpected top-level field: ${key}`);
     }
-
-    server.close();
   });
 
-  it('sends telemetry event with error info on failure', async () => {
-    const received: string[] = [];
+  it('sends telemetry event with error info on failure', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -733,7 +978,7 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await assert.rejects(
       () => trackCommand('sandbox', async () => {
@@ -742,7 +987,7 @@ describe('telemetry/trackCommand integration', () => {
       { message: 'Deployment failed: stack update failed' },
     );
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -751,27 +996,11 @@ describe('telemetry/trackCommand integration', () => {
     assert.ok(parsed.event.error);
     assert.strictEqual(parsed.event.error!.code, 'CDK_DEPLOY_FAILED');
     assert.strictEqual(parsed.event.error!.phase, 'deploy');
-
-    server.close();
   });
 
-  it('includes product and counters when options provided', async () => {
-    const received: string[] = [];
+  it('includes product and counters when options provided', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -784,7 +1013,7 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await trackCommand('create-blocks-app', async () => {}, {
       template: 'demo',
@@ -792,7 +1021,7 @@ describe('telemetry/trackCommand integration', () => {
       blocksCount: 2,
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -803,8 +1032,6 @@ describe('telemetry/trackCommand integration', () => {
     assert.strictEqual(parsed.product!.buildingBlocks, undefined);
     assert.ok(parsed.counters);
     assert.strictEqual(parsed.counters!.blocksCount, 2);
-
-    server.close();
   });
 });
 
@@ -828,10 +1055,55 @@ describe('telemetry/identifiers first-run notice', () => {
       cwd: __dirname,
     });
 
-    assert.ok(result.stderr.includes('AWS Blocks collects anonymous usage data to improve the product.'));
-    assert.ok(result.stderr.includes('No customer content or PII is collected.'));
+    assert.ok(result.stderr.includes('AWS Blocks collects usage data to improve the product.'));
     assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'));
     assert.ok(result.stdout.trim().length > 0, 'Should output an installation ID');
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('first-run notice states what is sent, does not claim "no PII", and gives opt-outs that work everywhere', () => {
+    const tmp = join(tmpdir(), `blocks-test-firstrun-wording-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+
+    const script = `
+      import { getInstallationId } from './identifiers.js';
+      getInstallationId();
+    `;
+
+    const result = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e', script,
+    ], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmp },
+      cwd: __dirname,
+    });
+    const notice = result.stderr;
+
+    // The endpoint sees the source IP of every request, so the notice must not
+    // promise that no personal data reaches it, and must say so in full.
+    assert.doesNotMatch(notice, /\bPII\b/);
+    assert.doesNotMatch(notice, /anonymous/i);
+    assert.ok(notice.includes('The collection endpoint also receives your IP address, as with any HTTPS request.'), notice);
+    // What the service keeps, and for how long: the IP address is dropped from accepted requests,
+    // events are kept for up to 1 year and logs of all requests for up to 10 years.
+    assert.match(notice, /It is not stored, except in logs of requests that the endpoint's firewall blocks\./);
+    assert.match(notice, /Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years\./);
+    // The sender sets no User-Agent header, so only the payload's package manager user agent is claimed.
+    assert.doesNotMatch(notice, /IP address and user agent/);
+    // What the event itself carries, and what it never carries.
+    assert.match(notice, /random installation and project IDs, and an event ID and timestamp/);
+    assert.match(notice, /the template name and version/);
+    assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
+    assert.match(notice, /custom Building Block names are never sent/);
+    assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
+    // Opt-outs that work from any directory, and the scope of the commands without --global.
+    assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
+    assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
+    assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
+    assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
+    assert.match(notice, /Without --global, these commands opt out the current app only\./);
 
     rmSync(tmp, { recursive: true, force: true });
   });
@@ -911,7 +1183,7 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1234 });
 
@@ -931,19 +1203,19 @@ describe('telemetry/--telemetry-file flag', () => {
     assert.strictEqual(getTelemetryFilePath(), undefined);
   });
 
-  it('writes file even when telemetry is disabled (matches CDK behavior)', () => {
+  it('does not write file when telemetry is disabled', () => {
     const filePath = join(tmpdir(), `blocks-telemetry-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
 
-    assert.ok(existsSync(filePath), 'File should be written even when telemetry is disabled');
-    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
-    assert.strictEqual(events.length, 1);
-    assert.strictEqual(events[0].event.command, 'deploy');
-
-    rmSync(dirname(filePath), { recursive: true, force: true });
+    try {
+      assert.ok(!existsSync(filePath), 'File must not be written when telemetry is disabled');
+    } finally {
+      rmSync(dirname(filePath), { recursive: true, force: true });
+    }
   });
 
   it('creates parent directories for telemetry file', () => {
@@ -963,7 +1235,7 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'sandbox', state: 'SUCCESS', duration: 100 });
 
@@ -995,7 +1267,7 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 200 });
 
@@ -1007,26 +1279,13 @@ describe('telemetry/--telemetry-file flag', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('still sends HTTP when --telemetry-file is set (additive)', async () => {
+  it('still sends HTTP when --telemetry-file is set (additive)', DELIVERY_TIMEOUT, async (t) => {
     const tmp = join(tmpdir(), `blocks-telemetry-both-test-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -1039,11 +1298,11 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     // File sink fired
     assert.ok(existsSync(filePath));
@@ -1052,52 +1311,28 @@ describe('telemetry/--telemetry-file flag', () => {
 
     // HTTP sink also fired
     assert.strictEqual(received.length, 1);
-
-    server.close();
-    rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('writes file but does NOT send HTTP when telemetry is disabled', async () => {
+  it('writes no file and sends no HTTP when telemetry is disabled', async (t) => {
     const tmp = join(tmpdir(), `blocks-telemetry-file-no-http-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, endpoint } = await startCollector(t);
 
-    const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
 
     await new Promise((r) => setTimeout(r, 200));
 
-    // File sink fired (regardless of opt-out)
-    assert.ok(existsSync(filePath), 'File should be written even when telemetry is disabled');
-    const events = JSON.parse(readFileSync(filePath, 'utf-8'));
-    assert.strictEqual(events.length, 1);
-    assert.strictEqual(events[0].event.command, 'deploy');
+    assert.ok(!existsSync(filePath), 'File must not be written when telemetry is disabled');
 
-    // HTTP sink did NOT fire
     assert.strictEqual(received.length, 0, 'HTTP should NOT be sent when telemetry is disabled');
-
-    server.close();
-    rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('writes file even when telemetry is disabled via project config (matches CDK behavior)', () => {
+  it('does not write file when telemetry is disabled via project config', () => {
     const filePath = join(tmpdir(), `blocks-telemetry-config-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
@@ -1112,6 +1347,7 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     const configDir = join(process.cwd(), '.blocks');
     const configPath = join(configDir, 'config.json');
@@ -1122,17 +1358,15 @@ describe('telemetry/--telemetry-file flag', () => {
 
     try {
       buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
-      assert.ok(existsSync(filePath), 'File should be written even when project config disables telemetry');
-      const events = JSON.parse(readFileSync(filePath, 'utf-8'));
-      assert.strictEqual(events.length, 1);
-      assert.strictEqual(events[0].event.command, 'deploy');
-      rmSync(dirname(filePath), { recursive: true, force: true });
+      assert.ok(!existsSync(filePath), 'File must not be written when project config disables telemetry');
     } finally {
-      if (had) writeFileSync(configPath, original!);
+      // Restore first: a throwing rmSync must not skip it and leave telemetry disabled.
+      if (original !== null) writeFileSync(configPath, original);
       else rmSync(configDir, { recursive: true, force: true });
+      rmSync(dirname(filePath), { recursive: true, force: true });
     }
   });
-  it('writes file even when telemetry is disabled via global config (matches CDK behavior)', () => {
+  it('does not write file when telemetry is disabled via global config', () => {
     const filePath = join(tmpdir(), `blocks-telemetry-global-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
@@ -1147,6 +1381,7 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     // Use homedir() to find the actual global config path (os.homedir reads
     // from native env, not the plain-object process.env that afterEach installs).
@@ -1159,17 +1394,11 @@ describe('telemetry/--telemetry-file flag', () => {
 
     try {
       buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
-      assert.ok(existsSync(filePath), 'File should be written even when global config disables telemetry');
-      const events = JSON.parse(readFileSync(filePath, 'utf-8'));
-      assert.strictEqual(events.length, 1);
-      assert.strictEqual(events[0].event.command, 'deploy');
-      rmSync(dirname(filePath), { recursive: true, force: true });
+      assert.ok(!existsSync(filePath), 'File must not be written when global config disables telemetry');
     } finally {
-      if (hadConfig) {
-        writeFileSync(globalConfigPath, originalConfig!);
-      } else {
-        rmSync(globalConfigPath, { force: true });
-      }
+      if (originalConfig !== null) writeFileSync(globalConfigPath, originalConfig);
+      else rmSync(globalConfigPath, { force: true });
+      rmSync(dirname(filePath), { recursive: true, force: true });
     }
   });
 
@@ -1186,6 +1415,11 @@ describe('telemetry/--telemetry-file flag', () => {
 
   it('rejects whitespace-only path', () => {
     process.argv = ['node', 'script.js', '--telemetry-file=   '];
+    assert.strictEqual(getTelemetryFilePath(), undefined);
+  });
+
+  it('rejects whitespace-only path in space-separated form', () => {
+    process.argv = ['node', 'script.js', '--telemetry-file', '   '];
     assert.strictEqual(getTelemetryFilePath(), undefined);
   });
 
@@ -1209,6 +1443,262 @@ describe('telemetry/--telemetry-file flag', () => {
     const content = JSON.parse(readFileSync(filePath, 'utf-8'));
     assert.deepStrictEqual(content, [{ existing: true }]);
     rmSync(dirname(filePath), { recursive: true, force: true });
+  });
+
+  it('keeps every event when one run emits several', () => {
+    const tmp = join(tmpdir(), `blocks-telemetry-multi-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+
+    try {
+      buildAndSendEvent({
+        command: 'dev', state: 'FAIL', duration: 1, error: { code: 'PORT_IN_USE', phase: 'startup' },
+      });
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+      buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 3 });
+
+      const events = JSON.parse(readFileSync(filePath, 'utf-8'));
+      assert.strictEqual(events.length, 3, 'A run emitting several events must keep all of them');
+      assert.deepStrictEqual(
+        events.map((e: BlocksTelemetryEvent) => [e.event.command, e.event.state]),
+        [['dev', 'FAIL'], ['dev', 'SUCCESS'], ['deploy', 'SUCCESS']],
+        'Events must be kept in emission order',
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an append failure on stderr when NODE_DEBUG is set', () => {
+    const tmp = join(tmpdir(), `blocks-telemetry-debug-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    mkdirSync(tmp, { recursive: true });
+    const spawnCwd = mkdtempSync(join(tmpdir(), 'blocks-append-cwd-'));
+    const spawnHome = mkdtempSync(join(tmpdir(), 'blocks-append-home-'));
+
+    const script = `
+      import { writeFileSync } from 'node:fs';
+      const [moduleUrl] = process.argv.slice(1);
+      const { buildAndSendEvent } = await import(moduleUrl);
+      process.argv = ['node', 'script.js', '--telemetry-file=' + ${JSON.stringify(filePath)}];
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+      writeFileSync(${JSON.stringify(filePath)}, 'not json');
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+    `;
+
+    // Consented, because D-018 means an opted-out run writes no file to append to.
+    const result = spawnTelemetryChild(script, [new URL('./client.js', import.meta.url).href], {
+      // A temp cwd, not __dirname: a consented run persists a project id into
+      // <cwd>/.blocks/config.json, and `files: ["dist"]` would ship it in the tarball.
+      cwd: spawnCwd,
+      home: spawnHome,
+      timeout: 20_000,
+      env: { NODE_DEBUG: 'blocks-telemetry' },
+    });
+
+    try {
+      assert.match(
+        result.stderr ?? '', /failed to append telemetry event/,
+        `Expected debug output, got: ${result.stderr}`,
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+      rmSync(spawnCwd, { recursive: true, force: true });
+      rmSync(spawnHome, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the file alone when its content stops being a JSON array mid-run', () => {
+    const tmp = join(tmpdir(), `blocks-telemetry-clobber-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+
+    try {
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+      writeFileSync(filePath, 'not json');
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+
+      assert.strictEqual(readFileSync(filePath, 'utf-8'), 'not json');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not append to a foreign file when the cwd changes under a relative path', () => {
+    const owned = join(tmpdir(), `blocks-telemetry-cwd-a-${Date.now()}`);
+    const foreign = join(tmpdir(), `blocks-telemetry-cwd-b-${Date.now()}`);
+    mkdirSync(owned, { recursive: true });
+    mkdirSync(foreign, { recursive: true });
+    writeFileSync(join(foreign, 'events.json'), '[{"USER_AUTHORED":true}]');
+    const spawnCwd = mkdtempSync(join(tmpdir(), 'blocks-append-cwd-'));
+    const spawnHome = mkdtempSync(join(tmpdir(), 'blocks-append-home-'));
+
+    // Ownership is keyed on the resolved path, so the same relative spelling under a
+    // different cwd is a different file and must not be treated as ours.
+    const script = `
+      const [moduleUrl] = process.argv.slice(1);
+      const { buildAndSendEvent } = await import(moduleUrl);
+      process.argv = ['node', 'script.js', '--telemetry-file=events.json'];
+      process.chdir(${JSON.stringify(owned)});
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+      process.chdir(${JSON.stringify(foreign)});
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+    `;
+
+    try {
+      // Consented: D-018 means an opted-out run writes nothing, which would make the
+      // assertion below pass without exercising the ownership check at all.
+      const result = spawnTelemetryChild(script, [new URL('./client.js', import.meta.url).href], {
+        cwd: spawnCwd,
+        home: spawnHome,
+        timeout: 20_000,
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(
+        readFileSync(join(foreign, 'events.json'), 'utf-8'), '[{"USER_AUTHORED":true}]',
+        'a file this run did not create must be left untouched',
+      );
+    } finally {
+      rmSync(owned, { recursive: true, force: true });
+      rmSync(foreign, { recursive: true, force: true });
+      rmSync(spawnCwd, { recursive: true, force: true });
+      rmSync(spawnHome, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a clobbered non-array file intact even when Object.prototype is polluted', () => {
+    const tmp = join(tmpdir(), `blocks-telemetry-proto-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    mkdirSync(tmp, { recursive: true });
+    const spawnCwd = mkdtempSync(join(tmpdir(), 'blocks-append-cwd-'));
+    const spawnHome = mkdtempSync(join(tmpdir(), 'blocks-append-home-'));
+
+    // The child creates the file itself, so the path is owned and the append path
+    // is reachable. A polluted push makes a plain object pushable, so only an explicit array
+    // check keeps the sink from writing a mutated user object back to disk.
+    const script = `
+      Object.prototype.push = function (x) { this.polluted = x; return 1; };
+      const { writeFileSync } = await import('node:fs');
+      const [moduleUrl] = process.argv.slice(1);
+      const { buildAndSendEvent } = await import(moduleUrl);
+      process.argv = ['node', 'script.js', '--telemetry-file=' + ${JSON.stringify(filePath)}];
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+      writeFileSync(${JSON.stringify(filePath)}, '{"USER_AUTHORED":true}');
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+    `;
+
+    try {
+      const result = spawnTelemetryChild(script, [new URL('./client.js', import.meta.url).href], {
+        cwd: spawnCwd,
+        home: spawnHome,
+        timeout: 20_000,
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(readFileSync(filePath, 'utf-8'), '{"USER_AUTHORED":true}');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+      rmSync(spawnCwd, { recursive: true, force: true });
+      rmSync(spawnHome, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the appended file 2-space indented, as the first write leaves it', () => {
+    const tmp = join(tmpdir(), `blocks-telemetry-shape-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+
+    try {
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+      const afterFirst = JSON.parse(readFileSync(filePath, 'utf-8'));
+      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+      const afterSecond = JSON.parse(readFileSync(filePath, 'utf-8'));
+
+      assert.strictEqual(
+        readFileSync(filePath, 'utf-8'),
+        JSON.stringify([afterFirst[0], afterSecond[1]], null, 2),
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('still sends the HTTP event when the append throws', DELIVERY_TIMEOUT, async (t) => {
+    const tmp = join(tmpdir(), `blocks-telemetry-contain-${Date.now()}`);
+    const filePath = join(tmp, 'events.json');
+    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, delivered, endpoint } = await startCollector(t, 2);
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
+
+    buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+    writeFileSync(filePath, 'not json');
+    buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+    await delivered;
+
+    assert.strictEqual(received.length, 2, 'a failed file append must not suppress the HTTP sink');
+  });
+
+  describe('pre-existing file handling (shared case table)', () => {
+    interface TelemetryFileCase {
+      name: string;
+      preExisting: string | null;
+      emits: number;
+      preserved: boolean;
+      expectedLength: number | null;
+    }
+
+    const { cases }: { cases: TelemetryFileCase[] } = JSON.parse(
+      readFileSync(new URL('../../src/telemetry/telemetry-file-append-cases.test.json', import.meta.url), 'utf-8'),
+    );
+
+    it('pins the shared case table contents', () => {
+      assert.deepStrictEqual(
+        cases.map((c) => [c.name, c.preExisting, c.emits, c.preserved, c.expectedLength]),
+        [
+          ['no pre-existing file, one event', null, 1, false, 1],
+          ['file created by this run, two events', null, 2, false, 2],
+          ['file created by this run, three events', null, 3, false, 3],
+          ['pre-existing JSON array', '[{"existing":true}]', 1, true, null],
+          ['pre-existing JSON array, several events', '[{"existing":true}]', 3, true, null],
+          ['pre-existing bare object', '{"existing":true}', 1, true, null],
+          ['pre-existing non-JSON text', 'this is not json', 1, true, null],
+          ['pre-existing empty file', '', 1, true, null],
+        ],
+      );
+    });
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        const tmp = join(tmpdir(), `blocks-own-case-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        const filePath = join(tmp, 'events.json');
+        mkdirSync(tmp, { recursive: true });
+        if (testCase.preExisting !== null) writeFileSync(filePath, testCase.preExisting);
+
+        process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+        process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+
+        try {
+          for (let i = 0; i < testCase.emits; i++) {
+            buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: i + 1 });
+          }
+
+          const content = readFileSync(filePath, 'utf-8');
+          if (testCase.preserved) {
+            assert.strictEqual(content, testCase.preExisting, 'a pre-existing file must be left untouched');
+          } else {
+            const events = JSON.parse(content);
+            assert.ok(Array.isArray(events), 'sink must write a JSON array');
+            assert.strictEqual(events.length, testCase.expectedLength);
+            assert.strictEqual(events[events.length - 1].event.command, 'deploy');
+          }
+        } finally {
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      });
+    }
   });
 
 });
@@ -1356,7 +1846,7 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1000 });
 
@@ -1391,7 +1881,7 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 500 });
 
@@ -1441,5 +1931,74 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
       process.chdir(originalCwd);
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('telemetry framework from hosting registry', () => {
+  afterEach(() => {
+    Scope._resetRegistry();
+  });
+
+  it('attaches the registered hosting framework to the event', () => {
+    Scope._setFrameworkForTelemetry('nextjs');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, 'nextjs');
+  });
+
+  it('omits framework when hosting registered none (backend-only project)', () => {
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, undefined);
+  });
+
+  it('an explicit caller framework takes precedence over the registered one', () => {
+    Scope._setFrameworkForTelemetry('spa');
+
+    const event = buildEvent({
+      command: 'deploy',
+      state: 'SUCCESS',
+      duration: 100,
+      product: { framework: 'nextjs' },
+    });
+
+    assert.strictEqual(event.product!.framework, 'nextjs');
+  });
+
+  it('omits a hosting framework outside the ingestion schema enum (keeps the event valid)', () => {
+    // A customAdapter lets any string reach the registry, so the gate must drop
+    // whatever the ingestion enum does not list.
+    Scope._setFrameworkForTelemetry('remix');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, undefined);
+  });
+
+  it('attaches every framework the hosting adapters can resolve', () => {
+    for (const framework of ['nitro', 'nuxt', 'astro', 'sveltekit'] as const) {
+      Scope._resetRegistry();
+      Scope._setFrameworkForTelemetry(framework);
+
+      const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+      assert.strictEqual(event.product!.framework, framework);
+    }
+  });
+
+  it('attaches static, the third accepted framework', () => {
+    Scope._setFrameworkForTelemetry('static');
+
+    const event = buildEvent({ command: 'deploy', state: 'SUCCESS', duration: 100 });
+
+    assert.strictEqual(event.product!.framework, 'static');
+  });
+
+  it('_resetRegistry clears the registered framework', () => {
+    Scope._setFrameworkForTelemetry('nextjs');
+    Scope._resetRegistry();
+
+    assert.strictEqual(Scope._getRegisteredFramework(), undefined);
   });
 });

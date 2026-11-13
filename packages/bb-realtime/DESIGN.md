@@ -4,7 +4,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-realtime`
 **Type:** Client-facing
-**AWS Services:** API Gateway WebSocket, DynamoDB, SSM Parameter Store
+**AWS Services:** API Gateway WebSocket, DynamoDB, AWS Secrets Manager or SSM Parameter Store (token secret, per `defaults.secretsStore`)
 
 ## Design Decisions
 
@@ -14,7 +14,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **No `publish()` on `RealtimeChannel`:** Channel handles are subscribe-only. Publishing goes through `rt.publish()` from API methods. Authorization stays in user code.
 
-**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
+**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from Secrets Manager or SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
 
 **No `unsubscribe_success` acknowledgment:** The server does not send a confirmation when a client unsubscribes. Unlike `subscribe`, which needs `established` for auth confirmation, unsubscribe is fire-and-forget — the client has already stopped listening. Adding an ack would cost a PostToConnection call per unsubscribe for zero functional benefit.
 
@@ -55,13 +55,19 @@ A failed subscribe rejects only that subscription's `established` promise — ot
 - **Connect token:** Scoped to the Realtime instance (2-hour TTL). Passed as query string parameter on WebSocket connect. Gates who can open a connection.
 - **Channel token:** Scoped to a specific channel (1-hour TTL). Sent in the subscribe message. Gates who can subscribe to a channel.
 
-Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix (e.g., `collab`), so `validateChannelToken`'s `startsWith` check accepts any channel under that prefix.
+Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix with a `$connect` suffix (e.g., `collab$connect`). It authorizes the `$connect` handshake only: a subscribe needs a channel token, whose scope always has a `/` after the instance prefix (`validateChannelToken` with a `requestedChannel` rejects any token whose scope has none).
+
+**Channel token scope:** a default channel token's payload is `{ "channel": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`; it authorizes its channel and every `/`-separated sub-channel (`validateChannelToken` accepts a requested channel equal to the token's, or starting with it plus `/`). This is the `getChannel()` default, `scope: 'subtree'`, and it is byte-for-byte the format minted before `scope` existed, so tokens issued by an older deployment keep validating with the same subtree scope. A `scope: 'exact'` token's payload is `{ "exact": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`, and it authorizes its channel only. The path sits under `exact` rather than `channel` on purpose: a validator from before `scope` existed returns `null` for a payload without `channel`, so if old code checks an exact token (a warm container during an update, or after a rollback) the handle stops working instead of being granted subtree access. A payload with both `channel` and `exact`, with neither, or with a `scope` field is rejected. The native clients pass tokens through unchanged. The internal token a server-side `subscribe()` mints for its own WebSocket is always exact, since it only ever subscribes to its one channel.
+
+**Channel names:** the `channel` argument of `publish()`, `subscribe()` and `getChannel()` may contain `/`, but not an empty name, a leading or trailing `/`, an empty segment, or a `.` or `..` segment (`validateChannelName`). Without the rule, `a//b` and `a/` produce paths that differ from, yet sit under, `a`, and `..` segments read like path traversal even though no path is resolved.
+
+**Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
 
 ### Mock Middleware
 
 - Connection pool keyed by `wsUrl` (e.g., `ws://localhost:3001/realtime`)
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 
 ### AWS Middleware
@@ -69,13 +75,23 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 - Connection pool keyed by `wsUrl` (API Gateway WebSocket stage URL)
 - Connect: `wss://{wsUrl}?token={connectToken}`
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 - Keep-alive: `{ action: 'ping' }` every ~9 minutes
 
 ### Server-Side Subscribe
 
 Server-side `subscribe()` opens a real WebSocket connection to the API Gateway endpoint, using the same connect token and channel token mechanism as client subscriptions. This means server-side subscribers receive messages published by any Lambda invocation, not just the current one. `publish()` also emits to a local EventEmitter for zero-latency delivery to same-invocation subscribers.
+
+Each server-side subscriber therefore has two delivery paths, and `publish()` drives both: it posts to every subscribed connection, including the publishing process's own WebSocket, and emits locally. Without coordination, a subscriber in the publishing process would run its handler twice per message. `server-subscribe.ts` makes the subscription decide which path delivers:
+
+- **Until API Gateway acknowledges the subscription** (`subscribe_success`), the socket isn't live. The local emitter delivers, and message frames on the socket are dropped.
+- **Once live**, the socket delivers every message and the local emitter skips that handler.
+- **After the socket closes or errors**, it isn't live again, and the local emitter takes over.
+
+So once a subscription is established, each published message runs a server-side handler once, matching the local mock. `test-apps/comprehensive` asserts one call per publish for both `getChannel().subscribe()` and `realtime.subscribe()`.
+
+Overall delivery is still at-least-once, not exactly-once. A message published from the same process while the subscription is being established can reach the handler twice: the local emitter delivers it because the socket isn't live yet, and if API Gateway has already registered the connection, the socket frame for the same message can arrive after `subscribe_success`. API Gateway delivery is also best-effort (see the README). Server-side handlers must therefore be idempotent.
 
 ## Infrastructure (CDK)
 
@@ -89,7 +105,7 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 | WebSocket API | API Gateway WebSocketApi | Client WebSocket endpoint |
 | WebSocket Stage | WebSocketStage (`rt`, auto-deploy) | Deployment stage |
 
-All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. No separate Lambdas are created.
+All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
 
 #### Stage defaults (throttling + access logging)
 
@@ -120,7 +136,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | AppSetting (secret: true) | HMAC signing key, auto-generated |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
 
 ### DynamoDB Connections Table
 
@@ -167,7 +183,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 **API Gateway limits:** `postToConnection` shares the account-level API Gateway TPS quota (~10K default, raisable). A single Lambda with 50 concurrent sockets is well within this. Multiple Lambdas publishing simultaneously could approach the limit — this is another reason to shard large fan-outs.
 
 **References:**
-- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame, 2hr connection, 500 new conn/sec, 10K TPS account-level)
+- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame **and a separate 128 KiB logical message maximum**, 2hr connection, 500 new conn/sec, 10K TPS account-level)
 - [SO: postToConnection 429 throttling](https://stackoverflow.com/questions/61159703) — confirms account-level throttle applies to management API calls
 
 ### Environment Variables
@@ -176,7 +192,8 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 |----------|-------|
 | `BLOCKS_RT_WS_URL` | `wss://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
-| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting) |
+| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
+| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). If a new container starts with the previous deploy's config (no ARN) and its SSM read fails, it reloads the config once and switches to Secrets Manager |
 
 The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 
@@ -206,7 +223,7 @@ Channel path:             my-app-collab/chat/room-123
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
-| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (128 KiB logical message, not the 32 KB frame quota — API Gateway reassembles frames) are now enforced in both environments |
 | Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
@@ -265,6 +282,47 @@ channel.subscribe({
 
 **Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source from `onReconnect`. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
 
+### Transparent auto-reconnect
+
+The client transport does not require the application to reconnect manually. On an unexpected
+drop it reconnects with exponential backoff (capped at `MAX_RECONNECT` attempts, `MAX_DELAY_MS`
+ceiling), resubscribes every active channel replaying its stored token, and re-arms the
+~9-minute keep-alive ping. `onReconnect` fires once the resubscribe is confirmed. Terminal vs
+reconnecting is decided by intent (`intentionalClose` / `subscriptions.size === 0`), not the
+close code — a legitimate drop can arrive as a clean `1000`/`1005`. Only when retries are
+exhausted, or a resubscribe is rejected (stale token past its TTL, revoked channel), does the
+transport surface `onDisconnect('error')` as the manual-recovery fallback.
+
+### `refresh` — outliving token TTLs
+
+Auto-reconnect replays the *stored* tokens, which carry TTLs (connect ~2h, channel ~1h). A
+subscription that must outlive those TTLs (e.g. a multi-hour agent turn crossing the 1h/2h
+boundaries) supplies `SubscribeOptions.refresh`: `() => Promise<RealtimeChannelDescriptor>`.
+
+- **Refresh-before-open ordering:** on reconnect the transport `await`s `refresh()` *before*
+  constructing the new socket, so the fresh connect token lands in the socket URL
+  (`?token=…`) and the fresh channel token is applied before the resubscribe frame is sent.
+- **Why the whole descriptor:** `refresh` returns the full descriptor (fresh `wsUrl` + connect
+  token + channel token), not just a channel token — a partial refresh would still fail once
+  the connect token expires past 2h. Minting is server-side (auth-gated), so the transport
+  cannot self-mint; the consumer supplies the callback that re-invokes its own channel method.
+- **Malformed / teardown guards:** a `refresh()` that resolves to a non-descriptor takes the
+  `onDisconnect('error')` + backoff path rather than reopening with stale tokens; the awaited
+  continuation re-checks teardown/pool-ownership both before and after applying the descriptor,
+  so an `unsubscribe()` during a pending refresh cannot resurrect a zombie socket.
+- **Per-channel refresh:** `refresh` is registered per-channel — a connection multiplexing
+  several channels keeps each channel's own refresher. On reconnect every live channel
+  re-mints its own token in parallel (the instance-scoped connect token is taken from any one
+  of them), then resubscribes with its fresh channel token. A channel whose `refresh` fails
+  falls back to its stored channel token; if that stored token has already lapsed, the server
+  rejects that channel's resubscribe and the drop is **channel-scoped** —
+  `onDisconnect('error')` reaches only that channel's owners, not its cleanly-reconnected
+  siblings. A connection-wide `onDisconnect('error')` fan-out is reserved for the refresh- or
+  reconnect-FAILURE path (retries exhausted / give-up), not a single sibling's stale-token
+  rejection.
+
+Absent `refresh`, reconnect replays the stored tokens (correct for short/transient drops).
+
 ## Channel Name Limits
 
 The previous AppSync Events implementation enforced a 5-segment × 50-character channel name limit. With the move to API Gateway WebSocket + DynamoDB, that restriction no longer applies.
@@ -276,11 +334,11 @@ Both the mock (local dev) and AWS runtimes enforce these limits at `publish()`, 
 | Limit | Value | Source | Validated at |
 |---|---|---|---|
 | Channel path (full) | 1024 bytes UTF-8 | DynamoDB sort key maximum | `publish`, `subscribe`, `getChannel` |
-| Published message size | 32,768 bytes | API Gateway WebSocket frame maximum | `publish` |
+| Published message size | 131,072 bytes | API Gateway WebSocket logical message maximum (128 KiB) | `publish` |
 
 **Channel path** is the fully-qualified string `{fullId}/{namespace}/{channel}` stored as the DynamoDB sort key. The validation uses `Buffer.byteLength(fullChannel, 'utf8')` so multi-byte characters (emoji, CJK, etc.) are counted correctly.
 
-**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. The 32 KB limit is the maximum single WebSocket frame that API Gateway will accept without closing the connection (code 1009).
+**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not "re-fix" this constant back to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
 
 ### Why Enforce in Both Environments
 
@@ -300,7 +358,7 @@ For a typical setup (`fullId` = `my-app-collab`, namespace = `cursors`):
 
 For publish size, the overhead is the JSON envelope wrapping the data:
 - Envelope: `{"type":"message","channel":"<fullChannel>","data":}` ≈ 40 + channel path length
-- Available for serialized data: ~32,700 bytes for typical channel paths
+- Available for serialized data: ~131,000 bytes for typical channel paths
 
 ### Binding Constraints
 
@@ -309,14 +367,15 @@ The full channel path (`{fullId}/{namespace}/{channel}`) is stored as a DynamoDB
 | Constraint | Limit | Impact |
 |---|---|---|
 | DynamoDB sort key | 1024 bytes | **Enforced** — hard limit on full channel path length |
-| API Gateway frame | 32 KB | **Enforced** — hard limit on published message size |
+| API Gateway message | 128 KiB (131,072 bytes) | **Enforced** — hard limit on published message size |
+| API Gateway frame | 32 KB | Not enforced — the service reassembles fragmented frames into one logical message |
 | DynamoDB partition key (GSI) | 2048 bytes | Not enforced — channel path hits SK limit first |
 | DynamoDB item size | 400 KB | Not a concern — items are ~200 bytes |
 | API Gateway billing | 32 KB increments | Long channel names marginally increase cost |
 
 ### Why We Recommend 256 Characters
 
-A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.8% to a 32 KB message — negligible for billing.
+A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.2% to a 128 KiB message — negligible for billing.
 
 Longer names are technically possible but offer no benefit. They increase DynamoDB read/write unit consumption (items are billed in 4 KB read / 1 KB write increments) and make WebSocket messages larger for no functional gain.
 

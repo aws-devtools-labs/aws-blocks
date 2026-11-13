@@ -6,8 +6,9 @@ import type { ScopeParent } from '@aws-blocks/core';
  * AWS-runtime entry point for `LambdaCompute`.
  *
  * The same backend module that declares `new LambdaCompute(...)` is imported in
- * two phases: at CDK synth (where the `cdk` entry provisions the function + API
- * Gateway) and again at request time inside the deployed runtime. At runtime
+ * two phases: at CDK synth (where the `cdk` entry provisions the function; the
+ * API Gateway in front of it is the stack's shared one, provisioned by core) and
+ * again at request time inside the deployed runtime. At runtime
  * there is nothing for a compute to do — it *is* the environment the handler
  * already runs in, and its infrastructure was created at synth. So the runtime
  * `LambdaCompute` is an inert handle: it constructs (so the import succeeds and
@@ -16,12 +17,13 @@ import type { ScopeParent } from '@aws-blocks/core';
  */
 import { Scope } from '@aws-blocks/core';
 import type { LambdaComputeProps } from './types.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { LambdaComputeProps } from './types.js';
 
 export class LambdaCompute extends Scope {
 	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 	}
 
 	setEnv(_key: string, _value: string): void {}

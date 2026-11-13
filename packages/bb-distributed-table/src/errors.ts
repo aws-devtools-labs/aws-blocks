@@ -3,7 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -91,14 +91,22 @@ export const DistributedTableErrors = {
 } as const;
 
 /**
- * @internal Build an Error whose `name` carries the typed error code (so callers
- * can match it with `isBlocksError`). Shared by the mock and AWS runtime so both
- * produce identically shaped errors.
+ * The set of error names this Building Block can produce. Deriving it from the
+ * `DistributedTableErrors` constant lets `blocksError` reject a stray string
+ * name at compile time, so every mint site passes a known code.
  */
-export function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
+export type DistributedTableErrorName = (typeof DistributedTableErrors)[keyof typeof DistributedTableErrors];
+
+/**
+ * @internal Build an Error whose `name` carries the typed error code (so callers
+ * can match it with `isBlocksError`). The `name` param is typed to
+ * `DistributedTableErrorName`, so a stray string is caught at compile time.
+ * Shared by the mock and AWS runtime so both produce identically shaped errors.
+ * Delegates to core's `blocksError` so the minting (prefixing, naming, wire-safe
+ * branding) lives in one place.
+ */
+export function blocksError(name: DistributedTableErrorName, message: string): Error {
+	return coreBlocksError(name, message);
 }
 
 /**
@@ -185,14 +193,16 @@ export const DistributedTableMessages = {
  * other `ValidationException` causes (malformed expressions, type mismatches) are
  * left untouched and propagate as-is. This mirrors the mock's client-side size
  * check so both layers are catchable with `isBlocksError(e, ItemTooLarge)`. The
- * original DynamoDB error is preserved as `cause` (kept server-side per D-003) so
- * its stack and requestId remain available for debugging.
+ * re-mapped error carries a STABLE BB-authored message (not DynamoDB's raw text):
+ * the branded name AND message now cross the wire (D-003), so the message must not
+ * embed raw driver text. The original DynamoDB error is preserved as `cause` (kept
+ * server-side per D-003) so its stack and requestId remain available for debugging.
  */
 export function remapItemTooLarge(err: unknown): unknown {
 	if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
-		const remapped = new Error(err.message, { cause: err });
+		const remapped = new Error(`${DistributedTableErrors.ItemTooLarge}: Item size has exceeded the maximum allowed size of 400 KB`, { cause: err });
 		remapped.name = DistributedTableErrors.ItemTooLarge;
-		return remapped;
+		return brandBlocksError(remapped);
 	}
 	return err;
 }

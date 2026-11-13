@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, isWireSafeError, isBlocksError } from '@aws-blocks/core';
 import { DatabaseErrors, wrapError, serializationConflict } from './errors.js';
 
 test('serializationConflict builds a 409 ApiError preserving name + retriable', () => {
@@ -22,42 +22,75 @@ test('DatabaseErrors has all expected keys', () => {
   assert.strictEqual(DatabaseErrors.ConnectionFailed, 'ConnectionFailedException');
   assert.strictEqual(DatabaseErrors.TransactionFailed, 'TransactionFailedException');
   assert.strictEqual(DatabaseErrors.UniqueConstraintViolation, 'UniqueConstraintViolationException');
+  assert.strictEqual(DatabaseErrors.PermissionDenied, 'PermissionDeniedException');
+  assert.strictEqual(DatabaseErrors.CheckViolation, 'CheckViolationException');
+  assert.strictEqual(DatabaseErrors.NotNullViolation, 'NotNullViolationException');
+  assert.strictEqual(DatabaseErrors.ForeignKeyViolation, 'ForeignKeyViolationException');
 });
 
-test('wrapError preserves errors with a known DatabaseErrors name', () => {
-  const original = new Error('duplicate key');
+test('wrapError keeps a request-error name as the same 4xx ApiError the engines build', () => {
+  const raw = Object.assign(new Error('permission denied for table projects'), { name: DatabaseErrors.PermissionDenied });
+  assert.throws(
+    () => wrapError(raw),
+    (e: Error) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError, not a 500-shaped Error');
+      assert.strictEqual(e.status, 403);
+      assert.strictEqual(e.name, DatabaseErrors.PermissionDenied);
+      assert.strictEqual(e.cause, raw);
+      assert.ok(!e.message.includes('projects'), 'driver text must not reach the message');
+      return true;
+    },
+  );
+});
+
+test('wrapError preserves a known DatabaseErrors name, brands it, and keeps the raw error as cause', () => {
+  const original = new Error('duplicate key value violates unique constraint "users_pkey"');
   original.name = DatabaseErrors.UniqueConstraintViolation;
 
   assert.throws(
     () => wrapError(original),
     (err: Error) => {
+      // Name is preserved and matchable on the client via isBlocksError.
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
-      assert.strictEqual(err.message, 'duplicate key');
+      assert.ok(isBlocksError(err, DatabaseErrors.UniqueConstraintViolation));
+      // Branded so the name crosses the RPC wire (D-003).
+      assert.ok(isWireSafeError(err), 'expected the re-tagged error to be branded');
+      // The client-facing message is the stable BB string, NOT the raw driver text.
+      assert.strictEqual(err.message, `${DatabaseErrors.UniqueConstraintViolation}: The item violates a unique constraint`);
+      assert.ok(!err.message.includes('users_pkey'), 'raw driver text must not leak into the message');
+      // The original driver error is retained server-side as cause.
+      assert.strictEqual((err.cause as Error).message, 'duplicate key value violates unique constraint "users_pkey"');
       return true;
     }
   );
 });
 
-test('wrapError sets unknown error names to QueryFailed', () => {
-  const original = new Error('something broke');
+test('wrapError sets unknown error names to QueryFailed with a stable branded message', () => {
+  const original = new Error('ERROR: relation "todos" does not exist at character 15');
   original.name = 'SomeRandomError';
 
   assert.throws(
     () => wrapError(original),
     (err: Error) => {
       assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
-      assert.strictEqual(err.message, 'something broke');
+      assert.ok(isWireSafeError(err));
+      assert.strictEqual(err.message, `${DatabaseErrors.QueryFailed}: The database query failed`);
+      assert.ok(!err.message.includes('relation'), 'raw driver text must not leak into the message');
+      assert.strictEqual((err.cause as Error).message, 'ERROR: relation "todos" does not exist at character 15');
       return true;
     }
   );
 });
 
-test('wrapError converts non-Error values to Error with QueryFailed', () => {
+test('wrapError converts non-Error values to a branded QueryFailed error', () => {
   assert.throws(
     () => wrapError('a string error'),
     (err: Error) => {
       assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
-      assert.strictEqual(err.message, 'a string error');
+      assert.ok(isWireSafeError(err));
+      assert.strictEqual(err.message, `${DatabaseErrors.QueryFailed}: The database query failed`);
+      // The stringified original is retained as cause.
+      assert.strictEqual((err.cause as Error).message, 'a string error');
       return true;
     }
   );
