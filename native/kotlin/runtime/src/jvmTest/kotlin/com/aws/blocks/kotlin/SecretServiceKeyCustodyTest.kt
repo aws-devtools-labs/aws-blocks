@@ -109,6 +109,30 @@ class SecretServiceKeyCustodyTest {
     }
 
     @Test
+    fun canResolveTheSymbolThatReleasesAReportedError() {
+        if (!keyringAvailable) return
+
+        // `g_error_free` is GLib's, reached through libsecret's own dependency chain rather than by
+        // loading glib under a soname a user's machine may not have. Nothing calls it until a real
+        // failure reports an error, so a declaration that does not resolve would lie dormant and
+        // then throw UnsatisfiedLinkError at precisely the moment the error handling is needed.
+        // Looking the symbol up here fails the build instead, on both architectures the job runs.
+        com.sun.jna.NativeLibrary.getInstance("secret-1").getFunction("g_error_free").name shouldBe
+            "g_error_free"
+    }
+
+    @Test
+    fun reportsNoErrorForAnAliasThatWasNeverStored() {
+        if (!keyringAvailable) return
+
+        // A lookup that finds nothing must stay distinguishable from one that failed: the first
+        // returns null, and the second now throws. Conflating them let a transient D-Bus failure
+        // read as "no key held", which sent the caller on to overwrite the real key and lose every
+        // entry written under it. This pins the benign half — a miss must not throw.
+        custody().load("never-stored-${System.nanoTime()}:com.example.app").shouldBeNull()
+    }
+
+    @Test
     fun storesAKeyWhoseBytesIncludeAZero() {
         if (!keyringAvailable) return
 

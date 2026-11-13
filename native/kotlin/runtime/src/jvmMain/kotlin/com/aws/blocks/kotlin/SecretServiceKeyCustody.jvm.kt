@@ -98,19 +98,74 @@ internal class SecretServiceKeyCustody(
         ): Boolean
 
         fun secret_password_free(password: Pointer)
+
+        /**
+         * GLib's, not libsecret's, and declared here on purpose.
+         *
+         * Loading `glib-2.0` separately would be a second soname to get right: the runtime package
+         * ships `libglib-2.0.so.0` and the bare `.so` comes with the development package, which a
+         * user's machine has no reason to have. Resolving the symbol against the libsecret handle
+         * instead searches its dependencies, and libsecret links glib, so there is nothing further
+         * to find or install.
+         */
+        fun g_error_free(error: Pointer)
+    }
+
+    /**
+     * `GError` as GLib declares it: `{ GQuark domain; gint code; gchar *message; }`.
+     *
+     * Read-only here — libsecret allocates it and `g_error_free` releases it. `GQuark` and `gint`
+     * are both 32-bit, so the layout is 4 + 4 + pointer on every platform this runs on.
+     */
+    class GError(pointer: Pointer?) : Structure(pointer) {
+        @JvmField var domain: Int = 0
+        @JvmField var code: Int = 0
+        @JvmField var message: Pointer? = null
+        override fun getFieldOrder(): List<String> = listOf("domain", "code", "message")
     }
 
     private companion object {
         val libsecret: Libsecret = Native.load("secret-1", Libsecret::class.java)
+
+        /**
+         * Reports what [call] set the error to, having released it, or null when it set none.
+         *
+         * Every one of these calls signals failure in two places: the return value, and an out
+         * parameter that is left untouched on success. Reading only the return value makes a failed
+         * call indistinguishable from an empty result — which for a lookup means "no key is held",
+         * and that answer sends the caller on to store one over the key that is really there.
+         */
+        fun <T> reportingErrors(call: (PointerByReference) -> T): Pair<T, String?> {
+            val slot = PointerByReference()
+            val result = call(slot)
+            val error = slot.value ?: return result to null
+            return try {
+                val detail = GError(error).also { it.read() }
+                result to (detail.message?.getString(0) ?: "error code ${detail.code}")
+            } finally {
+                libsecret.g_error_free(error)
+            }
+        }
     }
 
     /**
      * The key is base64'd because the native API carries it as a NUL-terminated string. Roughly one
      * AES key in eight contains a zero byte, which would otherwise be truncated silently.
+     *
+     * A failed lookup throws rather than reporting no key. The call returns null for both, and
+     * conflating them is destructive rather than merely wrong: [storeIfAbsent] takes "no key held"
+     * as licence to store one, libsecret overwrites unconditionally, and the key every stored entry
+     * was written under is then gone for good. A D-Bus failure shortly after login is enough to
+     * reach it.
      */
     override fun load(alias: String): ByteArray? {
-        val held = libsecret.secret_password_lookup_sync(schemaFor(alias), null, PointerByReference())
-            ?: return null
+        val (held, failure) = reportingErrors { error ->
+            libsecret.secret_password_lookup_sync(schemaFor(alias), null, error)
+        }
+        if (failure != null) {
+            throw KeyValueStoreException("Could not read the encryption key from the session keyring: $failure")
+        }
+        if (held == null) return null
         val encoded = try {
             held.getString(0)
         } finally {
@@ -129,25 +184,35 @@ internal class SecretServiceKeyCustody(
      */
     override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray =
         withDirectoryLock(directory) {
+            // Throws rather than returning null if the keyring cannot be read, so a failed lookup
+            // never reaches the unconditional overwrite below.
             load(alias)?.let { return@withDirectoryLock it }
-            val stored = libsecret.secret_password_store_sync(
-                schemaFor(alias),
-                // A collection alias the daemon does not recognise blocks in the native call
-                // indefinitely, and there is nothing to cancel it with. Null means the default.
-                null,
-                "$service session key",
-                Base64.getEncoder().encodeToString(key),
-                null,
-                PointerByReference(),
-            )
-            if (!stored) {
-                throw KeyValueStoreException("The session keyring refused to store the encryption key")
+            val (stored, failure) = reportingErrors { error ->
+                libsecret.secret_password_store_sync(
+                    schemaFor(alias),
+                    // A collection alias the daemon does not recognise blocks in the native call
+                    // indefinitely, and there is nothing to cancel it with. Null means the default.
+                    null,
+                    "$service session key",
+                    Base64.getEncoder().encodeToString(key),
+                    null,
+                    error,
+                )
+            }
+            if (!stored || failure != null) {
+                throw KeyValueStoreException(
+                    "The session keyring refused to store the encryption key" +
+                        failure?.let { ": $it" }.orEmpty(),
+                )
             }
             key
         }
 
     override fun delete(alias: String) {
-        libsecret.secret_password_clear_sync(schemaFor(alias), null, PointerByReference())
+        // The error is read and released rather than ignored, because leaving it allocated leaks
+        // for the life of the process. A failure to delete is not worth throwing over: the only
+        // caller is the self-test tidying up a probe it no longer needs.
+        reportingErrors { error -> libsecret.secret_password_clear_sync(schemaFor(alias), null, error) }
     }
 
     /**
