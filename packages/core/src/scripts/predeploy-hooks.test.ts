@@ -25,7 +25,7 @@ interface FakePackage {
 	/** The package's `aws-blocks.hooks` declaration, written as given. */
 	hooks?: unknown;
 	/** Body of the hook module (ESM). */
-	hook?: string;
+	hookSource?: string;
 }
 
 /** A project with the given packages installed under node_modules, each with an exports map that hides package.json. */
@@ -47,7 +47,7 @@ function project(appDependencies: Record<string, string>, packages: FakePackage[
 			}),
 		);
 		writeFileSync(join(dir, 'dist', 'index.js'), 'export const block = true;\n');
-		if (pkg.hook) writeFileSync(join(dir, 'dist', 'predeploy.js'), pkg.hook);
+		if (pkg.hookSource) writeFileSync(join(dir, 'dist', 'predeploy.js'), pkg.hookSource);
 	}
 	return root;
 }
@@ -93,8 +93,8 @@ describe('pre-deploy hooks', () => {
 					name: '@aws-blocks/blocks',
 					dependencies: { '@aws-blocks/bb-via-umbrella': '*', '@aws-blocks/bb-plain': '*' },
 				},
-				{ name: '@aws-blocks/bb-via-umbrella', hooks: predeploy, hook: guardHook },
-				{ name: '@aws-blocks/bb-direct', hooks: predeploy, hook: guardHook },
+				{ name: '@aws-blocks/bb-via-umbrella', hooks: predeploy },
+				{ name: '@aws-blocks/bb-direct', hooks: predeploy },
 				{ name: '@aws-blocks/bb-plain' },
 			],
 		);
@@ -108,8 +108,8 @@ describe('pre-deploy hooks', () => {
 
 	test('runs every hook with the stage and the stacks of the assembly, prints notes', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*', '@aws-blocks/bb-b': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
-			{ name: '@aws-blocks/bb-b', hooks: predeploy, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hookSource: guardHook },
+			{ name: '@aws-blocks/bb-b', hooks: predeploy, hookSource: guardHook },
 		]);
 		assembly(root, 'App');
 		const lines: string[] = [];
@@ -122,7 +122,7 @@ describe('pre-deploy hooks', () => {
 
 	test('a stop aborts the deploy with the hook named; a project with no hooks does nothing', async () => {
 		const root = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hookSource: guardHook },
 		]);
 		assembly(root, 'BadStack');
 		await assert.rejects(run(root, 'production'), /^Error: \[@aws-blocks\/bb-a\] Deploy stopped: BadStack$/);
@@ -137,32 +137,32 @@ describe('pre-deploy hooks', () => {
 		]);
 		await assert.rejects(run(missing, 'production'), /does not exist/);
 		const malformed = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: 'export const nothing = 1;\n' },
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hookSource: 'export const nothing = 1;\n' },
 		]);
 		await assert.rejects(run(malformed, 'production'), /does not export a predeploy\(\)/);
 		const noAssembly = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: predeploy, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: predeploy, hookSource: guardHook },
 		]);
 		await assert.rejects(run(noAssembly, 'production'), /No cloud assembly at .*cdk\.out/);
 	});
 
 	test('hooks that is not an object, an unknown hook name, or a hook that is not a module path fails the deploy', async () => {
 		const notAnObject = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: ['./dist/predeploy.js'], hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: ['./dist/predeploy.js'] },
 		]);
 		await assert.rejects(
 			run(notAnObject, 'production'),
 			/@aws-blocks\/bb-a declares "aws-blocks"\."hooks" in its package\.json, which is not an object/,
 		);
 		const misspelled = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: { predploy: './dist/predeploy.js' }, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: { predploy: './dist/predeploy.js' } },
 		]);
 		await assert.rejects(
 			run(misspelled, 'production'),
 			/@aws-blocks\/bb-a declares a hook this version of @aws-blocks\/core does not run: predploy\./,
 		);
 		const notAPath = project({ '@aws-blocks/bb-a': '*' }, [
-			{ name: '@aws-blocks/bb-a', hooks: { predeploy: { module: './dist/predeploy.js' } }, hook: guardHook },
+			{ name: '@aws-blocks/bb-a', hooks: { predeploy: { module: './dist/predeploy.js' } } },
 		]);
 		await assert.rejects(
 			run(notAPath, 'production'),

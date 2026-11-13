@@ -305,4 +305,3 @@ assert.deepEqual(events, [
     }
   });
 });
-

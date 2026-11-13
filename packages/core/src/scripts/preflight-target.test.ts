@@ -25,7 +25,7 @@ const expectedRegion = ${JSON.stringify(expectedRegion)};
 const explicitProfile = ${JSON.stringify(explicitProfile)};
 const originalRegion = process.env.AWS_REGION;
 const seen = [];
-const stop = new Error('fixture stopped before CDK');
+const stop = new Error('fixture stopped at the CDK deploy');
 
 // Resolve these through the same import locations as the real callers. The
 // SDK clients remain real; no credential provider or request is ever executed.
@@ -77,7 +77,7 @@ mock.module(new URL('../telemetry/trackCommand.js', scripts).href, {
 mock.module(new URL('../telemetry/client.js', scripts).href, {
   namedExports: { buildAndSendEvent: () => {} },
 });
-const reachedCdk = (env) => {
+const reachedCdk = (args, env) => {
   seen.push(['cdk']);
   assert.equal(env.AWS_REGION, originalRegion);
   assert.equal(env.AWS_CONFIG_FILE, process.env.AWS_CONFIG_FILE);
@@ -85,18 +85,19 @@ const reachedCdk = (env) => {
   assert.equal(env.AWS_PROFILE, explicitProfile ? 'default' : 'deployment');
   assert.equal(env.CDK_DEFAULT_REGION, 'us-west-2');
   assert.equal(env.NODE_OPTIONS, '--conditions=cdk');
-  throw stop;
+  // The synth runs first and the secrets step follows the pre-deploy hooks, so stop at the deploy.
+  if (!args.includes('synth')) throw stop;
 };
 const deployStream = await import(moduleUrl('deploy-stream'));
 mock.module(moduleUrl('deploy-stream'), {
   namedExports: {
     ...deployStream,
-    runStreaming: async (_command, _args, options) => reachedCdk(options.env),
+    runStreaming: async (_command, args, options) => reachedCdk(args, options.env),
   },
 });
 mock.module(moduleUrl('run-command'), {
   namedExports: {
-    runSync: (_command, _args, options) => reachedCdk(options.env),
+    runSync: (_command, args, options) => reachedCdk(args, options.env),
     runCapture: () => '',
     spawnCommand: () => { throw new Error('unexpected watch process'); },
   },
@@ -109,7 +110,7 @@ const run = command === 'deploy'
 await assert.rejects(run, (error) => error === stop);
 assert.deepEqual(seen[0], ['sts', expectedRegion]);
 assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);
-assert.deepEqual(seen.slice(4), [['ssm', expectedRegion], ['cdk']]);
+assert.deepEqual(seen.slice(4), [['cdk'], ['ssm', expectedRegion], ['cdk']]);
 assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 `;
 }

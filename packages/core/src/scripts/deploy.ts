@@ -276,18 +276,6 @@ async function runDeploy(options: DeployOptions) {
       checkBootstrap: true,
     });
 
-    // Provision secrets for production. projectRoot must match the root cdk
-    // synth uses (passed as --context below) so the written parameter name
-    // equals the one the app resolves at synth.
-    const secrets = await ensureSecrets('production', options.projectRoot);
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
-
-    // Apply external-database migrations to the production database before
-    // deploying. No-op unless this app uses an external DB and has ./migrations.
-    await applyExternalMigrations({ stage: 'production' });
-
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,
     // never by importing the backend here: an in-process import loads the local
@@ -355,8 +343,21 @@ async function runDeploy(options: DeployOptions) {
 
     // Pre-deploy hooks the installed blocks declare in their package.json
     // (`aws-blocks.hooks.predeploy`), for example a deploy guard. They run on the
-    // assembly just synthesized, before any stack changes; a stop aborts here.
+    // assembly just synthesized, before the secrets, the external migrations and
+    // any stack change; a stop aborts here.
     await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot, assemblyDir });
+
+    // Provision secrets for production. projectRoot must match the root cdk
+    // synth uses (passed as --context above) so the written parameter name
+    // equals the one the app resolves at synth.
+    const secrets = await ensureSecrets('production', options.projectRoot);
+    if (secrets.created.length > 0 || secrets.updated.length > 0) {
+      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
+    }
+
+    // Apply external-database migrations to the production database before
+    // deploying. No-op unless this app uses an external DB and has ./migrations.
+    await applyExternalMigrations({ stage: 'production' });
 
     try {
       await runStreaming(

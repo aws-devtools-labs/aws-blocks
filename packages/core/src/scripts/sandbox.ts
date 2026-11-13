@@ -402,6 +402,15 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   } = options;
   const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
+  // startSandbox isn't wrapped in trackCommand, so a step that fails before the
+  // deploy sends its own FAIL event.
+  const sendFailure = (error: unknown) =>
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
 
   // Load .env.local so CDK can read secret ARNs and other config.
   try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -418,30 +427,9 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   try {
     await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: classifyError(error),
-    });
+    sendFailure(error);
     throw error;
   }
-
-  // Provision connection string to SSM SecureString.
-  // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
-  // projectRoot is process.cwd() — the same value passed to cdk as --context
-  // projectRoot below — so the written name matches the name resolved at synth.
-  const secrets = await ensureSecrets('sandbox', process.cwd());
-  if (secrets.created.length > 0) {
-    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
-  }
-  if (secrets.updated.length > 0) {
-    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
-  }
-
-  // Apply external-database migrations to the sandbox database before
-  // deploying. No-op unless this app uses an external DB and has ./migrations.
-  await applyExternalMigrations({ stage: 'sandbox' });
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the
@@ -457,12 +445,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     await generateDeployClient(backendDefPath, clientPath);
   } catch (error) {
     // Not wrapped in trackCommand (see the credential check above): emit FAIL.
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: classifyError(error),
-    });
+    sendFailure(error);
     throw error;
   }
 
@@ -520,21 +503,33 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   }
 
   // Pre-deploy hooks the installed blocks declare in their package.json
-  // (`aws-blocks.hooks.predeploy`), on the assembly just synthesized. Before any
-  // stack changes, so a stop leaves nothing to recover: no failure banner and no
-  // destroy hint. Changes that `cdk watch` deploys later are not checked.
+  // (`aws-blocks.hooks.predeploy`), on the assembly just synthesized. Before the
+  // secrets, the external migrations and any stack change, so a stop leaves
+  // nothing to recover: no failure banner and no destroy hint. Changes that
+  // `cdk watch` deploys later are not checked.
   try {
     await runPredeployHooks({ stage: 'sandbox', projectRoot: process.cwd(), assemblyDir });
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: classifyError(error),
-    });
+    sendFailure(error);
     throw error;
   }
+
+  // Provision connection string to SSM SecureString.
+  // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
+  // projectRoot is process.cwd() — the same value passed to cdk as --context
+  // projectRoot above — so the written name matches the name resolved at synth.
+  const secrets = await ensureSecrets('sandbox', process.cwd());
+  if (secrets.created.length > 0) {
+    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+  }
+  if (secrets.updated.length > 0) {
+    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
+  }
+
+  // Apply external-database migrations to the sandbox database before
+  // deploying. No-op unless this app uses an external DB and has ./migrations.
+  await applyExternalMigrations({ stage: 'sandbox' });
 
   try {
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);

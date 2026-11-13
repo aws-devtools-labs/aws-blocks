@@ -55,6 +55,7 @@ export {
 	type PredeployContext,
 	type PredeployResult,
 	runPredeployHooks,
+	type RunPredeployHooksOptions,
 	type SynthesizedStack,
 } from './predeploy-hooks.js';
 export {

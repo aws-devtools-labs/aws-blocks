@@ -42,19 +42,24 @@ export interface PredeployContext {
 	/** The app's root: where `package.json` and `cdk.json` live. */
 	projectRoot: string;
 	/**
-	 * Every stack's template, from the assembly the deploy synthesized and is
-	 * about to deploy. Read once and cached across hooks.
+	 * The template of every top-level stack, from the assembly the deploy
+	 * synthesized and is about to deploy. Read once and cached across hooks.
+	 * The templates of CDK nested stacks are not included.
 	 */
 	synth(): Promise<SynthesizedStack[]>;
 }
 
-/** What a hook returns. Any stop aborts the deploy; notes are printed. */
+/**
+ * What a hook returns. Any stop aborts the deploy; notes are printed. Every
+ * hook runs before a stop aborts the deploy, so a hook must only check, or be
+ * safe to run again.
+ */
 export interface PredeployResult {
 	stops?: string[];
 	notes?: string[];
 }
 
-export type PredeployHook = (context: PredeployContext) => Promise<PredeployResult | undefined>;
+type PredeployHook = (context: PredeployContext) => Promise<PredeployResult | undefined>;
 
 /** A hook declared by an installed package. */
 export interface PredeployHookRef {
@@ -84,11 +89,15 @@ function readManifest(path: string): PackageManifest | undefined {
 }
 
 /**
- * Locate an installed package's directory from `projectRoot`. Resolves the
- * package's entry point and walks up to its `package.json`, because a package
- * with an `exports` map does not expose `<name>/package.json` to `require.resolve`.
+ * Locate an installed package from `projectRoot`: its directory and its parsed
+ * `package.json`. Resolves the package's entry point and walks up to its
+ * `package.json`, because a package with an `exports` map does not expose
+ * `<name>/package.json` to `require.resolve`.
  */
-function resolvePackageDir(projectRoot: string, packageName: string): string | undefined {
+function resolvePackage(
+	projectRoot: string,
+	packageName: string,
+): { dir: string; manifest: PackageManifest } | undefined {
 	const require = createRequire(join(projectRoot, 'package.json'));
 	let entry: string;
 	try {
@@ -99,7 +108,7 @@ function resolvePackageDir(projectRoot: string, packageName: string): string | u
 	let dir = dirname(entry);
 	for (;;) {
 		const manifest = readManifest(join(dir, 'package.json'));
-		if (manifest?.name === packageName) return dir;
+		if (manifest?.name === packageName) return { dir, manifest };
 		const parent = dirname(dir);
 		if (parent === dir) return undefined;
 		dir = parent;
@@ -116,8 +125,7 @@ function candidatePackages(projectRoot: string): string[] {
 	};
 	addDeps(readManifest(join(projectRoot, 'package.json')));
 	if (names.has(UMBRELLA)) {
-		const umbrellaDir = resolvePackageDir(projectRoot, UMBRELLA);
-		if (umbrellaDir) addDeps(readManifest(join(umbrellaDir, 'package.json')));
+		addDeps(resolvePackage(projectRoot, UMBRELLA)?.manifest);
 	}
 	return [...names];
 }
@@ -131,9 +139,9 @@ function candidatePackages(projectRoot: string): string[] {
 export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] {
 	const hooks: PredeployHookRef[] = [];
 	for (const packageName of candidatePackages(projectRoot)) {
-		const dir = resolvePackageDir(projectRoot, packageName);
-		if (!dir) continue;
-		const declared = readManifest(join(dir, 'package.json'))?.['aws-blocks']?.hooks;
+		const found = resolvePackage(projectRoot, packageName);
+		if (!found) continue;
+		const declared = found.manifest['aws-blocks']?.hooks;
 		if (declared === undefined) continue;
 		if (!isPlainObject(declared)) {
 			throw new Error(
@@ -156,7 +164,7 @@ export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] 
 					`Set "aws-blocks"."hooks"."${HOOK}" in its package.json to a path such as "./dist/predeploy.js".`,
 			);
 		}
-		hooks.push({ packageName, module: resolve(dir, module) });
+		hooks.push({ packageName, module: resolve(found.dir, module) });
 	}
 	return hooks;
 }
@@ -166,7 +174,7 @@ export function discoverPredeployHooks(projectRoot: string): PredeployHookRef[] 
  * template. Throws when the assembly cannot be read: a hook must not pass on
  * an empty list.
  */
-export function readSynthesizedStacks(assemblyDir: string): SynthesizedStack[] {
+function readSynthesizedStacks(assemblyDir: string): SynthesizedStack[] {
 	if (!existsSync(join(assemblyDir, 'manifest.json'))) {
 		throw new Error(`No cloud assembly at ${assemblyDir}; the pre-deploy hooks could not run.`);
 	}
