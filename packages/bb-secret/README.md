@@ -224,14 +224,25 @@ A key the app generates and rotates itself is **one** `Secret` with `generate: t
 ```typescript
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { CronJob } from '@aws-blocks/bb-cron-job';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { Secret } from '@aws-blocks/bb-secret';
+import { isBlocksError } from '@aws-blocks/core';
 
 const signingKey = new Secret(scope, 'signing-key', { generate: true, allowRuntimeWrite: true });
+const rotations = new KVStore(scope, 'signing-key-rotations'); // one marker per tick, never key material
 
 // put() makes the new key current and keeps the replaced one as the 'previous' version.
 new CronJob(scope, 'rotate-signing-key', {
   schedule: 'rate(7 days)',
-  handler: async () => {
+  handler: async (event) => {
+    // A tick can be delivered more than once and only one previous version is kept.
+    // Claim the tick first: the conditional write succeeds for exactly one delivery.
+    try {
+      await rotations.put(event.scheduledTime, 'rotated', { ifNotExists: true });
+    } catch (e: unknown) {
+      if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return; // another delivery claimed this tick
+      throw e;
+    }
     await signingKey.put(randomBytes(32).toString('hex'));
   },
 });
@@ -250,6 +261,8 @@ async function isValidSignature(payload: string, signature: string): Promise<boo
   return matches(payload, signature, current) || matches(payload, signature, previous);
 }
 ```
+
+The handler claims the tick before it rotates because a `CronJob` handler must be idempotent: a tick can be delivered more than once, and a failed tick is retried. Without the claim, a second `put()` for the same tick would replace the previous version with the key from the first `put()`, and signatures made with the key that was current before the tick would stop verifying. A repeated delivery carries the same `scheduledTime`, and a `KVStore` `put()` with `ifNotExists` is one conditional write, so only one delivery of a tick gets past it. If the secret's `put()` then fails, that tick is skipped rather than retried and the next tick rotates; until then the current and previous keys both stay valid. The `rotations` store holds only the tick's timestamp, one small item per tick.
 
 Keep the old key as this previous version — `put()` retains it for you. Don't pack `{ current, previous }` into one JSON value (the secret's value is then no longer the key, and every reader has to unpack it), and don't copy old keys into a `KVStore`, table or second `Secret` (that spreads key material into stores without the secret's access controls).
 
