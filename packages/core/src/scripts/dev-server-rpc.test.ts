@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,21 @@ async function getAvailablePort(): Promise<number> {
   // the port; port: 0 would require the dev server to expose its assigned port.
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return port;
+}
+
+/** True when this host can bind the IPv6 loopback address `::1`. */
+async function hasIpv6Loopback(): Promise<boolean> {
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '::1', resolve);
+    });
+  } catch {
+    return false;
+  }
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return true;
 }
 
 describe('dev-server RPC integration', () => {
@@ -69,6 +84,19 @@ startDevServer(${JSON.stringify({
     devProcess.stdout?.on('data', chunk => { processOutput.stdout += chunk.toString(); });
     devProcess.stderr?.on('data', chunk => { processOutput.stderr += chunk.toString(); });
     return processOutput;
+  }
+
+  /** Resolve once the dev process has written `text` to `stream`; reject if it exits first. */
+  function waitForOutput(stream: 'stdout' | 'stderr', text: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (output[stream].includes(text)) return resolve();
+      devProcess?.[stream]?.on('data', () => {
+        if (output[stream].includes(text)) resolve();
+      });
+      devProcess?.once('exit', (code) => reject(new Error(
+        `Dev server exited (${code}) before writing ${JSON.stringify(text)}.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`,
+      )));
+    });
   }
 
   async function fetchWhenReady(
@@ -153,6 +181,98 @@ createServer((request, response) => {
         `${request} sequential asset requests opened ${socketIds.size} upstream sockets; expected at most 4 (IDs: ${[...socketIds].join(', ')})`);
     }
     t.diagnostic(`24 sequential asset requests used ${socketIds.size} upstream sockets`);
+  });
+
+  // A frontend started without a host (e.g. `vite --port 3100`) binds whichever
+  // address `localhost` resolves to first, which can be only `::1`. The proxy
+  // must reach it on that family once the ready line prints.
+  for (const frontendHost of ['::1', '127.0.0.1']) {
+    it(`proxies the frontend when it listens only on ${frontendHost}`, { timeout: 30_000 }, async (t) => {
+      if (frontendHost === '::1' && !(await hasIpv6Loopback())) {
+        t.skip('host has no IPv6 loopback (::1)');
+        return;
+      }
+      const [port, frontendPort] = await Promise.all([getAvailablePort(), getAvailablePort()]);
+      writeFileSync(join(tempDir, 'frontend.mjs'), `
+import { createServer } from 'node:http';
+createServer((request, response) => {
+  response.writeHead(200, { 'Content-Type': 'text/html' });
+  response.end('frontend');
+}).listen(${frontendPort}, ${JSON.stringify(frontendHost)});
+`);
+      startDevProcess(port, { frontendPort, env: { BLOCKS_API_URL: '' } });
+      // The ready line prints once the readiness probe finds the frontend listening.
+      await waitForOutput('stdout', `➜  http://localhost:${port}/\n`);
+
+      const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2_000) });
+      const body = await response.text();
+      assert.strictEqual(response.status, 200, `Proxied GET returned ${response.status}: ${body}`);
+      assert.strictEqual(body, 'frontend');
+    });
+  }
+
+  // Vite restarts its server in-process on config changes and can rebind to the
+  // other loopback family; the proxy must follow it without a dev-server restart.
+  it('follows a frontend that rebinds from 127.0.0.1 to ::1 in-process', { timeout: 30_000 }, async (t) => {
+    if (!(await hasIpv6Loopback())) {
+      t.skip('host has no IPv6 loopback (::1)');
+      return;
+    }
+    const [port, frontendPort] = await Promise.all([getAvailablePort(), getAvailablePort()]);
+    writeFileSync(join(tempDir, 'frontend.mjs'), `
+import { createServer } from 'node:http';
+const server = createServer((request, response) => {
+  if (request.url === '/rebind') {
+    response.writeHead(200, { Connection: 'close' });
+    response.end('rebinding', () => {
+      server.close(() => server.listen(${frontendPort}, '::1', () => console.error('frontend rebound to ::1')));
+      server.closeAllConnections();
+    });
+    return;
+  }
+  response.writeHead(200, { 'Content-Type': 'text/html' });
+  response.end('frontend');
+});
+server.on('upgrade', (request, socket) => {
+  socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
+});
+server.listen(${frontendPort}, '127.0.0.1');
+`);
+    startDevProcess(port, { frontendPort, env: { BLOCKS_API_URL: '' } });
+    await waitForOutput('stdout', `➜  http://localhost:${port}/\n`);
+    const page = `http://127.0.0.1:${port}/`;
+    const before = await fetch(page, { signal: AbortSignal.timeout(2_000) });
+    const beforeBody = await before.text();
+    assert.strictEqual(before.status, 200, `Proxied GET before the rebind returned ${before.status}: ${beforeBody}`);
+
+    const rebind = await fetch(`http://127.0.0.1:${port}/rebind`, { signal: AbortSignal.timeout(2_000) });
+    assert.strictEqual(await rebind.text(), 'rebinding');
+    await waitForOutput('stderr', 'frontend rebound to ::1');
+
+    // The first request after the switch may still get the 502 that reveals it.
+    const first = await fetch(page, { signal: AbortSignal.timeout(2_000) });
+    const firstBody = await first.text();
+    assert.ok(first.status === 200 || first.status === 502, `Unexpected ${first.status}: ${firstBody}`);
+    const after = await fetch(page, { signal: AbortSignal.timeout(2_000) });
+    const afterBody = await after.text();
+    assert.strictEqual(after.status, 200, `Proxied GET after the rebind returned ${after.status}: ${afterBody}`);
+    assert.strictEqual(afterBody, 'frontend');
+
+    // A fresh WebSocket upgrade (e.g. an HMR reconnect) reaches the new address too.
+    const upgradeStatus = await new Promise<number | undefined>((resolve, reject) => {
+      const upgrade = request({ host: '127.0.0.1', port, path: '/hmr', headers: { Connection: 'Upgrade', Upgrade: 'websocket' } });
+      upgrade.once('upgrade', (response, socket) => {
+        socket.destroy();
+        resolve(response.statusCode);
+      });
+      upgrade.once('response', (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      });
+      upgrade.once('error', reject);
+      upgrade.end();
+    });
+    assert.strictEqual(upgradeStatus, 101);
   });
 
   it('returns success for a void handler in verbose mode', async () => {
