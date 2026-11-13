@@ -1469,14 +1469,18 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Start listening ────────────────────────────────────────────────────
   const onListening = async (): Promise<void> => {
-    // Record again now that we hold the port. Two concurrent starts (`npm run dev`
-    // and an e2e run that starts its own) can both pass the singleton guard before
-    // either binds; the one that binds second does so only after the other exited
-    // and removed its record, and would otherwise serve with no pidfile, so
-    // `dev:stop` would report nothing to stop.
+    // Record again now that we hold the port, if the pidfile no longer holds our
+    // record. Two starts of this version can't take it from each other (see
+    // claimDevPidfile), but a dev server of an older version, started at the same
+    // moment, writes its own record over ours and removes it when it bows out. We
+    // would then serve with no pidfile, and `dev stop` would report nothing to
+    // stop. The claim writes the whole record again, token included, and leaves
+    // a live record of another session alone.
     try {
-      writeFileSync(pidfilePath, JSON.stringify({ pid: process.pid, ppid: process.ppid, port }));
-    } catch { /* best-effort, as at startup */ }
+      let recorded: DevServerPidRecord | null = null;
+      try { recorded = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* no pidfile */ }
+      if (recorded?.pid !== process.pid) claimDevPidfile(pidfilePath, selfRecord);
+    } catch { /* best effort: the server runs on, as it would without a record */ }
     console.log(`AWS Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
