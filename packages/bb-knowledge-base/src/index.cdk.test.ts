@@ -120,6 +120,40 @@ test('CDK: sandbox defaults make the data bucket + vector store destroy', () => 
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Delete' });
 });
 
+test('CDK: the Bedrock service role trusts bedrock.amazonaws.com with aws:SourceAccount and an aws:SourceArn knowledge-base wildcard', () => {
+  const template = synth();
+  template.hasResourceProperties('AWS::IAM::Role', {
+    AssumeRolePolicyDocument: {
+      Statement: [
+        Match.objectLike({
+          Effect: 'Allow',
+          Action: 'sts:AssumeRole',
+          Principal: { Service: 'bedrock.amazonaws.com' },
+          Condition: {
+            StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+            ArnLike: {
+              'aws:SourceArn': {
+                'Fn::Join': [
+                  '',
+                  [
+                    'arn:',
+                    { Ref: 'AWS::Partition' },
+                    ':bedrock:',
+                    { Ref: 'AWS::Region' },
+                    ':',
+                    { Ref: 'AWS::AccountId' },
+                    ':knowledge-base/*',
+                  ],
+                ],
+              },
+            },
+          },
+        }),
+      ],
+    },
+  });
+});
+
 test('CDK: execution role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
   const template = synth();
 
@@ -183,7 +217,7 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // finalizeConfigRegistry serializes the registry into blocks-config.json via a
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
-  // the compute is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
+  // the compute is wired to read it from S3. (Mirrors the auth block's CDK tests.)
   // Grant config read to the shared execution role and stamp the coordinates on
   // the stand-in compute's function.
   finalizeConfigRegistry(stack, stack.executionRole, [
@@ -304,4 +338,12 @@ test('CDK: calling a runtime method throws an actionable synth-time error (not a
       `${method}() should throw the actionable synth-time error`,
     );
   }
+});
+
+test('CDK: asAgentTool() can be declared at synth; its handler throws the synth-time error', async () => {
+  const { kb } = buildStack();
+  const tool = kb.asAgentTool({ filter: () => undefined });
+  assert.strictEqual(tool.untrustedOutput, true);
+  assert.deepStrictEqual(Object.keys(tool.parameters.shape), ['query']);
+  await assert.rejects(tool.handler({ input: { query: 'docs' }, context: {} }), /retrieve/);
 });

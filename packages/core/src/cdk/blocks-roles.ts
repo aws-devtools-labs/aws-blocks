@@ -25,6 +25,15 @@
  *
  * Each role is visited once per visitor, whichever way it was reached.
  *
+ * The same walk reaches the `AWS::KMS::Key` resources in those scopes, for
+ * checks that read key policies ({@link forEachBlocksKmsKey}).
+ *
+ * The covered set also holds roles the app creates itself (in a `BlocksStack`
+ * the root's subtree is the whole stack; in either root the app's backend
+ * module adds constructs). {@link isAppOwnedRole} tells those apart from the
+ * roles AWS Blocks creates, by who created them, for checks that treat the two
+ * differently.
+ *
  * @internal
  */
 
@@ -35,16 +44,23 @@ import { Construct, type IConstruct } from 'constructs';
 /** A function called once for every IAM role AWS Blocks created for a root. */
 export type BlocksRoleVisitor = (role: cdk.CfnResource) => void;
 
+/** A function called once for every KMS key in the scopes covered for a root. */
+export type BlocksKmsKeyVisitor = (key: cdk.CfnResource) => void;
+
 /** Construct ids of the per-stack providers CDK adds for cross-region references. */
 const CROSS_REGION_PROVIDER = /^Custom::CrossRegionExport(Writer|Reader)CustomResourceProvider$/;
 
 const ROLE_TYPE = 'AWS::IAM::Role';
+const KMS_KEY_TYPE = 'AWS::KMS::Key';
 
 interface RoleCoverage {
 	readonly visitors: BlocksRoleVisitor[];
 	/** Roles reached so far, in visit order; each has been passed to every visitor. */
 	readonly roles: cdk.CfnResource[];
 	readonly seen: WeakSet<cdk.CfnResource>;
+	readonly keyVisitors: BlocksKmsKeyVisitor[];
+	/** `AWS::KMS::Key` resources reached so far by the same walk; each has been passed to every key visitor. */
+	readonly keys: cdk.CfnResource[];
 	/** Scopes already walked by an aspect (avoids stacking duplicate aspects). */
 	readonly scopes: WeakSet<IConstruct>;
 	/** Stacks whose prepare-time cross-region provider roles belong to this root. */
@@ -62,6 +78,8 @@ function coverageOf(root: Construct): RoleCoverage {
 		visitors: [],
 		roles: [],
 		seen: new WeakSet(),
+		keyVisitors: [],
+		keys: [],
 		scopes: new WeakSet(),
 		lateStacks: new Set(),
 		finalized: false,
@@ -72,6 +90,17 @@ function coverageOf(root: Construct): RoleCoverage {
 
 function isRole(node: IConstruct): node is cdk.CfnResource {
 	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === ROLE_TYPE;
+}
+
+function isKmsKey(node: IConstruct): node is cdk.CfnResource {
+	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === KMS_KEY_TYPE;
+}
+
+function visitKmsKey(coverage: RoleCoverage, key: cdk.CfnResource): void {
+	if (coverage.seen.has(key)) return;
+	coverage.seen.add(key);
+	coverage.keys.push(key);
+	for (const visitor of coverage.keyVisitors) visitor(key);
 }
 
 function visitRole(coverage: RoleCoverage, role: cdk.CfnResource): void {
@@ -99,6 +128,7 @@ function coverScope(coverage: RoleCoverage, scope: IConstruct): void {
 		{
 			visit(node) {
 				if (isRole(node)) visitRole(coverage, node);
+				else if (isKmsKey(node)) visitKmsKey(coverage, node);
 			},
 		},
 		{ priority: mutatingPriority(scope) },
@@ -134,6 +164,19 @@ export function forEachBlocksRole(root: Construct, visitor: BlocksRoleVisitor): 
 }
 
 /**
+ * Register `visitor` for every `AWS::KMS::Key` in the scopes covered for `root`:
+ * the same walk, and so the same coverage, as {@link forEachBlocksRole} (the
+ * root's subtree, the stack-level additions of an embedded backend, and
+ * `Hosting`'s subtree and helper stacks). Keys are visited at synth, in
+ * registration order. The prepare-time cross-region providers hold no keys.
+ */
+export function forEachBlocksKmsKey(root: Construct, visitor: BlocksKmsKeyVisitor): void {
+	const coverage = coverageOf(root);
+	coverage.keyVisitors.push(visitor);
+	for (const key of coverage.keys) visitor(key);
+}
+
+/**
  * Snapshot `scope`'s direct children — take it before building something that
  * may hoist constructs to `scope`, then pass it to the cover* functions.
  */
@@ -141,15 +184,94 @@ export function snapshotChildren(scope: Construct): ReadonlySet<IConstruct> {
 	return new Set(scope.node.children);
 }
 
+const BLOCKS_OWNED = Symbol.for('blocks:BlocksOwned');
+const FRAMEWORK_CHILDREN = Symbol.for('blocks:FrameworkChildren');
+const APP_STACK_CHILDREN = Symbol.for('blocks:AppStackChildren');
+
+/**
+ * Mark `construct` (and so every role under it) as created by AWS Blocks, not
+ * by the app. A Scope marks itself when its `bbName` is an official Building
+ * Block's; computes, `RawRoute` and first-party blocks without an official
+ * `bbName` mark themselves in their constructors; framework code that adds a
+ * construct to stack (or root) scope on a block's behalf marks it there
+ * (`getOrCreateOnRoot` does this for whatever its factory adds). A `Scope` or
+ * `Scope` subclass the app writes is not marked.
+ */
+export function markBlocksOwned(construct: IConstruct): void {
+	(construct as unknown as Record<symbol, boolean>)[BLOCKS_OWNED] = true;
+}
+
+/**
+ * Mark the children `scope` gained since `before` (a snapshot of
+ * `scope.node.children`) as AWS Blocks' own — for framework code that adds
+ * shared constructs at stack scope on a block's behalf, outside
+ * `getOrCreateOnRoot`.
+ */
+export function markAddedChildrenBlocksOwned(scope: IConstruct, before: ReadonlySet<IConstruct>): void {
+	for (const child of scope.node.children) if (!before.has(child)) markBlocksOwned(child);
+}
+
+function isMarked(construct: IConstruct): boolean {
+	return (construct as unknown as Record<symbol, boolean | undefined>)[BLOCKS_OWNED] === true;
+}
+
+/**
+ * Record the direct children of a backend root (`BlocksStack` or embedded
+ * `BlocksBackend`) that the framework added: everything `create()` added
+ * outside the app's backend module (the module's own additions, and whatever
+ * the app adds after `create()` returns, are left out). Called once, at the end
+ * of `create()`; until then — and for any other root — every covered role
+ * counts as framework-owned.
+ */
+export function recordFrameworkChildren(root: Construct, children: ReadonlySet<IConstruct>): void {
+	(root as unknown as Record<symbol, ReadonlySet<IConstruct>>)[FRAMEWORK_CHILDREN] = children;
+}
+
+/**
+ * Whether `role` is one the app created rather than one AWS Blocks created —
+ * classified by who created it, not by where it sits:
+ *
+ * - **framework-owned** when it, or a construct above it, is marked
+ *   ({@link markBlocksOwned}: an official Building Block, a compute, a hoisted
+ *   provider, Hosting); when it sits under a direct child of the root that the
+ *   framework added ({@link recordFrameworkChildren}); or when it lies outside
+ *   the root's stack (Hosting's helper stacks, Lambda@Edge peers);
+ * - **app-owned** otherwise: under a direct child of the root that the backend
+ *   module (or app code after `create()`) added and no mark above it, including
+ *   a `Scope` subclass the app writes; or, for an embedded `BlocksBackend`,
+ *   under a stack-level construct the backend module added unmarked.
+ *
+ * Always `false` for a root with no recorded framework children.
+ */
+export function isAppOwnedRole(root: Construct, role: IConstruct): boolean {
+	const store = root as unknown as Record<symbol, ReadonlySet<IConstruct> | undefined>;
+	const framework = store[FRAMEWORK_CHILDREN];
+	if (!framework) return false;
+	const stack = cdk.Stack.of(root);
+	// Walk up to the direct child of the root (or, for a role outside the
+	// root's subtree, the direct child of its stack), stopping at any mark.
+	let node: IConstruct = role;
+	while (node.node.scope && node.node.scope !== root && node.node.scope !== stack) {
+		if (isMarked(node)) return false;
+		node = node.node.scope;
+	}
+	if (isMarked(node)) return false;
+	if (node.node.scope === root) return !framework.has(node);
+	if (node.node.scope === stack) return store[APP_STACK_CHILDREN]?.has(node) === true;
+	return false;
+}
+
 function coverNewChildren(
 	coverage: RoleCoverage,
 	parent: Construct,
 	before: ReadonlySet<IConstruct>,
 	exclude: IConstruct,
+	unmarked: ReadonlySet<IConstruct> = new Set(),
 ): void {
 	for (const child of parent.node.children) {
 		if (child === exclude || before.has(child)) continue;
 		coverScope(coverage, child);
+		if (!unmarked.has(child)) markBlocksOwned(child);
 	}
 }
 
@@ -160,9 +282,19 @@ function coverNewChildren(
  * them; roles the stack already had (the customer's own) are left alone. A
  * singleton is created once per stack, so with several backends it belongs to
  * the backend that created it first.
+ *
+ * `addedByModule` holds the stack-level constructs added while the app's
+ * backend module ran. They are covered too, but only the ones framework code
+ * marked count as AWS Blocks'; the rest are recorded as the app's
+ * ({@link isAppOwnedRole}). Everything else added is marked.
  */
-export function coverStackLevelAdditions(backend: Construct, before: ReadonlySet<IConstruct>): void {
-	coverNewChildren(coverageOf(backend), cdk.Stack.of(backend), before, backend);
+export function coverStackLevelAdditions(
+	backend: Construct,
+	before: ReadonlySet<IConstruct>,
+	addedByModule: ReadonlySet<IConstruct> = new Set(),
+): void {
+	coverNewChildren(coverageOf(backend), cdk.Stack.of(backend), before, backend, addedByModule);
+	(backend as unknown as Record<symbol, ReadonlySet<IConstruct>>)[APP_STACK_CHILDREN] = addedByModule;
 }
 
 /** Constructs added to the stack and to the stage while `Hosting` was built. */
@@ -196,6 +328,7 @@ export function coverHosting(
 	const coverage = coverageOf(owner);
 	const stack = cdk.Stack.of(hosting);
 	coverScope(coverage, hosting);
+	markBlocksOwned(hosting);
 	coverNewChildren(coverage, stack, before.stack, hosting);
 
 	const stage = cdk.Stage.of(hosting);

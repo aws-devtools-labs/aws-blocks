@@ -13,7 +13,9 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import {
+	assertBlocksDefaults,
 	assertCdkConditionActive,
 	BlocksBackend,
 	buildSharedGateway,
@@ -21,22 +23,29 @@ import {
 	requireSharedGateway,
 	setupBlocksInfra,
 } from './blocks-backend.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
+import { markBlocksOwned, recordFrameworkChildren, snapshotChildren } from './blocks-roles.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
 	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 } from './api-front-door.js';
-import { finalizeConfigRegistry } from './config-registry.js';
+import type { ApiDirectRoute } from './api-direct-routes.js';
+import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
+import { claimScopeFullId, type ScopeFullIdClaims } from '../common/scope-fullid-claims.js';
+import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
@@ -44,20 +53,30 @@ import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
+export type { ApiWafOptions } from '../common/index.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
 	type CoreBlocksBackendProps,
+	getSharedGatewayUrl,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
 	type BlocksDefaults,
 	BlocksPresets,
+	type BlocksSecretsStore,
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
+export {
+	finalizeConfigRegistry,
+	getConfigDeployment,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerConfig,
+} from './config-registry.js';
+export { isSandboxContext } from './stack-metadata.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -108,6 +127,12 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -117,6 +142,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
 	}
 
 	/**
@@ -185,6 +219,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Validate and record the tier before the backend module is imported, so an
 		// invalid value fails before any app code runs.
 		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() can find this by walking the
 		// construct tree (see root-registry.ts). Set before any child Scope/BB is
@@ -204,10 +239,16 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left.
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.id);
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksStack');
 
 		// Detect ambient pipeline stage scope set by Pipeline appFile imports
 		const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
@@ -225,6 +266,18 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(stack) ? 'sandbox' : 'production';
+		registerConfig(stack, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
+		// Stack-level children the app's backend module adds (outside any
+		// Building Block) are the app's own; see recordFrameworkChildren below.
+		const childrenBeforeBackend = snapshotChildren(stack);
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -236,6 +289,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 				);
 			}
 		}
+		const childrenAfterBackend = snapshotChildren(stack);
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
@@ -296,9 +350,23 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		addBlocksStackMetadata(stack);
 
+		// The stack-level children AWS Blocks itself added: everything now on the
+		// stack except what the backend module added. Roles under the rest (the
+		// backend module's own constructs, and whatever the app adds after this
+		// returns) are app-owned unless a Building Block or framework helper sits
+		// above them (see isAppOwnedRole in blocks-roles.ts).
+		const appChildren = new Set([...childrenAfterBackend].filter((c) => !childrenBeforeBackend.has(c)));
+		recordFrameworkChildren(stack, new Set(stack.node.children.filter((c) => !appChildren.has(c))));
+
 		return stack;
 	}
 }
+
+/** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
+const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
+
+/** Per backend root: which scope path claimed each `fullId` at synth. See `../common/scope-fullid-claims.ts`. */
+const SCOPE_FULLID_CLAIMS = Symbol.for('blocks:ScopeFullIdClaims');
 
 export class Scope extends Construct {
 	public readonly id: string;
@@ -319,23 +387,52 @@ export class Scope extends Construct {
 	/**
 	 * Compute assigned at this node. Applies to this block and is inherited by
 	 * descendants (a nearer assignment wins). Covers both a handler assigned to a
-	 * specific compute and a scope-level default for its subtree. Internal until
-	 * the customer-facing surface exists.
+	 * specific compute (a block's own `compute` option) and a scope-level default
+	 * for its subtree ({@link ScopeOptions.compute}).
 	 * @internal
 	 */
 	_compute?: ComputeBase;
 
+	/**
+	 * Adds a synth warning (`blocks:scope:fullIdCollision`) when a different scope
+	 * path on the same backend root already resolves to the same `fullId`: ids are
+	 * joined with `-`, so `'user-service' > 'sessions'` and `'user' >
+	 * 'service-sessions'` collide and would get resources with one physical name.
+	 * A future release will make this a synth error.
+	 *
+	 * @param id - This scope's construct id, unique among its siblings.
+	 * @param options - Parent scope, Building Block metadata and compute.
+	 */
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
 		super(parent, id);
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		// computeScopeFullId, not this.fullId: a subclass getter may read fields it has not set yet.
+		const claims = getOrCreateOnRoot(
+			this,
+			SCOPE_FULLID_CLAIMS,
+			(): ScopeFullIdClaims => ({ owners: new Map(), collided: new Set() }),
+		);
+		const collision = claimScopeFullId(claims, this, computeScopeFullId(this));
+		if (collision) cdk.Annotations.of(this).addWarningV2('blocks:scope:fullIdCollision', collision);
+		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
+		// the roles it creates as AWS Blocks' own for the service-principal trust
+		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`
+		// namespace and a `Scope` subclass the app writes (a custom block) stay
+		// unmarked, so their roles are the app's. Computes, `RawRoute` and
+		// first-party blocks without an official `bbName` mark themselves.
+		if (options?.bbName && OFFICIAL_BB_NAMES.has(options.bbName)) markBlocksOwned(this);
 		if (options?.bbName) {
 			this.bbName = options.bbName;
 			this.bbVersion = options.bbVersion;
 			recordBuildingBlock(this, options.bbName);
 		}
+		// A scope-level compute (`new Scope(id, { parent, compute })`). Its
+		// `resolve()` yields the concrete compute, a `ComputeBase`: the option is
+		// typed structurally only so the default entry carries no CDK types.
+		if (options?.compute) this._compute = options.compute.resolve() as ComputeBase;
 	}
 
 	/**
@@ -365,10 +462,10 @@ export class Scope extends Construct {
 	 * The compute this block runs on: the nearest `_compute` assigned on this
 	 * block or an ancestor scope, else the owning stack/backend's default compute.
 	 *
-	 * For any app that doesn't assign a compute, this always resolves to the
-	 * default — so reads are a no-op refactor. `_compute` is internal
-	 * (test/framework) until the customer-facing surface exists; there is no
-	 * public option to set it yet.
+	 * A block's own `compute` option assigns it on the block; `new Scope(id, {
+	 * compute })` assigns it on a scope, for everything under it
+	 * ({@link ScopeOptions.compute}). For an app that assigns none, this always
+	 * resolves to the default.
 	 */
 	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
@@ -485,11 +582,37 @@ export class Scope extends Construct {
 	// Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
 	registerClientMiddleware(_packageSpecifier: string): void {}
 	registerDevAttachment(_packageSpecifier: string): void {}
+
+	/**
+	 * Claim a Lambda event key at synth, under the same one-handler-per-key rule
+	 * the Lambda runtime enforces (`Scope.registerLambdaEventHandler` in the
+	 * runtime layer): the key is `{eventSource}:{identifier}`, and a second claim
+	 * on the same backend root throws, naming both blocks.
+	 *
+	 * The runtime registers handlers when the handler module loads, so without
+	 * this a conflicting pair would pass `cdk synth` and deploy, and then every
+	 * request would fail on cold start. A Building Block whose runtime layer calls
+	 * `registerLambdaEventHandler(eventSource, identifier, …)` calls this from its
+	 * CDK constructor with the **same** `eventSource` and `identifier` (a CDK
+	 * token is fine — the same resource yields the same token). The handler is
+	 * not used at synth and may be omitted.
+	 *
+	 * @param eventSource - Event source prefix (e.g. `EventSourceMapping.SQS`, `'blocks.cronjob'`).
+	 * @param identifier - What the runtime registers under: the queue name, the block's `fullId`, the user pool id.
+	 * @param _handler - Ignored at synth; accepted so the call matches the runtime signature.
+	 * @throws {Error} When another block on the same backend root already claimed `{eventSource}:{identifier}`.
+	 */
 	registerLambdaEventHandler(
-		_eventSource: string,
-		_identifier: string,
-		_handler: (record: any) => Promise<void>,
-	): void {}
+		eventSource: string,
+		identifier: string,
+		_handler?: (record: any) => Promise<void>,
+	): void {
+		const claims = getOrCreateOnRoot(this, LAMBDA_EVENT_HANDLER_CLAIMS, () => new Map<string, string>());
+		const key = lambdaEventHandlerKey(eventSource, identifier);
+		const owner = claims.get(key);
+		if (owner !== undefined) throw duplicateLambdaEventHandlerError(key, this.fullId, owner);
+		claims.set(key, this.fullId);
+	}
 	get clientMiddleware(): readonly string[] {
 		return [];
 	}

@@ -28,60 +28,22 @@ dependencies {
 }
 ```
 
-## Configuration
-
-All properties are optional. Override them in the `awsBlocks` block if the defaults don't fit your project:
+### 3. Point at your spec
 
 ```kotlin
-import com.aws.blocks.plugin.GeneratedVisibility
-
 awsBlocks {
-    // Path to the generated spec file (defaults to rootProject.file("blocks.spec.json"))
-    apiSpec = rootProject.file("path/to/your/blocks.spec.json")
-
-    // Package name for generated code (defaults to "com.aws.blocks.generated")
-    packageName = "com.example.myapp.generated"
-
-    // Visibility of generated types: Public (default) or Internal
-    visibility = GeneratedVisibility.Internal
-
-    // Override or add server URLs (optional)
-    servers {
-        local("http://10.0.2.2:3001")
-        sandbox("https://sandbox.example.com")
-        prod("https://api.example.com")
-        custom("staging", "https://staging.example.com")
-    }
-
-    // Logical identities from x-blocks-native-packages that keep the
-    // UnknownTransferable fallback instead of a declared type (optional).
-    // An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
-    excludeNativePackages = setOf("example-iot-native")
-
-    // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
-    // registered with the operating system. Must match an entry in the backend's
-    // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
-    oidc {
-        relayTo = "com.yourcompany.yourapp://auth/callback"
-    }
+    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+    packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```
 
-Servers defined in the `servers` block override entries from the spec file that share the same name. New names are added alongside the spec's servers.
+See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration options.
 
-On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBundleURLTypes` — the Gradle plugin cannot reach an Xcode project. Android needs nothing further; the plugin injects the scheme into the merged manifest.
+### 4. Call your backend
 
-## Using the Generated Code
+Codegen runs as part of compilation, so building the module is all it takes to get the client.
 
 ```kotlin
-import com.aws.blocks.kotlin.Blocks
-import com.example.myapp.generated.Api.ListTodos
-import com.example.myapp.generated.Api.UpdateTodo
-import com.example.myapp.generated.Todo
-import com.example.myapp.generated.api
-import com.example.myapp.generated.authApi
-import com.example.myapp.generated.invoke
-
 val blocks = Blocks()
 
 suspend fun todos() {
@@ -99,51 +61,42 @@ suspend fun todos() {
 }
 ```
 
-`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
-call site alone — the `invoke` import is what brings it into scope, and without it the compiler
-reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+Building the instance — which server it reaches, the imports the generated accessors need, and
+closing the engine it owns — is covered in
+[runtime configuration](docs/runtime-configuration.md#building-an-instance).
 
-Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
-realtime channels still open their own. `close()` shuts that engine down, after which calls through
-the instance report it rather than failing inside the HTTP client.
+> **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
-The accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one spec is assumed per
-compilation scope. Two generated packages visible in the same file make `Blocks()` ambiguous, and
-an accessor imported from one while `Blocks()` comes from the other would send its calls to the
-wrong backend. A module that generates a client for its own use should set its own `packageName`
-and `visibility = GeneratedVisibility.Internal`, so that its accessors stay out of its consumers'
-scope and its generated types do not share fully qualified names with another module's — two
-modules both left on the default `packageName` ship the same ones.
+## Generated types
 
-### Transferable Results
+A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
 
-When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
+A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, read and written in the spec's wire format. When every arm is an object with a string discriminator property, the subclasses are written with that property (`{"type":"email",…}`). Otherwise each value is its arm's bare JSON value: a string, number, boolean, array, map, date-time or transferable arm is a subclass holding it as `value` (`Search.Query.Variant1("abc")` is sent as `"abc"`), a `const` arm is a `data object` written as its literal, and an object arm is its object, with no extra key. A value decodes to the first arm, in spec order, whose JSON shape it has (its JSON type, its required keys, or its exact literal), and one that matches no arm throws a `SerializationException` naming the union. A boolean or numeric discriminator is written and matched with that JSON type (`"isUpdated": true`). An arm with its own properties plus a nested `oneOf` (the `confirmSignIn` action of an `Auth` block's `createApi()`) is one flat object: `ConfirmSignIn(session, challenge = Challenge.Code(code))` sends `{"action":"confirmSignIn","session":…,"challenge":"code","code":…}`.
 
-When `x-blocks-native-bindings` binds the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
+Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
 
-A nullable built-in result now returns null for a JSON-null body as well, where it previously threw.
+## Documentation
 
-The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
+| Guide | Covers |
+|---|---|
+| [Gradle plugin](docs/gradle-plugin.md) | the full `awsBlocks { }` block, tasks, and multi-module setups |
+| [Runtime configuration](docs/runtime-configuration.md) | `BlocksConfig`, per-target configuration, where the session is stored, signing out |
+| [OIDC](docs/oidc.md) | sign-in, relay scheme registration, JVM landing pages, typed providers |
+| [Transferables](docs/transferables.md) | results that are live objects rather than data |
 
-## Gradle Tasks
+## Example apps
 
-| Task | Description |
-|------|-------------|
-| `awsBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `awsBlocksCodegenDebug`) |
-| `awsBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `awsBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
-
-## Example
-
-See the [`example/android`](example/android) directory for a complete Android app, or [`example/kmp`](example/kmp) for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API.
+See [`example/android`](example/android) for a complete Android app, or [`example/kmp`](example/kmp)
+for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API across Android,
+iOS and desktop.
 
 ## Supported Platforms
 
-| Platform | Engine | Cookie Storage |
-|----------|--------|----------------|
-| Android | OkHttp | EncryptedSharedPreferences |
-| iOS | Darwin (URLSession) | Keychain Services |
-| JVM | OkHttp | AES-256-GCM encrypted files |
+| Platform | Engine | Cookie Storage                                                                                                          |
+|----------|--------|-------------------------------------------------------------------------------------------------------------------------|
+| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#identifying-your-application) — in memory if no id is set |
 
 ## Support by Target
 

@@ -213,8 +213,8 @@ export function blocksError(name: string, message: string): Error {
  * @example
  * ```typescript
  * const next = await authApi.setAuthState({ action: 'signIn', username, password });
- * if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
- *   // unknown user → fall back to sign-up
+ * if (hasAuthError(next, AuthErrors.NotAuthorized)) {
+ *   // unknown user (or wrong password) → fall back to sign-up
  * }
  * ```
  */

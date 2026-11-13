@@ -16,10 +16,24 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * Packages under `packages/` that are NOT catalog-listed Building Blocks: the
- * umbrella + internal/support packages, and the scaffolding CLIs
- * (`create-blocks-app`, `create-block`) which ship a README but aren't `bb-*`.
+ * umbrella + internal/support packages, the scaffolding CLIs
+ * (`create-blocks-app`, `create-block`) which ship a README but aren't `bb-*`,
+ * and `admin-ui`, which is a local dashboard application rather than a block an
+ * app composes into its backend.
  */
-export const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app', 'create-block', 'bb-lambda-compute', 'bb-container-compute']);
+export const EXCLUDED = new Set([
+	'blocks',
+	'data-common',
+	'foundations',
+	'create-blocks-app',
+	'create-block',
+	'bb-lambda-compute',
+	'bb-container-compute',
+	'admin-ui',
+	// Preview block the umbrella does not depend on or re-export yet. Remove when
+	// @aws-blocks/blocks switches its Database export to bb-database.
+	'bb-database',
+]);
 
 /** Absolute path to the monorepo's `packages/` directory. */
 export const packagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'packages');

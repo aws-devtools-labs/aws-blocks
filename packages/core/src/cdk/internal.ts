@@ -41,20 +41,32 @@ export type {
 	ServerlessComputeOptions,
 } from '../common/compute-capabilities.js';
 export { LAMBDA_MAX_TIMEOUT_SECONDS, resolvePerInstanceConcurrency } from '../common/compute-capabilities.js';
-export type { ComputeDashboardSection, ComputeProvider } from './compute/compute.js';
+export type { ComputeApiIngress, ComputeDashboardSection, ComputeProvider } from './compute/compute.js';
+export { API_LISTENER_PORTS } from './api-vpc-link.js';
+export { CONTAINER_HTTP_PORT, CONTAINER_READINESS_PORT, CONTAINER_SERVES_API_ENV } from '../constants.js';
 export { ComputeBase } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
+export { foreignComputeProblem } from './compute/compute-ownership.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // VPC integration helpers a concrete container compute needs to hook into the
 // central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve
-// subnets, and declare its own requirement so the lazy VPC materializes.
+// subnets, and declare its own requirement so the lazy VPC materializes — plus
+// the finalize step, so a Building Block's tests can run endpoint provisioning.
 export { registerVpcRequirements } from './vpc-requirements-registry.js';
-export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, isVpcInitialized } from './vpc.js';
+export {
+	anyRequirementNeedsVpc,
+	finalizeVpc,
+	getOrCreateVpc,
+	getVpcContext,
+	initializeVpc,
+	isVpcInitialized,
+} from './vpc.js';
 // Resolve the owning backend root (BlocksStack/BlocksBackend), so a container
 // compute can create the shared VPC + ECS cluster once per backend at a fixed id
 // rather than once per compute or per stack.
+export { registerSharedConfig } from './config-registry.js';
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
 
 // Shared DynamoDB protection resolver for the two Blocks-provisioned DynamoDB
@@ -68,3 +80,48 @@ export {
 	type ResolvedDynamoDbProtection,
 	resolveDynamoDbProtection,
 } from './dynamodb-protection.js';
+
+// Committed synth baselines (`baselines.ts`): the protocol a Building Block
+// follows to refuse a destructive change at synth, and the on-disk format
+// version it writes. First-party only — `bb-auth`'s user-pool immutability
+// guard is the first user — so it is not on the public `@aws-blocks/core/cdk`
+// barrel.
+export {
+	BASELINE_FORMAT_VERSION,
+	type BaselineFormatVersion,
+	type BaselineRemovalGuard,
+	baselineDir,
+	claimBaseline,
+	hasOrphanedBaselines,
+	readBaselineFormatVersion,
+} from './baselines.js';
+// Deploy-time Lambdas that ship in the block's npm package and still work when
+// the block is vendorized (`src/` only): the bundled asset when installed, the
+// TypeScript source bundled at synth otherwise. Used by first-party blocks
+// (bb-auth, bb-distributed-table, bb-data, bb-distributed-data).
+export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
+// Scopes the Step Functions trust of a custom-resource Provider's waiter role,
+// which the synth-time service-principal trust check requires (bb-distributed-table,
+// bb-database), and builds the aws:SourceAccount / aws:SourceArn conditions blocks
+// put on the service-principal trusts they create (bb-knowledge-base, bb-agent,
+// bb-cron-job, bb-container-compute, bb-auth).
+export {
+	type SourceScopedConditionsOptions,
+	scopeProviderWaiterTrust,
+	sourceScopedConditions,
+} from './service-principal-trust.js';
+// Marks a construct (and every role under it) as created by AWS Blocks, for the
+// service-principal trust check's ownership split. Used by first-party blocks
+// that add constructs at stack scope on a block's behalf (bb-app-setting,
+// bb-distributed-table, bb-distributed-data) or carry no official bbName at
+// synth (bb-database).
+export { markAddedChildrenBlocksOwned, markBlocksOwned } from './blocks-roles.js';
+// The service-agnostic half of the above: the `encryption` option parser, also
+// used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
+// `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.
+export {
+	type KmsBlockIdentity,
+	type KmsEncryptionOption,
+	type ResolvedKmsEncryption,
+	resolveKmsEncryption,
+} from './kms-encryption.js';

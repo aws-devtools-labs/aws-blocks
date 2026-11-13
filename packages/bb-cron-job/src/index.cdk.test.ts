@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /**
  * CDK-side tests for CronJob: compute targeting + synth-time schedule validation.
@@ -20,9 +21,11 @@ import { dirname, join } from 'node:path';
  */
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
-import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
+import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { BlocksPresets, BlocksStack, Scope, getRegisteredConfigValue } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
@@ -182,5 +185,254 @@ describe('CronJob scheduler role trust', () => {
 		assert.ok(sourceArn.includes('AWS::Region'), `SourceArn is region-scoped: ${sourceArn}`);
 		assert.ok(sourceArn.includes('AWS::AccountId'), `SourceArn is account-scoped: ${sourceArn}`);
 		assert.ok(sourceArn.includes('AWS::Partition'), `SourceArn uses the stack partition: ${sourceArn}`);
+	});
+});
+
+describe('CronJob one handler per event key, at synth', () => {
+	// Two jobs end up with one `fullId` (`<stack>-x-y-z`) because `fullId` joins
+	// ids with '-': `x-y`/`z` and `x`/`y-z`. CDK accepts both construct paths, and
+	// the Lambda runtime would register both under `blocks.cronjob:<fullId>` —
+	// the second throws on cold start, failing every request. Synth must refuse it.
+	test('two CronJobs that share a fullId fail synth, naming the key', async () => {
+		const stack = await makeStack('CronCollide');
+		new CronJob(new Scope('x-y', { parent: stack }), 'z', { schedule: 'rate(1 day)', handler: async () => {} });
+		const other = new Scope('x', { parent: stack });
+		assert.throws(
+			() => new CronJob(other, 'y-z', { schedule: 'rate(1 day)', handler: async () => {} }),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /"blocks\.cronjob:CronCollide-x-y-z"/);
+				assert.match(e.message, /already registered by Building Block 'CronCollide-x-y-z'/);
+				return true;
+			},
+		);
+	});
+
+	test('distinct CronJobs in one stack synthesize', async () => {
+		const stack = await makeStack('CronDistinct');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(stack, 'hourly', { schedule: 'rate(1 hour)', handler: async () => {} });
+		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 2);
+	});
+});
+
+/** The policy statements attached to the shared scheduler role. */
+function schedulerRoleStatements(template: Template): Array<{ Action: unknown; Resource: unknown }> {
+	const roles = template.findResources('AWS::IAM::Role');
+	const trustsScheduler = (role: { Properties?: { AssumeRolePolicyDocument?: { Statement?: unknown[] } } }) =>
+		(role.Properties?.AssumeRolePolicyDocument?.Statement ?? []).some(
+			(s) => (s as { Principal?: { Service?: unknown } }).Principal?.Service === 'scheduler.amazonaws.com',
+		);
+	const roleId = Object.keys(roles).find((k) => trustsScheduler(roles[k]));
+	assert.ok(roleId, 'a scheduler role exists');
+	const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((p) =>
+		JSON.stringify(p.Properties?.Roles ?? []).includes(roleId),
+	);
+	return policies.flatMap((p) => p.Properties.PolicyDocument.Statement);
+}
+
+function scheduleResource(template: Template): { Target: { Arn: unknown; Input: string } } {
+	const schedules = Object.values(template.findResources('AWS::Scheduler::Schedule'));
+	assert.strictEqual(schedules.length, 1, 'exactly one schedule');
+	return schedules[0].Properties;
+}
+
+describe('CronJob compute option', () => {
+	test('serverless: the compute option targets that function', async () => {
+		const stack = await makeStack('CronOptionServerless');
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', compute: lambdaB, handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		assert.ok(scheduleTargets(template, fnLogicalId(stack, lambdaB)), 'schedule targets lambdaB');
+		// A Lambda-targeted job provisions no runner queue.
+		template.resourceCountIs('AWS::SQS::Queue', 0);
+	});
+
+	test('container: ticks go to the runner AsyncJob queue the container drains', async () => {
+		const stack = await makeStack('CronOptionContainer');
+		const worker = new ContainerCompute(stack, 'worker', { size: { vcpu: 0.5, memory: 1024 } });
+		const job = new CronJob(stack, 'nightly', {
+			schedule: 'cron(0 3 * * ? *)',
+			compute: worker,
+			timeoutSeconds: 7200,
+			input: { region: 'eu' },
+			handler: async () => {},
+		});
+
+		const template = Template.fromStack(stack);
+		// The runner is an AsyncJob: a queue and its DLQ.
+		template.resourceCountIs('AWS::SQS::Queue', 2);
+		const runnerFullId = `${job.fullId}-runner`;
+		const queues = template.findResources('AWS::SQS::Queue', { Properties: { QueueName: runnerFullId } });
+		const queueId = Object.keys(queues)[0];
+		assert.ok(queueId, `runner queue named ${runnerFullId}`);
+
+		// The schedule targets the runner queue, not a function.
+		const props = scheduleResource(template);
+		assert.deepStrictEqual(props.Target.Arn, { 'Fn::GetAtt': [queueId, 'Arn'] });
+		// The body is the handler's event, without the Lambda routing `source`.
+		assert.deepStrictEqual(JSON.parse(props.Target.Input), {
+			jobName: job.fullId,
+			scheduledTime: '<aws.scheduler.scheduled-time>',
+			input: { region: 'eu' },
+		});
+
+		// The scheduler role may send to the queue and invokes no function.
+		const statements = schedulerRoleStatements(template);
+		const send = statements.find((s) => JSON.stringify(s.Action).includes('sqs:SendMessage'));
+		assert.ok(send, 'scheduler role can send to the runner queue');
+		assert.deepStrictEqual(send.Resource, { 'Fn::GetAtt': [queueId, 'Arn'] });
+		assert.ok(
+			!statements.some((s) => JSON.stringify(s.Action).includes('lambda:InvokeFunction')),
+			'no invoke grant for a container job',
+		);
+
+		// The container owns the runner and enforces the job's timeout.
+		const key = sanitizeConfigKey(runnerFullId);
+		assert.strictEqual(getRegisteredConfigValue(stack, `BLOCKS_HANDLER_OWNER_${key}`), worker.fullId);
+		assert.strictEqual(getRegisteredConfigValue(stack, `BLOCKS_HANDLER_TIMEOUT_${key}`), '7200');
+	});
+
+	test('rejects a non-Lambda, non-container compute option at synth', async () => {
+		const stack = await makeStack('CronOptionUnsupported');
+		const fake = new FakeCompute('fake', { parent: stack });
+		assert.throws(
+			() => new CronJob(stack, 'job', { schedule: 'rate(5 minutes)', compute: fake, handler: async () => {} }),
+			(e: unknown) => isBlocksError(e, CronJobErrors.UnsupportedCompute),
+		);
+	});
+});
+
+describe('CronJob scheduler role grants', () => {
+	test('jobs on different functions can each invoke their own target', async () => {
+		const stack = await makeStack('CronGrantsPerTarget');
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		new CronJob(stack, 'onDefault', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(stack, 'onB', { schedule: 'rate(1 day)', compute: lambdaB, handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		const invoked = JSON.stringify(
+			schedulerRoleStatements(template).filter((s) => JSON.stringify(s.Action).includes('lambda:InvokeFunction')),
+		);
+		assert.ok(invoked.includes(fnLogicalId(stack, stack._defaultCompute as LambdaCompute)), 'default fn invokable');
+		assert.ok(invoked.includes(fnLogicalId(stack, lambdaB)), 'lambdaB invokable');
+	});
+
+	test('jobs on one function share a single invoke statement', async () => {
+		const stack = await makeStack('CronGrantsDedupe');
+		new CronJob(stack, 'a', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(stack, 'b', { schedule: 'rate(1 hour)', handler: async () => {} });
+
+		const template = Template.fromStack(stack);
+		const invokes = schedulerRoleStatements(template).filter((s) =>
+			JSON.stringify(s.Action).includes('lambda:InvokeFunction'),
+		);
+		assert.strictEqual(invokes.length, 1, JSON.stringify(invokes));
+	});
+});
+
+describe('CronJob runner marker', () => {
+	test('a container CronJob registers the runner marker; a serverless one does not', async () => {
+		const stack = await makeStack('CronRunnerMarker');
+		const worker = new ContainerCompute(stack, 'worker', { size: { vcpu: 0.5, memory: 1024 } });
+		const onContainer = new CronJob(stack, 'onContainer', {
+			schedule: 'rate(1 day)',
+			compute: worker,
+			handler: async () => {},
+		});
+		const onLambda = new CronJob(stack, 'onLambda', { schedule: 'rate(1 day)', handler: async () => {} });
+		assert.strictEqual(
+			getRegisteredConfigValue(stack, `BLOCKS_CRON_RUNNER_${sanitizeConfigKey(onContainer.fullId)}`),
+			'1',
+		);
+		assert.strictEqual(
+			getRegisteredConfigValue(stack, `BLOCKS_CRON_RUNNER_${sanitizeConfigKey(onLambda.fullId)}`),
+			undefined,
+		);
+	});
+});
+
+// ── defaults.permissionsBoundary guard ───────────────────────────────────────
+// Every AWS::IAM::Role in every synthesized template (custom-resource provider
+// roles and any other stack or helper stack's roles included) must carry the
+// configured boundary and be listed in the synth-time IAM report.
+//
+// Keep in sync: the same helper is copied in the bb-auth (`boundary.cdk.test.ts`), bb-compute, bb-container-compute and bb-dashboard
+// cdk test files, and mirrors core's `assertEveryRoleBounded` in
+// `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
+// belongs in all of them.
+
+const GUARD_BOUNDARY = 'blocks-guard-boundary';
+const GUARD_EXPECTED = {
+	'Fn::Join': [
+		'',
+		['arn:', { Ref: 'AWS::Partition' }, ':iam::', { Ref: 'AWS::AccountId' }, `:policy/${GUARD_BOUNDARY}`],
+	],
+};
+
+/**
+ * Read every top-level template and the IAM report in `outdir`; fail on a role
+ * without the boundary or missing from the report. Returns the checked roles as
+ * `<artifact>/<logicalId>` (for asserting a block's own roles were reached).
+ *
+ * Only the top level of the cloud assembly is read: templates from a CDK `Stage`
+ * (written under `assembly-*` folders) are not. No block tested here creates a Stage.
+ */
+function assertEveryRoleBoundedAndReported(outdir: string, reportFile: string): string[] {
+	const report = JSON.parse(readFileSync(join(outdir, reportFile), 'utf8')) as {
+		roles: { stack: string; logicalId: string; permissionsBoundary: unknown }[];
+	};
+	const reported = new Set(report.roles.map((r) => `${r.stack}/${r.logicalId}`));
+	const checked: string[] = [];
+	const problems: string[] = [];
+	for (const file of readdirSync(outdir).filter((f) => f.endsWith('.template.json'))) {
+		const artifact = file.slice(0, -'.template.json'.length);
+		const { Resources = {} } = JSON.parse(readFileSync(join(outdir, file), 'utf8')) as {
+			Resources?: Record<string, { Type: string; Properties?: { PermissionsBoundary?: unknown } }>;
+		};
+		for (const [id, r] of Object.entries(Resources)) {
+			if (r.Type !== 'AWS::IAM::Role') continue;
+			const key = `${artifact}/${id}`;
+			checked.push(key);
+			if (JSON.stringify(r.Properties?.PermissionsBoundary) !== JSON.stringify(GUARD_EXPECTED)) {
+				problems.push(`${key}: boundary ${JSON.stringify(r.Properties?.PermissionsBoundary ?? 'NONE')}`);
+			}
+			if (!reported.has(key)) problems.push(`${key}: missing from ${reportFile}`);
+		}
+	}
+	assert.ok(checked.length > 0, 'synth should produce at least one role');
+	assert.deepStrictEqual(
+		problems,
+		[],
+		`roles not covered by defaults.permissionsBoundary:\n  ${problems.join('\n  ')}`,
+	);
+	return checked;
+}
+
+describe('CronJob under defaults.permissionsBoundary', () => {
+	test('every role it creates (scheduler role included) carries the boundary and is in blocks-iam.json', async () => {
+		const outdir = mkdtempSync(join(tmpdir(), 'cron-boundary-'));
+		try {
+			const app = new cdk.App({ outdir });
+			const stack = await BlocksStack.create(app, 'CronBoundary', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: { ...BlocksPresets.production, permissionsBoundary: GUARD_BOUNDARY },
+				defaultComputeFactory: lambdaFactory,
+			});
+			new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+			const worker = new ContainerCompute(stack, 'worker', { size: { vcpu: 0.5, memory: 1024 } });
+			new CronJob(stack, 'onContainer', { schedule: 'rate(1 day)', compute: worker, handler: async () => {} });
+			app.synth();
+
+			const checked = assertEveryRoleBoundedAndReported(outdir, `${stack.artifactId}.blocks-iam.json`);
+			assert.ok(
+				checked.some((r) => r.includes('BlocksSchedulerRole')),
+				`the scheduler role should be among the checked roles: ${checked}`,
+			);
+		} finally {
+			rmSync(outdir, { recursive: true, force: true });
+		}
 	});
 });

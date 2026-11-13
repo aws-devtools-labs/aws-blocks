@@ -22,6 +22,9 @@
     },
     {
       "path": "../bb-lambda-compute"
+    },
+    {
+      "path": "../bb-secret"
     }
   ]
 }

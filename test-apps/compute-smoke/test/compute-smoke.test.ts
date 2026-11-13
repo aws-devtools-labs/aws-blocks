@@ -5,11 +5,22 @@
  * Compute E2E — one deployment of the compute app, every compute scenario.
  *
  * The harness deploys the app behind this leg's front door
- * (`COMPUTE_API_FRONT_DOOR`, see aws-blocks/index.cdk.ts), waits until the API
+ * (`COMPUTE_API_FRONT_DOOR`, see aws-blocks/index.cdk.ts), with or without
+ * `defaults.strictNamespacePlacement` (`COMPUTE_STRICT_NAMESPACE_PLACEMENT`), waits until the API
  * answers through it, and runs each scenario module against the same stack, the
  * way `comprehensive`'s e2e.test.ts does:
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
  * - api-namespace-compute.test.ts — an API namespace on its own serverless compute
+ * - container-api-namespace.test.ts — an API namespace on a container compute
+ * - hosting-container-api.test.ts — the same namespace through a Hosting
+ *   distribution (`cloudfront` leg only)
+ * - scope-compute.test.ts — blocks placed by their scope's compute (a namespace, a
+ *   child scope's namespace, an AsyncJob, a CronJob), and a block's own compute
+ *   winning over its scope's
+ * - cron-job-compute.test.ts — a CronJob on its own compute, and two CronJobs on two
+ *   computes both running
+ * - container-cron.test.ts — a CronJob whose ticks run on a container
+ * - scale-from-zero.test.ts — a container compute with `minInstances: 0` wakes for a job
  *
  * A new scenario is a new module registered below; a module that only applies
  * to some front doors skips the others.
@@ -25,27 +36,67 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { apiNamespaceComputeTests } from './api-namespace-compute.test.js';
+import { containerApiNamespaceTests } from './container-api-namespace.test.js';
+import { containerCronTests } from './container-cron.test.js';
 import { containerJobTests } from './container-jobs.test.js';
+import { cronJobComputeTests } from './cron-job-compute.test.js';
+import { hostingContainerApiTests } from './hosting-container-api.test.js';
+import { scaleFromZeroTests } from './scale-from-zero.test.js';
+import { scopeComputeTests } from './scope-compute.test.js';
 import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from './context.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
-const outputsPath = join(__dirname, '..', '.blocks-sandbox', 'outputs.json');
+// Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+// production run must not read the sandbox's.
+const outputsPath = join(
+  __dirname,
+  '..',
+  '.blocks-sandbox',
+  ENV === 'production' ? 'outputs.production.json' : 'outputs.json',
+);
 
 // Same default and values as index.cdk.ts, which reads the same variable at synth.
 const frontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as FrontDoor;
 if (!FRONT_DOORS.includes(frontDoor)) throw new Error(`Unknown COMPUTE_API_FRONT_DOOR '${frontDoor}'`);
 
+// Same default and values as index.cdk.ts, which reads the same variable at synth.
+const strictFlag = process.env.COMPUTE_STRICT_NAMESPACE_PLACEMENT ?? 'false';
+if (strictFlag !== 'true' && strictFlag !== 'false') {
+  throw new Error(`COMPUTE_STRICT_NAMESPACE_PLACEMENT must be 'true' or 'false', got '${strictFlag}'`);
+}
+const strictNamespacePlacement = strictFlag === 'true';
+
 let apiUrl: string | undefined;
+let hostingUrl: string | undefined;
 const ctx: ComputeTestContext = {
   frontDoor,
+  strictNamespacePlacement,
   apiUrl() {
     if (!apiUrl) throw new Error('The stack is not deployed yet');
     return apiUrl;
   },
+  hostingUrl() {
+    if (!hostingUrl) throw new Error(`No Hosting URL: the stack is not deployed yet, or the ${frontDoor} leg deploys no Hosting`);
+    return hostingUrl;
+  },
 };
+
+/** The Hosting construct's `HostingUrl` output; CDK appends a hash to the output key, so match its prefix. */
+function findHostingUrl(outputs: Record<string, unknown>): string | undefined {
+  for (const value of [outputs, ...Object.values(outputs)]) {
+    if (!value || typeof value !== 'object') continue;
+    const entries = Object.entries(value as Record<string, unknown>);
+    const found = entries.find(([key, url]) => key.startsWith('HostingHostingUrl') && typeof url === 'string');
+    if (found) {
+      const url = String(found[1]);
+      return url.startsWith('http') ? url : `https://${url}`;
+    }
+  }
+  return undefined;
+}
 
 /**
  * A new CloudFront distribution reports CREATE_COMPLETE before its domain
@@ -69,9 +120,9 @@ async function waitForFrontDoor(budgetMs = 300_000): Promise<void> {
   throw new Error(`Front door not reachable within ${budgetMs / 1000}s: ${String(lastError)}`);
 }
 
-describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute tests require deployment — skipping in local mode.' }, () => {
+describe(`Compute (${frontDoor} front door${strictNamespacePlacement ? ', strict namespace placement' : ''})`, { skip: !isDeployed && 'Compute tests require deployment — skipping in local mode.' }, () => {
   before(async () => {
-    console.log(`🚀 Deploying ${ENV} (apiFrontDoor: ${frontDoor})...\n`);
+    console.log(`🚀 Deploying ${ENV} (apiFrontDoor: ${frontDoor}, strictNamespacePlacement: ${strictNamespacePlacement})...\n`);
     execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
       cwd: join(__dirname, '..'),
       stdio: 'inherit',
@@ -87,6 +138,11 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
     }
     if (!apiUrl) throw new Error(`No ApiUrl found in ${outputsPath}: ${JSON.stringify(outputs)}`);
     console.log(`📡 API URL: ${apiUrl}\n`);
+    if (frontDoor === 'cloudfront') {
+      hostingUrl = findHostingUrl(outputs);
+      if (!hostingUrl) throw new Error(`No HostingHostingUrl* found in ${outputsPath}: ${JSON.stringify(outputs)}`);
+      console.log(`🌐 Hosting URL: ${hostingUrl}\n`);
+    }
     await waitForFrontDoor();
   });
 
@@ -101,7 +157,7 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
         });
         console.log('✅ Stack destroyed');
       } catch (error) {
-        // In CI a failed teardown fails the run (the job's last step retries the
+        // In CI a failed teardown fails the run (the job's last step starts the
         // destroy); a stack left behind would keep its endpoints in the shared VPC.
         if (process.env.CI) throw error;
         console.log('⚠️  Stack destroy failed — run test/sandbox-destroy.ts again, or the scheduled cleanup removes it');
@@ -110,5 +166,11 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
   });
 
   apiNamespaceComputeTests(ctx);
+  containerApiNamespaceTests(ctx);
+  scopeComputeTests(ctx);
+  cronJobComputeTests(ctx);
   containerJobTests(ctx);
+  containerCronTests(ctx);
+  scaleFromZeroTests(ctx);
+  hostingContainerApiTests(ctx);
 });

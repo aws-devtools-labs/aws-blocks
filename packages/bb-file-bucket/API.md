@@ -36,6 +36,14 @@ export interface ExternalBucketRef {
 }
 
 // @public
+export interface ExternalKmsKeyRef {
+    // (undocumented)
+    readonly __brand: 'ExternalKmsKeyRef';
+    // (undocumented)
+    readonly keyArn: string;
+}
+
+// @public
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: O);
     // (undocumented)
@@ -48,6 +56,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
     deleteBatch(paths: string[]): Promise<void>;
     // (undocumented)
     static fromExisting(bucketName: string): ExternalBucketRef;
+    static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     // (undocumented)
     get(path: string, options?: GetOptionsFor<O>): Promise<FileContent | null>;
     // (undocumented)
@@ -73,16 +82,21 @@ export const FileBucketErrors: {
     readonly FileNotFound: "NoSuchKey";
     readonly FileTooLarge: "EntityTooLarge";
     readonly VersionNotFound: "NoSuchVersion";
+    readonly PresignedUploadUnsupported: "PresignedUploadUnsupported";
 };
 
 // @public (undocumented)
 export interface FileBucketOptions {
     accessLogging?: boolean;
+    allowedContentTypes?: string[];
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
+    maxUploadBytes?: number;
     noncurrentVersionExpirationDays?: number;
+    objectLock?: ObjectLockOptions;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }
@@ -130,7 +144,6 @@ export interface FileUploadClient {
 export interface FileUploadDescriptor {
     // (undocumented)
     readonly __blocks: 'file-bucket/upload';
-    // (undocumented)
     readonly contentType?: string;
     // (undocumented)
     readonly url: string;
@@ -151,6 +164,7 @@ export type GetOptionsFor<O extends FileBucketOptions> = O extends {
 
 // @public (undocumented)
 export interface GetUrlOptions {
+    attachment?: boolean | string;
     expiresIn?: number;
 }
 
@@ -166,6 +180,12 @@ export interface LifecycleRule {
     transitionToIaDays?: number;
 }
 
+// @public
+export interface ObjectLockOptions {
+    mode: 'governance' | 'compliance';
+    retentionDays: number;
+}
+
 // @public (undocumented)
 export interface PutOptions {
     cacheControl?: string;
@@ -175,6 +195,7 @@ export interface PutOptions {
 
 // @public (undocumented)
 export interface PutUrlOptions {
+    contentLength?: number;
     contentType?: string;
     expiresIn?: number;
 }

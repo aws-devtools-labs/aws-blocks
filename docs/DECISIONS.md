@@ -112,6 +112,7 @@ An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatc
 
 **Date**: 2026-04-07
 **Authors:** Jon Wire
+**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
 
 ### Context
 Auth Building Blocks span multiple packages (`AuthBasic`, `AuthOIDC`, `AuthCognito`) and share a common interface. We needed a naming convention for the classes, types, and packages.
@@ -134,7 +135,7 @@ Use **auth-first** naming: the word `Auth` comes first in all auth-related ident
 
 ### References
 - Common interface: `packages/auth-common/src/index.ts`
-- Design docs: `docs/tech-design/BB-auth-common.md`, `docs/tech-design/BB-auth-basic.md`
+- Design docs: [`packages/auth-common/DESIGN.md`](../packages/auth-common/DESIGN.md), [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md). (This record originally cited `docs/tech-design/BB-auth-common.md` and `docs/tech-design/BB-auth-basic.md`; neither file was ever committed.)
 
 ## D-005: Auth state machine uses a unified form model (no redirect action type)
 
@@ -190,12 +191,13 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 ### References
 - D-001: original mock data convention
-- PR #769: AWS Resource Groups and console shortcut routes
+- AWS Resource Groups and console shortcut routes: `packages/core/src/cdk/blocks-backend.ts`
 
 ## D-007: Auth cookies default to `SameSite=Lax`; cross-domain is opt-in
 
 **Date**: 2026-06-08
 **Authors:** pranavosu
+**Status:** Still in force. Since [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) there is one auth block: `Auth` applies this recipe through the same helper (`packages/bb-auth/src/cookies.ts`), with the opt-in at `session: { crossDomain: true }`. The original record follows unchanged.
 
 ### Context
 The three auth Building Blocks disagreed on the session cookie's `SameSite` attribute (and the coupled `Secure` / `Partitioned` handling):
@@ -208,7 +210,7 @@ The three auth Building Blocks disagreed on the session cookie's `SameSite` attr
 
 `bb-auth-basic` and `bb-auth-cognito` chose `SameSite=None` to make the session cookie work in the legacy cross-port dev setup (frontend `:3000`, backend `:3001`). That choice rested on a misdiagnosis: cross-port is cross-*origin* but **same-site** — `SameSite` is defined by registrable domain + scheme, and the port is not part of "site" (RFC 6265bis). A `SameSite=Lax` cookie is therefore sent on a same-site cross-port request, so `None` was never required for it. The actual requirement for a credentialed cross-origin `fetch` is CORS (`Access-Control-Allow-Credentials: true` + a specific `Origin`), which the dev server already set. `bb-auth-oidc` had already chosen `Lax` and worked fine cross-port, which corroborates this. Each BB hand-rolled its own attribute selection, which is how they drifted. No prior decision record resolved this.
 
-The single-origin dev proxy ([#769](https://github.com/aws-devtools-labs/aws-blocks/pull/769)) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
+The single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
 
 ### Decision
 All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `crossDomain` (default `false`), switches a BB to the cross-domain recipe:
@@ -218,7 +220,7 @@ All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `
 
 The attribute selection lives in one shared helper, `@aws-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
 
-This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on #769: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
+This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on the single-origin dev proxy: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
 
 ### Rationale
 - **Same-origin by default.** With the dev proxy, both dev and a standard (same-domain) production deploy are same-origin, where `Lax` cookies are never dropped. `Lax` is the correct default for the common case.
@@ -234,8 +236,7 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 
 ### References
 - Helper: `packages/auth-common/src/cookies.ts`
-- Enabler: #769 (single-origin dev proxy)
-- Related: #704 (docs), #748 (cross-port behavior, obsoleted by the proxy)
+- Enabler: the single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`)
 
 ## D-008: BB documentation follows a progressive-disclosure model (README entry point + task-scoped references)
 
@@ -244,7 +245,7 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 **Amends**: [D-002](#d-002-bb-documentation-ships-as-readmemd--designmd)
 
 ### Context
-D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. PR #834 (custom auth UI guide, #700) needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
+D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. The custom auth UI guide needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
 
 ### Decision
 Generalize D-002 from a fixed two-file rule to a **progressive-disclosure model**: one always-read entry point plus as many task-scoped reference docs as the package's surface area warrants.
@@ -272,7 +273,7 @@ Every reference doc MUST ship via `"files"` in package.json (so it reaches `node
 ### References
 - Amends: D-002 (original two-file rule)
 - Skill convention this mirrors: `.skills/blocks-pr-review/` (`SKILL.md` + `references/`)
-- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md` (PR #834, issue #700)
+- First third-file instance: [`packages/bb-auth/CUSTOMIZING-AUTH-UI.md`](../packages/bb-auth/CUSTOMIZING-AUTH-UI.md) (moved from `packages/auth-common/` when the auth Building Blocks were unified into `Auth`)
 
 ## D-009: External databases — Blocks-applied, version-controlled schema migrations
 
@@ -304,7 +305,7 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - **Aurora DSQL support.** Out of scope — needs a separate runner (no advisory locks, one-DDL-per-transaction with no DDL/DML mixing, IAM-token auth).
 
 ### References
-- #793 (this PR); connection/port resolution shipped separately in #861
+- Connection/port resolution: `findConnectionString` (`packages/core/src/scripts/ensure-secrets.ts`), `toSessionPortUrl` (`packages/bb-data/src/migrations/external-migrations.ts`)
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
@@ -371,7 +372,7 @@ To capture events without sending to the server: combine `--telemetry-file` with
 
 ### References
 
-- PR #880: implementation
+- Code: `packages/core/src/telemetry/client.ts`, `packages/create-blocks-app/src/telemetry.ts`
 
 ## D-011: `db pull` is interactive-only; dev/prod intent routes the connection string (R1)
 
@@ -420,7 +421,7 @@ earlier planning decisions and removed a released behavior:
   (`--prod` / `--provider`) — non-interactive mode is removed, so those flags are unnecessary.
 
 ### References
-- PR #922 (this change); follows #895 (db-pull modularization), #793 (external-DB migrations).
+- Follows [D-009](#d-009-external-databases--blocks-applied-version-controlled-schema-migrations) (external-DB migrations); the db-pull modules live in `packages/bb-data/src/db-pull/`.
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
@@ -839,3 +840,621 @@ Applying that test shrank the overlap rather than documenting it, and it gives t
 ### References
 - `packages/core/src/scripts/validate-native-catalogs.ts` — `seenIds`, now the single enforcement point for binding-`id` uniqueness, with cross-block reporting
 - `native/swift/Sources/BlocksCodegen/CodegenModel.swift` — `resolveDeclaredTransferableBindings`, the six rules Swift keeps because its emission reads them
+
+## D-021: An export's type name raises each segment's first character and nothing else
+
+**Date**: 2026-10-29
+**Authors:** varshpam
+
+### Context
+A transferable binding declares an `export`, and each native generator derives a type name from it that must resolve to a symbol the declared package exports. The design doc states the constraint — the type must be public in the declared Dart library, Swift module or Kotlin package — and describes the derivation only as upper camel case, without settling whether an acronym's tail is lowered; its `export` examples are all separator-free lower-camel, so none discriminates either.
+
+The three generators had diverged:
+
+- `API_link` resolved to `APILink` on Dart and Kotlin, and `ApiLink` on Swift.
+- `DEVICE_LINK` resolved to `DEVICELINK` and `DeviceLink`.
+- `device.link` was accepted by Dart and Swift, and rejected by Kotlin.
+- `device:link` was accepted by Swift alone.
+- Swift had no export grammar at all: `device__link`, `device.`, `.link` and `device-.link` all derived a name and passed its post-hoc identifier check.
+
+### Decision
+An export resolves to a type name by splitting on `-`, `_` and `.`, raising each segment's first character, and leaving the rest of every segment as declared.
+
+- **Alphabet.** Exactly `-`, `_` and `.`, each joining two non-empty segments. A doubled or dangling separator, or any other separator, is a generation error. `:` is refused.
+- **Collision.** Two bindings whose exports resolve to the same type name in one generated client are a generation error, unless both make the identical claim — so two distinct tags declaring one export in one package at one arity generate fine.
+- **Scope.** Only the bindings a generator emits are checked: a built-in-tag or opted-out binding is dropped beforehand and collides with nothing.
+- **Length.** An export is bounded at 64 characters, in the producer and in the Kotlin parser only; Swift and Dart derive a name from whatever length reaches them.
+
+### Rationale
+The rest of a segment is left as declared because the derived name is not invented: it must match a symbol a third party exported. A package exporting `APILink` must be imported as `APILink`; lowering the tail names `ApiLink`, which it does not export, so the failure surfaces in the consumer's compiler, not at generation.
+
+The alphabet is the producer's: `EXPORT_GRAMMAR` gates every spec derived from native declarations, so a narrower generator alphabet is a defect and a wider one is dead permissiveness. That grammar rejects `:` upstream, so no `blocks.spec.json` can carry one and the derivation never receives it — that unreachability decides removing `:` from the separator set.
+
+Kotlin had keyed uniqueness on `tag` alone, and accepting `.` enlarged the surface, so its guard was required by this change rather than added alongside it.
+
+The rule exists as four independent implementations with no cross-language guard, the posture D-020 settled, pinned by per-language unit tests and fixture 27's goldens. The export grammar is a seventh rule coinciding with the producer, after D-020's six: no generator's derivation specifies a result for a dangling or doubled separator.
+
+This is a behavior change for an all-caps Swift export: `API_link` now resolves to `APILink`, not `ApiLink`. It is latent: no shipped block declares a native binding, so no generated client changes.
+
+### Collision-rule divergence
+The collision rule is not one convention across the four implementations, and this change narrows the divergence. The producer has none, and the three generators diverge on two axes.
+
+**What is compared.** All three compare package, export and `genericArity`, so one export declared at two generic arities is an error on each. Dart had omitted arity, generating `Future<APILink>` and `Future<APILink<…>>` side by side from one import.
+
+**How it is qualified.** Dart keys the resolved name bare, Swift keys `module.Type` and Kotlin the `canonicalName`, so two packages resolving to one type name is a Dart generation error, reported as already declaring `DeviceLink`, and generates cleanly on Swift and Kotlin, which emit `PkgOne.DeviceLink` and `PkgTwo.DeviceLink` from two imports. Dart's bare keying predates this change; Kotlin's guard was added here to match Swift, making the split two generators against one.
+
+The package term discriminates because Kotlin keys on `kotlinPackage` and Swift on the Swift module, which two catalog identities may share; Swift's `moduleOwners` guard compares declared `identity` and `product` rather than the catalog's `package` key, so byte-identical Swift package metadata passes it and is rejected on the package term alone.
+
+**Reserved names.** Dart refuses a resolved name `dart:core`, `dart:async` or `blocks_runtime` owns; Swift refuses one in `swiftKeywords` or `typeNamesIllegalWhenQualified`. The sets differ rather than one side lacking a guard. Kotlin has no equivalent, and this divergence predates this change too.
+
+Reconciling them changes behavior on whichever side moves, so it is left to its own decision.
+
+### Length bound
+No generator's emission depends on how long an export is — a long name derives and compiles — so by D-020's test none needs a bound of its own, and the producer's covers all three because `packages/core/src/scripts/validate-native-catalogs.ts` is the only path that derives a spec from native declarations. Kotlin's parser carries one anyway because it is the only one whose grammar can be defeated by length: Kotlin's `Regex` is `java.util.regex`, which keeps its backtrack state on the program stack, and the export grammar's nested quantifier overflows it.
+
+The overflow threshold is not a stable figure worth quoting. It tracks thread stack size and moves with calling context, so it is a property of the running JVM rather than of the grammar, and above the smallest stack sizes it is not even deterministic: at the 2 MB default and at `-Xss8m`, inputs near the boundary split match and overflow across fresh JVMs at one configuration, and a smaller input can overflow where a larger one matches. One point is sharp, and it is the only one the bound needs: at `-Xss256k` 196 single-character segments (391 characters) match and 197 (393 characters) overflow, ten fresh JVMs per side with no split, and identically on Corretto 11, 17 and 21 and OpenJDK 24. Swift's `range(of:options:.regularExpression)` and Dart's `RegExp` both matched 200,001 characters without fault.
+
+What the bound needs is an ordering rather than a margin: 64 characters sits below every threshold measured at every stack size — narrowest at `-Xss256k`, where the shortest overflowing input is still about 6× the cap — and it still admits every export a package is likely to name, so Swift and Dart gain nothing from repeating it.
+
+### Alternatives Considered
+- **Apply each language's house style** — Effective Dart and the Kotlin conventions both lower an acronym's tail, while Swift's own API Design Guidelines require `APILink`, so the three styles cannot produce the one name the binding needs; and each guide binds the author who declares a type, not a tool deriving a name for someone else's symbol.
+
+- **Normalize the name and ship a mapping escape hatch**, as `openapi-generator` does with `--model-name-mappings` — deferred rather than rejected: normalization is only safe with an override, and the manifest that would carry one is a later iteration.
+
+- **A cross-language guard over the four implementations** — per D-020's own rejected alternative.
+
+### References
+- D-020 — what a native generator validates
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `EXPORT_GRAMMAR`, the alphabet the generators follow; `MAX_EXPORT_LENGTH`, the 64-character bound shared with `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/parser/NativeCatalogParser.kt` alone; and `seenTags`, which a derived type name is distinct from
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift`, `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/NamingUtils.kt`, `native/dart/packages/blocks_codegen/lib/src/builder.dart` — the three derivations
+
+## D-022: Each deploy stage writes its own CDK outputs document
+
+**Date**: 2026-11-05
+**Authors:** phandpau
+
+### Context
+`npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
+
+The CDK CLI does not merge into that file. It writes the stacks of the one invocation that produced it, and it writes from a `finally` block, so the write lands even when the deploy throws (confirmed in review against the pinned `aws-cdk@2.1138.0`). Two consequences followed. A production deploy replaced the sandbox's record with its own stack alone, so anything reading the file for the sandbox got production's stack. And a deploy that failed on its first stack wrote an empty document, blanking the record of a stack that was still standing.
+
+Readers have been working around this rather than relying on the file. `.blocks-sandbox/last-deploy.json` exists because the shared document cannot be trusted after the runner exits, and `sandbox console` derives the sandbox stack name instead of reading a stack out of the document at all.
+
+### Decision
+One outputs document per stage, by name:
+
+- sandbox keeps `.blocks-sandbox/outputs.json`
+- production writes `.blocks-sandbox/outputs.production.json`
+
+The names live in one place, `OUTPUTS_FILE` in `packages/core/src/scripts/deploy-outputs.ts`, with `outputsFileIn` for the sandbox commands, whose out directory is an option. The CLI's record cleanup takes the document of the stage it is forgetting, so destroying one stage no longer leaves the other's record behind, and no longer fails to clean its own. A production destroy also clears its stack from a pre-split `outputs.json`, the one document the two stages can still share on an app that upgrades.
+
+### Rationale
+Two distinct file names are the whole fix, because the write is the CDK CLI's and it cannot be asked to merge. Nothing downstream has to detect or repair a mixed document: a stage's file holds only ever that stage's stacks, and a failed production deploy can only blank production's record.
+
+Both documents stay in `.blocks-sandbox/`. The directory's name is a wart (it holds per-deploy state for every stage, not only the sandbox) but it is already ignored everywhere, while `.blocks/` is committed for the `config.json` carrying the app's stable `stackId` (D-012). A per-deploy, account-specific file placed there would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record. Renaming the directory is a separate, breaking change: the Hosting construct serves it as a public URL path.
+
+An app that upgrades still has a pre-split `outputs.json` on disk, and it can hold production's stack alone. For `cdk-blocks sandbox console` that document is only corroboration for a stack name derived from `sandbox-id.txt`, so the CLI cannot name the wrong stack from it. That is not true of every reader: the public `openConsole({ outputsFile })` still takes the document's first stack, and the Kotlin and Swift example scripts plus any app scaffolded before the CLI call it that way, so those open production until one `npm run sandbox` rewrites the file. A production destroy now removes that entry too, which closes the case where the named stack no longer exists. The CLI tests keep a mixed document as a fixture for both destroy directions.
+
+### Alternatives Considered
+**Keep one file and choose the right stack when reading it.** Rejected: after a deploy the file physically holds only that invocation's stacks, so there is no second stack to choose between. The other stage's record is gone, not ambiguous.
+
+**Record production's outputs in `.blocks/` instead.** Rejected: that directory is committed, so it would need a per-file ignore everywhere a template or example is scaffolded, and a single omission commits a developer's deployment record.
+
+**Rely on `last-deploy.json` alone and leave the shared document as it is.** Rejected: it records only a successful deploy made through the CLI runner, so a failed deploy and an app driven by the old npm-script wrappers leave no entry, and it is owned by the CLI while core and the dashboard sit below it. It remains the right source for what a deploy reported; it is not a substitute for the document being correct.
+
+**Merge each invocation's stacks into the existing file after the deploy.** Rejected: it re-derives state the CDK CLI just wrote, and a deploy killed between the CLI's write and the merge leaves the file in the state this decision exists to prevent.
+
+### References
+- `packages/core/src/scripts/deploy-outputs.ts` — `OUTPUTS_FILE`, the two names, and `outputsFileIn` for a caller-supplied out directory
+- `packages/core/src/scripts/deploy.ts` — the production write and the post-deploy read
+- `packages/core/src/scripts/sandbox.ts` — the sandbox writes and read, via `outputsFileIn`
+- `packages/blocks/src/cli/commands.ts` — `OUTPUTS_BASENAME`, mirrored rather than imported because core is resolved lazily and version-checked, and pinned against core by a test
+- D-012 — the committed `.blocks/config.json` and the app's stable `stackId`
+
+## D-023: One auth Building Block: `Auth` replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`
+
+**Date**: 2026-10-03
+**Authors:** Harshdeep Singh
+
+### Context
+AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` — plus `auth-common`. Users could not tell which to pick or why, and nothing in the framework answered the question. The blocks also disagreed on error names and on what `userId` means, and `AuthBasic` and `AuthCognito` used the same cookie name with incompatible payloads.
+
+### Decision
+Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
+
+- **Two federation engines.** A provider either federates through a Cognito user pool (`store: 'cognito'`, the default) or is verified by your backend directly, with no Cognito involved (`store: 'builtin'`). Google, Facebook, Amazon, Apple and SAML providers always federate through Cognito.
+- **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
+- **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
+- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
+
+### Rationale
+1. **One import, no "which block?" decision.** Adding a sign-in method is a new option or `providers` entry on an `Auth` block, not a migration to another block.
+2. **Direct federation avoids a pricing cliff.** Cognito bills users federated through OIDC or SAML on a separate meter with 50 free MAUs, against 10,000 for direct and social sign-in. Direct federation involves no Cognito, runs offline against the built-in stub IdP, and supports PKCE-only (public) clients, which Cognito cannot federate because it requires a client secret.
+3. **Federating through Cognito adds no MFA.** Cognito leaves all authentication of federated users to their IdP. The case for federating through Cognito is having those users in the pool (Cognito groups, `auth.admin`, Cognito-issued tokens).
+4. **Offline development survives.** The local Cognito user pool runs fully offline, so removing `AuthBasic` does not remove offline development.
+
+### Alternatives Considered
+- **Keep three blocks and document the choice.** Leaves the decision with the user and keeps three error vocabularies and `userId` meanings.
+- **Route every provider through Cognito.** One token format, but a 200× smaller free tier for OIDC users, no offline federated sign-in and no PKCE-only IdPs.
+- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
+
+### References
+- User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
+- Upgrade guide and codemod: [`packages/bb-auth/MIGRATION.md`](../packages/bb-auth/MIGRATION.md)
+- Design: [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md)
+- Options shape: [D-024](#d-024-auth-options-store--providers)
+- Supersedes the three-block naming in [D-004](#d-004-auth-first-naming-convention-for-auth-building-blocks)
+
+## D-024: Auth options: `store` + `providers`
+
+**Date**: 2026-11-04
+**Authors:** Harshdeep Singh
+
+### Context
+The decision that matters most when configuring `Auth` is where a block's users live. A user either has a record in a Cognito user pool (groups, `auth.admin`, Cognito-issued tokens, the 50-free-MAU federated meter) or is verified by the backend alone (no Cognito charge, offline `stubIdp()`, PKCE-only clients). An options shape organised by protocol (one map each for social, OIDC and SAML providers, with a per-provider engine switch) would leave that decision implicit, a consequence of which key and which switch an entry used. It would also let one block hold both kinds of user, each with different features and no account linking between them.
+
+### Decision
+Every `Auth` block has one `store`, and all of its sign-in providers go in one `providers` map whose entries carry a `type`:
+
+- **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` is unchanged): users live in a Cognito user pool. It allows email + password, `mfa`, `passkeys`, `admin` and `userPool`, plus `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. `oidc` federates through Cognito and requires `clientSecret`.
+- **`store: 'builtin'`**: there is no user pool. The backend verifies each provider itself, and the only storage is the session table. It allows `providers` of `type: 'oidc' | 'oauth2' | 'stub'` (`github()` / `customOauth2()` and `stubIdp()` set the latter two), `users.groups` and `allowBearerAuth: true`. `validateUser` runs at sign-in only.
+- **One block holds one kind of user.** An app that wants password users and backend-verified IdP users uses two `Auth` blocks, with two session cookies and two `createApi()`s.
+- **Compile time first, runtime as a backstop.** `AuthOptions` is a union discriminated on `store`. Each arm declares the other arm's keys with named error types (`ERROR_needs_store_cognito<'emailPassword'>`), because `Auth` captures its options as a `const` generic, where TypeScript does no excess-property check. The constructor rejects the same combinations with readable messages, and also what the compiler can't see: options built from JSON or env, casts, and a social entry keyed differently from its `type`.
+- **One internal shape.** An internal resolver (`resolveOptions()`) maps the public shape, at the constructor, onto per-family maps with a per-provider `federateVia`. The CDK, runtime and mock layers and the engines read only that resolved shape.
+
+### Rationale
+1. **The store is visible at the call site.** "Where do my users live?" is one explicit key with a safe default, not a consequence of which provider keys or per-provider switches a block uses.
+2. **The strongest compile-time guard.** Each store accepts only its own options and provider types. With `store` set, autocomplete for `type:` lists only that store's types; with `store` omitted it lists every type, and the compiler rejects `'oauth2'` / `'stub'`.
+3. **Mixing stores in one block was ruled a non-goal.** A block's users never shared identities across the two kinds (no account linking), and features differed per user (`auth.admin` and pool groups for one kind, `groupsClaim` for the other). Two blocks make that split explicit. Without mixing as a goal, the main advantage of grouping options by store over one store per block went away.
+4. **Upgrade-safe.** Provider keys pass through the resolver unchanged, and construct ids are derived from them, so no deployed pool, identity provider or session moves.
+5. **Leaves room for later.** A future store, or an injectable engine construct created at the existing `<authId>/pool` path, would fit behind `store` without reshaping `providers`.
+
+### Alternatives Considered
+- **Per-protocol provider maps with a per-provider engine switch** (`socialProviders`, `samlProviders`, `oidcProviders: { x: { federateVia: 'direct' | 'cognito' } }`), with a decision tree in the README. This keeps every capability but leaves the store implicit.
+- **Per-protocol maps, with OIDC split by engine** (a separate `directOidcProviders` key instead of the switch). One setting fewer to get wrong, but the store stays implicit and the provider keys multiply.
+- **Group options by store** (`{ cognito: { emailPassword, social, saml, oidc }, direct: { oidc } }`). Explicit and extensible, and it allows both kinds of user in one block, but that is a non-goal (Rationale 3), and it nests every option one level deeper.
+- **An injectable engine construct** (`engine: new CognitoAuthEngine(…)`). Consistent with blocks that take a `compute:` or `cluster:` construct, but it moves the pool's construct path unless the default engine is pinned to `<authId>/pool`. It remains possible later, behind `store`.
+- **Cognito only.** Remove direct federation. This loses PKCE-only clients, `github()`, offline `stubIdp()` and the no-Cognito-charge path.
+- **Compose per-method handler blocks** into `Auth`. Flexible, but it adds the most constructs, the most decisions and the most effort.
+- **Cognito by default, with direct OIDC as a separate plugin block.** Close to the chosen design in effect, but it adds a second block type and a plugin seam to keep stable.
+
+### Invariants
+The options shape does not affect: construct ids (`<authId>/pool`, `client`, `sessions`, `session-secret`, `saml-<id>`, `idp-<id>`); user ids (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users); the session row format, including its internal `kind: 'direct'` discriminator; the default store (`'cognito'`); and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`).
+
+### References
+- User doc: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#where-do-your-users-live)
+- Design (the resolver and the store → engine mapping): [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md#options-store-providers-and-the-resolved-shape)
+- Amends [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc)
+
+## D-025: The usage view gates on a per-request consent, and labels the one metric it cannot attribute per stage
+
+**Date**: 2026-10-07
+**Authors:** phandpau
+
+### Context
+The dashboard had no answer to "is anyone using this app". The data it needs is
+in CloudWatch, and reading it is not free: `GetMetricData` is one of three
+CloudWatch operations the free tier explicitly excludes ("1 Million API requests
+(not including GetMetricData, GetInsightRuleReport and GetMetricWidgetImage:
+these 3 operations are always charged)"). A refresh of a typical app's metrics
+is around $0.001, which is small and is never zero.
+
+Two facts found by reading the live account rather than by reasoning shaped the
+rest:
+
+- Most resources are dimensioned by a physical name CloudFormation already made
+  unique per stack (`<stack>-rota-staff`), so sandbox and production separate
+  for free.
+- **API Gateway REST APIs are not.** Their metrics are dimensioned by `ApiName`
+  plus `Stage` — the API's *display name*, which CDK sets from the construct.
+  Both of rota's stacks therefore report under
+  `{ApiName: 'Blocks API', Stage: 'prod'}`, and CloudWatch sums them. Verified:
+  `apigateway get-rest-apis` returns the same name for both stages' REST APIs,
+  and `cloudwatch list-metrics` shows exactly one
+  `ApiName`/`Stage` dimension pair for the account.
+
+### Decision
+1. `GET /api/v1/usage` without `confirm=true` makes **no** `GetMetricData` call
+   and answers `usageSource: 'gated'`, carrying the price and the target
+   inventory. Discovery (`ListStackResources` + `GetTemplate`) carries no
+   per-request charge, so the gated answer is free rather than merely cheaper.
+2. Consent is a **parameter of the request**, not server-side session state.
+3. The response is **not cached**.
+4. A REST API target is kept and flagged `sharedDimensions` with a reason,
+   rather than dropped or shown bare.
+5. A series that returned no datapoints carries `empty`, distinct from a series
+   of zeroes.
+6. Deploy markers are positioned against the span CloudWatch returned data for,
+   not the requested window.
+
+### Rationale
+**Per-request consent, unlike the write unlock (which is per-session).** The
+unlock governs a standing capability; a usage refresh is one priced action.
+Request-scoped consent cannot be inherited by a later call, cannot outlive the
+estimate the reader saw, and leaves no state to get stale. The *decision* still
+lives in the route and not the provider, for the reason recorded on
+`DataProvider.writeRecord`: only a route sees a request, so a provider deciding
+for itself would have to invent an answer for a CLI or script caller. The
+provider owns the consequence instead, and guarantees no billable call when
+`confirmed` is false. `confirm` is accepted only as the exact string `true`,
+because `?confirm` alone yields `''` and a gate that opens on a near-miss is not
+a gate.
+
+**No cache**, although `getCost` caches Cost Explorer for 15 minutes. A cache
+would make the second refresh free and the first expensive, which is the
+asymmetry that makes a consent screen lie: the reader authorises a charge that
+does not happen. The view never polls, so there is nothing to protect against.
+
+**The estimate is computed from the query set a confirmed call would send**, so
+the gated figure and the billed figure cannot drift apart when the metric list
+changes. It is formatted once, server-side, and never rounded to `$0.00` when it
+is not zero.
+
+**Labelling the REST API rather than dropping it.** No way of querying fixes the
+shared dimensions, because the per-stage series does not exist in CloudWatch to
+be fetched. Dropping the target would silently remove the headline number the
+reader came for; showing it unlabelled would report two stages' traffic as one
+stage's. Labelling keeps the figure and tells the truth about it, on the row and
+on any total it feeds.
+
+**`empty` is not cosmetic.** A series of zeroes and a series of nothing both draw
+a flat line. The distinction is what lets the view say "nothing was published"
+instead of "no traffic", and it matters most for `ACCESS_DENIED`: a dashboard
+lacking `cloudwatch:GetMetricData` would otherwise render blank charts that read
+as an idle app. Measured on rota's production stack: 59 of 99 series had no
+datapoints while a *separate* 26 had datapoints that were all zero.
+
+**Markers follow the chart, not the window.** The chart spans only where data
+exists (a gap stays a gap), so the two ranges differ whenever the window is
+wider than the data. A marker placed by the window's fraction sits at the wrong
+point on the line and invites blaming the wrong release. A deploy inside the
+requested range but outside that span is reported in words rather than drawn in
+the wrong place.
+
+### Alternatives Considered
+- **Fetch on load and show the cost afterwards:** rejected. The charge would
+  already have happened, which makes the disclosure a notification rather than a
+  consent.
+- **A session-wide or server-held unlock, mirroring cloud writes:** rejected per
+  the rationale above. It would also survive a stage switch, so a reader would
+  authorise one stack's charge and be billed for another's.
+- **Drop the REST API target because it cannot be attributed:** rejected. It
+  removes the single number most asked for, and an absent row is a weaker signal
+  than a labelled one.
+- **Require unanimous agreement among a stack's outputs to accept a region:**
+  rejected for the equivalent metric case. The region is taken from `ApiUrl`
+  alone; a hosting app legitimately publishes a `us-east-1` resource (the
+  CloudFront alarm topic, which must live there) and unanimity would discard a
+  region that is known exactly.
+- **Re-derive "no datapoints" in the view from `points.length`:** rejected as a
+  duplicated rule. The contract owns the definition and carries the flag.
+- **A charting dependency:** rejected. An inline SVG `polyline` in a 0..100 box
+  is enough for a line, a legend and markers, and the repo's rule on
+  dependencies as a commitment applies.
+
+### References
+- `packages/admin-ui/src/server/metric-targets.ts` (+ tests) — namespace and
+  dimension mapping, `sharedDimensions`
+- `packages/admin-ui/src/server/metric-usage.ts` (+ tests) — query batching, the
+  cost model, `empty`
+- `packages/admin-ui/src/server/usage-request.ts` (+ tests) — the consent parse
+- `packages/admin-ui/src/usage/usage-view.ts` (+ tests) — grouping, chart,
+  markers
+- `DataProvider.writeRecord` on why a gate belongs in the route
+- D-016 for the off-region CloudFront alarm referenced above
+- The per-stage outputs documents this reads are introduced by their own change,
+  which is not merged yet, so that decision is named by mechanism rather than
+  cited by number
+
+## D-026: An empty screen states the next action first, and may never be a dead end
+
+**Date**: 2026-10-13
+**Authors:** phandpau
+
+### Context
+Thirteen empty screens across nine pages, plus the shared request-error card,
+were accurate and entirely passive: a title, one sentence naming the mechanism,
+and no control. Two were actively self-contradicting. The Logs page in a local
+environment ended its sentence with "select a deployed stage" while offering
+nothing that selects one, and the resources index printed "or open Blocks to see
+what your app declares" with no way to follow it, because that link existed only
+in the markup of the resource *group* page one level down.
+
+The copy was never the problem. Each sentence names a real mechanism (they live
+in `localNotApplicableReason`, which records why each of these pillars cannot
+work locally), and those sentences are worth keeping: a reader who learns logs go
+to the dev server's own stdout knows which terminal to open. What was missing was
+the way out.
+
+### Decision
+1. One pure module, `packages/admin-ui/src/env/empty-state.ts`, owns what every
+   empty screen says and offers. No copy and no action rule lives in a
+   component: this package has no component tests at all, so copy decided in
+   JSX is copy nothing can check.
+2. The states are a **closed union** of five members, and the assembling function
+   is total over it, so a new empty screen is a compile error until its guidance
+   is written.
+3. Every screen carries four fields in a fixed order: a plain-language
+   `headline`, exactly one imperative `nextStep`, the `actions`, and the old
+   mechanism sentence demoted to `detail`.
+4. **The invariant: a screen offers at least one action, or states why it cannot,
+   never both and never neither.** `isGuided` is a predicate so a test can sweep
+   it over every state rather than trusting five constructors to remember.
+5. An environment is offered as a switch **only if the header's switcher would
+   offer it**, reusing `EnvironmentStatus.selectable` unchanged.
+   Known-deployed targets sort ahead of unresolved ones, and an unresolved target
+   carries its own reason on the control.
+6. A deploy command is offered **only for a stage known to be `not-deployed`**,
+   never for one whose state is merely unread or unknown.
+7. The 401 screen offers **no command to copy**, and says why.
+8. A `detail` sentence that names a route must be accompanied by that route.
+   Tested over every pillar.
+9. An idle app and a refused read never share copy.
+10. Access denied asks for "a change in your AWS account", not an IAM change.
+11. Both collaborators (`deployCommandFor`, `localNotApplicableReason`) are
+    parameters, not imports.
+
+### Rationale
+**Why the action goes first.** The mechanism answers "why is this empty", which
+is the second question. A reader on an empty screen wants out of it, and the
+field order is what guarantees the reader meets the action before the
+explanation, in every state, rather than per page.
+
+**Why `selectable` is reused rather than tightened.** The obvious reading of
+"only offer an environment that would work" is a stricter check than the
+switcher's. That is exactly how the guided card and the header would come to
+disagree about the same environment, which `environmentStatuses` exists to
+prevent. `environmentStatuses` already made this decision: only `not-deployed` is
+refused, and an environment whose state could not be READ stays selectable,
+because greying it out would claim we looked and found nothing when we could not
+look at all.
+
+**Why a deploy command needs certainty but a switch does not.** They fail
+differently. Switching to an environment that turns out not to work costs a
+click and shows another honest screen. Running a deploy on the strength of our
+guess costs real time and may act on a stage that was already running. The
+consequence is accepted deliberately: no deploy button appears in the moment
+before `/api/v1/environments` lands, which is correct, because we do not yet know
+whether one is needed.
+
+**Why the 401 has no button.** `commands.ts` exists because two pages once
+instructed `blocks deploy --stage <stage>`, a command that exists nowhere in this
+repo. Only one of the eight project templates defines a `dashboard` script, so a
+copyable `npm run dashboard` would hand most readers a `command not found` on top
+of the problem they arrived with. This is the case that makes rule 4's escape
+hatch load-bearing rather than decorative: the honest action here is a sentence,
+not a control.
+
+**Why "your AWS account" and not "IAM".** The Cost page reaches access denied
+when Cost Explorer is simply not enabled for the account, which is a Billing
+console action and no permission fixes it. The narrower wording reads as more
+precise and is false on one of the two callers, so a test asserts the word IAM is
+absent.
+
+**Why the collaborators are injected.** The module is bundled into the client,
+where Turbopack cannot resolve the relative `../x.js` specifiers that the ESM
+server build requires of a value import. Across every tsc-tested directory in
+this package there is not one value import of that shape; all are type-only and
+erase. A module that must be both client-bundled and unit-tested can type-import
+and nothing else. `environment.ts` already took `DeployCommandFor` as a parameter
+for this reason.
+
+### Alternatives Considered
+**Putting the model in `environment.ts`.** It would make both collaborators local
+calls and remove two parameters. Rejected: that file is already long, and a
+separate module keeps the empty-state contract reviewable on its own.
+
+**Letting each page supply its own `detail`.** Seven pillar screens already
+imported `localNotApplicableReason`, so passing the finished sentence per call
+site was the smaller change. Rejected as the duplication that let one of them
+drift in the first place: the resource group page's hand-rolled Blocks link is
+exactly that failure.
+
+**A second component for the inline strips.** The Playground and block detail
+pages show their blocked state as a compact strip beside a sibling note that
+stays relevant, so a full card there would nest a card inside a card. A separate
+component would have reimplemented the action row and could diverge from it.
+Rejected in favour of one component with a `variant`, so both renderings map the
+same model through the same controls.
+
+**Making consent-style session state of the dismissal.** Not pursued: an empty
+screen is not something to dismiss, and a screen that remembers being dismissed
+would hide the one thing the reader needs.
+
+### References
+- `packages/admin-ui/src/env/empty-state.ts` (+ tests): the states, the copy, the
+  action rules, and `isGuided`
+- `packages/admin-ui/src/components/guided-empty.tsx`: the two renderings and the
+  clipboard, deliberately thin
+- `localNotApplicableReason` in `src/env/environment.ts` for the mechanism
+  sentences this demotes rather than replaces
+- `EnvironmentStatus.selectable` and `environmentStatuses` in the same file for
+  why `not-deployed` and `unknown` must stay distinct, and why only the former is
+  refused
+- `src/lib/commands.ts` for why the dashboard command is phrased as an example
+  rather than asserted
+- The `D74`-style markers in these source comments are the in-source decision
+  numbering used throughout `src/env` and `src/nav`. They are not entries in this
+  file, which runs D-001 to D-027, so they are named here by mechanism instead.
+
+## D-027: Settings are editable per stage, and a list may never decrypt
+
+**Date**: 2026-10-14
+**Authors:** phandpau
+
+### Context
+The dashboard could read six pillars and write data records, and could not touch
+configuration at all. There was no settings route, no SSM client in the package,
+and a developer who needed to flip a feature flag or rotate an API key left the
+dashboard for the console or the CLI.
+
+Three facts about the framework shaped what "editable" can mean here:
+
+1. `AppSetting` is the only block carrying a value a developer edits at runtime.
+   It is one SSM parameter per instance, `/${fullId}` by default, a SecureString
+   when declared `secret`, and in local mode the same values sit in
+   `.bb-data/settings.json` keyed by `fullId`.
+2. Environment variables and `blocks-config.json` are deploy-owned.
+   `finalizeConfigRegistry` uploads the config document at synth time and sets
+   `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on the handler, so a write to
+   either is reverted by the next deploy.
+3. A SecureString is NOT an `AWS::SSM::Parameter` in the deployed template.
+   CloudFormation cannot create one, so every secret in a stack is created by a
+   single custom resource carrying their names in a `ParameterNames` list.
+
+### Decision
+1. Only the SSM-backed layer is editable. Env vars and the generated config are
+   shown read-only beside the settings and labelled as overwritten by the next
+   deploy, because offering an edit that a deploy silently reverts is worse than
+   offering none.
+2. **The listing path cannot decrypt.** Not "does not": the function that can
+   decrypt is a different one, reached only by the reveal route, so the list
+   route cannot opt into a plaintext read even by mistake. A SecureString's
+   ciphertext is dropped at the SSM client boundary (`toStoredParameter`), which
+   is extracted and exported for exactly that reason: it was the one
+   security-critical line sitting inside a function that makes a network call
+   and so is not unit-tested.
+3. Three layers decide whether a value is shown, and the later ones outrank the
+   earlier: the declaration's `secret` flag, then the LIVE parameter type (a
+   parameter that is a SecureString in the account is masked even if no
+   declaration said so, because that is a fact about the data rather than a
+   claim in source), then the repo's existing shape-based redaction, which
+   catches a credential pasted into a plain setting.
+4. The reveal is a POST carrying the full mutation hardening, which is the RPC
+   route's reasoning inverted: that route is guarded as a mutation because an
+   RPC call can write, and this one is guarded as a mutation because its
+   consequence is a credential leaving the host. It takes a declared `fullId`
+   and never a parameter path, so the reachable set is what the app declares
+   rather than every parameter the developer's credentials can see.
+5. The write asks whether the input is text or JSON and never infers it.
+   `put()` stores `JSON.stringify(value)` and `get()` runs `JSON.parse`, so a
+   box wired straight to `PutParameter` changes the TYPE the app receives on
+   exactly the inputs a config field attracts: `5`, `true`, `{"a":1}`.
+6. A production write needs the stage typed into the form, on top of the
+   existing cloud-write unlock. One unlock covers every write for fifteen
+   minutes; this is the only write on the surface that changes what a live
+   system reads.
+7. Presence is settled by querying every resolved address BY NAME rather than by
+   reading the template, because the two differ: a parameter can be deleted out
+   of band. A declaration whose path cannot be resolved is `unknown` rather than
+   `absent`, since nothing was asked about it.
+8. **A deployed parameter's path is read from the template, never derived.**
+   `fullId` walks the scope's parent chain, and in a deployed stack the Scope's
+   parent is the stack, so the synthesized path is `/${stackName}-${fullId}`:
+   rota's `min-educators` is `/rota-3a4f18-dev-bf9209-rota-min-educators`,
+   not `/rota-min-educators`. In the mock the Scope has no parent, so there
+   `fullId` IS the bare id, which is why local addressing works off it and cloud
+   addressing must not. Both candidate forms are built EXACTLY from the known
+   stack name rather than matched by suffix.
+
+### Rationale
+The alternative on point 2 was to fetch decrypted values and mask them in the
+response. It is simpler and it is how the implementation this package models got
+it wrong: that one hardcoded `redacted: false` beside a path applying no
+redaction, so the flag the UI trusted was a claim by the caller rather than a
+fact about the data. Masking after decryption also puts every plaintext in this
+process's memory and in whatever sits between it and the browser. Keeping the
+decrypt in a separate function makes "the list cannot leak a secret" a property
+of the call graph, provable by counting invocations rather than by reading flags.
+
+Point 5 looks like friction and removes a whole class of silent corruption. A
+developer typing `5` into a field means the string; a developer pasting
+`{"retries":3}` means the object. No heuristic can tell those apart from the text
+alone, and getting it wrong hands the app a value of the wrong type that fails
+somewhere else entirely.
+
+Point 7 came out of wiring the read path: an earlier version carried a
+`liveComplete` flag so absence could be reported as `unknown` when the template
+hid a name. Querying by name settles existence, so the flag had no caller and was
+removed with its test.
+
+Point 8 was found by deploying, not by reasoning. Every unit fixture used the
+mock's unprefixed path, so the whole suite passed while the dashboard reported
+rota's one real setting as `absent` AND listed its parameter as an orphan in the
+same response. The suffix rule that first replaced the derivation was also wrong:
+`/stack-rota-min-educators` ends with `-educators`, so a sibling declaration
+named `educators` would have claimed another setting's parameter. The stack name
+is known, so the candidates are built exactly and compared for equality.
+
+### Alternatives Considered
+1. **Make the settings editable through the app's own RPC** (call a method that
+   calls `setting.put()`): rejected. it needs the app to expose such a method,
+   it only works when the stage is deployed and healthy, and it cannot create a
+   parameter that was deleted. It does remain the right route for a change that
+   must go through the app's validation.
+2. **Edit `blocks-config.json` or the handler's environment**: rejected on
+   point 1: both are regenerated by the next deploy, so the edit is a trap.
+3. **Discover parameters with `DescribeParameters` and a tag filter**: rejected.
+   the framework tags stack-owned parameters with `aws-blocks-stack`, but
+   external secrets are deliberately not tagged, so the tag query misses exactly
+   the parameters `fromExisting` declares. The template is already fetched for
+   the resource inventory, so it costs no extra call.
+4. **Identify the secrets custom resource by its logical id** (`BlocksSecretsBulk`)
+   Rejected: that is the naming heuristic on ids the resource inventory
+   explicitly avoids, and it breaks on a nested stack or a renamed construct. The
+   `ParameterNames` property is the framework's own and travels with the
+   resource.
+5. **Optimistic concurrency through a conditional put**: not available. SSM has
+   no conditional `PutParameter`. The version check reads before writing and is
+   documented as non-atomic rather than presented as a guarantee.
+6. **A rollback button for secrets**: rejected. Parameter history is read
+   without decryption, so a secret's past values are not in hand. A restore
+   control that cannot restore is worse than none, so a secret offers no
+   rollback and a non-secret restores by putting the old value in the editor,
+   where the user can see what they are about to save.
+
+### References
+- `packages/admin-ui/src/server/settings-inventory.ts`: the declared-against-live
+  join, the value codec, and the template readers
+- `packages/admin-ui/src/server/settings-store.ts`: the SSM calls and
+  `toStoredParameter`, the line a ciphertext must not cross
+- `packages/admin-ui/src/server/settings-view.ts`: the masking rules, pure
+- `packages/admin-ui/src/settings/settings-page-view.ts`: what the page may offer
+- `packages/bb-app-setting/src/index.aws.ts` and `index.mock.ts` for the encoding
+  this mirrors, and `index.cdk.ts` for the SecureString custom resource
+- `packages/core/src/cdk/config-registry.ts` for why env vars are read-only here
+- D-026 for the guided empty states this page reuses for an undeployed stage, and
+  the record-write route for the unlock gate this write shares
+
+## D-028: The Vite templates typecheck the backend as a TypeScript project reference
+
+**Date**: 2026-11-06
+**Authors:** belaboe, svidgen
+
+### Context
+A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it (`import { api } from 'aws-blocks'`, with `aws-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `aws-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
+
+### Decision
+- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `aws-blocks/tsconfig.json` (every backend file plus `.blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
+- `typecheck` is `tsc -b --force`, and `build` is `tsc -b --force && vite build`.
+- `nextjs` keeps one `tsconfig.json` with global Node types: `next build` ignores project references when it type-checks. The backend-only templates also keep one, because all their code runs on Node.
+- Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
+- AGENTS.md's "no client generation step" stays true: editors read the backend source through the reference, and the declarations are written by the typecheck itself, not by a separate AWS Blocks step.
+
+### Rationale
+- Project references are TypeScript's own mechanism for one codebase running in two environments, and create-vite already ships this layout. No AWS Blocks code has to keep declarations fresh.
+- A skipped build fails loudly (`TS6305`) instead of silently falling back to the backend source.
+- The project's `tsconfig` belongs to the customer. During preview, asking existing apps to make a small manual change is acceptable, and printing the change is less risky than writing into a config we do not own.
+- `--force`: TypeScript 5.x `tsc -b` does not track changed dependency declarations, so after a breaking `npm install` it reported the backend up to date and passed with real type errors. `--force` cost under a second on `default` (2.5 s to 3.4 s). Revisit when the templates move to TypeScript 7, which tracks them.
+- Next.js users already work with global Node types, so looser checks there are the existing norm, without errors.
+
+### Consequences
+- In a new Vite scaffold, a Node global in browser code (`src/`) is a type error.
+- A backend API signature that uses a Node type (for example, returning `Buffer`) reads as `any` in the frontend, hidden by `skipLibCheck`. Backend APIs should return JSON-serializable values.
+- `composite` turns on declaration emit, so an inferred type that names a non-hoisted package fails with `TS2742` (pnpm's default layout). `packages/blocks/TROUBLESHOOTING.md` lists the fixes.
+- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `aws-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
+- Code shared by browser and backend belongs in its own project without Node types, referenced by both. Adding it to the backend project would let Node globals into browser code.
+
+### Alternatives Considered
+- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `aws-blocks/`. Kept for Next.js only.
+- **B. `/// <reference types="node" />` in `@aws-blocks/blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
+- **D. Generated declarations** (`aws-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
+- **E. Generate an explicit API type or schema** (for example, from `blocks.spec.json`). A much larger change, and TypeScript inference is the source of truth today.
+
+### References
+- #1111: implementation and review
+- vercel/next.js#67372: `next build` does not build referenced projects
+- `docs/guides/upgrading-older-apps.md` ("Keep Node types out of the frontend")
+- `packages/blocks/TROUBLESHOOTING.md`

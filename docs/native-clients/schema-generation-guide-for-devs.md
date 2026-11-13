@@ -37,7 +37,7 @@ The emitter uses three tiers, in order of precision:
 
 1. **Zod schemas** — if a method calls `.parse()` on an exported Zod schema, the emitter extracts full JSON Schema with constraints (`format: uuid`, `maxLength`, `minLength`, etc.)
 2. **TypeScript types** — if no Zod schema is found, the emitter uses the TypeScript type checker to extract types from method signatures and inferred return values
-3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates `Any` in native clients
+3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates an untyped JSON value in native clients (`JsonElement` in Kotlin, `JSONValue` in Swift, `dynamic` in Dart)
 
 Most methods get good types from tier 2 automatically. Tier 1 is for when you need precision beyond what TypeScript can express.
 
@@ -211,6 +211,32 @@ export const authApi = auth.createApi();
 
 If the helper returns `any` or an unresolvable generic, the methods will emit as `unknown`. In that case, wrap them in an explicit `ApiNamespace`.
 
+### Narrowed for TypeScript, wide for native: `@blocksCodegenDefaultTypeArgs` (experimental, for Building Block authors)
+
+> **Experimental and internal.** A JSDoc tag for Building Block authors, like `@blocksSkipCodegen`; app code does not need it. Its name and behaviour may change.
+
+A Building Block may narrow a type per instance for TypeScript callers, by its options, while native clients should see one shape. `Auth` does: `createApi()`'s `setAuthState` accepts only the actions a block's options allow, and `signIn` returns only the steps they can produce. If the spec followed the narrowed types, two differently configured blocks would generate different native types (and, in Dart, colliding class names).
+
+`@blocksCodegenDefaultTypeArgs` on an exported generic type alias or interface whose type parameters all have defaults makes the spec describe every instantiation of it at its default type arguments: `SignInNextStep<{ mfa: 'off' }>` is described as `SignInNextStep`, every step. It applies wherever the type appears: a namespace's own type (`AuthStateApi<I, U>`, so `setAuthState` takes the full `AuthActionInput`), a parameter, a result, or nested inside one. The TypeScript types are unaffected, so the server must enforce the narrowing at runtime.
+
+```ts
+/** … @blocksCodegenDefaultTypeArgs */
+export type SignInNextStep<O extends AuthOptions = AuthOptions> = Extract<AnySignInNextStep, { name: SignInStepNameOf<O> }>;
+```
+
+A misplaced tag fails spec generation with an error naming the type: on a type that is not exported at the top level of its file, that has no type parameters, or that has one without a default.
+
+### One component per type name
+
+A named object type (an interface or type alias) becomes one entry in `components.schemas`, and every use with the same schema refers to it. When uses of one name differ, the first (the one the name has always gone to) keeps it, and each other use is described where it appears; native generators name those by method and field (Dart `ApiListKeysOptions`, Swift and Kotlin `Api.ListKeys.Options`). That happens for:
+
+- instantiations of one generic type that come out different, such as the `AuthenticatedUser` of two differently configured `Auth` blocks;
+- two different declarations with the same name, such as two Building Blocks' `ScanOptions`. The generator also prints a warning naming both declarations: rename one type, or share one declaration, to keep a single native type.
+
+A recursive type (`interface Comment { replies: Comment[] }`) is described four levels deep, a mutually recursive pair (`A` holding `B` holding `A`) five, and a generic that holds a new instantiation of itself nine; the next level is an object with any fields (native clients decode it as a map), with a warning naming the field.
+
+Unnamed types nest at most six levels below the nearest named type. Past that, an unnamed object is an object with any fields and an array of unnamed objects or arrays an array of any values, with a warning naming the field; strings, numbers, booleans, named types and arrays of them keep their types. To describe a deep shape in full, declare one of its enclosing object types as an interface.
+
 ### Returning Building Block handles (Realtime, FileBucket)
 
 Some BBs return live handles instead of plain data — `RealtimeChannel`, `FileDownloadHandle`, `FileUploadHandle`. These implement `toJSON()` returning a `{ __blocks: '<tag>' }` descriptor. The spec emitter detects the marker and lowers it onto the result schema as `x-blocks-transferable`, plus `x-blocks-type-args` for any generic arguments. Native codegen reads those fields and emits the matching SDK type (`RealtimeChannel<Cursor>` instead of a raw struct).
@@ -300,13 +326,22 @@ This produces:
 ### Spread/rest params
 
 ```ts
-// ⚠️ Rest params emit a single "args" param with unknown type
+// ✅ A rest param typed as a tuple is one param per element: `item`, then optional `options`
 async tablePut(...args: Parameters<typeof table.put>) {
   await table.put(...args);
 }
+
+// ⚠️ A rest param typed as a plain array stays one array param, with a warning
+async tag(name: string, ...labels: string[]) { ... }
 ```
 
-The spec emitter sees one param named `args`. Prefer explicit params.
+The server calls a method with its params spread, so a rest param typed as a tuple (`...args: [id: string, count?: number]`, or `Parameters<typeof f>`) is described as one positional param per element. Each is named by its tuple label (`f`'s parameter names), otherwise `arg0`, `arg1`, and so on, and is optional where the element is. A rest element inside the tuple (`[level: string, ...string[]]`) can't be described: the params stop before it, with a warning.
+
+A rest param typed as a plain array (`...labels: string[]`) is described as one array param, and spec generation warns: a native client sends the labels as one nested array, so the method receives that array as its only `labels` argument. Declare it as an array param (`labels: string[]`) instead.
+
+### Tuples
+
+A tuple (`[number, string]`) is described with `prefixItems`, `minItems` and `maxItems`, and is a JSON array on the wire. Swift and Kotlin generate a type with properties `item0`, `item1`, and so on. Dart generates a record (`(num, String)`), and a one-element tuple (`[number]`) as a `List`. An optional element (`[string, number?]`) is nullable, and is `null` when the array leaves it out.
 
 ### `as any` type casts
 
@@ -399,7 +434,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient` (`OIDCClient` on Swift) | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `AnyProvider` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | none: formerly `bb-auth-oidc`, which `Auth` replaced; `Auth` returns no `oidc/client`, and the tag stays built in |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -418,7 +453,24 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 }
 ```
 
-Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload`, `oidc/client` today), this field is omitted.
+Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. The emitter writes the field when a method's return type spells out the arguments, on a namespace the entry file exports directly (`export const api = new ApiNamespace(...)`). It's omitted for non-generic transferables (`file-bucket/download`, `file-bucket/upload`), for a `RealtimeChannel` whose message type isn't written in the return type, and for every method of a namespace built elsewhere, such as a block's `createApi()` or a factory function.
+
+The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. The removed `AuthOIDC.createApi()` typed `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
+
+```json
+{
+	"x-blocks-transferable": "oidc/client",
+	"x-blocks-type-args": [
+		{ "type": "string", "enum": ["google", "github"] }
+	]
+}
+```
+
+Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, whose `signIn(provider:relayTo:launcher:)` takes only those providers. Without the field, the client is `OIDCClient<String>`.
+
+Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<AnyProvider>`, where `AnyProvider` is the Kotlin runtime's own carrier for a provider the spec didn't name, and `signIn` takes that name. Dart ignores it for now.
+
+Because both meanings share one field, each generator classifies the argument itself: `realtime/channel`'s is a payload to generate and decode, `oidc/client`'s is the set of values its client accepts. Kotlin declares it per argument position (`TransferableTypeArg` in `codegen/.../model/Transferables.kt`): an `Out` or `InOut` argument has to represent anything the backend may send, so it is generated from the spec's schema, while an `In` one has to express just what a caller may send, so it becomes an enum of the values the spec permits. A tag's arguments can mix. The fact is still restated per platform — a new transferable with a narrowed argument has to be added to each. A dedicated spec field would be the way to stop that.
 
 ### `x-blocks-native-packages` (document root)
 
@@ -466,7 +518,9 @@ Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), 
 }
 ```
 
-**Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
+**Codegen contract.** A method joins its binding by tag. Under `blocks-transferable-v1` an export splits on `-`, `_` or `.`, each segment's first character is raised, and the rest stands as declared. `fromBlocksDescriptor` is called on the type that results, so `API_link` resolves to `APILink.fromBlocksDescriptor`. A built-in tag cannot be bound.
+
+**Type names.** A doubled, dangling or foreign separator is an error, and an export over 64 characters is refused at spec generation. No two exports may resolve to one type name, and each export takes one arity. Avoid Swift keywords and names `dart:core`, `dart:async` or `blocks_runtime` owns. Two tags may share one export at one arity.
 
 **Factory contract.** `fromBlocksDescriptor` is the declared package's own surface — nothing here type-checks it, so a shape mismatch surfaces only when the consumer compiles. Under `blocks-transferable-v1` the descriptor arrives already checked against the binding's `tag`. On Android the `export` must carry the form its `genericArity` selects:
 
@@ -492,9 +546,13 @@ class DeviceLink<T> {
 
 Block authors do not edit `blocks.spec.json`. A block declares its native packages and bindings as static JSON under an `aws-blocks.native` key in its own `package.json`. The `aws-blocks` namespace is already in use for `vendorize` on the umbrella package.
 
+A block that declares nothing omits the key. Present but not an object — a string, a number, `null`, or the key's own value wrapped in an array — is an error rather than an absence, `"aws-blocks" must be an object (declared by <block>)`, because the declarations are usually inside and would otherwise be dropped without a word. A namespace object carrying only other keys, `vendorize` among them, declares no native metadata and is skipped, and a manifest whose own top level is not an object is skipped too, with the manifest case listed further down.
+
+That rule is the key's own, not a general one. Inside a registration, at `aws-blocks.native.packages[].platforms`, a field set to `null` is reported as the absence it resembles, `Missing "platforms" object (declared by <block>)`, while `packages` or `bindings` set to `null` is an error.
+
 `packages` and `bindings` are independently optional. Field values reach the two catalogs intact, but the catalogs are not a copy: bindings sort by `id`, packages sort by identity, each object's fields are emitted in a fixed order, `identity` becomes the catalog key rather than a field of the entry, and a repeated identity is emitted once.
 
-Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`.
+Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`. The seven are also the only fields a binding may carry, whatever its `kind`: once its `id` is usable, an eighth is rejected with `Unexpected field "<name>" — a binding holds only id, kind, tag, package, export, abi, genericArity (declared by <block>)`. The emitter rebuilds those seven unconditionally, so a field outside them would be dropped from the catalog rather than carried to a generator. A binding whose `id` is blank is reported for that alone.
 
 ```json
 {
@@ -533,11 +591,15 @@ npm nests a copy only when two dependents need different versions, so a block th
 
 `schemaVersion` is not authored here — the generator stamps it.
 
-Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key.
+Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key. Every manifest the scan reaches counts, so a malformed key in a hoisted transitive dependency fails the whole app's generation, not only one authored by the app; a copy nested inside another package is skipped with the rest of that directory.
 
-The last is deliberate — a manifest that carries the `aws-blocks` key but will not parse cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
+On the CLI path the manifests are read before anything is validated, so a malformed `aws-blocks` in any resolvable manifest — including a hoisted one you do not own — is reported alongside every other read error and masks every validation error until it is fixed. A caller that supplies its own declarations skips the read and sees no masking.
 
-Two neighbouring failures are warned and skipped instead: a `node_modules` directory or a manifest that cannot be read for a reason other than absence, which holds no metadata to rule out, and an unparseable manifest that does not carry `aws-blocks` as a JSON key, escapes decoded, which belongs to a package that declares nothing.
+Validation collects its errors and returns them rather than throwing, so a run reports every problem it can reach in the declarations it was given.
+
+Aborting on a manifest that will not parse is deliberate — one that carries the `aws-blocks` key cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
+
+Two neighbouring failures are warned and skipped instead: a `node_modules` directory or a manifest that cannot be read for a reason other than absence, which holds no metadata to rule out, and an unparseable manifest in which `aws-blocks` never appears as a quoted token followed by a colon or by the end of the text, escapes decoded, which belongs to a package that declares nothing. The test is textual rather than structural, so a truncated manifest whose final token is the *value* `"aws-blocks"` is treated as carrying the key and aborts generation.
 
 Three more are skipped silently, because each is an answer rather than a failure: a level with no `node_modules`, a `node_modules` that is not a directory, and a manifest that parses to something other than an object.
 
@@ -549,7 +611,7 @@ A dependency that declares a binding therefore participates in the generated cli
 
 Once a generator consumes the catalogs, the client it emits will import the declared package and hand it the descriptor, which may carry a signed URL or a short-lived credential.
 
-Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` is unchecked. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
+Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` value is unchecked. Its field set is not: the seven-field rule above holds for every kind, so a new kind cannot carry a field of its own without a core change. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
 
 Restricting the scan to the spec project's own `dependencies` would narrow it further and is deferred, not rejected — see [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies).
 

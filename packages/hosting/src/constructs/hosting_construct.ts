@@ -44,7 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import type { DeployManifest } from '../manifest/types.js';
+import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
   type KindStoreOptions,
@@ -56,6 +56,9 @@ import {
 import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
+import { routeSpecificity } from '../plan/route-table.js';
+import { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
+import { prependBasePath } from '../adapters/shared/basepath.js';
 import { albDoor } from './alb_door.js';
 import { AlbConstruct } from './alb_construct.js';
 import {
@@ -66,6 +69,14 @@ import {
   generateAlbEventShimCode,
   generateForwardedHostShimCode,
 } from './alb_lambda_event.js';
+import {
+  assertCacheGuardIgnoredCookies,
+  isDefaultTtlPositive,
+  type SsrCacheGuardConfig,
+  withSsrCacheGuard,
+  withSsrCacheGuardNodeOption,
+} from './ssr_cache_guard.js';
+import { resolveHandlerModule } from './handler_module.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -92,7 +103,7 @@ import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
-import { WafConstruct } from './waf_construct.js';
+import { DEFAULT_WAF_RATE_LIMIT, WafConstruct } from './waf_construct.js';
 import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -103,6 +114,8 @@ export type { SkewProtectionConfig } from './skew_protection.js';
 // well before it so the operator can split the stack before a deploy fails.
 const CFN_MAX_RESOURCES_PER_STACK = 500;
 const CFN_RESOURCE_WARNING_THRESHOLD = 450;
+/** Stable id of the plain-HTTP front-door warning; also the `acknowledgeWarning` id. */
+const PLAIN_HTTP_FRONT_DOOR_WARNING_ID = '@aws-blocks/hosting:PlainHttpFrontDoor';
 
 // ---- Public types ----
 
@@ -275,6 +288,14 @@ export type HostingConstructProps = {
      * @deprecated Use `frontDoor.features.cacheKeyCookies`.
      */
     cacheKeyCookies?: string[];
+    /**
+     * Cookie names that never affect the rendered output (e.g. `_ga`,
+     * `_gid`, `_fbp`, a consent cookie): the SSR cache guard ignores them, as
+     * it does the `__dpl` build pin, and they are not in the cache key.
+     * @see HostingProps.cdn.cacheGuardIgnoredCookies for the full note.
+     * @deprecated Use `frontDoor.features.cacheGuardIgnoredCookies`.
+     */
+    cacheGuardIgnoredCookies?: string[];
     /**
      * Header names to include in the SSR cache key (e.g. `'authorization'`).
      * Use to vary cached SSR responses by credential-bearing headers.
@@ -533,6 +554,42 @@ export type HostingConstructProps = {
      */
     paths?: readonly string[];
   };
+
+  /**
+   * Build no image-optimization function, even when the manifest declares
+   * one. On the API Gateway HTTP door the framework image endpoints
+   * (`/_next/image`, `/_ipx/*`, `/_image`) are then answered by the asset
+   * proxy with the source image, unoptimized; a remote source is redirected
+   * to itself when its host is in the manifest's image allowlist
+   * (`imageOptimization.domains` / `remotePatterns`), else 404. Set by core
+   * `Hosting` for `imageOptimization: false` (`HostingPresets.preview`).
+   * @default false
+   */
+  skipImageOptimization?: boolean;
+
+  /**
+   * The manifest's `buildId` stays the same while the build is unchanged
+   * (core `Hosting` `buildId: 'fixed'` keys it on the build's content,
+   * `HostingPresets.preview`), so a re-deploy uploads under the
+   * `builds/<buildId>/` prefix the door already serves.
+   *
+   * There is then no switch-over to a new build, so the door's
+   * `FrontDoorResult.cutover` constructs (the ALB and API Gateway asset
+   * proxies, whose environment names the prefix) are not ordered after the
+   * asset uploads or after the uploads registered later through
+   * {@link HostingConstruct.addBuildAssetDependency}. CloudFormation creates
+   * them alongside the uploads, which takes the proxy (its role, policy and
+   * function) off the end of a first deploy. A door's `onUpload` resources
+   * still run after every upload.
+   *
+   * Use it only for throwaway environments: while a deploy that changes the
+   * build runs, the door can serve the new prefix before its files are
+   * uploaded. The CloudFront door
+   * ignores it (its edge cache would keep serving the overwritten files; core
+   * `Hosting` rejects `buildId: 'fixed'` behind it).
+   * @default false
+   */
+  inPlaceBuild?: boolean;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -721,6 +778,9 @@ export class HostingConstruct extends Construct {
   /** The constructs the door's `onUpload` declared; each runs after every upload (see {@link addBuildAssetDependency}). */
   private readonly postUploadConstructs: IConstruct[] = [];
 
+  /** The bundles the SSR cache guard was installed in, by the first compute that installed it. */
+  private readonly ssrCacheGuardBundles = new Map<string, { name: string; key: string }>();
+
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
    */
@@ -767,6 +827,12 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertEdgeRoutesReachableByDoor(
+      manifest,
+      resolved.kind,
+      stackedRouter ? 'stacked' : resolved.kind,
+      typeof props.frontDoor === 'object' && props.frontDoor?.kind === 'apiGateway' && (props.frontDoor.api ?? 'http') === 'http',
+    );
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -844,6 +910,27 @@ export class HostingConstruct extends Construct {
     // built: a door that invokes it without streaming gets a buffered server.
     const serverResponse = serverResponseFor(props.frontDoor);
     this.serverResponse = serverResponse;
+    // The SSR cache guard (see ssr_cache_guard.ts) needs the same cache-key
+    // names the selected door's server-route cache policy keys on, and
+    // whether a response with no Cache-Control is edge-cached. The
+    // CloudFront-over-ALB door's server-route policy keys on every cookie.
+    assertCacheGuardIgnoredCookies(f.cacheKeyCookies, f.cacheGuardIgnoredCookies);
+    const ssrCacheGuardConfig: SsrCacheGuardConfig = {
+      cacheKeyCookies: f.cacheKeyCookies,
+      ignoredCookies: f.cacheGuardIgnoredCookies,
+      cacheKeyHeaders: f.cacheKeyHeaders,
+      defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
+      allCookiesKeyed: stackedRouter,
+    };
+    // The computes the manifest routes requests to, other than the image
+    // function: they render server responses (e.g. a Next.js split function
+    // built regional), so they get the SSR cache guard too. A route's fallback
+    // compute serves the same requests, so it counts as well.
+    const serverRouteComputes = new Set(
+      manifest.routes
+        .flatMap((r) => (r.fallback ? [r.target, r.fallback] : [r.target]))
+        .filter((t) => t !== 'static' && t !== 's3' && t !== 'image-optimization'),
+    );
 
     for (const [name, resource] of computeEntries) {
       if (resource.type === 'edge') {
@@ -863,7 +950,14 @@ export class HostingConstruct extends Construct {
 
       // SSR compute is fronted by REST API (cdn_construct.ts), not by a
       // Function URL. Image-opt etc. keep OAC + Function URL.
+      // `default` and `server` are the reserved manifest names of the SSR
+      // server compute (ComputeResource has no role field); only these get
+      // the SSR server settings. The SSR cache guard goes in front of these
+      // and of every other regional compute a route targets (see
+      // serverRouteComputes); computes no route targets (image optimization,
+      // revalidation) are deployed without it.
       const isSsrCompute = name === 'default' || name === 'server';
+      const servesServerRoutes = isSsrCompute || serverRouteComputes.has(name);
 
       // Web Functions host the SSR server only; auxiliary compute (image
       // optimization, revalidation, edge) stays on Lambda.
@@ -871,7 +965,7 @@ export class HostingConstruct extends Construct {
         this.warnInapplicableWebFunctionOptions(props.compute);
         const webFunction = new WebFunctionConstruct(this, `WebCompute-${name}`, {
           name,
-          computeResource: resource,
+          computeResource: this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'web-function').resource,
           timeout: computeTimeout,
           logRetention: props.compute.logRetention,
           skipRegionValidation: props.skipRegionValidation,
@@ -882,9 +976,22 @@ export class HostingConstruct extends Construct {
         continue;
       }
 
+      // The SSR cache guard goes in front of the server first, so a door shim
+      // (which converts the door's event shape) wraps the guarded handler.
+      const guarded = servesServerRoutes ? this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'lambda') : undefined;
+      const ssrResource = !guarded ? resource : isSsrCompute ? withDoorEventShim(guarded.resource, props.frontDoor) : guarded.resource;
+      // `compute.environment` is applied over the manifest's environment, so a
+      // NODE_OPTIONS set there must keep loading the guard.
+      const computeEnvironment =
+        guarded?.installed && ssrResource.type === 'http-server' && props.compute?.environment?.NODE_OPTIONS !== undefined
+          ? {
+              ...props.compute.environment,
+              NODE_OPTIONS: withSsrCacheGuardNodeOption(props.compute.environment.NODE_OPTIONS),
+            }
+          : props.compute?.environment;
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: isSsrCompute ? withDoorEventShim(resource, props.frontDoor) : resource,
+        computeResource: ssrResource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -896,7 +1003,7 @@ export class HostingConstruct extends Construct {
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
-        environment: props.compute?.environment,
+        environment: computeEnvironment,
         ...(isSsrCompute && serverResponse === 'buffered' ? { responseMode: 'buffered' as const } : {}),
       });
 
@@ -1139,7 +1246,7 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    if (manifest.imageOptimization && !props.skipImageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {
@@ -1555,9 +1662,15 @@ export class HostingConstruct extends Construct {
         skewProtection: f.skewProtection ?? { enabled: true },
         ssrDefaultTtl: f.ssrDefaultTtl,
         cacheKeyCookies: f.cacheKeyCookies,
+        cacheGuardIgnoredCookies: f.cacheGuardIgnoredCookies,
         cacheKeyHeaders: f.cacheKeyHeaders,
         webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
         quotas: f.quotas,
+        serverOrigin: f.serverOrigin,
+        // The Blocks-managed web ACL's rules also run on the server origin's
+        // REST API stage (a REGIONAL web ACL with the same rate limit), so a
+        // call made straight to `execute-api` meets them too.
+        originWafRateLimit: this.webAcl ? (f.waf?.rateLimit ?? DEFAULT_WAF_RATE_LIMIT) : undefined,
         customErrorPages: props.errorPages
           ? {
               notFound: !!props.errorPages.notFound,
@@ -1944,6 +2057,10 @@ export class HostingConstruct extends Construct {
             apiGateway: {
               ...common,
               errorPages: this.doorInput.app.errorPages,
+              computeRoutes: directComputeRoutes(manifest, this.computeFunctions, serverName),
+              ...(props.skipImageOptimization
+                ? { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }
+                : {}),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -1991,22 +2108,27 @@ export class HostingConstruct extends Construct {
         });
       }
       // A door served over plain HTTP with an API: sign-in, cookies and every
-      // RPC travel in cleartext between the browser and the door.
+      // RPC travel in cleartext between the browser and the door. The `'none'`
+      // door warns even without an API: it can never serve over TLS, so the
+      // pages and scripts themselves travel in cleartext.
       // (The stacked door's router isn't the public address: the core warns about its hop.)
       // The S3 website's URL is a token at synth, so its handle's protocol says it.
       const plainHttp = built.url.startsWith('http://') || built.originHandle.protocol === 'http';
-      if (plainHttp && props.backendApi && !stackedRouter) {
+      if (plainHttp && (props.backendApi || isNone) && !stackedRouter) {
+        // `'none'` may be chosen on purpose (testing, public non-interactive
+        // content), so its message names how to acknowledge it.
         Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:PlainHttpFrontDoor',
-          `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
-            'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
-            (isNone
-              ? ''
-              : 'AuthBasic drops `Secure` from its session cookie behind such a door; AuthCognito and AuthOIDC keep it, ' +
-                "so the browser discards their session cookie and sign-in doesn't persist. ") +
-            (isNone
-              ? 'Use the CloudFront door for HTTPS.'
-              : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),
+          PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+          isNone
+            ? "The 'none' front door serves the app from the public S3 website endpoint over plain HTTP " +
+                '(an S3 website has no TLS), so the HTML and scripts can be read or altered in transit — ' +
+                'even when the app calls an HTTPS API cross-origin, a tampered script sees everything the user enters. ' +
+                'Use the CloudFront door for HTTPS. If serving over plain HTTP is intended, acknowledge it with ' +
+                `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_FRONT_DOOR_WARNING_ID}')\`.`
+            : `The '${resolved.kind}' front door serves the app over plain HTTP (no certificate), ` +
+                'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
+                '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ' +
+                "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door.",
         );
       }
       this.distributionUrl = built.url;
@@ -2388,7 +2510,9 @@ export class HostingConstruct extends Construct {
     // upload here, and — recorded with the post-upload constructs — for the
     // uploads declared later (`addBuildAssetDependency`, e.g. the resolved
     // runtime config), so the previous build serves until the new one is whole.
-    for (const c of cutover) {
+    // An in-place build (`inPlaceBuild`) has no new build to switch to: the
+    // prefix never changes, so the cutover is created alongside the uploads.
+    for (const c of props.inPlaceBuild ? [] : cutover) {
       for (const dep of buildAssetDeployments) c.node.addDependency(dep);
       this.postUploadConstructs.push(c);
     }
@@ -2470,6 +2594,11 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+
+    // An in-place build behind a door without CloudFront drops the AWS CLI
+    // layers no upload handler uses (see `aws_cli_layers.ts`). The CloudFront
+    // door ignores `inPlaceBuild`, and every other build keeps its layers.
+    if (props.inPlaceBuild && !cdn) removeUnusedAwsCliLayers(this);
   }
 
   /**
@@ -2484,6 +2613,39 @@ export class HostingConstruct extends Construct {
     }
     for (const entry of this.computeWebFunctions) targets.push(entry);
     return targets;
+  }
+
+  /**
+   * Put the SSR cache guard in front of an SSR server (see ssr_cache_guard.ts),
+   * and warn when it cannot be installed: that server's responses are then
+   * cached exactly as its own `Cache-Control` says.
+   */
+  private withSsrCacheGuard(
+    name: string,
+    resource: ComputeResource,
+    config: SsrCacheGuardConfig,
+    host: 'lambda' | 'web-function',
+  ): { resource: ComputeResource; installed: boolean } {
+    // The guard's files have fixed names in the bundle, so two computes that
+    // share a bundle can share them only when they wrap the same handler.
+    const bundle = path.resolve(resource.bundle);
+    const key = `${host}:${resource.type}:${resource.handler ?? ''}:${resource.serverEntry ?? ''}`;
+    const sharing = this.ssrCacheGuardBundles.get(bundle);
+    const result: { resource: ComputeResource; skipped?: string } =
+      sharing && sharing.key !== key
+        ? { resource, skipped: `it shares its bundle with compute '${sharing.name}', which runs a different server` }
+        : withSsrCacheGuard(resource, config, host);
+    if (result.resource !== resource && !sharing) this.ssrCacheGuardBundles.set(bundle, { name, key });
+    if (result.skipped !== undefined) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:SsrCacheGuardNotInstalled',
+        `The SSR cache guard is not installed in front of compute '${name}': ${result.skipped}. ` +
+          'Its responses are cached as their Cache-Control says, so routes that set cookies or depend on ' +
+          "the request's cookies or Authorization should send `Cache-Control: private`, or list those " +
+          'credentials in cdn.cacheKeyCookies/cdn.cacheKeyHeaders.',
+      );
+    }
+    return { resource: result.resource, installed: result.resource !== resource };
   }
 
   /**
@@ -2612,6 +2774,7 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
     geoRestriction: { value: cdn?.geoRestriction, prop: 'cdn.geoRestriction' },
     ssrDefaultTtl: { value: cdn?.ssrDefaultTtl, prop: 'cdn.ssrDefaultTtl' },
     cacheKeyCookies: { value: cdn?.cacheKeyCookies, prop: 'cdn.cacheKeyCookies' },
+    cacheGuardIgnoredCookies: { value: cdn?.cacheGuardIgnoredCookies, prop: 'cdn.cacheGuardIgnoredCookies' },
     cacheKeyHeaders: { value: cdn?.cacheKeyHeaders, prop: 'cdn.cacheKeyHeaders' },
     responseHeadersPolicy: { value: cdn?.responseHeadersPolicy, prop: 'cdn.responseHeadersPolicy' },
     quotas: { value: cdn?.quotas, prop: 'cdn.quotas' },
@@ -2696,6 +2859,64 @@ export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor'
       return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
   }
 };
+
+/**
+ * The routes a regional door sends straight to a compute other than the
+ * server and the image function (e.g. a Next.js `runtime: 'edge'` route built
+ * as a regional function): the route table lists them as server routes.
+ * Lambda@Edge functions are reached only through CloudFront and are skipped.
+ *
+ * @param manifest the deploy manifest.
+ * @param computeFunctions the functions built for the manifest's compute.
+ * @param serverName the server compute's name, if any.
+ * @returns `{ pattern, computeName }` (basePath-prefixed), most-specific first.
+ */
+const directComputeRoutes = (
+  manifest: DeployManifest,
+  computeFunctions: ReadonlyMap<string, unknown>,
+  serverName: string | undefined,
+): { pattern: string; computeName: string }[] =>
+  manifest.routes
+    .filter(
+      (r) =>
+        r.target !== serverName &&
+        r.target !== 'image-optimization' &&
+        computeFunctions.has(r.target) &&
+        manifest.compute[r.target]?.type !== 'edge',
+    )
+    .map((r) => ({ pattern: prependBasePath(manifest.basePath, r.pattern), computeName: r.target }))
+    .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+/**
+ * The path-form image endpoints the manifest routes to the image function
+ * (Nuxt IPX: `/_ipx/*` by default, or a custom `runtimeConfig.ipx.baseURL`),
+ * as basePath-relative prefixes. The query-form endpoints (`/_next/image`,
+ * `/_image`) are matched by name.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the prefixes, e.g. `['/img']`.
+ */
+const imagePathEndpoints = (manifest: DeployManifest): string[] =>
+  manifest.routes
+    .filter((r) => r.target === 'image-optimization' && r.pattern.endsWith('/*'))
+    .map((r) => `/${r.pattern.slice(0, -2).replace(/^\/+/, '')}`)
+    .filter((p) => !p.startsWith('/_next/') && p !== '/_image');
+
+/**
+ * The remote image hosts the app allows its image optimizer to fetch: the
+ * manifest's `imageOptimization.domains` and `remotePatterns` hostnames, or,
+ * with no image function, its `imageRemoteSources`.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the hosts (may carry a `*.` / `**.` wildcard prefix).
+ */
+const imageRemoteHosts = (manifest: DeployManifest): string[] => [
+  ...(manifest.imageOptimization?.domains ?? []),
+  ...(manifest.imageOptimization?.remotePatterns ?? []).map((p) => p.hostname),
+  ...(manifest.imageRemoteSources?.domains ?? []),
+  ...(manifest.imageRemoteSources?.remotePatterns ?? []).map((p) => p.hostname),
+];
+
 
 /**
  * How the selected front door invokes the server-rendering compute. Known
@@ -2797,15 +3018,8 @@ const withDoorEventShim = (
   const isAlb = kind !== 'apiGateway';
   if (isAlb && resource.streaming === true) return resource; // fails synth (assertServerReachableByDoor)
   if (!isAlb && !forwardedHostFromHost) return resource;
-  const handler = resource.handler ?? 'index.handler';
-  const dot = handler.lastIndexOf('.');
-  if (dot <= 0) return resource;
-  const moduleBase = handler.substring(0, dot);
-  const exportName = handler.substring(dot + 1);
-  const moduleFile = ['.mjs', '.js', '.cjs']
-    .map((ext) => `${moduleBase}${ext}`)
-    .find((file) => fs.existsSync(path.join(resource.bundle, file)));
-  if (!moduleFile) return resource;
+  const { exportName, moduleFile } = resolveHandlerModule(resource.bundle, resource.handler ?? 'index.handler') ?? {};
+  if (!moduleFile || exportName === undefined) return resource;
   const [shimFile, shimHandler, code] = isAlb
     ? [ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode(`./${moduleFile}`, exportName, { forwardedHostFromHost })]
     : [FORWARDED_HOST_SHIM_FILE, FORWARDED_HOST_SHIM_HANDLER, generateForwardedHostShimCode(`./${moduleFile}`, exportName)];
@@ -2864,6 +3078,42 @@ const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string,
     resolution:
       "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or move the middleware's logic into the pages " +
       'or route handlers before choosing another door.',
+  });
+};
+
+/**
+ * Fail synth for a Lambda@Edge compute (`type: 'edge'`, for example a Next.js
+ * `runtime: 'edge'` route) behind a door other than CloudFront: only a
+ * CloudFront distribution invokes Lambda@Edge, so the route would never reach
+ * its function.
+ *
+ * The resolution depends on the door: only the API Gateway HTTP API door can
+ * run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`),
+ * so behind any other door the fix is to change the door.
+ *
+ * @param httpApi whether the door is the API Gateway HTTP API door.
+ * @throws HostingError('EdgeRouteNeedsCloudFrontDoorError') naming the computes and the door.
+ */
+const assertEdgeRoutesReachableByDoor = (
+  manifest: DeployManifest,
+  kind: string,
+  label: string = kind,
+  httpApi = false,
+): void => {
+  if (kind === 'cloudfront') return;
+  const edge = Object.entries(manifest.compute)
+    .filter(([, resource]) => resource.type === 'edge')
+    .map(([name]) => name);
+  if (edge.length === 0) return;
+  throw new HostingError('EdgeRouteNeedsCloudFrontDoorError', {
+    message:
+      `The app has Lambda@Edge computes (${edge.join(', ')}), which only the CloudFront door invokes; the '${label}' ` +
+      'front door would deploy them with no route reaching them.',
+    resolution: httpApi
+      ? "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind this door), " +
+        'or use the CloudFront door.'
+      : "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or the API Gateway HTTP API door " +
+        "(`frontDoor: { kind: 'apiGateway' }`), which runs them as regional functions.",
   });
 };
 

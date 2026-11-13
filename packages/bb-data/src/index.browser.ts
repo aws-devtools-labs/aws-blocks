@@ -8,3 +8,4 @@ export class Database {
 }
 
 export { DatabaseErrors } from './errors.js';
+export { fromExisting } from './from-existing.js';

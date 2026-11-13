@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -11,10 +12,43 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
-const serverPort = 3001;
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+
+/**
+ * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
+ * address with a 6-digit code, then signs the user in. Locally no email is
+ * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
+ * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ *
+ * `user` defaults to this file's clients (the cookie jar `installCookieJar`
+ * installs); pass `createTestClient(app)` for another user with a session of
+ * their own, signed in at the same time.
+ */
+async function signUpAndSignIn(username: string, password: string, user = { authApi }) {
+  const signUp = await user.authApi.setAuthState({ action: 'signUp', username, password });
+  assert.strictEqual(signUp.state, 'confirmingSignUp');
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  return await user.authApi.setAuthState({ action: 'autoSignIn', username });
+}
+
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await setTimeout(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
 
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
@@ -26,33 +60,46 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
+  await waitForServer();
 
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-      else process.kill(-server.pid, 'SIGTERM');
-    } catch {}
+// Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
+function signalServer(pid: number, signal: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function waitForServerExit(pid: number, ms: number) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+    if (Date.now() >= deadline) return false;
+  }
+  return true;
+}
+
+// The dev server shuts down gracefully, so wait for it to exit: it can still be
+// writing to the app's directory when this file ends and the caller removes it.
+test.after(async () => {
+  if (!server?.pid) return;
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  if (!signalServer(server.pid, 'SIGTERM') || await waitForServerExit(server.pid, 15_000)) return;
+  signalServer(server.pid, 'SIGKILL');
+  await waitForServerExit(server.pid, 2_000);
 });
 
 // App-level readiness — independent of the sample API, so it keeps passing
@@ -69,12 +116,28 @@ test('health: public liveness check', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
+// A presigned URL is a bearer credential, so only a signed-in caller gets one.
+test('files: signed-out callers cannot mint presigned URLs', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.createUploadUrl('reports/data.txt', 'text/plain'), { status: 401 });
+  await assert.rejects(api.createDownloadUrl('reports/data.txt'), { status: 401 });
+});
+
+// Only the allowed content types get a presigned upload URL.
+test('files: an unsupported content type is declined', async () => {
+  await signUpAndSignIn(`ctype-${Date.now().toString(36)}@example.com`, 'TestPass123!');
+  await assert.rejects(api.createUploadUrl('page.html', 'text/html'), { status: 400 });
+});
+
 // FileBucket via presigned URLs — the headless-client path. Ask the API for an
 // upload URL, PUT the bytes directly (no bytes through the API), then ask for a
 // download URL and GET them back. Backed by the dev server's local file server,
 // so it runs with no AWS. The Content-Type on the PUT must match the one the
 // upload URL was signed with (presigned-URL parity with S3).
 test('files: presigned upload/download round-trips', async () => {
+  const state = await signUpAndSignIn(`files-${Date.now().toString(36)}@example.com`, 'TestPass123!');
+  assert.strictEqual(state.state, 'signedIn');
+
   const path = 'reports/data.txt';
   const contentType = 'text/plain';
   const payload = 'headless client via presigned url';
@@ -91,17 +154,23 @@ test('files: presigned upload/download round-trips', async () => {
   const getRes = await fetch(downloadUrl);
   assert.strictEqual(getRes.status, 200, 'presigned GET should succeed');
   assert.strictEqual(await getRes.text(), payload);
+
+  // Paths are scoped per user: another user asking for the same path gets
+  // their own (empty) object, not this one.
+  await signUpAndSignIn(`other-${Date.now().toString(36)}@example.com`, 'TestPass123!');
+  const { url: otherUrl } = await api.createDownloadUrl(path);
+  const otherRes = await fetch(otherUrl);
+  assert.notStrictEqual(otherRes.status, 200, "another user must not read this user's file");
 });
 
 // Runs against the sample CRUD API the template ships with, so a freshly
 // scaffolded app is validated end to end: signup, then an item round-trip.
 // When you replace the sample API, update or delete this test.
 test('items: auth-gated CRUD round-trip', async () => {
-  const username = `e2e-${Date.now().toString(36)}`;
-  const password = 'password123';
+  const username = `e2e-${Date.now().toString(36)}@example.com`;
+  const password = 'TestPass123!';
 
-  // signUp creates the account and signs in (no code delivery configured).
-  const state = await authApi.setAuthState({ action: 'signUp', username, password });
+  const state = await signUpAndSignIn(username, password);
   assert.strictEqual(state.state, 'signedIn');
 
   const item = await api.createItem('Widget', 3);
@@ -133,10 +202,10 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
 
-  const username = `e2e-lock-${Date.now().toString(36)}`;
-  const password = 'password123';
+  const username = `e2e-lock-${Date.now().toString(36)}@example.com`;
+  const password = 'TestPass123!';
 
-  const state = await authApi.setAuthState({ action: 'signUp', username, password });
+  const state = await signUpAndSignIn(username, password);
   assert.strictEqual(state.state, 'signedIn');
 
   const item = await api.createItem('Locked', 1); // version 1
@@ -161,4 +230,29 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   assert.strictEqual(current.version, 2);
 
   await api.deleteItem(item.itemId);
+});
+
+// Items are private: every method reads and writes only the caller's own.
+// When you replace the sample API, update or delete this test.
+test('items: another user can neither see nor change them', async () => {
+  const password = 'TestPass123!';
+  // Two users signed in at once, each with a cookie jar of their own.
+  const owner = createTestClient(app);
+  const other = createTestClient(app);
+  assert.strictEqual((await signUpAndSignIn(`e2e-owner-${Date.now().toString(36)}@example.com`, password, owner)).state, 'signedIn');
+  assert.strictEqual((await signUpAndSignIn(`e2e-other-${Date.now().toString(36)}@example.com`, password, other)).state, 'signedIn');
+  const mine = await owner.api.createItem('Private', 1);
+  assert.ok(mine.owner, "the item is keyed on the owner's userSub");
+
+  const theirs = await other.api.listItems();
+  assert.ok(!theirs.some((i) => i.itemId === mine.itemId), "listItems leaked the owner's item");
+  await assert.rejects(() => other.api.getItem(mine.itemId), /not found/i);
+  await assert.rejects(() => other.api.updateQuantity(mine.itemId, 9), /not found/i);
+  await assert.rejects(() => other.api.setQuantity(mine.itemId, 9, 1), /not found/i);
+  await other.api.deleteItem(mine.itemId); // a no-op outside the caller's own items
+
+  const after = await owner.api.getItem(mine.itemId);
+  assert.strictEqual(after.quantity, 1);
+  assert.strictEqual(after.version, 1);
+  await owner.api.deleteItem(mine.itemId);
 });

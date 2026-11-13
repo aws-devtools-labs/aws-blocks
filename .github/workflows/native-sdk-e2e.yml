@@ -5,6 +5,10 @@ name: Native SDK E2E
 # always-when-relevant, deploy a per-run sandbox to the shared repo account for
 # the sandbox suite (same-repo PRs + manual dispatch only), and expose a single
 # always-running required gate so unrelated/fork PRs don't block branch protection.
+#
+# Jobs check out the PR's merge commit (actions/checkout's default), the
+# commit GitHub reads this file from, so a step added on main finds its script
+# even when the PR branch predates it.
 
 on:
   pull_request:
@@ -33,17 +37,20 @@ jobs:
       swift-changed: ${{ steps.check.outputs.swift-changed }}
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
+      # The auth-derived codegen fixtures (18, 23) must match the live Auth
+      # block's spec; a change to the block, the spec generator or the
+      # fixtures re-runs that check (setup job) without the platform suites.
+      auth-fixtures-changed: ${{ steps.check.outputs.auth-fixtures-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            dart=true; swift=true; kotlin=true
+            dart=true; swift=true; kotlin=true; fixtures=true
           else
             CHANGED="$(git diff --name-only origin/main...HEAD)"
             # Shared inputs affect EVERY platform: the test backend that
@@ -59,6 +66,10 @@ jobs:
             if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
             if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
             if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
+            fixtures=false
+            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/generate-spec|^native/codegen-fixtures/'; then
+              fixtures=true
+            fi
           fi
           any=false
           if [ "$dart" = true ] || [ "$swift" = true ] || [ "$kotlin" = true ]; then
@@ -69,13 +80,16 @@ jobs:
             echo "swift-changed=$swift"
             echo "kotlin-changed=$kotlin"
             echo "any-changed=$any"
+            echo "auth-fixtures-changed=$fixtures"
           } >> "$GITHUB_OUTPUT"
 
   # Shared setup: build monorepo, generate spec, upload artifact
   setup:
     name: Build & Generate Spec
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.any-changed == 'true'
+    if: >-
+      needs.detect-changes.outputs.any-changed == 'true' ||
+      needs.detect-changes.outputs.auth-fixtures-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -83,7 +97,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -100,6 +113,13 @@ jobs:
         run: |
           npm run spec
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
+
+      # Codegen fixtures 18-hybrid-arm and 23-cognito-nested-unions are the Auth
+      # block's sign-in state machine and sign-in results. regenerate-all.sh only
+      # proves the generators are stable against the committed spec.json; this
+      # proves those specs still match what the live block emits.
+      - name: Check auth codegen fixtures against the live Auth spec
+        run: node native/codegen-fixtures/check-live-auth-fixtures.mjs test-apps/native-bindings/aws-blocks/blocks.spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -120,7 +140,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -162,7 +181,8 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
-          npx tsx aws-blocks/scripts/server.ts &
+          # Keep the server's output: a later step prints it if the job fails.
+          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
@@ -197,6 +217,10 @@ jobs:
         # BLOCKS_URL is provided via $GITHUB_ENV from the "Pick a free port" step.
         run: dart run bin/e2e_test.dart
 
+      - name: Show native-bindings server log
+        if: failure()
+        run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
+
   kotlin-e2e:
     name: Kotlin E2E (${{ matrix.label }})
     needs: [detect-changes, setup]
@@ -218,7 +242,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -226,7 +249,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 17
@@ -247,7 +270,8 @@ jobs:
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
         run: |
-          npx tsx aws-blocks/scripts/server.ts &
+          # Keep the server's output: a later step prints it if the job fails.
+          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -s -X POST http://localhost:3001/aws-blocks/api \
               -H "Content-Type: application/json" \
@@ -261,16 +285,21 @@ jobs:
           BLOCKS_URL: http://localhost:3001/aws-blocks/api
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      - name: Show native-bindings server log
+        if: failure()
+        run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
+
   swift-e2e:
     name: Swift E2E
     needs: [detect-changes, setup]
     if: needs.detect-changes.outputs.swift-changed == 'true'
     runs-on: macos-26
-    timeout-minutes: 20
+    # A green run takes ~16 min, but macOS arm64 runners are capacity-constrained
+    # and the simulator boot alone can stall for minutes; 20 tripped the wall.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -315,7 +344,8 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
-          npx tsx aws-blocks/scripts/server.ts &
+          # Keep the server's output: a later step prints it if the job fails.
+          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
@@ -338,6 +368,34 @@ jobs:
           echo "❌ Server never became ready"
           exit 1
 
+      # Boot the simulator in its own step, with its own timeout, so a slow boot
+      # on a capacity-constrained runner fails here, visibly, instead of silently
+      # eating the test step's budget. It is the device the test step names
+      # (iPhone 17 Pro, on the newest installed iOS runtime); the test step then
+      # targets it by UDID so xcodebuild runs on the simulator booted here.
+      - name: Boot iOS simulator
+        timeout-minutes: 10
+        run: |
+          SIM_UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          name = "iPhone 17 Pro"
+          devices = json.load(sys.stdin)["devices"]
+          def version(runtime):
+              m = re.search(r"SimRuntime\.iOS-([0-9-]+)$", runtime)
+              return tuple(int(p) for p in m.group(1).split("-")) if m else None
+          runtimes = sorted((r for r in devices if version(r)), key=version, reverse=True)
+          print(next((d["udid"] for r in runtimes for d in devices[r] if d["name"] == name), ""))
+          ')"
+          if [ -z "$SIM_UDID" ]; then
+            echo "❌ No available iPhone 17 Pro simulator"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "SIM_UDID=${SIM_UDID}" >> "$GITHUB_ENV"
+          echo "Booting iPhone 17 Pro (${SIM_UDID})"
+          # -b boots the device if it is shut down, then waits until it is ready.
+          xcrun simctl bootstatus "$SIM_UDID" -b
+
       - name: Run E2E tests
         env:
           BLOCKS_URL: ${{ env.BLOCKS_URL }}
@@ -345,12 +403,48 @@ jobs:
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+            -destination "platform=iOS Simulator,id=${SIM_UDID}"
+
+      - name: Show native-bindings server log
+        if: failure()
+        run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
-  # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
-  # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
+  # dispatch. Deploy uses `npm run deploy:sandbox` (aws-blocks/scripts/deploy-sandbox.ts
+  # -> startSandbox deployOnly -> aws-blocks/index.cdk.ts with sandboxMode); the
+  # API serves JSON-RPC under `/aws-blocks/api`.
+  #
+  # Native OIDC sign-in against the sandbox. The OIDC relay suites (Dart
+  # oidc_test.dart, Swift OIDCE2ETests, Kotlin OidcE2ETest) always run in the
+  # local-server jobs above, against `Auth`'s stub IdP. The sandbox deploys
+  # with sandboxMode, where `stubIdp()` is allowed, so the deployed sandbox
+  # serves the stub too: the Dart and Swift sandbox jobs set RUN_OIDC=1 and run
+  # the suites against it, as they did with `AuthOIDC`. (The Kotlin sandbox job
+  # runs it against the stub on JVM; its iOS leg still needs a real IdP, below.) Optionally, federate a real IdP instead by setting these
+  # Actions variables (repository or `publish` environment — `vars`, not
+  # `secrets`: neither value is secret):
+  #
+  #   NATIVE_E2E_OIDC_ISSUER     the IdP's issuer URL (HTTPS, serving
+  #                              /.well-known/openid-configuration)
+  #   NATIVE_E2E_OIDC_CLIENT_ID  a public client (authorization code + PKCE,
+  #                              no client secret) registered at that IdP
+  #
+  # With both set, each sandbox job below passes them to the deploy (the
+  # native-bindings `auth-oidc` block then federates that IdP directly, keyed
+  # `google`; index.cdk.ts forwards both to the deployed handler) and sets
+  # RUN_OIDC=1, which un-skips the suites. The suites stand in for the browser
+  # by following HTTP redirects, so the IdP must:
+  #   - finish /authorize with redirects only — no login or consent page (a
+  #     test IdP that auto-approves a fixed user; a real Google/Okta tenant
+  #     will not work);
+  #   - accept the per-run redirect URI
+  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback
+  #     — each run deploys a new API, so it must allow any `<api-id>`;
+  #   - issue ID tokens signed with an asymmetric key published in its JWKS,
+  #     with `aud` set to the client id.
+  # Unset (the default), the deployed stub serves the suites (Dart, Swift) and
+  # the Kotlin suite skips.
   dart-e2e-sandbox:
     permissions:
       contents: read
@@ -362,19 +456,37 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    # Deploy sandbox alone is ~21 min (sequential DynamoDB GSI custom-resource
-    # backfill), plus npm ci (~2m) + build (~4m) ≈ 27 min before any test runs.
-    # 30 left too little headroom (test squeaked in but the job tripped the
-    # wall / Destroy could be skipped → leaked stacks). Stop-gap until
-    # deploy-once-per-run lands.
+    # Deploy sandbox used to take ~21 min (sequential DynamoDB GSI custom-resource
+    # backfill); 30 min left too little headroom (the job tripped the wall and
+    # Destroy could be skipped -> leaked stacks).
+    # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
+    # on, so the GSIs are built with the table and the deploy takes about 3
+    # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
+    # then drops to 30 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run: the PR number (d<run number> for manual runs), then the
+      # run number, then the attempt. Every push starts a new run with a new run
+      # number, and a re-run keeps it and bumps the attempt. Without the run
+      # number, the first attempt of every push reused the previous push's stack
+      # and bucket names and the deploy failed with AlreadyExists. The run number,
+      # not the 11-digit run id, keeps the derived bucket name short (see
+      # kotlin-e2e-sandbox).
+      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # The deployed pools send mail through this verified SES identity, not
+      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+      # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
+      RUN_OIDC: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -399,6 +511,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -406,15 +519,16 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
 
-      - name: Seed Cognito returning-customer test user
+      - name: Seed returning-customer test user
         working-directory: test-apps/native-bindings
         # Real Cognito emails the confirmation code, so the sign-up→code→confirm
-        # leg can't be verified in CI (auth_cognito_test.dart skips it against a
-        # deployed pool). Instead, admin-provision a confirmed user so the suite
-        # can exercise the real returning-customer sign-in path. AWS_REGION +
-        # BLOCKS_STACK_SUFFIX are inherited from the job/credentials step.
+        # legs can't be verified in CI (the auth suites skip them against a
+        # deployed pool). Instead, admin-provision a confirmed user in every
+        # user pool of the stack so the suites can exercise the real
+        # returning-customer sign-in path. AWS_REGION + BLOCKS_STACK_SUFFIX are
+        # inherited from the job/credentials step.
         run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
@@ -481,20 +595,22 @@ jobs:
         working-directory: native/dart/example
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
-          # The sandbox is HTTPS, so the OIDC relay suite can run here (the
-          # local-server job above cannot — the stub IdP rejects http
-          # redirect_uris). The server-relay OidcClient landed in #867 (now on
-          # main), so oidc_test.dart compiles.
-          RUN_OIDC: '1'
+          # oidc_test.dart runs here (the job sets RUN_OIDC=1): against the
+          # deployed stub IdP, or the real IdP when one is configured — see the
+          # note above dart-e2e-sandbox.
         run: |
           printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../packages/blocks_runtime\n  blocks_codegen:\n    path: ../packages/blocks_codegen\n' > pubspec_overrides.yaml
           dart pub get
           dart run bin/e2e_test.dart
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   swift-e2e-sandbox:
     permissions:
@@ -507,17 +623,28 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
-    # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
-    # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
-    # Stop-gap until deploy-once-per-run lands.
+    # Same deploy history as dart-e2e-sandbox; with the old ~27-min deploy+build
+    # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
+    # 45 stays until this job has 10 green runs with sandboxMode on, then drops
+    # to 35 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run, as in dart-e2e-sandbox.
+      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # The deployed pools send mail through this verified SES identity, not
+      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+      # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
+      RUN_OIDC: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -534,6 +661,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -541,7 +669,14 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
+
+      - name: Seed returning-customer test user
+        working-directory: test-apps/native-bindings
+        # `Auth` confirms every sign-up with an emailed code, so against a
+        # deployed pool the auth + todos suites sign in this pre-provisioned
+        # user instead (see seed-cognito-user.ts).
+        run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
         id: url
@@ -586,17 +721,20 @@ jobs:
       - name: Run Swift E2E against sandbox
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
-          RUN_OIDC: '1'
         run: |
           xcodebuild test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   kotlin-e2e-sandbox:
     permissions:
@@ -609,8 +747,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
-    # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
-    # Swift iOS sandbox job and the non-sandbox Kotlin job above.
+    # Per-leg: iOS deploy + simulator build exceeded a flat 30 min with the
+    # serial GSI deploy. For now the same 45 as the Swift sandbox job; see each
+    # leg's note for when it drops.
     timeout-minutes: ${{ matrix.timeout }}
     environment: e2e
     strategy:
@@ -621,24 +760,40 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
-            # resources), so 30 min left no room for the build, tests and destroy.
+            # The sandbox deploy took 19-25 min before sandboxMode (serial GSI
+            # custom resources), so 30 min left no room for the build, tests and
+            # destroy. 45 stays until this leg has 10 green runs with
+            # sandboxMode on, then drops to 30 by the rule in #986.
             timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
+            # Drops to 30 after 10 green runs with sandboxMode on, by the rule
+            # in #986.
             timeout: 45
     env:
-      # Manual runs have no PR number. They use the short run number (d-prefixed
-      # so it can't match a PR number), not the 11-digit run id: with the run id
-      # the derived bucket name `bb-test-nb-<suffix>-native-bindings-files` is
-      # 64 characters for the Kotlin legs, over S3's 63-character limit.
-      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run, as in dart-e2e-sandbox: PR number (d<run number> for
+      # manual runs, d-prefixed so it can't match a PR number), run number,
+      # attempt. The suffix uses the short run number, not the 11-digit run id:
+      # with the run id the derived bucket name
+      # `bb-test-nb-<suffix>-native-bindings-files` would exceed S3's 63-character
+      # limit on the Kotlin legs and fall back to FileBucket's hashed short form.
+      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
+      # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
+      # the sandbox" above. Empty unless the repository sets both variables.
+      NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
+      NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
+      # The deployed pools send mail through this verified SES identity, not
+      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+      # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
+      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native)
+      # hasn't been run against a deployed stub yet, so it keeps the real-IdP gate.
+      RUN_OIDC: ${{ (matrix.suffix == 'jvm' || (vars.NATIVE_E2E_OIDC_ISSUER != '' && vars.NATIVE_E2E_OIDC_CLIENT_ID != '')) && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -646,7 +801,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 17
@@ -655,6 +810,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -662,7 +818,14 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
+
+      - name: Seed returning-customer test user
+        working-directory: test-apps/native-bindings
+        # `Auth` confirms every sign-up with an emailed code, so against a
+        # deployed pool the auth + todos suites sign in this pre-provisioned
+        # user instead (see seed-cognito-user.ts).
+        run: npm run seed:cognito
 
       - name: Resolve BLOCKS_URL
         id: url
@@ -716,10 +879,14 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated

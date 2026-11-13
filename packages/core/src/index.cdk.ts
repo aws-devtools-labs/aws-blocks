@@ -35,6 +35,7 @@ export {
 	type BlocksBackendProps,
 	type BlocksDefaults,
 	BlocksPresets,
+	type BlocksSecretsStore,
 	BlocksStack,
 	type BlocksThrottling,
 	BuildingBlockScope,
@@ -51,7 +52,10 @@ export {
 	getConfigDeployment,
 	getConfigLocation,
 	getOrCreateOnRoot,
+	getRegisteredConfigValue,
+	getSharedGatewayUrl,
 	getVpcContext,
+	isSandboxContext,
 	registerConfig,
 	registerDashboardFinalizer,
 	registerTracer,
@@ -60,8 +64,17 @@ export {
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 	synthGuard,
 } from './cdk/index.js';
-export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
 export {
+	_resetConfigCache,
+	getCachedConfigValue,
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+} from './common/config.js';
+export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
+export {
+	type ApiWafOptions,
 	type BlocksStackProps,
 	type BuildingBlockMeta,
 	buildingBlockParent,
@@ -87,6 +100,7 @@ export {
 	isContainerRuntime,
 	isJobWorker,
 	registerContainerPoller,
+	type RunContainerOptions,
 	runContainer,
 	runJobWorker,
 } from './container-runtime.js';
@@ -100,6 +114,8 @@ export {
 	type HostingDomainConfig,
 	type HostingProps,
 	type HostingWafConfig,
+	type HostingPreset,
+	HostingPresets,
 } from './hosting.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export {

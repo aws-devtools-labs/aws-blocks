@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { parseEnv } from 'node:util';
-import type { DbPullOptions, TableInfo } from './types.js';
+import type { DbPullOptions } from './types.js';
 import { introspect } from './introspect.js';
 import {
   generateIndexFile,
@@ -21,8 +21,13 @@ import {
   generateMigrationGuide,
   readExistingSingulars,
   selectEligibleTables,
+  ineligibleReason,
+  publicTableSql,
+  rlsDisabledWarning,
+  tablesWithoutRls,
   writeTypesAndMeta,
 } from './generate.js';
+import type { IneligibleReason } from './generate.js';
 import { generateBaseline } from '../migrations/baseline.js';
 import { prepareEnvFileUpsert, upsertEnvFile } from './env-file.js';
 import { SUPABASE, SUPABASE_AUTH, SUPABASE_CONN_GUIDANCE, SUPABASE_MESSAGING, detectSupabase, extractProjectRef } from './supabase.js';
@@ -69,12 +74,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   }
 
   // ── Eligibility criteria ──────────────────────────────────────────────
-  // A table is eligible if: (1) has a primary key, (2) does not use Supabase Auth
-  const hasNoPk = (t: TableInfo) => Array.isArray(t.primaryKey) && t.primaryKey.length === 0;
-
-  const eligibleTables = selectEligibleTables({ tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims });
+  // A table is eligible if it (1) does not use Supabase Auth, (2) has a primary
+  // key and (3) has row-level security enabled — see ineligibleReason().
+  const intro = { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims };
+  const eligibleTables = selectEligibleTables(intro);
   const eligibleSet = new Set(eligibleTables);
   const skippedTables = allTables.filter(t => !eligibleSet.has(t));
+  const ineligibleLabels: Record<IneligibleReason, string> = {
+    'supabase-auth': SUPABASE_MESSAGING.authIneligibleReason,
+    'no-primary-key': 'No — no primary key',
+    'rls-disabled': 'No — RLS disabled',
+  };
 
   // ── Table eligibility ────────────────────────────────────────────────
   const nameWidth = Math.max(...allTables.map(t => t.name.length), 5);
@@ -93,45 +103,46 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     const authCol = tablesUsingSupabaseAuth.has(t.name)
       ? SUPABASE_MESSAGING.authEligibilityLabel
       : t.hasRls ? 'OIDC' : '—';
-    let eligibleCol: string;
-    if (tablesUsingSupabaseAuth.has(t.name)) {
-      eligibleCol = SUPABASE_MESSAGING.authIneligibleReason;
-    } else if (hasNoPk(t)) {
-      eligibleCol = 'No — no primary key';
-    } else {
-      eligibleCol = 'Yes';
-    }
+    const reason = ineligibleReason(t, intro);
+    const eligibleCol = reason ? ineligibleLabels[reason] : 'Yes';
     console.log(`  ${t.name.padEnd(nameWidth)}  ${pkCol.padEnd(pkWidth)}  ${authCol.padEnd(14)}  ${eligibleCol}`);
   }
   console.log(`\n  ${eligibleTables.length} table(s) eligible, ${skippedTables.length} will be skipped.\n`);
 
+  const skippedForRls = tablesWithoutRls(intro);
+  for (const line of rlsDisabledWarning(skippedForRls)) console.warn(line);
+  if (skippedForRls.length > 0) console.warn('');
+
   // ── Readiness criteria ───────────────────────────────────────────────
   // Eligible tables may still need actions before they work at runtime:
-  // grants (authenticated role), non-standard JWT claims
+  // grants (authenticated role), RLS policies, non-standard JWT claims.
+  // RLS on with no policies is eligible but denies every row (Postgres's default).
+  const hasNoPolicies = (t: (typeof eligibleTables)[number]) => t.policyCount === 0;
   if (eligibleTables.length > 0) {
     console.log(`  Eligible table readiness:\n`);
     const claimsWidth = Math.max(...eligibleTables.map(t => {
       const c = nonStandardClaims.get(t.name);
       return c ? c.join(', ').length : 1;
     }), 6);
-    console.log(`  ${'Table'.padEnd(nameWidth)}  RLS   Grants   ${'Claims'.padEnd(claimsWidth)}  Status`);
-    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(4)}  ${'─'.repeat(7)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
+    console.log(`  ${'Table'.padEnd(nameWidth)}  Grants   Policies  ${'Claims'.padEnd(claimsWidth)}  Status`);
+    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(7)}  ${'─'.repeat(8)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
     for (const t of eligibleTables) {
-      const rlsCol = t.hasRls ? 'yes' : 'no';
       const grantsCol = t.missingGrants ? 'MISSING' : 'ok';
+      const policiesCol = hasNoPolicies(t) ? 'NONE' : 'ok';
       const claims = nonStandardClaims.get(t.name);
       const claimsCol = claims ? claims.join(', ') : '—';
-      const status = (t.missingGrants || claims) ? 'Action required' : 'Ready';
-      console.log(`  ${t.name.padEnd(nameWidth)}  ${rlsCol.padEnd(4)}  ${grantsCol.padEnd(7)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
+      const status = (t.missingGrants || hasNoPolicies(t) || claims) ? 'Action required' : 'Ready';
+      console.log(`  ${t.name.padEnd(nameWidth)}  ${grantsCol.padEnd(7)}  ${policiesCol.padEnd(8)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
     }
     console.log('');
   }
 
   // ── Actions Required ─────────────────────────────────────────────────
   const tablesWithMissingGrants = eligibleTables.filter(t => t.missingGrants);
+  const tablesWithNoPolicies = eligibleTables.filter(hasNoPolicies);
   const eligibleNames = new Set(eligibleTables.map(t => t.name));
   const migratedClaims = [...nonStandardClaims].filter(([t]) => eligibleNames.has(t));
-  const hasActions = tablesWithMissingGrants.length > 0 || migratedClaims.length > 0;
+  const hasActions = tablesWithMissingGrants.length > 0 || tablesWithNoPolicies.length > 0 || migratedClaims.length > 0;
 
   if (hasActions) {
     console.log(`  Actions required:\n`);
@@ -142,6 +153,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       for (const t of tablesWithMissingGrants) {
         console.log(`     ${grantStatement(t.name)}`);
       }
+      console.log('');
+      actionNum++;
+    }
+
+    if (tablesWithNoPolicies.length > 0) {
+      console.log(`  ${actionNum}. Add RLS policies. No policies: every row is denied, so generated CRUD returns nothing:\n`);
+      for (const t of tablesWithNoPolicies) {
+        console.log(`     ${t.name}`);
+      }
+      console.log(`\n     For example, to share a table with every signed-in user on purpose:`);
+      console.log(`     CREATE POLICY "shared" ON ${publicTableSql(tablesWithNoPolicies[0].name)} FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
       console.log('');
       actionNum++;
     }
@@ -347,7 +369,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
         const insertPos = apiMatch.index + apiMatch[0].length;
         const authBlock = [
           `  // TODO: add auth — see MIGRATION_GUIDE.md#auth`,
-          `  // const auth = new AuthOIDC(scope, 'auth', { providers: [...] });`,
+          `  // const auth = new Auth(scope, 'auth', { ... });  // import { Auth } from '@aws-blocks/bb-auth'`,
           `  ...supabaseCrud(context),  // pass auth as 2nd arg once configured: supabaseCrud(context, auth)`,
         ].join('\n') + '\n';
         indexFileContent = indexFileContent.slice(0, insertPos) + authBlock + indexFileContent.slice(insertPos);
@@ -393,42 +415,106 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
 
 // ── Interactive CLI ────────────────────────────────────────────────────
 
-function prompt(question: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
-    rl.question(question, answer => { rl.close(); resolve(answer.trim()); });
+/** Streams an interactive prompt reads from and writes to (stdin/stdout by default). */
+export interface PromptIO {
+  input: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?(mode: boolean): unknown };
+  output: NodeJS.WritableStream;
+}
+
+/** A prompt ended without an answer: Ctrl-C (exit code 130) or stdin closed (exit code 1). */
+export class PromptAbortedError extends Error {
+  constructor(message: string, readonly exitCode: number) {
+    super(message);
+    this.name = 'PromptAbortedError';
+  }
+}
+
+const INTERRUPTED = 'Interrupted.';
+const STDIN_CLOSED = 'stdin closed before an answer was given.';
+
+/** Reads one line. Rejects with {@link PromptAbortedError} on Ctrl-C or EOF. */
+export function readAnswer(question: string, io: PromptIO = { input: process.stdin, output: process.stdout }): Promise<string> {
+  let resolve!: (answer: string) => void, reject!: (err: PromptAbortedError) => void;
+  const promise = new Promise<string>((res, rej) => { resolve = res; reject = rej; });
+  const rl = readline.createInterface({ input: io.input, output: io.output, terminal: io.input.isTTY === true });
+  let settled = false;
+  rl.on('SIGINT', () => {
+    io.output.write('\n');
+    settled = true;
+    reject(new PromptAbortedError(INTERRUPTED, 130));
+    rl.close();
   });
+  rl.on('close', () => {
+    if (settled) return;
+    io.output.write('\n');
+    reject(new PromptAbortedError(STDIN_CLOSED, 1));
+  });
+  rl.question(question, answer => {
+    settled = true;
+    resolve(answer.trim());
+    rl.close();
+  });
+  return promise;
+}
+
+/**
+ * Reads a secret without echoing it. Input is handled one character at a time,
+ * so a paste that ends in Enter is submitted at once; anything after the Enter
+ * in the same chunk is discarded. Rejects with {@link PromptAbortedError} on
+ * Ctrl-C, or on Ctrl-D / EOF before anything was typed.
+ */
+export function readSecret(question: string, io: PromptIO = { input: process.stdin, output: process.stdout }): Promise<string> {
+  const { input, output } = io;
+  let resolve!: (answer: string) => void, reject!: (err: PromptAbortedError) => void;
+  const promise = new Promise<string>((res, rej) => { resolve = res; reject = rej; });
+  output.write(question);
+  const raw = input.isTTY === true && typeof input.setRawMode === 'function';
+  if (raw) input.setRawMode!(true);
+  let secret = '';
+  const finish = (err?: PromptAbortedError) => {
+    input.removeListener('data', onData);
+    input.removeListener('end', onEnd);
+    if (raw) input.setRawMode!(false);
+    input.pause();
+    output.write('\n');
+    if (err) reject(err);
+    else resolve(secret);
+  };
+  const onEnd = () => finish(secret ? undefined : new PromptAbortedError(STDIN_CLOSED, 1));
+  const onData = (chunk: Buffer | string) => {
+    for (const c of chunk.toString()) {
+      if (c === '\x03') return finish(new PromptAbortedError(INTERRUPTED, 130));
+      if (c === '\r' || c === '\n') return finish();
+      if (c === '\x04') {
+        if (!secret) return finish(new PromptAbortedError(STDIN_CLOSED, 1));
+      } else if (c === '\x7f' || c === '\b') {
+        secret = [...secret].slice(0, -1).join('');
+      } else if (c >= ' ') {
+        secret += c;
+      }
+    }
+  };
+  input.on('data', onData);
+  input.on('end', onEnd);
+  input.resume();
+  return promise;
+}
+
+/** CLI prompt boundary: an aborted prompt exits with its exit code. */
+function exitOnAbort(err: unknown): never {
+  if (err instanceof PromptAbortedError) {
+    console.error(`✗ ${err.message}`);
+    process.exit(err.exitCode);
+  }
+  throw err;
+}
+
+function prompt(question: string): Promise<string> {
+  return readAnswer(question).catch(exitOnAbort);
 }
 
 function promptPassword(question: string): Promise<string> {
-  return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    process.stdout.write(question);
-    const stdin = process.stdin;
-    if (stdin.isTTY) stdin.setRawMode(true);
-    let password = '';
-    const onData = (ch: Buffer) => {
-      const c = ch.toString();
-      if (c === '\x03') {
-        if (stdin.isTTY) stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        rl.close();
-        process.exit(130);
-      } else if (c === '\n' || c === '\r') {
-        if (stdin.isTTY) stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        rl.close();
-        resolve(password);
-      } else if (c === '\u007f' || c === '\b') {
-        password = password.slice(0, -1);
-      } else {
-        password += c;
-      }
-    };
-    stdin.on('data', onData);
-    stdin.resume();
-  });
+  return readSecret(question).catch(exitOnAbort);
 }
 
 // ── Provider detection + dev/prod routing helpers ──────────────────────

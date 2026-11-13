@@ -10,7 +10,15 @@
 export type DeployManifest = {
   version: 1;
 
-  /** Named compute resources */
+  /**
+   * Named compute resources. `default` and `server` are the reserved names of
+   * the SSR server compute: only a compute with one of these names gets the
+   * SSR server settings (REST API origin, Web Functions, provisioned
+   * concurrency). The SSR cache guard goes in front of the SSR server compute
+   * and of every other regional compute a route targets (e.g. a Next.js split
+   * function built regional), except the image function. Computes no route
+   * targets (revalidation) and edge computes do not get it.
+   */
   compute: Record<string, ComputeResource>;
 
   /** Static asset configuration */
@@ -86,6 +94,24 @@ export type DeployManifest = {
 
   /** Image optimization (separate Lambda if present) */
   imageOptimization?: ImageConfig;
+
+  /**
+   * The remote image sources the app allows, for a build with no image
+   * function (`skipImageOptimization`): a door that answers the image
+   * endpoints itself redirects a remote source only to these hosts. Set by the
+   * Nitro (`@nuxt/image` `image.domains`) and Astro (`image.domains`,
+   * `image.remotePatterns`) adapters; a manifest with `imageOptimization`
+   * carries them there instead.
+   */
+  imageRemoteSources?: {
+    /** Exact hostnames. */
+    domains?: string[];
+    /**
+     * Patterns; only `hostname` (with an optional `*.` / `**.` prefix) is
+     * matched. Hostname `'**'` matches any host.
+     */
+    remotePatterns?: RemotePattern[];
+  };
 
   /** Middleware (edge function if present) */
   middleware?: MiddlewareConfig;
@@ -267,6 +293,16 @@ export type RouteBehavior = {
 
   /** Fallback if target fails */
   fallback?: string;
+
+  /**
+   * Keep this route as its own row in the front door's route table: never
+   * merge it with its siblings into a `<parent>/*` wildcard, and never switch
+   * it to the server when ISR/SWR is active. An adapter sets this for a
+   * static file or a frozen prerendered page inside an ISR/SWR subtree, where
+   * a merged wildcard would either shadow pages that render on demand (as
+   * static) or send real files to the server (as compute). Default: `false`.
+   */
+  exact?: boolean;
 };
 
 export type CacheConfig = {

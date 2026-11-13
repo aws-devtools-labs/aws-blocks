@@ -4,7 +4,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,58 @@ function runGate(options: { cwd: string; env?: Record<string, string> }): boolea
   return result.stdout === 'true';
 }
 
+// Same child-process reason as GATE_CHILD: the status must be read with HOME redirected.
+const STATUS_CHILD = `
+const [moduleUrl, projectRoot] = process.argv.slice(1);
+const { getTelemetryStatus } = await import(moduleUrl);
+process.stdout.write(JSON.stringify(getTelemetryStatus(projectRoot)));
+`;
+
+function readStatus(projectRoot: string, env: Record<string, string>): { enabled: boolean; projectConfig?: boolean } {
+  const consentUrl = new URL('../telemetry/consent.js', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', STATUS_CHILD, consentUrl, projectRoot], {
+    cwd: projectRoot,
+    encoding: 'utf-8',
+    timeout: 30_000,
+    env: { ...process.env, ...env },
+  });
+  assert.strictEqual(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+// Runs `telemetry({ argv: [..., '--disable'] })` with `getTelemetryStatus` mocked to report
+// telemetry as still enabled, so the read-back check fails independently of the writer.
+const STALE_READ_BACK_CHILD = `
+import { mock } from 'node:test';
+const [consentUrl, telemetryUrl] = process.argv.slice(1);
+const real = await import(consentUrl + '?real');
+mock.module(consentUrl, {
+  namedExports: { ...real, getTelemetryStatus: (root) => ({ ...real.getTelemetryStatus(root), enabled: true }) },
+});
+const { telemetry } = await import(telemetryUrl);
+await telemetry({ argv: ['node', 'blocks-telemetry', '--disable'] });
+`;
+
+function runDisableWithStaleReadBack(options: { cwd: string; env: Record<string, string> }): { stdout: string; stderr: string; exitCode: number } {
+  const consentUrl = new URL('../telemetry/consent.js', import.meta.url).href;
+  const telemetryUrl = new URL('./telemetry.js', import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-test-module-mocks', '--no-warnings', '--input-type=module', '-e', STALE_READ_BACK_CHILD, consentUrl, telemetryUrl],
+    { cwd: options.cwd, encoding: 'utf-8', timeout: 30_000, env: { ...process.env, ...options.env } },
+  );
+  return { stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status ?? 1 };
+}
+
+/** An app layout (`package.json` + `aws-blocks/`) with a nested `src/sub`; returns the real paths. */
+function createAppProject(dir: string): { root: string; sub: string } {
+  writeFileSync(join(dir, 'package.json'), '{"name":"app"}');
+  mkdirSync(join(dir, 'aws-blocks'));
+  mkdirSync(join(dir, 'src', 'sub'), { recursive: true });
+  const root = realpathSync(dir);
+  return { root, sub: join(root, 'src', 'sub') };
+}
+
 function writeTelemetryConfig(dir: string, enabled: boolean): void {
   mkdirSync(join(dir, '.blocks'), { recursive: true });
   writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
@@ -104,6 +156,15 @@ describe('telemetry CLI', () => {
       assert.ok(result.stdout.includes('A disable from any other mechanism still wins'));
       assert.ok(result.stdout.includes('BLOCKS_TELEMETRY_ENDPOINT=<url>'));
       assert.ok(result.stdout.includes('Send failures are ignored'));
+      assert.ok(result.stdout.includes('AWS_BLOCKS_DISABLE_TEMPLATE_METADATA=1|true|yes'));
+      assert.ok(result.stdout.includes('-c blocks:template-metadata=false or cdk --no-version-reporting'));
+      assert.ok(result.stdout.includes('--disable does not affect it'));
+    });
+
+    it('names the cdk-blocks telemetry command first', () => {
+      const result = runCli(['--help'], { cwd: tmpProject, env: { HOME: tmpHome } });
+      assert.strictEqual(result.exitCode, 0);
+      assert.match(result.stdout, /^Usage: npx --no -- cdk-blocks telemetry \[status\|enable\|disable\] \[--global\]\n/);
     });
 
     it('-h shows usage', () => {
@@ -139,6 +200,7 @@ describe('telemetry CLI', () => {
 
   describe('--disable (project-level default)', () => {
     it('creates .blocks/config.json with telemetry.enabled=false', () => {
+      createAppProject(tmpProject);
       const result = runCli(['--disable'], { cwd: tmpProject, env: { HOME: tmpHome } });
       assert.strictEqual(result.exitCode, 0);
       assert.ok(result.stdout.includes('disabled for this project'));
@@ -147,6 +209,130 @@ describe('telemetry CLI', () => {
       assert.ok(existsSync(configPath));
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       assert.strictEqual(config.telemetry.enabled, false);
+    });
+  });
+
+  describe('project-level writes resolve the project root', () => {
+    it('--disable from a subdirectory writes the project root and the root status reads disabled', () => {
+      const { root, sub } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd: sub, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes(join(root, '.blocks', 'config.json')), `expected the root config path, got:\n${result.stdout}`);
+      assert.ok(!existsSync(join(sub, '.blocks')), 'must not write a config into the subdirectory');
+
+      const status = readStatus(root, env);
+      assert.strictEqual(status.projectConfig, false);
+      assert.strictEqual(status.enabled, false);
+    });
+
+    it('--enable from a subdirectory writes the project root', () => {
+      const { root, sub } = createAppProject(tmpProject);
+
+      const result = runCli(['--enable'], { cwd: sub, env: { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV } });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.strictEqual(JSON.parse(readFileSync(join(root, '.blocks', 'config.json'), 'utf-8')).telemetry.enabled, true);
+      assert.ok(!existsSync(join(sub, '.blocks')), 'must not write a config into the subdirectory');
+    });
+
+    it('--status from a subdirectory reports the project-root config that --disable wrote', () => {
+      const { root, sub } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      assert.strictEqual(runCli(['--disable'], { cwd: sub, env }).exitCode, 0);
+      const result = runCli(['--status'], { cwd: sub, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes('❌ Disabled'), result.stdout);
+      assert.ok(
+        result.stdout.includes(`Project config (${join(root, '.blocks', 'config.json')}): telemetry.enabled = false`),
+        result.stdout,
+      );
+    });
+
+    it('--disable outside any project refuses, writes nothing and points at --global', () => {
+      const cwd = join(realpathSync(tmpProject), 'loose', 'dir');
+      mkdirSync(cwd, { recursive: true });
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd, env });
+      assert.notStrictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(!result.stdout.includes('✅'), `must not claim success, got:\n${result.stdout}`);
+      assert.ok(result.stderr.includes('--global'), result.stderr);
+      assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'), result.stderr);
+      assert.ok(!existsSync(join(cwd, '.blocks')), 'must not write a config outside a project');
+    });
+
+    it('--disable from a monorepo root without aws-blocks/ refuses instead of claiming success', () => {
+      // The workspace root has a package.json but the app (with aws-blocks/) is nested below it,
+      // so no project root is found walking up from the workspace root.
+      const mono = realpathSync(tmpProject);
+      writeFileSync(join(mono, 'package.json'), '{"name":"mono","private":true}');
+      const app = join(mono, 'apps', 'web');
+      mkdirSync(app, { recursive: true });
+      createAppProject(app);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd: mono, env });
+      assert.notStrictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(!result.stdout.includes('✅'), `must not claim success, got:\n${result.stdout}`);
+      assert.ok(result.stderr.includes('--global'), result.stderr);
+      assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'), result.stderr);
+      assert.ok(!existsSync(join(mono, '.blocks')), 'must not write an opt-out the app never reads');
+      // Nothing changed for the nested app, and the command did not say otherwise.
+      assert.strictEqual(runGate({ cwd: app, env }), true);
+    });
+
+    it('--disable --global from a monorepo root still opts out the nested app', () => {
+      const mono = realpathSync(tmpProject);
+      writeFileSync(join(mono, 'package.json'), '{"name":"mono","private":true}');
+      const app = join(mono, 'apps', 'web');
+      mkdirSync(app, { recursive: true });
+      createAppProject(app);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable', '--global'], { cwd: mono, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes('disabled globally'), result.stdout);
+      assert.strictEqual(runGate({ cwd: app, env }), false);
+    });
+
+    it('--enable and --status outside any project still use the working directory', () => {
+      const cwd = join(realpathSync(tmpProject), 'loose', 'dir');
+      mkdirSync(cwd, { recursive: true });
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      assert.strictEqual(runCli(['--enable'], { cwd, env }).exitCode, 0);
+      assert.strictEqual(JSON.parse(readFileSync(join(cwd, '.blocks', 'config.json'), 'utf-8')).telemetry.enabled, true);
+      const status = runCli(['--status'], { cwd, env });
+      assert.strictEqual(status.exitCode, 0);
+      assert.ok(status.stdout.includes(`Project config (${join(cwd, '.blocks', 'config.json')})`), status.stdout);
+    });
+  });
+
+  describe('--disable verifies the effect before reporting success', () => {
+    // The read-back is stubbed to report "still enabled" so the failure branch is reached
+    // however `writeConfigTelemetry` writes the file. Runs `telemetry()` in a child so HOME
+    // is redirected and `process.exit` ends the child, not the test runner.
+    it('prints no success line when the opt-out does not read back', () => {
+      const { root } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runDisableWithStaleReadBack({ cwd: root, env });
+      assert.notStrictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(!result.stdout.includes('✅'), `must not claim success, got:\n${result.stdout}`);
+      assert.ok(result.stderr.includes('still enabled'), result.stderr);
+      assert.ok(result.stderr.includes(join(root, '.blocks', 'config.json')), result.stderr);
+    });
+
+    it('prints the success line once the opt-out reads back disabled', () => {
+      const { root } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd: root, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes('✅ Telemetry disabled for this project.'), result.stdout);
+      assert.strictEqual(runGate({ cwd: root, env }), false);
     });
   });
 

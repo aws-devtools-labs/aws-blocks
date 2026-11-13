@@ -20,6 +20,8 @@ import { attach, closeWebSocketServer, localRealtimeBus, isAllowedUpgradeOrigin 
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { mintChannelToken } from './utils.js';
 import { hydrate, __resetConnectionsForTest } from './mock-middleware.js';
+import { Realtime } from './index.js';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // The mock middleware uses the browser `WebSocket` global. Provide it from `ws`.
 (globalThis as any).WebSocket = (globalThis as any).WebSocket ?? WebSocket;
@@ -64,6 +66,18 @@ describe('WebSocket server: subscribe authorization', () => {
 		assert.strictEqual(reply.type, 'error');
 		assert.match(reply.message, /Unauthorized: invalid or expired token/);
 		ws.close();
+	});
+
+	it('rejects a subscribe whose channel is not a channel path', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		for (const channel of [42, '__connection__', 'my-app-rt/chat']) {
+			const { ws, reply } = await subscribe({ channel, token });
+			try {
+				assert.deepStrictEqual(reply, { type: 'error', message: 'Invalid channel' });
+			} finally {
+				ws.close();
+			}
+		}
 	});
 
 	it('accepts a subscribe with a valid token', async () => {
@@ -141,6 +155,40 @@ describe('WebSocket server: subscribe authorization', () => {
 // subscribe / unsubscribe / ping. A client-originated `publish` used to be
 // broadcast locally with NO authorization of any kind, so any connected client
 // could inject payloads into any channel.
+describe('WebSocket server: channel token scope', () => {
+	const anySchema: StandardSchemaV1<unknown> = {
+		'~standard': { version: 1, vendor: 'test', validate: (value: unknown) => ({ value }) },
+	};
+	const rt = new Realtime({ id: 'ws-scope-test' }, 'rt', { namespaces: { chat: Realtime.namespace(anySchema) } });
+
+	async function descriptorFor(options?: { scope?: 'exact' | 'subtree' }) {
+		const json = (await rt.getChannel('chat', 'a', options)).toJSON();
+		return { channel: String(json.channel), token: String(json.token) };
+	}
+
+	it('an exact token from getChannel() subscribes to its own channel', async () => {
+		const { channel, token } = await descriptorFor({ scope: 'exact' });
+		const { ws, reply } = await subscribe({ channel, token });
+		ws.close();
+		assert.deepStrictEqual(reply, { type: 'subscribe_success', channel });
+	});
+
+	it('an exact token from getChannel() is refused for a sub-channel', async () => {
+		const { channel, token } = await descriptorFor({ scope: 'exact' });
+		const { ws, reply } = await subscribe({ channel: `${channel}/b`, token });
+		ws.close();
+		assert.strictEqual(reply.type, 'error');
+		assert.match(reply.message, /Unauthorized: invalid or expired token/);
+	});
+
+	it('a default token from getChannel() still subscribes to a sub-channel', async () => {
+		const { channel, token } = await descriptorFor();
+		const { ws, reply } = await subscribe({ channel: `${channel}/b`, token });
+		ws.close();
+		assert.deepStrictEqual(reply, { type: 'subscribe_success', channel: `${channel}/b` });
+	});
+});
+
 describe('WebSocket server: client publish is not supported (parity with AWS)', () => {
 	it('never broadcasts a client-originated publish, and tells the sender', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
@@ -338,6 +386,12 @@ describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
 	it('a WILDCARD opt-in (0.0.0.0 / ::) admits a same-origin page reached by IP address', () => {
 		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', '0.0.0.0', '192.168.1.10:3000'), true);
 		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
+	});
+
+	it('a specific IPv6 opt-in matches its bracketed Origin, with or without brackets', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', 'fd00::1'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '[FD00::1]'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::2]:3000', 'fd00::1'), false);
 	});
 
 	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {

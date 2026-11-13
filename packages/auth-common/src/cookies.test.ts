@@ -3,13 +3,34 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import type { BlocksContext } from '@aws-blocks/core';
 import {
 	resolveCookieSecurity,
 	buildCookieSecurityAttrs,
 	isInsecurePublicOrigin,
+	isLocalDevRequest,
 	isLoopbackRequest,
 	type CookieSecurityInput,
 } from './cookies.js';
+
+/**
+ * Run `fn` as if on deployed compute: the two variables synth stamps on every
+ * Blocks-configured compute, which `getDeploymentType()` reads.
+ */
+function withDeployedEnv(fn: () => void): void {
+	const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;
+	const previous = keys.map((k) => process.env[k]);
+	process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+	process.env.BLOCKS_CONFIG_KEY = 'config.json';
+	try {
+		fn();
+	} finally {
+		keys.forEach((k, i) => {
+			if (previous[i] === undefined) delete process.env[k];
+			else process.env[k] = previous[i];
+		});
+	}
+}
 
 // ─── resolveCookieSecurity ───────────────────────────────────────────────────
 
@@ -162,6 +183,38 @@ describe('isLoopbackRequest', () => {
 
 	test('no origin/host header is not loopback', () => {
 		assert.strictEqual(isLoopbackRequest(ctxWith({})), false);
+	});
+});
+
+// ─── isLocalDevRequest ───────────────────────────────────────────────────────
+
+describe('isLocalDevRequest', () => {
+	function ctxWith(headers: Record<string, string>): BlocksContext {
+		const h = new Headers();
+		for (const [k, v] of Object.entries(headers)) h.set(k, v);
+		return { request: { headers: h } } as unknown as BlocksContext;
+	}
+
+	test('local dev: a loopback request is local', () => {
+		assert.strictEqual(isLocalDevRequest(ctxWith({ origin: 'http://localhost:3000' })), true);
+	});
+
+	test('local dev: a public origin is not local', () => {
+		assert.strictEqual(isLocalDevRequest(ctxWith({ origin: 'https://app.example.com' })), false);
+	});
+
+	test('deployed: a request claiming a loopback Origin or Host is not local', () => {
+		withDeployedEnv(() => {
+			const forged: Record<string, string>[] = [
+				{ origin: 'http://localhost:3000' },
+				{ origin: 'http://127.0.0.1:8080' },
+				{ origin: 'http://[::1]:3000' },
+				{ host: 'localhost:3001' },
+			];
+			for (const headers of forged) {
+				assert.strictEqual(isLocalDevRequest(ctxWith(headers)), false, JSON.stringify(headers));
+			}
+		});
 	});
 });
 

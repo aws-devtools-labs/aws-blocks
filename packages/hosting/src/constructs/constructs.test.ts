@@ -12,8 +12,9 @@ import * as os from 'os';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
+import { SSR_CACHE_GUARD_HANDLER } from './ssr_cache_guard.js';
 
 // ---- Helpers ----
 
@@ -227,9 +228,10 @@ void describe('Cache (ISR) provisioning', () => {
       VisibilityTimeout: 30,
     });
 
-    // Env vars on the compute Lambda
+    // Env vars on the compute Lambda (its handler is the SSR cache guard
+    // wrapper in front of index.handler)
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Handler: 'index.handler',
+      Handler: SSR_CACHE_GUARD_HANDLER,
       Environment: Match.objectLike({
         Variables: Match.objectLike({
           CACHE_BUCKET_NAME: Match.anyValue(),

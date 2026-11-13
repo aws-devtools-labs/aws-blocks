@@ -35,9 +35,9 @@ interface InstalledPackage {
 /**
  * Rooted at the spec project, not `process.cwd()`, so what is found is what the
  * generated spec's own app installed. Throws `NativeCatalogError` when the
- * `aws-blocks.native` key is unusable or an installed manifest cannot be read.
- * The contents of `packages` and `bindings` are passed through for
- * `validateNativeCatalogs` to report on.
+ * `aws-blocks` namespace or its `native` key is unusable, or an installed
+ * manifest cannot be read. The contents of `packages` and `bindings` are passed
+ * through for `validateNativeCatalogs` to report on.
  */
 export function readNativeDeclarations(foundationPath: string): NativeDeclarationInput[] {
 	const sources: NativeDeclarationInput[] = [];
@@ -54,7 +54,16 @@ export function readNativeDeclarations(foundationPath: string): NativeDeclaratio
 		if (manifest === undefined) continue;
 
 		const namespace = manifest[NATIVE_DECLARATION_NAMESPACE];
-		if (!isPlainObject(namespace)) continue;
+		if (namespace === undefined) continue;
+
+		if (!isPlainObject(namespace)) {
+			errors.push({
+				path: NATIVE_DECLARATION_NAMESPACE,
+				message: `"${NATIVE_DECLARATION_NAMESPACE}" must be an object (declared by ${specifier})`,
+			});
+			continue;
+		}
+
 		const declarations = namespace[NATIVE_DECLARATION_KEY];
 		if (declarations === undefined) continue;
 

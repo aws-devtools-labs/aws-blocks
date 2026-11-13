@@ -31,6 +31,7 @@ export const agentStreamChunkSchema = z.object({
 	toolName: z.string().optional(),
 	input: z.any().optional(),
 	error: z.string().optional(),
+	errorName: z.string().optional(),
 	interrupts: z.array(z.object({ id: z.string(), name: z.string(), reason: z.any().optional() })).optional(),
 	usage: z.object({
 		inputTokens: z.number(),

@@ -133,22 +133,44 @@ void main() {
       expect(output, isNot(contains("RegExp(r'^a")));
     });
 
-    test('a namespace segment that is not a Dart identifier is an error', () {
-      for (final name in ['api.f\u00f3o.m', '.foo.m', 'foo..m', 'api..foo.m']) {
-        expect(
-          () => _generateFrom(_namespaceSpec(name)),
-          _throwsFormat('cannot name the Dart class and field it emits'),
-          reason: name,
-        );
-      }
-    });
+    // This generator allocates a legal, distinct Dart class and field for any
+    // namespace (see `identifiers.dart`) rather than refusing the spec, so a
+    // segment that isn't a Dart identifier, and two namespaces that differ only
+    // by punctuation, still generate a client that compiles.
+    test(
+      'a namespace segment that is not a Dart identifier still names a legal class and field',
+      () {
+        for (final name in [
+          'api.f\u00f3o.m',
+          '.foo.m',
+          'foo..m',
+          'api..foo.m',
+        ]) {
+          final output = _generateFrom(_namespaceSpec(name));
+          final classes = RegExp(
+            r'^class ([\w$]+) \{',
+            multiLine: true,
+          ).allMatches(output).map((m) => m.group(1)).toList();
+          expect(classes, isNotEmpty, reason: name);
+          expect(classes.where((c) => c != 'Blocks'), isNotEmpty, reason: name);
+          expect(output, isNot(contains('class Api.')), reason: name);
+        }
+      },
+    );
 
-    test('two namespaces differing only by punctuation are an error', () {
-      expect(
-        () => _generateFrom(_collidingNamespaceSpec()),
-        _throwsFormat('both generate ApiFooApi'),
-      );
-    });
+    test(
+      'two namespaces differing only by punctuation get distinct classes',
+      () {
+        final output = _generateFrom(_collidingNamespaceSpec());
+        final classes = RegExp(
+          r'^class ([\w$]+) \{',
+          multiLine: true,
+        ).allMatches(output).map((m) => m.group(1)).toList();
+        final apis = classes.where((c) => c != 'Blocks').toList();
+        expect(apis.length, 2, reason: '$classes');
+        expect(apis.toSet().length, 2, reason: '$classes');
+      },
+    );
 
     test('a dotted namespace yields one class and one identifier', () {
       final output = _generateFrom(_namespaceSpec('api.foo.bar'));
@@ -280,6 +302,25 @@ void main() {
       expect(output, contains('Future<DeviceLink> connectDevice()'));
     });
 
+    test('only each segment\'s first character is raised', () {
+      for (final entry in const {
+        'iot_API': 'IotAPI',
+        'iot-API': 'IotAPI',
+        'iot.API': 'IotAPI',
+        'DEVICE_LINK': 'DEVICELINK',
+      }.entries) {
+        final output = _generate(
+          _build(_specWith(_binding(export: entry.key))),
+        );
+
+        expect(
+          output,
+          contains('Future<${entry.value}> connectDevice()'),
+          reason: entry.key,
+        );
+      }
+    });
+
     test('a declared package is not imported when no result uses its tag', () {
       final output = _generate(
         _build(
@@ -306,7 +347,7 @@ void main() {
       );
 
       expect(output, contains('Future<RealtimeChannel<dynamic>> '));
-      expect(output, contains('RealtimeChannel.fromJson('));
+      expect(output, contains('RealtimeChannel.fromJsonValue('));
       expect(output, isNot(contains('example_iot_native')));
       expect(output, isNot(contains('fromBlocksDescriptor')));
     });
@@ -397,6 +438,45 @@ void main() {
       expect(model.warnings, isEmpty);
     });
 
+    test('a kind schema 1 does not define reports AWSBLOCKS-NATIVE-004', () {
+      final model = _build(
+        _specWith(_binding(id: 'typo', kind: 'transferrable')),
+      );
+
+      expect(
+        model.warnings.first,
+        "AWSBLOCKS-NATIVE-004: binding 'typo' declares kind 'transferrable', "
+        'which schema 1 does not define; ignored on dart.',
+      );
+    });
+
+    test('a newline in a reported binding id cannot split the diagnostic', () {
+      final model = _build(
+        _specWith(
+          _binding(id: 'a\nAWSBLOCKS-NATIVE-001: forged', kind: 'facade'),
+        ),
+      );
+
+      final reported = model.warnings.first;
+      expect(reported, startsWith('AWSBLOCKS-NATIVE-004: '));
+      expect(reported, contains(r'a\nAWSBLOCKS-NATIVE-001: forged'));
+      expect(reported, isNot(contains('\n')));
+    });
+
+    test('a newline in an operation name cannot split the diagnostic', () {
+      final model = _build(
+        _specJson(methodName: 'api.get\nAWSBLOCKS-NATIVE-999: forged'),
+      );
+
+      final reported = model.warnings.firstWhere(
+        (w) => w.startsWith('AWSBLOCKS-NATIVE-001'),
+      );
+      expect(reported, contains(r'api.get\nAWSBLOCKS-NATIVE-999: forged'));
+      expect(reported, isNot(contains('\n')));
+    });
+
+    // This generator types a nullable transferable result `dynamic` (a
+    // `dynamic?` would only restate it).
     test('a nullable bound direct result stays dynamic', () {
       final model = _build(
         _specJson(
@@ -411,7 +491,7 @@ void main() {
       );
       final output = _generate(model);
 
-      expect(output, contains('Future<dynamic?> '));
+      expect(output, contains('Future<dynamic> '));
       expect(output, isNot(contains('fromBlocksDescriptor')));
       expect(model.warnings, isEmpty);
     });
@@ -460,8 +540,10 @@ void main() {
         ),
       );
 
+      // This runtime hydrates a channel of any payload type
+      // (`RealtimeChannel.fromJsonValue`), so no AWSBLOCKS-NATIVE-002.
       expect(_generate(model), contains('Future<RealtimeChannel<String>> '));
-      expect(model.warnings, contains(contains('AWSBLOCKS-NATIVE-002')));
+      expect(model.warnings, isNot(contains(contains('AWSBLOCKS-NATIVE-002'))));
     });
   });
 
@@ -512,6 +594,25 @@ void main() {
       expect(
         () => _build(spec),
         _throwsFormat("export 'deviceLink' in package 'a-native'"),
+      );
+    });
+
+    test('one export declared at two generic arities is an error', () {
+      expect(
+        () => _build(
+          _specJson(
+            extras: _catalogs(
+              bindings: [
+                _binding(),
+                _binding(tag: 'other/link', genericArity: 1),
+              ],
+            ),
+          ),
+        ),
+        _throwsFormat(
+          "export 'deviceLink' in package 'example-iot-native' "
+          'at generic arity 0',
+        ),
       );
     });
 
@@ -1182,6 +1283,21 @@ void main() {
       );
     });
 
+    test('a binding with a missing id', () {
+      final binding = _binding()..remove('id');
+      expect(
+        () => _build(_specWith(binding)),
+        _throwsFormat(".id' to be a non-empty string"),
+      );
+    });
+
+    test('a binding with an empty id', () {
+      expect(
+        () => _build(_specWith(_binding(id: ''))),
+        _throwsFormat(".id' to be a non-empty string"),
+      );
+    });
+
     test('a binding with a blank kind', () {
       expect(
         () => _build(_specWith(_binding(kind: ''))),
@@ -1240,10 +1356,33 @@ void main() {
       for (final export in const ['_private', '2device', 'device link']) {
         expect(
           () => _build(_specWith(_binding(export: export))),
-          _throwsFormat("export '$export' does not name a public Dart type"),
+          _throwsFormat(
+            "export '$export' is not a -, _ or . joined run of "
+            'alphanumeric segments starting with a letter, so it cannot name '
+            'a public Dart type',
+          ),
           reason: export,
         );
       }
+    });
+
+    test('a newline in a rejected export cannot split the diagnostic', () {
+      expect(
+        () => _build(
+          _specWith(
+            _binding(export: 'deviceLink\nAWSBLOCKS-NATIVE-999: forged'),
+          ),
+        ),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                contains(r"export 'deviceLink\nAWSBLOCKS-NATIVE-999: forged'"),
+              )
+              .having((e) => e.message, 'message', isNot(contains('\n'))),
+        ),
+      );
     });
 
     test('type-arg count disagreeing with the declared arity', () {
@@ -1433,6 +1572,7 @@ String _secondMethodBoundSpec() => jsonEncode({
 });
 
 Map<String, dynamic> _binding({
+  String id = 'example-device-link',
   String kind = 'transferable',
   String tag = _tag,
   String package = 'example-iot-native',
@@ -1440,7 +1580,7 @@ Map<String, dynamic> _binding({
   String abi = 'blocks-transferable-v1',
   int genericArity = 0,
 }) => {
-  'id': 'example-device-link',
+  'id': id,
   'kind': kind,
   'tag': tag,
   'package': package,
@@ -1475,12 +1615,13 @@ String _specJson({
   Map<String, dynamic> extras = const {},
   Map<String, dynamic>? schemas,
   List<Map<String, dynamic>> params = const [],
+  String methodName = 'api.connectDevice',
 }) => jsonEncode({
   'openrpc': '1.3.2',
   'info': {'title': 'test', 'version': '1.0.0'},
   'methods': [
     {
-      'name': 'api.connectDevice',
+      'name': methodName,
       'params': params,
       'result': {'name': 'ConnectDeviceResult', 'schema': resultSchema},
     },

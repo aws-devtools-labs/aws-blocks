@@ -164,11 +164,16 @@ class UnionVariant {
   /// their own fields with a further `oneOf`.
   final DiscriminatedUnionRef? embeddedUnion;
 
+  /// The value type of the arm's extra keys when the arm is an open record
+  /// (`additionalProperties`), as on [InlineObjectRef]. Null for a closed arm.
+  final TypeRef? additionalProperties;
+
   const UnionVariant({
     required this.discriminantValue,
     required this.properties,
     required this.required,
     this.embeddedUnion,
+    this.additionalProperties,
   });
 }
 
@@ -198,6 +203,7 @@ class DartNativePackage {
 /// An `x-blocks-native-bindings` entry, before validation.
 class NativeBinding {
   const NativeBinding({
+    required this.id,
     required this.kind,
     required this.tag,
     required this.package,
@@ -205,6 +211,8 @@ class NativeBinding {
     required this.abi,
     required this.genericArity,
   });
+
+  final String id;
 
   /// Open enumeration; only `transferable` is defined in schema 1.
   final String kind;

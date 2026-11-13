@@ -110,6 +110,7 @@ export {
 	type HostingGeoRestriction,
 	type HostingLoggingConfig,
 	type HostingMonitoringConfig,
+	type HostingServerOriginConfig,
 	type ResolvedFrontDoor,
 	pickKnownSettingKeys,
 	resolveFrontDoorFeatures,
@@ -166,4 +167,6 @@ export { generateAlbApiProxyCode } from './alb_api_proxy.js';
 // router); a BYO door that stacks CloudFront over its own ALB can use the same.
 export { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from './alb_construct.js';
 export { backendBaseUrl } from './apigw_routes.js';
+/** @internal Used by `@aws-blocks/core` `Hosting` for an in-place build. */
+export { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';

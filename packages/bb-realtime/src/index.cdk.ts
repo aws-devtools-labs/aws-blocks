@@ -22,7 +22,7 @@ import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -31,6 +31,7 @@ import { RealtimeErrors } from './errors.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -80,8 +81,9 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 	return getOrCreateOnRoot(parent, SHARED_KEY, (root): SharedInfra => {
 		const stack = cdk.Stack.of(parent);
 
-		// ── Token secret via AppSetting ─────────────────────────────────────
-		new AppSetting(parent, 'token-secret', { secret: true });
+		// ── Token secret via frameworkKey ───────────────────────────────────
+		// Secrets Manager or SSM SecureString, per `defaults.secretsStore`.
+		frameworkKey(parent, 'token-secret');
 
 		// ── DynamoDB connections table via DistributedTable ──────────────────
 		new DistributedTable(parent, 'connections', {
@@ -194,6 +196,9 @@ export class Realtime extends BuildingBlockScope {
 			);
 		}
 		getOrCreateSharedInfra(compute.fn, this);
+		// Claim the key the Lambda runtime registers this block's WebSocket handler
+		// under, so two blocks with the same `fullId` fail synth instead of on cold start.
+		this.registerLambdaEventHandler('blocks.websocket', this.fullId);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

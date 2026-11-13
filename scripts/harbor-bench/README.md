@@ -13,9 +13,10 @@ deployed.
 
 1. Resolve the PR head and its merge-base with the PR base SHA.
 2. On credential-free runners, `npm ci`, `npm run build` and `npm run publish:local` at both commits.
-3. In the `harbor-bench` environment (blocks-team approval), each (arm, trial) matrix job runs
-   `prepare.py` to build one task with harness code from the workflow SHA and that arm's packed
-   registry. `run.py` runs Harbor with a dedicated Bedrock-only role.
+3. After one blocks-team approval of the `approval` job (environment `harbor-bench-approval`), each
+   (arm, trial) matrix job runs in the `harbor-bench` environment: `prepare.py` builds one task with
+   harness code from the workflow SHA and that arm's packed registry, and `run.py` runs Harbor with a
+   dedicated Bedrock-only role.
 4. Harbor sends the three `task/steps/*/instruction.md` prompts to one Claude Code session.
    Subagent and web tools are disabled.
 5. After each phase the root-owned verifier (`task/tests/verify.py`) kills agent servers,
@@ -85,7 +86,14 @@ changes cost, so the report shows counts and the primary metric per storage bloc
 within-block difference when both arms have at least 3 passes.
 
 Bounds: 200 turns and 25 minutes per phase, 5 minutes per verifier, 100 minutes per Harbor
-process, 110 minutes per trial job. No retries and no dollar cap.
+process, 110 minutes per trial job. No retries. Claude Code also stops a session at
+`--max-budget-usd 10`, its own list-price estimate (passing sessions use about 1.30 USD for all
+three phases); this bounds a runaway session, not what the credentials allow.
+
+In CI the Bedrock session lasts `HARBOR_SESSION_SECONDS` (2,700 s, in the workflow; the run step
+took at most 1,125 s, p95 882 s, over 284 trials). `run.py --credentials-expire-at` stops Harbor at
+that deadline and records the trial as an infrastructure error (`outlived_credentials`), since its
+late phases could fail on expired credentials alone.
 
 ## Trials and statistics
 
@@ -184,10 +192,15 @@ machine: `calibrate.py` never uploads.
 
 ## Repository setup
 
-- Environment **`harbor-bench`** with required reviewers `@aws-devtools-labs/blocks-team` and
-  deployments restricted to `main`.
+- Environment **`harbor-bench-approval`** with required reviewers `@aws-devtools-labs/blocks-team`
+  and deployments restricted to `main`. It holds no secrets; its single `approval` job is the one
+  review per run.
+- Environment **`harbor-bench`** with deployments restricted to `main` and **no** required
+  reviewers: each benchmark matrix job references it, and reviewers here would be asked per job.
+  It holds the secrets below and is the OIDC subject the roles trust.
 - Environment secret **`AWS_ROLE_ARN`**: a role trusted for this repository's
-  `:environment:harbor-bench` OIDC subject (audience `sts.amazonaws.com`, max session 10800 s)
+  `:environment:harbor-bench` OIDC subject (audience `sts.amazonaws.com`, max session at least
+  `HARBOR_SESSION_SECONDS`; 3600 s, the IAM minimum, is enough)
   that only allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the
   pinned inference profile and its foundation models.
 - Optional environment secret **`AWS_TRACES_ROLE_ARN`** and variable **`HARBOR_TRACES_BUCKET`**:
@@ -210,7 +223,19 @@ Artifacts contain phase metrics, package hashes, tool-name-only traces and fixed
 IDs, never prompts, commands, output, app files or exception text. Raw traces go only to the
 private bucket, with the model credentials redacted, and the trace role is assumed only after
 the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
-model credentials and use the network until the session expires.
+model credentials and use the network until the session expires, at most `HARBOR_SESSION_SECONDS`
+after it starts. The inline session policy limits it to invoking the pinned model. The CLI budget
+cap does not apply to calls the agent makes with the credentials directly, so an account-level
+Bedrock spend limit belongs on the account that hosts the role.
+
+The human approval is enforced by the workflow, not by IAM. Both roles trust the
+`:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
+runs on `main` and references `harbor-bench` can assume them. Today only this workflow does, and
+every job in it that uses `harbor-bench` needs the `approval` job. `scripts/ci/harbor-approval-gate.test.mjs`
+checks both on every PR: it fails if any other workflow file mentions `harbor-bench`, though not if
+the name is assembled at runtime from parts. Changes to `main` go through reviewed pull requests
+(repository admins can bypass that review), so a new `harbor-bench` reference needs that review
+instead of a per-run approval.
 
 ## Local verification
 

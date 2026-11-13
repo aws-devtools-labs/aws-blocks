@@ -63,6 +63,11 @@ const FILE_ALLOWLIST: Record<string, string> = {
 	// errors surface to the operator's terminal, never through the RPC serializer,
 	// so the wire-safe brand is irrelevant here.
 	'bb-data/src/migrations/external-migrations.ts': 'host-side migration CLI — errors go to the operator, not the RPC wire',
+	// The `bb-auth` codemod (`npx @aws-blocks/bb-auth migrate`): a CLI that rewrites the
+	// app's source files. Its errors are codemod bugs reported in the terminal, never
+	// thrown from an API method, so they never reach the RPC serializer.
+	'bb-auth/src/migrate/text.ts': 'codemod CLI — OverlappingEditError goes to the terminal, not the RPC wire',
+	'bb-auth/src/migrate/transform.ts': 'codemod CLI — IdPreservationError goes to the terminal, not the RPC wire',
 };
 
 /** Recursively collect `*.ts` sources under `dir`, skipping tests, `.d.ts`, `dist`. */
@@ -173,7 +178,11 @@ const SITE_WINDOW = 8;
  * is intentionally unbranded, each with a reason. Prefer branding the site over
  * adding an entry — every entry is a documented exception, not a hiding place.
  */
-const SITE_ALLOWLIST: Record<string, string> = {};
+const SITE_ALLOWLIST: Record<string, string> = {
+	'bb-agent/src/providers/throwing.ts:cause.name = \'AccessDeniedException\'':
+		'Test-only provider imitating a raw AWS SDK error as the cause of a model failure. It must stay unbranded: ' +
+		'bb-agent classifies it server-side and only its own composed, branded ModelUnavailable error crosses the wire.',
+};
 
 test('every site that mints a BB error name brands it at that site', () => {
 	const offenders: string[] = [];

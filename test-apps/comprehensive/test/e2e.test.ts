@@ -7,25 +7,38 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
+import type {
+  api as apiType,
+  authSocialApi as authSocialApiType,
+  isolatedApi as isolatedApiType,
+  strictStatusApi as strictStatusApiType,
+} from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
+import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
+import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
 import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
+import { responseCookieTests } from './response-cookies.test.js';
+import { testSupportGateTests } from './test-support-gate.test.js';
 import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
-import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
+import { authAdminScanFilterTests, authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
+import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
+import { authTestHelpersTests } from './auth-test-helpers.test.js';
+import { authProtectTests, type ProtectApis } from './auth-protect.test.js';
+import { authTotpEnrolmentTests, type AuthTotpApis } from './auth-totp-enrolment.test.js';
+import { browserClientTests } from './browser-client.test.js';
+import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
-import { asyncJobTests } from './async-job.test.js';
-import { asyncJobStatusTests } from './async-job-status.test.js';
-import { agentTests } from './agent.test.js';
+import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -39,6 +52,9 @@ import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
+import { backgroundSuites } from './background-suites.js';
+import { httpErrorStatusTests } from './http-error-status.test.js';
+import { authSocialLocalTests } from './auth-social-local.test.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +63,12 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
+let strictStatusApi: typeof strictStatusApiType;
+let authSocialApi: typeof authSocialApiType;
+let authStateApis: AuthStateApis;
+let appModule: typeof import('aws-blocks');
+let protectApis: ProtectApis;
+let authTotpApis: AuthTotpApis;
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -61,6 +83,9 @@ async function waitForServer(maxAttempts = 30) {
 
 // Setup - start server and import API after it's ready
 test.before(async () => {
+  // This run's test-support secret: kept if CI set it, otherwise generated now,
+  // before the dev server or the deploy starts, so both inherit the same value.
+  ensureTestSupportSecret();
   // Type check the backend
   console.log('🔍 Type checking backend...');
   try {
@@ -134,14 +159,24 @@ test.before(async () => {
 
   // Import API after config is written
   const module = await import('aws-blocks');
+  appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
+  strictStatusApi = module.strictStatusApi;
+  authSocialApi = module.authSocialApi;
+  authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
+  protectApis = { api: module.api, protectedApi: module.protectedApi };
+  authTotpApis = { authCMfaApi: module.authCMfaApi, authApi: module.authApi, api: module.api };
   
   await waitForServer();
   console.log('✅ Server ready\n');
 });
 
 test.after(async (t) => {
+  // Children started by the background suites test must not outlive the
+  // server or stack they call (see BackgroundSuites.settle()).
+  await background.settle();
+
   if (server) {
     console.log('\n🛑 Stopping local server...');
     // Kill the entire process group (npm + tsx grandchild)
@@ -152,10 +187,19 @@ test.after(async (t) => {
   if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
     const destroyScript = ENV === 'sandbox' ? 'test/sandbox-destroy.ts' : 'test/production-destroy.ts';
     console.log(`\n🗑️  Destroying ${ENV} stack...`);
-    execFileSync('npx', ['tsx', destroyScript, backendPath], {
-      cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
-    });
-    console.log(`✅ ${ENV} stack destroyed`);
+    try {
+      execFileSync('npx', ['tsx', destroyScript, backendPath], {
+        cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
+      });
+      console.log(`✅ ${ENV} stack destroyed`);
+    } catch (e) {
+      // Fail the run. This file runs directly (not under `node --test`), where
+      // a throwing after() hook is reported but the process still exits 0, so a
+      // broken destroy would pass CI. No rethrow: the cleanup below must still
+      // run so the process can exit.
+      console.error(`\n❌ Destroying the ${ENV} stack failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exitCode = 1;
+    }
   }
 
   // Close the realtime client middleware's pooled WebSocket(s) so the event
@@ -218,6 +262,70 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
   }
 });
 
+// Before any suite signs into `auth`: the signed-out call must stay signed out.
+httpErrorStatusTests(() => ({ api, strictStatusApi }));
+
+// Local only: the `auth-social` block exists only in `npm run dev`.
+if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
+
+// The full (no-argument) purge of delivered verification codes. It runs here,
+// before the background suites below start, because once they overlap a full
+// purge could delete a code one of them is waiting to read (basic-auth.test.ts
+// covers the per-user purge). Locally it also sweeps the records earlier runs
+// left in .bb-data/.
+test('Auth - full purge clears every code record and leaves other keys alone', { skip: ENV !== 'local' && 'codeDelivery is mock-only; deployed Auth emails the code' }, async () => {
+  const stamp = Date.now().toString(36);
+  const username = `purge-probe-${stamp}`;
+  const bystander = `kv-bystander-${stamp}`;
+  await api.kvPut(bystander, 'keep me');
+  await api.authSignUp(username, 'password123');
+  await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
+
+  const { testSupport, secret } = await getTestSupport();
+  const { deleted } = await testSupport.authPurgeDeliveredCodes(secret);
+  assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+
+  assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
+  const left = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
+  assert.deepStrictEqual(left, [], 'no code record survives a full purge');
+  assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
+  await api.kvDelete(bystander);
+});
+
+// Auth OIDC tests, formerly AuthOIDC (separate file). They run before the background suites start:
+// the stub IdP keeps each refresh token in the memory of the Lambda instance
+// that served its /token call, which is never the instance serving
+// the token exchange route (that one is busy waiting on the call). A later refresh only
+// succeeds if its own /token call lands on the issuing instance again. Serial
+// traffic happens to route it back there; the background suites' load breaks
+// that routing and the bearer refresh test fails. The stub IdP itself needs
+// self-contained refresh tokens to fix this: see
+// https://github.com/aws-devtools-labs/aws-blocks/issues/988.
+oidcAuthTests(() => api);
+
+// The browser redirect client: a frontend on another origin signs in.
+browserClientTests();
+
+// Auth createApi() narrowing: typed by the block options, refused at runtime (separate file)
+authApiNarrowingTests(() => authStateApis);
+
+// The auth test helpers: two createTestClient() users at once, getLastAuthCode (separate file)
+authTestHelpersTests(() => appModule);
+
+// Auth protect(): a deny-by-default namespace (separate file)
+authProtectTests(() => protectApis);
+
+// Auth createApi() TOTP enrolment: set up, verify, challenged sign-in (separate file)
+authTotpEnrolmentTests(() => authTotpApis);
+
+// Agent, AsyncJob and AsyncJob status spend most of their time waiting on
+// queues, Lambda and the model, so each runs in its own child process against
+// this server/stack while the suites below run here. They start now and are
+// awaited at the end of this file. See ./background-suites.ts for why a child
+// process and what a suite must not share to belong there.
+const background = backgroundSuites(['agent', 'async-job', 'async-job-status']);
+test('Background suites - start Agent, AsyncJob, AsyncJob status', () => background.start());
+
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
@@ -233,6 +341,8 @@ databaseTests(() => api);
 // DSQL Database tests (separate file)
 dsqlTests(() => api);
 
+databaseBlockTests(() => api);
+
 // AppSetting tests (separate file)
 appSettingTests(() => api);
 
@@ -242,35 +352,33 @@ secretTests(() => api);
 // Realtime tests (separate file)
 realtimeTests(() => api);
 
-// AuthBasic tests (separate file)
+// Auth email + password tests, formerly AuthBasic (separate file)
 basicAuthTests(() => api);
 
-// AuthBasic cookie-attribute convergence tests (separate file)
+// Auth cookie-attribute convergence tests (separate file)
 authCookieAttrsTests(() => api);
+
+// Multiple Set-Cookie values from one API method (separate file)
+responseCookieTests(() => api);
+
+// The e2e build's test-only support endpoints are secret-gated (separate file)
+testSupportGateTests();
 
 // CORS preflight allow-list tests (separate file)
 corsPreflightTests(() => api);
 
-// AuthCognito tests (separate file)
+// Auth (Cognito user pool) tests, formerly AuthCognito (separate file)
 authCognitoTests(() => api);
 
-// AuthCognito Sandbox tests (separate file)
+// Auth (Cognito user pool) sandbox tests (separate file)
 authCognitoSandboxTests(() => api);
 
-// AuthCognito admin-surface sandbox tests (separate file)
+// Auth admin-surface sandbox tests (separate file)
 authCognitoAdminTests(() => api);
+authAdminScanFilterTests();
 
-// AuthOIDC tests (separate file)
-oidcAuthTests(() => api);
-
-// Database tests (separate file)
-databaseTests(() => api);
-
-// AsyncJob tests (separate file)
-asyncJobTests(() => api);
-
-// AsyncJob status tracking tests (separate file)
-asyncJobStatusTests(() => api);
+// Auth validateUser: one policy for every sign-up and sign-in
+authValidateUserTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);
@@ -300,13 +408,10 @@ rawRouteTests();
 consoleShortcutTests();
 
 // CLI client tests (separate file)
-cliClientTests();
+cliClientTests(() => api);
 
 // Tracer tests (separate file)
 tracerTests(() => api);
-
-// Agent BB tests last — uses Realtime internally, may affect WS server state
-agentTests(() => api);
 
 test('Context - access headers', { timeout: 10_000 }, async () => {
   const headers = await api.echoHeaders();
@@ -328,3 +433,10 @@ test('Data types - serialization', { timeout: 10_000 }, async () => {
   assert.deepStrictEqual(await api.echoData([1, 2, 3]), [1, 2, 3]);
   assert.strictEqual(await api.echoData(null), null);
 });
+
+// Background suites started at the top of this file: one test per suite, each
+// failing with that suite's own exit status (its results are the prefixed
+// lines in the output).
+for (const suite of background.suites) {
+  test(`Background suite - ${suite.name}`, () => suite.done());
+}

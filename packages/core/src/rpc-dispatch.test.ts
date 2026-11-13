@@ -11,7 +11,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-blocks/hosting';
 import { ApiNamespace } from './api.js';
-import { isDispatchableExport, resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
+import { isApiNamespace, isDispatchableExport, isScopeLike, resolveApiNamespace, resolveApiMethod, rpcErrorHttpStatus, httpErrorStatusExports } from './rpc-dispatch.js';
+import { ApiError, blocksError } from './errors.js';
 
 const scope = { id: 'app' };
 
@@ -83,5 +84,69 @@ describe('resolveApiMethod', () => {
 
   it('rejects a non-function property', () => {
     assert.strictEqual(resolveApiMethod({ config: { key: 'x' } }, 'config'), undefined);
+  });
+
+  it('rejects a non-enumerable own property (hidden with defineProperty)', () => {
+    const methods = { async visible() { return 'ok'; } };
+    Object.defineProperty(methods, 'hidden', { value: async () => 'hidden', enumerable: false });
+    assert.strictEqual(resolveApiMethod(methods, 'hidden'), undefined);
+    assert.ok(resolveApiMethod(methods, 'visible'));
+  });
+
+  it('exposes no method of a Building Block instance a handler returns', () => {
+    class Block { readonly id = 'notes'; readonly fullId = 'app-notes'; async get() { return 'stored'; } }
+    assert.strictEqual(resolveApiMethod(new Block(), 'get'), undefined);
+  });
+});
+
+describe('isApiNamespace / isScopeLike (shared with generate-client)', () => {
+  it('recognises an ApiNamespace by its marker, not by shape', () => {
+    assert.strictEqual(isApiNamespace(new ApiNamespace(scope, 'api', () => ({}))), true);
+    assert.strictEqual(isApiNamespace(() => ({})), false);
+    assert.strictEqual(isApiNamespace(null), false);
+  });
+
+  it('treats an object with string id and fullId as a Building Block', () => {
+    assert.strictEqual(isScopeLike({ id: 'todos', fullId: 'app-todos' }), true);
+    assert.strictEqual(isScopeLike({ id: 'todos' }), false);
+    assert.strictEqual(isScopeLike('todos'), false);
+  });
+});
+
+describe('rpcErrorHttpStatus', () => {
+  const on = new ApiNamespace({ id: 'app' }, 'on', () => ({}), { httpErrorStatus: true });
+  const off = new ApiNamespace({ id: 'app' }, 'off', () => ({}));
+
+  it('is 200 for a namespace without httpErrorStatus, whatever the error', () => {
+    assert.strictEqual(rpcErrorHttpStatus(off, new ApiError('x', 401)), 200);
+    assert.strictEqual(rpcErrorHttpStatus(off, new ApiError('x', 403)), 200);
+    assert.strictEqual(rpcErrorHttpStatus(undefined, new ApiError('x', 401)), 200);
+    assert.strictEqual(rpcErrorHttpStatus({}, new ApiError('x', 401)), 200);
+  });
+
+  it('is the ApiError status for a 4xx when httpErrorStatus is on', () => {
+    for (const status of [400, 401, 403, 404, 409, 413, 429, 499]) {
+      assert.strictEqual(rpcErrorHttpStatus(on, new ApiError('x', status)), status);
+    }
+  });
+
+  it('stays 200 for a 5xx, an unbranded error, a branded BB error and a non-error', () => {
+    assert.strictEqual(rpcErrorHttpStatus(on, new ApiError('x', 500)), 200);
+    assert.strictEqual(rpcErrorHttpStatus(on, new ApiError('x', 503)), 200);
+    assert.strictEqual(rpcErrorHttpStatus(on, new Error('raw')), 200);
+    assert.strictEqual(rpcErrorHttpStatus(on, blocksError('KVStore.Conflict', 'x')), 200);
+    assert.strictEqual(rpcErrorHttpStatus(on, 'thrown string'), 200);
+  });
+});
+
+describe('httpErrorStatusExports', () => {
+  it('lists the dispatchable exports created with httpErrorStatus: true', () => {
+    const backend = {
+      strict: new ApiNamespace({ id: 'app' }, 'strict', () => ({}), { httpErrorStatus: true }),
+      plain: new ApiNamespace({ id: 'app' }, 'plain', () => ({})),
+      _hidden: new ApiNamespace({ id: 'app' }, 'hidden', () => ({}), { httpErrorStatus: true }),
+      value: 42,
+    };
+    assert.deepStrictEqual(httpErrorStatusExports(backend), ['strict']);
   });
 });

@@ -27,10 +27,34 @@ health check plus an auth-gated CRUD resource with per-user isolation.
   version field). `setQuantity` is the raw compare-and-swap: pass the version you
   read, and a stale write is rejected with `ConditionalCheckFailedException`
   (HTTP 409) so the caller can re-read and retry.
-- **Auth** — `AuthBasic`: callers sign up, then their items are scoped to them.
+- **Files** — `createUploadUrl` / `createDownloadUrl` mint presigned URLs on a
+  `FileBucket`; the client PUTs/GETs the bytes directly. Both call
+  `auth.requireAuth(context)` and scope the path to the caller, so a user can
+  only reach their own files. `createUploadUrl` signs only the content types in
+  `ALLOWED_UPLOAD_TYPES` (extend it for your app), and the bucket is versioned,
+  so an overwritten file can be restored. A presigned PUT carries no size limit;
+  if you need one, upload through the API with `files.put()` and check the size
+  first.
+- **Auth** — `Auth` (email + password; Amazon Cognito on AWS): callers sign up,
+  confirm their email with a 6-digit code (printed in the `npm run dev` terminal
+  locally), and are signed in; their items are scoped to them.
 
 There is no `src/`, `index.html`, or web bundle — nothing is served to a browser.
 Point any HTTP/JSON-RPC client at the RPC endpoint.
+
+## Security model
+
+- **Every `ApiNamespace` method is a public, internet-reachable endpoint.**
+  Nothing is gated by default. When you add a method, start it with
+  `await auth.requireAuth(context)` unless anyone on the internet may call it
+  signed out (like `health`). Scope what it touches to the caller: derive the
+  owner or prefix from the signed-in user (as `userPath` and the `owner` key do
+  here), never from an id or owner the caller passes in.
+- **A presigned URL is a bearer credential.** Whoever holds the URL that
+  `createUploadUrl` or `createDownloadUrl` returns can write or read that one
+  key until the URL expires (one hour by default; `expiresIn` sets it), without
+  signing in. Mint one only in a gated method, only for a key the caller owns,
+  and don't log the URL or share it.
 
 ## api-only vs backend
 
@@ -44,13 +68,22 @@ building an API for a client, not learning from an empty backend.
 ```bash
 npm run typecheck   # Check TypeScript types (run after code changes)
 npm run dev         # Local dev server on http://localhost:3001 (long-running)
+npm run dev:stop    # Stop the dev server this app started
 npm run sandbox     # Deploy to AWS sandbox
 npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack
-npm run destroy          # Tear down the production stack
+npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
+npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
+npm run secret -- set KEY # Set a secret (also list, remove KEY)
+npm run config -- set KEY value # Set a config value (also list, remove KEY)
+npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ### RPC endpoint (local dev)
 

@@ -12,9 +12,9 @@
  * (CloudFront → API Gateway → Lambda).
  *
  * It is a single catch-all default behavior forwarding to the shared gateway
- * origin: every API path already resolves to that one gateway, so there is no
- * per-path fan-out. Per-path routing to distinct origins becomes load-bearing
- * only once a compute-assignment surface exists to send a namespace elsewhere.
+ * origin, which fans namespaces out to their computes itself — plus, for each
+ * namespace on a container compute, an exact-path behavior straight to the
+ * container's load balancer through a VPC origin (see `addDirectApiBehaviors`).
  *
  * The decision is deferred to synth rather than made in `create()`, because
  * `Hosting` is typically constructed *after* `BlocksStack.create()` resolves and
@@ -28,17 +28,33 @@ import {
 	type AddBehaviorOptions,
 	AllowedMethods,
 	CachePolicy,
+	type CfnDistribution,
+	Function as CloudFrontFunction,
 	Distribution,
+	type FunctionAssociation,
+	FunctionCode,
+	FunctionEventType,
+	FunctionRuntime,
 	type IOrigin,
 	OriginRequestPolicy,
 	ResponseHeadersPolicy,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
+import type { Stage } from 'aws-cdk-lib/aws-apigateway';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
 import type { ApiFrontDoorTier } from '../common/index.js';
-import { BLOCKS_RPC_PREFIX } from '../constants.js';
-import { registerConfig } from './config-registry.js';
+import { BLOCKS_RPC_PREFIX, PUBLIC_HOST_HEADER, PUBLIC_HOSTS_CONFIG_KEY } from '../constants.js';
+import { type ApiDirectRoute, addDirectApiBehaviors } from './api-direct-routes.js';
+import {
+	API_FRONT_DOOR_MARKER_HEADER,
+	apiFrontDoorMarkerValue,
+	attachApiWafToStage,
+	type ResolvedApiWaf,
+	warnApiWafDeferredToHosting,
+	webAclArnForDistribution,
+} from './api-waf.js';
+import { appendSharedConfigList, registerSharedConfig } from './config-registry.js';
 
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
@@ -69,6 +85,64 @@ export const API_BEHAVIOR_OPTIONS = {
 } satisfies AddBehaviorOptions;
 
 /**
+ * Viewer-request function on a Blocks CloudFront front door's API behaviors that
+ * reach the shared gateway: stamp the host the viewer called (the distribution's
+ * domain or a custom domain) as {@link PUBLIC_HOST_HEADER}, overwriting any client
+ * copy. CloudFront forwards the gateway's own `Host` (see
+ * {@link API_BEHAVIOR_OPTIONS}), so without it a Lambda handler — or a container
+ * the gateway proxies to — would build `ctx.request.url` on the `execute-api`
+ * host. Handlers take the stamp only when it names one of the backend's front-door
+ * hosts ({@link registerPublicHosts}), since the gateway is reachable directly.
+ *
+ * It leaves `X-Forwarded-Host` alone: the sandbox dev server proxies to the API
+ * through this distribution and names its loopback origin there, which handlers
+ * take first.
+ */
+const PUBLIC_HOST_FUNCTION = `function handler(event) {
+  var request = event.request;
+  request.headers['${PUBLIC_HOST_HEADER}'] = { value: request.headers.host.value };
+  return request;
+}`;
+
+/**
+ * The function association that stamps {@link PUBLIC_HOST_HEADER} on a
+ * distribution's behaviors to the shared gateway: one CloudFront Function, created
+ * as `scope`'s child `id`, to share across those behaviors.
+ *
+ * @internal Framework-only; the managed distribution and `Hosting`'s CloudFront door use it.
+ */
+export function publicHostStamp(scope: Construct, id: string): FunctionAssociation[] {
+	const fn = new CloudFrontFunction(scope, id, {
+		code: FunctionCode.fromInline(PUBLIC_HOST_FUNCTION),
+		runtime: FunctionRuntime.JS_2_0,
+		comment: 'Blocks: stamp the viewer host for the API',
+	});
+	return [{ function: fn, eventType: FunctionEventType.VIEWER_REQUEST }];
+}
+
+/**
+ * Add `distribution`'s hosts — its CloudFront domain and every custom domain it
+ * serves — to the backend's {@link PUBLIC_HOSTS_CONFIG_KEY} list: the hosts a
+ * handler accepts in {@link PUBLIC_HOST_HEADER}. Each front door of the backend
+ * adds its own, so a request through any of them reports the host it came in on.
+ *
+ * @param configOwner the backend the distribution fronts (its config registry)
+ * @internal Framework-only; the managed distribution and `Hosting`'s CloudFront door use it.
+ */
+export function registerPublicHosts(configOwner: Construct, distribution: Distribution): void {
+	const hosts = cdk.Lazy.string({
+		produce: () => {
+			const cfn = distribution.node.defaultChild as CfnDistribution;
+			const config = cfn.distributionConfig as CfnDistribution.DistributionConfigProperty;
+			const aliases = config.aliases ?? [];
+			if (!cdk.Token.isUnresolved(aliases) && aliases.length === 0) return distribution.distributionDomainName;
+			return cdk.Fn.join(',', [distribution.distributionDomainName, cdk.Fn.join(',', aliases)]);
+		},
+	});
+	appendSharedConfigList(configOwner, PUBLIC_HOSTS_CONFIG_KEY, hosts);
+}
+
+/**
  * The front-door signal, carried on the owner instance (`BlocksStack` /
  * `BlocksBackend`) rather than in ambient per-stack state.
  *
@@ -90,6 +164,16 @@ export interface ApiFrontDoorOwner {
 	 * backend module is imported — so a read from inside that module sees it.
 	 */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting, recorded at construction; `undefined` when WAF is off. */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header (see {@link apiFrontDoorMarker}). */
+	_apiFrontDoorMarked?: boolean;
+	/**
+	 * The API paths a CloudFront front door routes straight to a container's load
+	 * balancer, recorded when the shared gateway is built (see
+	 * `addDirectApiBehaviors`).
+	 */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 }
 
 /**
@@ -102,12 +186,28 @@ export interface ApiFrontDoorOwner {
  * in-template via `Fn::Split` rather than in JS — string methods here would
  * operate on the unresolved placeholder text.
  */
-export function httpOriginFromEndpoint(gatewayUrl: string): IOrigin {
+export function httpOriginFromEndpoint(gatewayUrl: string, customHeaders?: Record<string, string>): IOrigin {
 	const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, gatewayUrl));
 	const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
 	const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
 	const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
-	return new HttpOrigin(hostname, { originPath: `/${stage}` });
+	return new HttpOrigin(hostname, { originPath: `/${stage}`, ...(customHeaders ? { customHeaders } : {}) });
+}
+
+/**
+ * The header a claiming CloudFront `Hosting` distribution adds to its API origin
+ * so the backend's `apiWaf` rate rule can tell its (edge-IP) requests from
+ * direct callers. `undefined` unless the backend has a Blocks-managed web ACL
+ * (a caller-supplied `webAclArn` is attached as-is). Calling it records that the
+ * claiming distribution sends the header.
+ *
+ * @internal Framework-only; `Hosting` calls it (via `BlocksStackApi.apiFrontDoorMarker`).
+ */
+export function apiFrontDoorMarker(owner: Construct & ApiFrontDoorOwner): Record<string, string> | undefined {
+	const waf = owner._apiWaf;
+	if (!waf || !('rateLimit' in waf)) return undefined;
+	owner._apiFrontDoorMarked = true;
+	return { [API_FRONT_DOOR_MARKER_HEADER]: apiFrontDoorMarkerValue(owner) };
 }
 
 /**
@@ -209,6 +309,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		private readonly owner: Construct & ApiFrontDoorOwner,
 		private readonly provision: boolean,
 		private readonly gatewayUrl?: string,
+		private readonly gatewayStage?: Stage,
 	) {}
 
 	visit(_node: IConstruct): void {
@@ -217,14 +318,34 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 
 		const stack = cdk.Stack.of(this.owner);
 
-		// `Hosting` fronts the API itself, and has already published its origin
-		// (recorded on this same owner instance). Provisioning a second distribution
-		// would double the hops and split the domain.
-		if (this.owner._apiFrontDoorClaimedByHosting) return;
+		const waf = this.owner._apiWaf;
 
 		// The `apigateway` tier: clients call the gateway directly, so there is no
-		// CloudFront distribution to build.
-		if (!this.provision) return;
+		// CloudFront distribution to build. A WAF attaches to the gateway stage even
+		// when a `Hosting` door also fronts the API, because `ApiUrl` (what native
+		// and direct callers use) stays the gateway's here; the door's traffic only
+		// changes how the rate rule counts (see `StageWafTraffic`).
+		if (!this.provision) {
+			if (waf && this.gatewayStage) {
+				const owner = this.owner;
+				const traffic = owner._apiFrontDoorMarked
+					? 'marked'
+					: owner._apiFrontDoorClaimedByHosting || owner._publicOriginPublishedByHosting
+						? 'proxied'
+						: 'direct';
+				attachApiWafToStage(owner, this.gatewayStage, waf, traffic);
+			}
+			return;
+		}
+
+		// `Hosting` fronts the API itself, and has already published its origin
+		// (recorded on this same owner instance). Provisioning a second distribution
+		// would double the hops and split the domain. Under this tier the claim also
+		// moves `ApiUrl` onto Hosting's distribution, so the API's WAF belongs there.
+		if (this.owner._apiFrontDoorClaimedByHosting) {
+			if (waf) warnApiWafDeferredToHosting(this.owner);
+			return;
+		}
 
 		// No gateway URL means no origin, so there is nothing coherent to put behind
 		// the default behavior.
@@ -243,14 +364,28 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// Under the owner, not the stack: a `BlocksBackend` is a construct inside
 		// someone else's stack, and two of them in one stack would otherwise collide
 		// on this construct id.
+		const behaviorOptions = {
+			...API_BEHAVIOR_OPTIONS,
+			responseHeadersPolicy: securityHeadersPolicy,
+			functionAssociations: publicHostStamp(this.owner, `${FRONT_DOOR_ID}PublicHost`),
+		};
 		const distribution = new Distribution(this.owner, FRONT_DOOR_ID, {
 			comment: `Blocks API front door for ${stack.stackName}`,
-			// One catch-all behavior: every API path resolves to the shared gateway
-			// today, so a single default behavior routes RPC, auth, and raw routes
-			// alike. Per-path behaviors would only carry traffic once a namespace
-			// resolves to a distinct origin.
-			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy },
+			// One catch-all behavior to the shared gateway routes RPC, auth, and raw
+			// routes alike — every namespace on a Lambda compute included, since the
+			// gateway fans those out itself.
+			defaultBehavior: { origin, ...behaviorOptions },
+			// The `cloudfront` tier's WAF sits on the distribution, where it sees the
+			// real client IP (a REGIONAL ACL behind CloudFront would rate-limit per
+			// edge location instead). It covers the direct container routes too.
+			webAclId: waf ? webAclArnForDistribution(this.owner, waf) : undefined,
 		});
+		// A namespace on a container compute skips the gateway: its exact path goes
+		// straight to the container's load balancer.
+		addDirectApiBehaviors(distribution, this.owner._apiDirectRoutes ?? [], behaviorOptions, { source: 'managed' });
+		// Handlers behind it take the viewer host it stamps only when it is one of
+		// this backend's front-door hosts.
+		registerPublicHosts(this.owner, distribution);
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
 		// output) resolve to the CloudFront URL. No separate CloudFront-domain
@@ -258,15 +393,16 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		const frontDoorUrl = `https://${distribution.distributionDomainName}`;
 		this.owner._apiFrontDoorResolvedUrl = frontDoorUrl;
 
-		// CloudFront forwards with `ALL_VIEWER_EXCEPT_HOST_HEADER`, so the Lambda
-		// sees the execute-api host, never the public one. Publish the public origin
-		// the same way `Hosting` does, so absolute URLs the runtime builds (e.g.
-		// AuthOIDC's callback `redirect_uri`) point at this distribution and its
-		// cookies. Registered at synth, before the config JSON (a Lazy) resolves.
+		// CloudFront forwards with `ALL_VIEWER_EXCEPT_HOST_HEADER`, so the gateway gets
+		// the execute-api host; handlers get the public host from the stamp above.
+		// Publish the public origin the same way `Hosting` does too, so absolute URLs
+		// the runtime builds without a request (e.g. Auth's federated callback
+		// `redirect_uri`) point at this distribution and its cookies. Registered at
+		// synth, before the config JSON (a Lazy) resolves.
 		// A `Hosting` door that serves `/aws-blocks/*` to browsers owns the origin
 		// (see `publishPublicOrigin`); this distribution then serves native clients only.
 		if (!this.owner._publicOriginPublishedByHosting) {
-			registerConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
+			registerSharedConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
 		}
 	}
 }
@@ -308,11 +444,14 @@ export function resolveApiFrontDoor(apiFrontDoor: ApiFrontDoorTier | undefined):
  * @param provision whether to build the `cloudfront` tier's distribution
  * @param gatewayUrl the shared REST API gateway URL (`https://{host}/{stage}/aws-blocks/api`),
  *   the origin the distribution forwards to
+ * @param gatewayStage the shared REST API's stage, where the `apigateway` tier's
+ *   WAF attaches (see `apiWaf`)
  */
 export function scheduleApiFrontDoor(
 	owner: Construct & ApiFrontDoorOwner,
 	provision: boolean,
 	gatewayUrl?: string,
+	gatewayStage?: Stage,
 ): void {
-	cdk.Aspects.of(owner).add(new ApiFrontDoorAspect(owner, provision, gatewayUrl));
+	cdk.Aspects.of(owner).add(new ApiFrontDoorAspect(owner, provision, gatewayUrl, gatewayStage));
 }

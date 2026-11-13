@@ -50,6 +50,23 @@ const E2E_PREFIXES = [
 // Amplify Gen 2 sandbox stacks (amplify-interop suite). cleanup-stacks.yml
 // empties their buckets before deleting them.
 const AMPLIFY_SANDBOX_PREFIXES = ['amplify-amplifygen2-', 'amplify-amplifyinteroptest-'];
+// Function and DB cluster name prefixes whose orphaned log groups
+// cleanup-stacks.yml deletes ("Cleanup orphaned Lambda and RDS log groups";
+// scripts/ci/sweep-log-groups.test.mjs checks the two lists match).
+// CloudFormation cuts the stack-name part of a generated function name, so the
+// interop prefix is cut too. `my-app-` is left out: it may be a developer's
+// ad-hoc deploy.
+const LOG_GROUP_LAMBDA_PREFIXES = [
+  'amplify-amplifygen2-',
+  'amplify-amplifyinteroptes',
+  'bb-compute-smoke-',
+  'bb-telemetry-',
+  'bb-test-',
+  'bb-vpc-smoke-',
+  'blocks-hosting-',
+  'blocks-test-',
+];
+const LOG_GROUP_RDS_PREFIXES = ['bb-test-'];
 
 export interface GithubE2eOidcStackProps {
   account: string;
@@ -185,8 +202,9 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
 
   // cleanup-stacks.yml sweeps that keep account quotas in check: orphaned REST
   // APIs (120 EDGE APIs), API Gateway CloudWatch roles (3000 roles) and
-  // CloudFront response headers policies. Its calls swallow errors, so a missing
-  // grant here shows up as an empty sweep, not a failed job.
+  // CloudFront response headers policies. A REST API, region or IAM role listing
+  // it can't read fails the job, and a stack or CloudFront listing it can't read
+  // is a warning with the error, so a missing grant here shows up in the run.
   // These list calls have no resource-level scoping; '*' is the only valid resource.
   role.addToPolicy(
     new iam.PolicyStatement({
@@ -217,11 +235,62 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
       resources: E2E_PREFIXES.map((p) => `arn:aws:iam::${account}:role/${p}*`),
     }),
   );
+  // The Amplify sweep reports a DynamoDB table that a stuck sandbox's delete
+  // had to retain (scripts/ci/amplify-stuck-delete.sh --leftovers) until the
+  // table is gone. Describe only: no sweep deletes tables. Amplify sandbox
+  // tables are named <Model>-<apiId>-NONE.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLeftoverAmplifyTables',
+      actions: ['dynamodb:DescribeTable'],
+      resources: [`arn:aws:dynamodb:${region}:${account}:table/*-NONE`],
+    }),
+  );
   role.addToPolicy(
     new iam.PolicyStatement({
       sid: 'CleanupResponseHeadersPolicies',
       actions: ['cloudfront:DeleteResponseHeadersPolicy', 'cloudfront:GetResponseHeadersPolicy'],
       resources: [`arn:aws:cloudfront::${account}:response-headers-policy/*`],
+    }),
+  );
+  // Lambda creates a function's log group itself, outside CloudFormation, so it
+  // outlives the stack; RDS engine log groups outlive their cluster. The sweep
+  // deletes a test-prefixed group only when its function or cluster is gone, so
+  // it lists all three. Read-only, in an account that holds only test stacks;
+  // lambda:ListFunctions takes only '*', and scoping the other two buys nothing.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLogGroupsList',
+      actions: ['logs:DescribeLogGroups', 'lambda:ListFunctions', 'rds:DescribeDBClusters'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLogGroupsDelete',
+      actions: ['logs:DeleteLogGroup'],
+      resources: [
+        ...LOG_GROUP_LAMBDA_PREFIXES.map((p) => `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/${p}*`),
+        ...LOG_GROUP_RDS_PREFIXES.map((p) => `arn:aws:logs:${region}:${account}:log-group:/aws/rds/cluster/${p}*`),
+      ],
+    }),
+  );
+
+  // scripts/ci/sweep-cognito-pools.mjs deletes a user pool no live stack owns
+  // any more, once its name, age and tags mark it as CI's. ListUserPools takes
+  // only '*'; the rest are scoped to user pools in this account and region.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupCognitoPoolsList',
+      actions: ['cognito-idp:ListUserPools'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupCognitoPools',
+      actions: ['cognito-idp:DeleteUserPool', 'cognito-idp:DeleteUserPoolDomain', 'cognito-idp:DescribeUserPool'],
+      resources: [`arn:aws:cognito-idp:${region}:${account}:userpool/*`],
     }),
   );
 

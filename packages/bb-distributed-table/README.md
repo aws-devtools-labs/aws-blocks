@@ -18,7 +18,7 @@ const table = new DistributedTable(scope, id, options)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a single item by primary key. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. Pass `{ consistentRead: true }` for a strongly consistent read. |
 | `put(item, options?)` | `Promise<void>` | Store an item. Overwrites unless conditions are set. |
 | `delete(key, options?)` | `Promise<void>` | Remove an item by primary key. |
 | `query(options)` | `AsyncIterable<T>` | Query items by index or primary key. |
@@ -28,7 +28,7 @@ const table = new DistributedTable(scope, id, options)
 | `deleteBatch(keys)` | `Promise<void>` | Remove multiple items by key. |
 | `DistributedTable.fromExisting(tableName)` | `ExternalTableRef` | Wrap a pre-existing DynamoDB table. |
 
-**Runtime only.** Data methods (`get`, `put`, `delete`, `query`, `scan`, `getBatch`, `putBatch`, `deleteBatch`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct (no data methods), so a top-level call throws `table.<method> is not a function` (throws `TypeError` at runtime if called during CDK synth). To seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
+**Runtime only.** Data methods (`get`, `put`, `delete`, `query`, `scan`, `getBatch`, `putBatch`, `deleteBatch`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `DistributedTable.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
 
 > **Collecting `scan()` results:** like `query()`, `scan()` returns an `AsyncIterable` — collect with `await Array.fromAsync(table.scan())` or iterate with `for await`. Prefer `query()` over `scan()` (scans read every item).
 
@@ -42,10 +42,10 @@ const table = new DistributedTable(scope, id, options)
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | No | Point-in-Time Recovery (continuous backups). `true` = on with the default 35-day window; `false` = off; `{ retentionDays: n }` = on with an `n`-day window (**1–35**). Defaults to the stack `defaults.pointInTimeRecovery` (on under `BlocksPresets.production`, off under `sandbox`). Bills for backup storage per GB-month; a shorter window trims cost. |
 | `protection` | `'disposable' \| 'retained' \| 'locked'` | No | How hard the table is to destroy (spans removal policy + deletion protection). `'disposable'` = deleted with the stack; `'retained'` = orphaned on stack delete but a direct delete still works; `'locked'` = orphaned **and** deletion-protected. When omitted, removal policy + deletion protection follow the stack `defaults` (`BlocksPresets.production` ≈ `'locked'`, `sandbox` ≈ `'disposable'`). |
-| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | No | At-rest encryption key. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK; pass `DistributedTable.fromKmsKey(arn)` to encrypt with an existing CMK you own (shareable across tables). |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | No | At-rest encryption key. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK; pass `DistributedTable.fromKmsKey(arn)` to encrypt with an existing CMK you own (shareable across tables). Any other value (e.g. a typo from untyped JavaScript or config) fails the synth with an error listing the valid values, rather than falling back to `'aws-managed'`. |
 | `readValidation` | `'off' \| 'coerce' \| 'strict'` | No | How reads (`get`/`getBatch`/`query`/`scan`) reconcile a stored item with `schema`. `'coerce'` (**default**) returns the coerced value and, on failure, the raw value + a warning (never throws); `'strict'` throws `ValidationFailed` on a non-conforming item; `'off'` returns the raw value with no validation. See [Reads and schema evolution](#reads-and-schema-evolution). |
 | `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. Durability/encryption options are ignored — the customer owns the table's configuration. |
-| `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
+| `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at warn level is created so `readValidation: 'coerce'` fallback warnings surface. |
 
 ### Key Object Pattern
 
@@ -69,6 +69,13 @@ const settings = new DistributedTable(scope, 'settings', {
 
 // Key object requires only the partition key
 await settings.get({ settingId: 'theme' });
+```
+
+**Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. On AWS every other read (`getBatch()`, `query()`, `scan()`) stays eventually consistent.
+
+```typescript
+// Sees a put() that has just completed, on AWS as well as locally
+const fresh = await orders.get({ userId: 'alice', orderId: '001' }, { consistentRead: true });
 ```
 
 ### Query
@@ -135,7 +142,7 @@ All condition failures throw with `error.name === DistributedTableErrors.Conditi
 
 ### Reads and schema evolution
 
-Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T` — a newly added field is **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a **required, no-default** field makes the read-modify-write cycle above **fail on the write** as `put()` rejects the legacy shape.
+Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T`. Under the default `'coerce'` (and under `'strict'`), a newly added field with a `.default()` is **filled in on the returned value**, but the stored row is **not rewritten** — the default reaches storage only when you `put()` the returned item back. Under `'off'` the field stays **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back). A **required, no-default** field can't be filled in any mode: the read-modify-write cycle above **fails on the write** as `put()` rejects the legacy shape (under `'strict'`, the read itself throws first).
 
 `readValidation` has three modes:
 
@@ -341,6 +348,8 @@ Under **`BlocksPresets.sandbox`** these flip the other way — PITR off, `Remova
 > **PITR is not free.** Point-in-Time Recovery charges for continuous-backup storage (per GB-month of table size), so a large production table carries an ongoing cost. It's on by default because unrecoverable data loss is usually the worse outcome — but for regenerable data (caches, derived tables) set `pointInTimeRecovery: false`.
 
 > **`protection: 'locked'`/`'retained'` orphans the table on stack delete.** Because the removal policy is `RETAIN`, deleting the stack leaves the table behind (by design — your data survives). But the table name is derived deterministically from the block's id, so **redeploying the same app afterward fails with `Table already exists`** until you delete the orphaned table (`aws dynamodb delete-table`, after disabling deletion protection if `'locked'`) or import it into the new stack. This is inherent to retain-on-delete; use `protection: 'disposable'` for tables you expect to recreate freely.
+
+> **Indexes follow the config while the table is in the stack.** Removing an index (or the whole `indexes` option) from your config and redeploying drops it from the table. When the table itself leaves the stack (you delete the stack, or remove the `DistributedTable` from your app) its indexes are left alone: an orphaned `'locked'`/`'retained'` table keeps all of them, so importing it into a new stack needs no index rebuild. To tell the two apart the GSI manager reads the stack's template. If it cannot read it in the cleanup phase of an update (or of a rolled-back update), it leaves the indexes in place and reports a `DELETE_FAILED` event for the table's GSI custom resource (logical ID containing `gsiresource`) that names the table and the indexes. The deploy itself still succeeds, so check the deploy output (or the stack's events) for that event. To remove an index your config no longer has, run `aws dynamodb update-table --table-name <table> --global-secondary-index-updates '[{"Delete":{"IndexName":"<index>"}}]'`; DynamoDB takes one index change per call, so wait for each delete to finish before the next.
 
 Every stack default is overridable per table (a per-block option always wins over `defaults`):
 

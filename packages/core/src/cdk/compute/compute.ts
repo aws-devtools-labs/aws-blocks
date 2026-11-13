@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import type * as ec2 from 'aws-cdk-lib/aws-ec2';
+import type * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { ComputeType } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
+import { markBlocksOwned } from '../blocks-roles.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
 
@@ -32,6 +35,39 @@ export interface ComputeProvider<K extends ComputeType = ComputeType> {
 	 */
 	resolve(): ComputeBase & { readonly type: K };
 }
+
+/**
+ * How the shared API gateway reaches a compute's API: a Lambda `function` it
+ * invokes directly, or a `load-balancer` listener — an internal Application Load
+ * Balancer in front of the compute's HTTP server (a container) — that it reaches
+ * through a VPC link. A load-balanced compute's namespaces share one listener
+ * across computes, so each namespace path must also be routed on it
+ * ({@link routePath}).
+ *
+ * @internal
+ */
+export type ComputeApiIngress =
+	| {
+			readonly kind: 'function';
+			/** The function API Gateway invokes. */
+			readonly fn: IFunction;
+	  }
+	| {
+			readonly kind: 'load-balancer';
+			/** The internal load balancer in front of the compute's HTTP server. */
+			readonly loadBalancer: elbv2.IApplicationLoadBalancer;
+			/** The port of the listener serving the compute's API namespaces. */
+			readonly port: number;
+			/** The VPC the load balancer runs in. */
+			readonly vpc: ec2.IVpc;
+			/** Subnets for the VPC link's network interfaces (the load balancer's subnets). */
+			readonly subnets: ec2.SubnetSelection;
+			/**
+			 * Route an exact request path (`/aws-blocks/api/{name}`) on the listener to
+			 * this compute. Called once per namespace path by the gateway build.
+			 */
+			routePath(path: string): void;
+	  };
 
 /**
  * Base class for a Blocks *compute* — a runtime that executes handler code
@@ -106,6 +142,9 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
+		// A compute is AWS Blocks' own: its roles (function and task roles) are
+		// framework roles for the service-principal trust check.
+		markBlocksOwned(this);
 		// Self-register on the owning stack so finalize steps (config, tracing,
 		// dashboards) can enumerate every compute without a separate discovery
 		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated —
@@ -135,6 +174,24 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 	 */
 	apiHandler(): IFunction | undefined {
 		return undefined;
+	}
+
+	/**
+	 * How the shared API gateway reaches this compute when it hosts an API
+	 * namespace — or `undefined` when it accepts no API traffic. Defaults to
+	 * {@link apiHandler}'s function. A compute whose HTTP server runs behind a load
+	 * balancer (a container) overrides it.
+	 *
+	 * Called by the gateway build — after the backend module is imported, before
+	 * {@link finalize} — and only for a compute that hosts a namespace, so an
+	 * override can provision its ingress on first call. Must return the same
+	 * ingress on every call.
+	 *
+	 * @internal
+	 */
+	apiIngress(): ComputeApiIngress | undefined {
+		const fn = this.apiHandler();
+		return fn ? { kind: 'function', fn } : undefined;
 	}
 
 	/**

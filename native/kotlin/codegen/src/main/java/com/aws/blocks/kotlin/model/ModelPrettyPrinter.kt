@@ -93,6 +93,7 @@ object ModelPrettyPrinter {
                 sb.appendLine(")")
             }
             is TypeRef.SchemaRef -> sb.appendLine("SchemaRef(${typeRef.schemaName})")
+            is TypeRef.RecursiveSchemaRef -> sb.appendLine("RecursiveSchemaRef(${typeRef.schemaName})")
             is TypeRef.UnionLiteral -> sb.appendLine("UnionLiteral([${typeRef.values.joinToString(", ")}])")
             is TypeRef.Union -> {
                 sb.appendLine("Union")
@@ -161,6 +162,7 @@ object ModelPrettyPrinter {
                 }
             }
             is TypeRef.SchemaRef -> sb.append("SchemaRef(${typeRef.schemaName})")
+            is TypeRef.RecursiveSchemaRef -> sb.append("RecursiveSchemaRef(${typeRef.schemaName})")
             is TypeRef.UnionLiteral -> sb.append("UnionLiteral([${typeRef.values.joinToString(", ")}])")
             is TypeRef.ArrayType -> {
                 sb.append("ArrayType(")

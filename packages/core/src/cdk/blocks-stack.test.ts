@@ -18,6 +18,7 @@ import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from '../rpc-dispatch.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
@@ -81,6 +82,8 @@ const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js')
 const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
 const reexportBackendPath = join(__dirname, '__fixtures__', 'reexport-backend.js');
+const deploymentTypeBackendPath = join(__dirname, '__fixtures__', 'deployment-type-backend.js');
+const httpErrorStatusBackendPath = join(__dirname, '__fixtures__', 'http-error-status-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -98,6 +101,17 @@ const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
 		defaults: BlocksPresets.production,
 		defaultComputeFactory: stubComputeFactory,
 	});
+
+describe('httpErrorStatus namespaces are recorded on the backend owner (for Hosting)', () => {
+	test('BlocksStack and BlocksBackend record exactly the httpErrorStatus exports', async () => {
+		const app = new cdk.App();
+		const stack = await makeStack(app, 'HttpErrorStatusStack', httpErrorStatusBackendPath);
+		assert.deepStrictEqual(Reflect.get(stack, HTTP_ERROR_STATUS_EXPORTS), ['strictApi']);
+		const backendStack = new cdk.Stack(app, 'HttpErrorStatusBackendHost');
+		const backend = await makeBackend(backendStack, 'Backend', httpErrorStatusBackendPath);
+		assert.deepStrictEqual(Reflect.get(backend, HTTP_ERROR_STATUS_EXPORTS), ['strictApi']);
+	});
+});
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksStack.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -160,6 +174,65 @@ describe('ApiUrl output and the Hosting front-door claim', () => {
 			value.includes('https://d123.cloudfront.net/aws-blocks/api'),
 			`cloudfront ApiUrl should follow the claim, got ${value}`,
 		);
+	});
+});
+
+describe('apiWaf', () => {
+	const withWaf = (scope: Construct, id: string, extra: Record<string, unknown>) =>
+		BlocksStack.create(scope, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			...extra,
+		});
+
+	test('apigateway (default): associates a REGIONAL web ACL with the shared gateway stage', async () => {
+		const stack = await withWaf(new cdk.App(), 'ApiWafStack', { apiWaf: { enabled: true } });
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'REGIONAL' });
+		template.hasResourceProperties('AWS::WAFv2::WebACLAssociation', {
+			ResourceArn: Match.objectLike({ 'Fn::Join': Match.anyValue() }),
+		});
+		const [assoc] = Object.values(template.findResources('AWS::WAFv2::WebACLAssociation'));
+		assert.match(JSON.stringify(assoc.Properties.ResourceArn), /restapis/);
+	});
+
+	test('cloudfront in us-east-1: puts a CLOUDFRONT web ACL on the managed distribution', async () => {
+		const stack = await withWaf(new cdk.App(), 'ApiWafCfStack', {
+			env: { region: 'us-east-1' },
+			apiFrontDoor: 'cloudfront',
+			apiWaf: { enabled: true },
+		});
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'CLOUDFRONT' });
+		template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
+		template.hasResourceProperties('AWS::CloudFront::Distribution', {
+			DistributionConfig: { WebACLId: Match.anyValue() },
+		});
+	});
+
+	test('rejects an invalid apiWaf before the backend module is imported', async () => {
+		await assert.rejects(
+			() => withWaf(new cdk.App(), 'BadApiWafStack', { apiWaf: { enabled: true, rateLimit: 10 } }),
+			/apiWaf\.rateLimit must be an integer of at least 100/,
+		);
+	});
+
+	test('BlocksBackend: associates the web ACL with its own gateway stage', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'HostStack');
+		await BlocksBackend.create(stack, 'Backend', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			apiWaf: { webAclArn: 'arn:aws:wafv2:us-west-2:111122223333:regional/webacl/mine/abcd' },
+		});
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::WAFv2::WebACL', 0);
+		template.hasResourceProperties('AWS::WAFv2::WebACLAssociation', {
+			WebACLArn: 'arn:aws:wafv2:us-west-2:111122223333:regional/webacl/mine/abcd',
+		});
 	});
 });
 
@@ -369,6 +442,81 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 	});
 });
 
+describe('defaults.strictNamespacePlacement (create())', () => {
+	// The namespace-routing fixture: `api` on the default compute, `shop` on
+	// OrdersCompute. Synth must put the placement map in the environment of both
+	// functions, so a change rolls each of them, and the compute id on OrdersCompute only.
+	const WARNING_ID = 'blocks:apigateway:bare-endpoint-serves-placed-namespaces';
+	before(() => {
+		(globalThis as Record<string, unknown>).__BLOCKS_TEST_MAKE_COMPUTE__ = (parent: ScopeParent, id: string) =>
+			new StubLambdaCompute(parent, id);
+	});
+
+	const create = {
+		BlocksStack: (strict: boolean) =>
+			BlocksStack.create(new cdk.App(), `StrictPlacementStack${strict ? 'On' : 'Off'}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: namespaceRoutingBackendPath,
+				defaults: { ...BlocksPresets.production, strictNamespacePlacement: strict },
+				defaultComputeFactory: stubComputeFactory,
+			}).then((stack) => ({ stack, owner: stack as Construct })),
+		BlocksBackend: async (strict: boolean) => {
+			const stack = new cdk.Stack(new cdk.App(), `StrictPlacementParent${strict ? 'On' : 'Off'}`);
+			// A backend id of its own: create() caches the backend module per id.
+			const owner = await BlocksBackend.create(stack, `StrictPlacement${strict ? 'On' : 'Off'}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: namespaceRoutingBackendPath,
+				defaults: { ...BlocksPresets.production, strictNamespacePlacement: strict },
+				defaultComputeFactory: stubComputeFactory,
+			});
+			return { stack, owner: owner as Construct };
+		},
+	};
+
+	const envOf = (stack: cdk.Stack, compute: StubLambdaCompute): Record<string, unknown> => {
+		const id = stack.getLogicalId(compute.fn.node.defaultChild as cdk.CfnElement);
+		const fn = Template.fromStack(stack).toJSON().Resources[id] as {
+			Properties: { Environment?: { Variables?: Record<string, unknown> } };
+		};
+		return fn.Properties.Environment?.Variables ?? {};
+	};
+
+	const computesOf = (owner: Construct) => {
+		const all = getComputes(owner) as StubLambdaCompute[];
+		const orders = all.find((c) => c.node.id === 'OrdersCompute');
+		const defaultCompute = all.find((c) => c.node.id === 'DefaultCompute');
+		assert.ok(orders && defaultCompute);
+		return { orders, defaultCompute };
+	};
+
+	for (const entry of ['BlocksStack', 'BlocksBackend'] as const) {
+		test(`${entry}: on, every API function's environment carries the placement map`, async () => {
+			const { stack, owner } = await create[entry](true);
+			const { orders, defaultCompute } = computesOf(owner);
+			const expected = JSON.stringify({ shop: orders.fullId });
+			const onDefault = envOf(stack, defaultCompute);
+			const onOrders = envOf(stack, orders);
+			assert.strictEqual(onDefault.BLOCKS_API_NAMESPACE_COMPUTES, expected);
+			assert.strictEqual(onDefault.BLOCKS_API_COMPUTE_ID, undefined, 'the default compute carries no id');
+			assert.strictEqual(onOrders.BLOCKS_API_NAMESPACE_COMPUTES, expected);
+			assert.strictEqual(onOrders.BLOCKS_API_COMPUTE_ID, orders.fullId);
+			Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(WARNING_ID));
+		});
+
+		test(`${entry}: off, no function carries the map and synth warns until acknowledged`, async () => {
+			const { stack, owner } = await create[entry](false);
+			const { orders, defaultCompute } = computesOf(owner);
+			for (const compute of [defaultCompute, orders]) {
+				assert.strictEqual(envOf(stack, compute).BLOCKS_API_NAMESPACE_COMPUTES, undefined);
+				assert.strictEqual(envOf(stack, compute).BLOCKS_API_COMPUTE_ID, undefined);
+			}
+			Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp(`shop.*${WARNING_ID}`));
+			cdk.Annotations.of(owner).acknowledgeWarning(WARNING_ID, 'raw callers still use the bare endpoint');
+			Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(WARNING_ID));
+		});
+	}
+});
+
 describe('a namespace bound to another backend is not routed (multi-backend synth)', () => {
 	// create() re-runs only the top-level backend module per backend; a namespace
 	// from a cached sub-module stays bound to the first backend. A second backend
@@ -397,5 +545,155 @@ describe('a namespace bound to another backend is not routed (multi-backend synt
 		await makeBackend(parent, 'BackendOne', reexportBackendPath);
 		await makeBackend(parent, 'BackendTwo', reexportBackendPath);
 		assert.ok(!routedPathParts(Template.fromStack(parent)).includes('reports'), "no route for 'reports'");
+	});
+});
+
+describe('AWSBlocks template metadata (BlocksStack.create)', () => {
+	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+
+	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
+
+	test('writes AWSBlocks by default', async () => {
+		const stack = await makeStack(new cdk.App(), 'MetadataOnStack', sideEffectBackendPath);
+		assert.match(toolsMetrics(stack)?.AWSBlocks, /^1;core=[^;]+;mode=production;bb=[^;]*;custom=\d+$/);
+	});
+
+	test('omits AWSBlocks when context blocks:template-metadata is false', async () => {
+		const app = new cdk.App({ context: { 'blocks:template-metadata': false } });
+		const stack = await makeStack(app, 'MetadataOffStack', sideEffectBackendPath);
+		assert.strictEqual(toolsMetrics(stack), undefined);
+	});
+});
+
+// create() derives the deployment type from the `sandboxMode` CDK context and
+// propagates it two ways: as a BB config entry (BLOCKS_DEPLOYMENT_TYPE, loaded
+// into process.env on deployed compute) and into this synth process's env
+// before the backend module is imported. The fixture records the env value at
+// module evaluation as a marker construct id.
+describe('deployment type propagation (synth -> runtime)', () => {
+	/** Whether the uploaded config JSON in `stack` contains `text` (Lazy source marker). */
+	const configContains = (stack: cdk.Stack, text: string): boolean =>
+		JSON.stringify(Template.fromStack(stack).findResources('Custom::CDKBucketDeployment')).includes(text);
+
+	const cases = [
+		{ name: 'sandbox context', context: { sandboxMode: 'true' }, expected: 'sandbox' },
+		{ name: 'non-sandbox context', context: {}, expected: 'production' },
+	] as const;
+
+	for (const { name, context, expected } of cases) {
+		for (const kind of ['BlocksStack', 'BlocksBackend'] as const) {
+			test(`${kind}.create() with ${name} propagates BLOCKS_DEPLOYMENT_TYPE=${expected}`, async () => {
+				const saved = process.env.BLOCKS_DEPLOYMENT_TYPE;
+				// A stale inherited value must be overwritten by the CDK context.
+				process.env.BLOCKS_DEPLOYMENT_TYPE = 'local';
+				try {
+					const app = new cdk.App({ context });
+					let scope: Construct;
+					let stack: cdk.Stack;
+					if (kind === 'BlocksStack') {
+						stack = await makeStack(app, `DeploymentType${expected}Stack`, deploymentTypeBackendPath);
+						scope = stack;
+					} else {
+						stack = new cdk.Stack(app, `DeploymentType${expected}Parent`);
+						// Distinct id per case: the backend import is cache-busted by id.
+						scope = await makeBackend(stack, `Blocks${expected}`, deploymentTypeBackendPath);
+					}
+
+					assert.ok(
+						scope.node.tryFindChild(`DeploymentTypeAtImport-${expected}`),
+						`backend module should see BLOCKS_DEPLOYMENT_TYPE=${expected} at import time`,
+					);
+					assert.strictEqual(process.env.BLOCKS_DEPLOYMENT_TYPE, expected);
+					assert.ok(configContains(stack, 'BLOCKS_DEPLOYMENT_TYPE'), 'config registry has BLOCKS_DEPLOYMENT_TYPE');
+					// The config JSON is embedded as a string in an Fn::Join, so its quotes
+					// appear escaped once in the stringified template.
+					assert.ok(
+						configContains(stack, `\\"BLOCKS_DEPLOYMENT_TYPE\\":\\"${expected}\\"`),
+						`config entry BLOCKS_DEPLOYMENT_TYPE has value '${expected}'`,
+					);
+				} finally {
+					if (saved === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+					else process.env.BLOCKS_DEPLOYMENT_TYPE = saved;
+				}
+			});
+		}
+	}
+});
+
+// Apps scaffolded before `defaults` became required call create() without it.
+// cdk runs index.cdk.ts through a loader that doesn't type-check, so the props
+// arrive without `defaults` at runtime. Both entry points must fail with an
+// actionable Blocks error that names the fix and links the upgrade guide, not
+// a raw TypeError from deep inside the constructor.
+describe('create() without defaults (apps from older templates)', () => {
+	const assertMissingDefaultsError = (e: unknown) => {
+		assert.ok(e instanceof Error);
+		assert.ok(!(e instanceof TypeError), `expected a Blocks error, got ${e.name}: ${e.message}`);
+		assert.match(e.message, /requires a `defaults` field/);
+		assert.match(e.message, /defaults: sandboxMode \? BlocksPresets\.sandbox : BlocksPresets\.production/);
+		assert.match(e.message, /import \{ BlocksPresets \} from '@aws-blocks\/blocks\/cdk'/);
+		assert.match(e.message, /docs\/guides\/upgrading-older-apps\.md/);
+		return true;
+	};
+	const propsWithoutDefaults = () =>
+		({
+			backendHandlerPath: handlerPath,
+			backendCDKPath: factoryBackendPath,
+			defaultComputeFactory: stubComputeFactory,
+		}) as unknown as Parameters<typeof BlocksStack.create>[2];
+
+	test('BlocksStack.create() names the fix instead of throwing a TypeError', async () => {
+		await assert.rejects(() => BlocksStack.create(new cdk.App(), 'NoDefaultsStack', propsWithoutDefaults()), assertMissingDefaultsError);
+	});
+
+	test('BlocksBackend.create() names the fix and links the upgrade guide', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'Host');
+		await assert.rejects(() => BlocksBackend.create(stack, 'NoDefaultsBackend', propsWithoutDefaults()), assertMissingDefaultsError);
+	});
+});
+
+// `defaults.allowedOrigins` is checked at synth by the same validator the
+// runtime uses, so an entry the runtime would ignore fails `cdk synth` instead.
+describe('create() validates defaults.allowedOrigins', () => {
+	const propsWithOrigins = (allowedOrigins: string[]) => ({
+		backendHandlerPath: handlerPath,
+		backendCDKPath: factoryBackendPath,
+		defaultComputeFactory: stubComputeFactory,
+		defaults: { ...BlocksPresets.production, allowedOrigins },
+	});
+
+	test('BlocksStack.create() rejects a regex entry with an unescaped dot', async () => {
+		const props = propsWithOrigins(['^https://app.example\\.com$']);
+		await assert.rejects(
+			() => BlocksStack.create(new cdk.App(), 'BadOriginsStack', props),
+			/defaults\.allowedOrigins entry "\^https:\/\/app\.example\\\.com\$": has an unescaped '\.'/,
+		);
+	});
+
+	test('BlocksBackend.create() rejects a regex entry that does not compile on its own', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'Host');
+		await assert.rejects(
+			() => BlocksBackend.create(stack, 'BadOriginsBackend', propsWithOrigins(['a)|(?:.*'])),
+			/not a valid regular expression/,
+		);
+	});
+
+	test('BlocksStack.create() accepts a plain origin', async () => {
+		await BlocksStack.create(new cdk.App(), 'PlainOriginStack', propsWithOrigins(['https://app.example.com']));
+	});
+
+	test('BlocksStack.create() skips unresolved tokens', async () => {
+		const app = new cdk.App();
+		const token = cdk.Lazy.string({ produce: () => 'https://d123.cloudfront.net' });
+		await BlocksStack.create(app, 'TokenOriginStack', propsWithOrigins([token]));
+	});
+
+	test('BlocksStack.create() skips an entry with an embedded unresolved token', async () => {
+		// The encoded token sits next to literal, unescaped dots, so without the
+		// unresolved-token filter the validator would reject this entry.
+		const host = cdk.Lazy.string({ produce: () => 'x' });
+		const entry = `https://${host}.example.com`;
+		assert.ok(cdk.Token.isUnresolved(entry));
+		await BlocksStack.create(new cdk.App(), 'EmbeddedTokenOriginStack', propsWithOrigins([entry]));
 	});
 });

@@ -16,8 +16,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { isBlocksError } from '@aws-blocks/blocks/client';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -28,13 +30,37 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof ApiType;
 let authApi: typeof AuthApiType;
 
-const serverPort = 3000;
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// A fresh user per run, so the suite also passes against existing local data.
+const username = `testuser-${Date.now().toString(36)}@example.com`;
+const password = 'TestPass123!';
+
+// Locally no email is sent: `getLastAuthCode(name)` reads the verification code
+// the local auth block just issued for `name` (it finds the block's .bb-data/
+// files itself). On AWS, Cognito emails it instead.
+
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
+
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await setTimeout(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
 
 test.before(async () => {
   // Use existing dev server if running, otherwise start one
@@ -47,33 +73,46 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
+  await waitForServer();
 
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-      else process.kill(-server.pid, 'SIGTERM');
-    } catch {}
+// Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
+function signalServer(pid: number, signal: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function waitForServerExit(pid: number, ms: number) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+    if (Date.now() >= deadline) return false;
+  }
+  return true;
+}
+
+// The dev server shuts down gracefully, so wait for it to exit: it can still be
+// writing to the app's directory when this file ends and the caller removes it.
+test.after(async () => {
+  if (!server?.pid) return;
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  if (!signalServer(server.pid, 'SIGTERM') || await waitForServerExit(server.pid, 15_000)) return;
+  signalServer(server.pid, 'SIGKILL');
+  await waitForServerExit(server.pid, 2_000);
 });
 
 // ─── App readiness (independent of the sample API) ────────────────────────────
@@ -90,14 +129,19 @@ test('auth: starts signed out', async () => {
   assert.strictEqual(state.state, 'signedOut');
 });
 
-test('auth: sign up creates account and signs in', async () => {
-  const state = await authApi.setAuthState({
-    action: 'signUp',
-    username: 'testuser@example.com',
-    password: 'TestPass123!',
-  });
+test('auth: sign up asks for the emailed code', async () => {
+  const state = await authApi.setAuthState({ action: 'signUp', username, password });
+  assert.strictEqual(state.state, 'confirmingSignUp');
+});
+
+test('auth: the code confirms the account and signs in', async () => {
+  const confirmed = await authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  // The <Authenticator> submits this step on its own; no second password entry.
+  assert.ok(confirmed.actions.some((a) => a.name === 'autoSignIn'));
+  const state = await authApi.setAuthState({ action: 'autoSignIn', username });
   assert.strictEqual(state.state, 'signedIn');
-  assert.strictEqual(state.user?.username, 'testuser@example.com');
+  // The username is an id Cognito generates (`signInWith: ['email']`); the UI shows `displayName`.
+  assert.strictEqual(state.user?.displayName, username);
 });
 
 test('auth: unauthenticated access is rejected', async () => {
@@ -106,15 +150,12 @@ test('auth: unauthenticated access is rejected', async () => {
 
   await assert.rejects(
     () => api.listTodos(),
-    (err: any) => err.message.includes('Authentication') || err.message.includes('Session') || err.message.includes('401'),
+    (err: unknown) => isBlocksError(err, 'NotAuthenticatedException'),
   );
 
   // Sign back in for remaining tests
-  await authApi.setAuthState({
-    action: 'signIn',
-    username: 'testuser@example.com',
-    password: 'TestPass123!',
-  });
+  const state = await authApi.setAuthState({ action: 'signIn', username, password });
+  assert.strictEqual(state.state, 'signedIn');
 });
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -131,7 +172,10 @@ test('todos: create with priority', async () => {
 test('todos: list (only own)', async () => {
   const list = await api.listTodos();
   assert.ok(list.length >= 1);
-  assert.ok(list.every(t => t.userId === 'testuser@example.com'));
+  // Every todo is keyed on the owner's userSub, the same for all of them.
+  const owner = list[0].userSub;
+  assert.ok(owner);
+  assert.ok(list.every(t => t.userSub === owner));
 });
 
 test('todos: list sorted by priority (client-side sort)', async () => {
@@ -199,8 +243,132 @@ test('todos: concurrent toggle → conflict → retry succeeds', async () => {
   await api.deleteTodo(todo.todoId);
 });
 
+// ─── Per-user isolation ───────────────────────────────────────────────────────
+
+test('todos: another user can neither see nor change them', async () => {
+  const mine = await api.createTodo('Private to the first user', 2);
+
+  // A second, brand-new user, signed in at the same time: `createTestClient`
+  // gives them the app's clients with a cookie jar of their own.
+  const other = createTestClient(app);
+  const otherName = `b-${username}`;
+  await other.authApi.setAuthState({ action: 'signUp', username: otherName, password });
+  await other.authApi.setAuthState({ action: 'confirmSignUp', username: otherName, code: await getLastAuthCode(otherName) });
+  assert.strictEqual((await other.authApi.setAuthState({ action: 'autoSignIn', username: otherName })).state, 'signedIn');
+
+  for (const sortBy of [undefined, 'priority', 'title'] as const) {
+    const theirs = await other.api.listTodos(sortBy);
+    assert.ok(!theirs.some(t => t.todoId === mine.todoId), `listTodos(${sortBy ?? ''}) leaked the first user's todo`);
+  }
+  await assert.rejects(() => other.api.toggleTodo(mine.todoId), /not found/i);
+  await assert.rejects(() => other.api.updatePriority(mine.todoId, 3), /not found/i);
+  await other.api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
+
+  // The first user, still signed in: the todo is still there, unchanged.
+  const after = (await api.listTodos()).find(t => t.todoId === mine.todoId);
+  assert.ok(after, 'the first user still has the todo');
+  assert.strictEqual(after.completed, false);
+  assert.strictEqual(after.priority, 2);
+  assert.strictEqual(after.version, 1);
+  await api.deleteTodo(mine.todoId);
+});
+
 // ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.
+// `subscribeTodos()` returns a channel the client hydrates into a live
+// WebSocket subscription (dev server runs a local WS server — no AWS). We
+// subscribe, mutate over the API, and assert the broadcast arrives. This is
+// the same subscription App.tsx uses to reload the list in every open tab.
+
+type TodoEvent = { action: 'created' | 'updated' | 'deleted'; todoId: string };
+
+/**
+ * Subscribe to `channel` and return a promise for the NEXT message, plus an
+ * `established` promise that resolves once the server confirms the subscription.
+ * Awaiting `established` before triggering a mutation closes the race where a
+ * publish could fire before the subscribe is confirmed. Rejects after
+ * `timeoutMs` so a dropped broadcast fails loudly instead of hanging.
+ */
+function nextMessage<T>(
+  channel: {
+    subscribe(handler: (message: T) => void): { unsubscribe(): void; established: Promise<void> };
+  },
+  timeoutMs = 5000,
+): { received: Promise<T>; established: Promise<void>; unsubscribe(): void } {
+  let unsubscribe = () => {};
+  let established: Promise<void> = Promise.resolve();
+  const received = new Promise<T>((resolve, reject) => {
+    // Use globalThis to avoid the timers/promises setTimeout shadow (the
+    // template imports { setTimeout } from 'node:timers/promises' at the top).
+    const timer = globalThis.setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const sub = channel.subscribe((message: T) => {
+      globalThis.clearTimeout(timer);
+      resolve(message);
+    });
+    established = sub.established;
+    unsubscribe = () => { globalThis.clearTimeout(timer); sub.unsubscribe(); };
+  });
+  return { received, established, unsubscribe };
+}
+
+test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    const todo = await api.createTodo('Realtime create');
+    const message = await received;
+    assert.strictEqual(message.action, 'created');
+    assert.strictEqual(message.todoId, todo.todoId);
+    await api.deleteTodo(todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('realtime: a priority change broadcasts an updated event', async (t) => {
+  const todo = await api.createTodo('Realtime priority', 3);
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.updatePriority(todo.todoId, 1);
+    const message = await received;
+    assert.strictEqual(message.action, 'updated');
+    assert.strictEqual(message.todoId, todo.todoId);
+    const updated = (await api.listTodos()).find(item => item.todoId === todo.todoId);
+    assert.strictEqual(updated?.priority, 1);
+    assert.strictEqual(updated?.version, todo.version + 1);
+  } finally {
+    unsubscribe();
+    await api.deleteTodo(todo.todoId);
+  }
+});
+
+test('realtime: a deleted todo broadcasts a deleted event', async (t) => {
+  const todo = await api.createTodo('Realtime delete');
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.deleteTodo(todo.todoId);
+    const message = await received;
+    assert.strictEqual(message.action, 'deleted');
+    assert.strictEqual(message.todoId, todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});

@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
+import { HostingError } from '@aws-blocks/hosting/constructs';
 import {
   _setSynthExistsChecker,
   _setSynthSecretFetcher,
@@ -17,17 +18,29 @@ import {
   type RouteBehavior,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { App, Duration, Stack, Token } from 'aws-cdk-lib';
+import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
-import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import {
+  type ApiFrontDoorOwner,
+  apiFrontDoorMarker,
+  claimApiFrontDoor,
+  publishPublicOrigin,
+  scheduleApiFrontDoor,
+} from './cdk/api-front-door.js';
+import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, forEachBlocksKmsKey, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
-import { type BlocksStackApi, buildConfigJson, Hosting, type HostingProps } from './hosting.js';
+import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
+import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 
 // ================================================================
 // Hosting construct tests
@@ -528,6 +541,210 @@ describe('Hosting', () => {
     });
   });
 
+  // A namespace on a container compute: Hosting routes its exact path straight to
+  // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
+  // behavior that would otherwise match first.
+  describe('container API namespaces', () => {
+    function hostingWithDirectRoute(id: string, cacheBehaviors?: number) {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, id);
+      const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+      const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+      const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        _apiDirectRoutes: [
+          {
+            path: `${BLOCKS_RPC_PREFIX}/render`,
+            ingress: { kind: 'load-balancer', loadBalancer, port: 10_123, vpc, subnets, routePath: () => {} },
+          },
+        ],
+      };
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api,
+        ...(cacheBehaviors === undefined ? {} : { frontDoor: { features: { quotas: { cacheBehaviors } } } }),
+      });
+      return Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string; Properties: any }>;
+    }
+
+    it("counts the container behaviors against the door's quotas.cacheBehaviors at synth", () => {
+      const resources = hostingWithDirectRoute('HostingDirectRouteCount');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      // The default behavior plus every other one, the container path included.
+      const total = 1 + dist.Properties.DistributionConfig.CacheBehaviors.length;
+      assert.doesNotThrow(() => hostingWithDirectRoute('HostingDirectRouteAtLimit', total));
+      assert.throws(
+        () => hostingWithDirectRoute('HostingDirectRouteOverLimit', total - 1),
+        new RegExp(
+          `needs ${total} cache behaviors .*'render'.*exceeding the limit of ${total - 1} .*Hosting's ` +
+            '`frontDoor\\.features\\.quotas\\.cacheBehaviors`',
+          's',
+        ),
+      );
+    });
+
+    it('adds the container path before the gateway API behaviors, to a VPC origin', () => {
+      const resources = hostingWithDirectRoute('HostingDirectRoute');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      const config = dist.Properties.DistributionConfig;
+      const patterns: string[] = config.CacheBehaviors.map((b: { PathPattern: string }) => b.PathPattern);
+      const direct = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/render`);
+      assert.ok(direct !== -1, `behaviors: ${patterns.join(', ')}`);
+      assert.ok(direct < patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`), 'ahead of /aws-blocks/api/*');
+      assert.ok(direct < patterns.indexOf(BLOCKS_RPC_PREFIX), 'ahead of /aws-blocks/api');
+      const behavior = config.CacheBehaviors[direct];
+      const origin = config.Origins.find((o: { Id: string }) => o.Id === behavior.TargetOriginId);
+      assert.ok(origin.VpcOriginConfig, 'a VPC origin');
+      assert.strictEqual(behavior.FunctionAssociations?.[0]?.EventType, 'viewer-request');
+      const vpcOrigins = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::VpcOrigin');
+      assert.strictEqual(vpcOrigins.length, 1);
+      assert.strictEqual(vpcOrigins[0].Properties.VpcOriginEndpointConfig.HTTPPort, 10_123);
+    });
+
+    it('adds no VPC origin or function without container namespaces', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'HostingNoDirectRoute');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::CloudFront::VpcOrigin', 0);
+      // Hosting has functions of its own; none of them is the forwarded-host stamp.
+      const stamps = Object.values(template.findResources('AWS::CloudFront::Function')).filter((f) =>
+        String(f.Properties.FunctionCode).includes('x-blocks-forwarded-host'),
+      );
+      assert.strictEqual(stamps.length, 0);
+    });
+  });
+
+  // CloudFront forwards the gateway's own `Host`, so the door stamps the viewer's
+  // host on its API behaviors, and the backend's config lists the hosts a handler
+  // may take from that stamp.
+  describe('the viewer host reaches handlers behind the gateway', () => {
+    /** The parts of the synthesized template these tests read. */
+    type Association = { EventType: string; FunctionARN: { 'Fn::GetAtt': [string, string] } };
+    type Behavior = { PathPattern?: string; FunctionAssociations?: Association[] };
+    type Resources = Record<
+      string,
+      {
+        Type: string;
+        Properties: {
+          FunctionCode?: string;
+          DistributionConfig?: { DefaultCacheBehavior?: Behavior; CacheBehaviors?: Behavior[] };
+        };
+      }
+    >;
+    type ViewerRequest = (event: unknown) => { headers: Record<string, { value: string } | undefined> };
+
+    function hostingWith(id: string) {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+      return { resources: Template.fromStack(stack).toJSON().Resources as Resources };
+    }
+
+    /** The viewer-request function an API behavior runs, as CloudFront would run it. */
+    function viewerRequestOf(resources: Resources, behavior: Behavior | undefined): ViewerRequest {
+      const association = (behavior?.FunctionAssociations ?? []).find((a) => a.EventType === 'viewer-request');
+      assert.ok(association, `${behavior?.PathPattern ?? 'default'} has a viewer-request function`);
+      const code = String(resources[association.FunctionARN['Fn::GetAtt'][0]]?.Properties.FunctionCode);
+      return new Function(`${code}\nreturn handler;`)() as ViewerRequest;
+    }
+
+    /**
+     * A resolved template value as CloudFormation would evaluate it, with each
+     * distribution's `DomainName` taken from `domains` — the only intrinsics a
+     * front door's host list is made of.
+     */
+    function evaluate(value: unknown, domains: Record<string, string>): string {
+      if (typeof value === 'string') return value;
+      if (value && typeof value === 'object' && 'Fn::GetAtt' in value) {
+        const [id, attribute] = value['Fn::GetAtt'] as [string, string];
+        assert.strictEqual(attribute, 'DomainName');
+        const domain = domains[id];
+        assert.ok(domain, `a domain for ${id}`);
+        return domain;
+      }
+      if (value && typeof value === 'object' && 'Fn::Join' in value) {
+        const [separator, parts] = value['Fn::Join'] as [string, unknown[]];
+        return parts.map((part) => evaluate(part, domains)).join(separator);
+      }
+      throw new Error(`unexpected template value ${JSON.stringify(value)}`);
+    }
+
+    it('every API behavior to the gateway stamps the viewer host over a client copy', () => {
+      const { resources } = hostingWith('HostingPublicHostStamp');
+      const [, dist] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::CloudFront::Distribution') ?? [];
+      const behaviors = dist?.Properties.DistributionConfig?.CacheBehaviors ?? [];
+      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, '/aws-blocks/auth/*']) {
+        const behavior = behaviors.find((b) => b.PathPattern === pattern);
+        assert.ok(behavior, `a ${pattern} behavior`);
+        const forwarded = viewerRequestOf(resources, behavior)({
+          request: { headers: { host: { value: 'd111.cloudfront.net' }, 'x-blocks-public-host': { value: 'attacker.example' } } },
+        });
+        assert.strictEqual(forwarded.headers['x-blocks-public-host']?.value, 'd111.cloudfront.net', pattern);
+      }
+    });
+
+    it('a Lambda handler behind either of two doors sees the host the viewer called, custom domain included', () => {
+      // The backend's managed distribution and a Hosting distribution with a custom
+      // domain both front it (the compute-smoke `cloudfront` leg's shape).
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'HostingPublicHostTwoDoors', { env: { account: '111111111111', region: 'us-east-1' } });
+      scheduleApiFrontDoor(stack, true, MOCK_API.apiUrl);
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' },
+      });
+      const resources = Template.fromStack(stack).toJSON().Resources as Resources;
+      const distributions = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::CloudFront::Distribution');
+      const managedId = distributions.find(([id]) => id.startsWith('ApiFrontDoor'))?.[0];
+      const hostingId = distributions.find(([id]) => id !== managedId)?.[0];
+      assert.ok(managedId && hostingId, 'both distributions');
+      const domains = { [managedId]: 'dmanaged.cloudfront.net', [hostingId]: 'dhosting.cloudfront.net' };
+      // The deployed config the handlers read: the registered hosts, as CloudFormation resolves them.
+      const registry = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+        Symbol.for('BLOCKS_CONFIG_REGISTRY')
+      ];
+      const hosts = evaluate(stack.resolve(registry?.entries.get('BLOCKS_PUBLIC_HOSTS')), domains);
+
+      const gatewayBehavior = (id: string) => {
+        const config = resources[id]?.Properties.DistributionConfig;
+        return id === managedId ? config?.DefaultCacheBehavior : config?.CacheBehaviors?.find((b) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/*`);
+      };
+      /** The URL a Lambda handler sees for a call the viewer made to `viewerHost` through door `id`. */
+      const lambdaUrl = (id: string, viewerHost: string) => {
+        const forwarded = viewerRequestOf(resources, gatewayBehavior(id))({ request: { headers: { host: { value: viewerHost } } } });
+        return buildEventUrl({
+          path: `${BLOCKS_RPC_PREFIX}/reports`,
+          headers: { Host: 'abc123.execute-api.us-east-1.amazonaws.com', 'x-blocks-public-host': forwarded.headers['x-blocks-public-host']?.value },
+          requestContext: { stage: 'prod' },
+        }).href;
+      };
+
+      const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+      process.env.BLOCKS_PUBLIC_HOSTS = hosts;
+      try {
+        for (const [id, viewerHost] of [
+          [managedId, 'dmanaged.cloudfront.net'],
+          [hostingId, 'dhosting.cloudfront.net'],
+          [hostingId, 'app.example.com'],
+        ] as const) {
+          assert.strictEqual(lambdaUrl(id, viewerHost), `https://${viewerHost}${BLOCKS_RPC_PREFIX}/reports`, viewerHost);
+        }
+        // A host neither door serves keeps the gateway's host (the route path has no stage).
+        assert.strictEqual(
+          lambdaUrl(hostingId, 'other.cloudfront.net'),
+          `https://abc123.execute-api.us-east-1.amazonaws.com${BLOCKS_RPC_PREFIX}/reports`,
+        );
+      } finally {
+        if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+        else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+      }
+    });
+  });
+
   // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
   //
   // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
@@ -589,6 +806,92 @@ describe('Hosting', () => {
         .DistributionConfig;
       const patterns = (distConfig.CacheBehaviors ?? []).map((b: { PathPattern: string }) => b.PathPattern);
       assert.ok(patterns.includes(BLOCKS_RPC_PREFIX), 'Hosting distribution carries the RPC behavior');
+    });
+  });
+
+  describe('apiWaf when Hosting fronts the API', () => {
+    // An owner wired like BlocksStack: the recorders Hosting calls write onto the
+    // same object the front-door aspect is scheduled on. Plumbing only.
+    function wafOwner(id: string, env?: { account: string; region: string }) {
+      const stack = new Stack(new App(), id, env ? { env } : undefined) as Stack & ApiFrontDoorOwner;
+      stack._apiWaf = { rateLimit: 1000 };
+      const restApi = new aws_apigateway.RestApi(stack, 'Api');
+      restApi.root.addMethod('ANY');
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+        publishPublicOrigin: () => publishPublicOrigin(stack),
+        apiFrontDoorMarker: () => apiFrontDoorMarker(stack),
+      };
+      return { stack, api, stage: restApi.deploymentStage };
+    }
+
+    it('default apigateway tier + CloudFront Hosting: attaches the stage ACL and marks Hosting-proxied requests', () => {
+      createSpaBuildOutput(tmpDir);
+      const { stack, api, stage } = wafOwner('ApiWafDefaultTierHosting');
+      scheduleApiFrontDoor(stack, false, api.apiUrl, stage);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      // Native and direct callers keep calling execute-api, so the stage is protected.
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
+      const [acl] = Object.values(template.findResources('AWS::WAFv2::WebACL'));
+      const rate = (acl.Properties.Rules as Array<Record<string, any>>).find((r) => r.Name === 'RateLimitRule');
+      const searchString = rate?.Statement.RateBasedStatement.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString;
+      assert.deepStrictEqual(searchString, stack.resolve(apiFrontDoorMarkerValue(stack)));
+      // Hosting's API origin carries the same marker, so its edge-IP requests are exempt.
+      const distConfig = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0].Properties.DistributionConfig;
+      const markedOrigins = (distConfig.Origins as Array<{ OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }> }>)
+        .filter((o) => o.OriginCustomHeaders?.some((h) => h.HeaderName === API_FRONT_DOOR_MARKER_HEADER && JSON.stringify(h.HeaderValue) === JSON.stringify(searchString)));
+      assert.strictEqual(markedOrigins.length, 1, 'the API origin forwards the marker header');
+      assert.strictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('apiWaf')).length, 0);
+    });
+
+    it('default apigateway tier + a non-claiming door: stage ACL without the rate rule, and a warning', () => {
+      createSpaBuildOutput(tmpDir);
+      const { stack, api, stage } = wafOwner('ApiWafProxyDoor', { account: '111111111111', region: 'us-east-1' });
+      scheduleApiFrontDoor(stack, false, api.apiUrl, stage);
+      // A bring-your-own door: like the ALB and API Gateway doors, it serves the API
+      // to browsers through its own proxy and doesn't claim the front-door role.
+      const proxyDoor = defineFrontDoor({
+        service: 'my-proxy',
+        build(scope, input) {
+          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+            defaultBehavior: { origin: cf.origin(input.origins.assets) },
+            additionalBehaviors: cf.apiBehaviors(input.origins.api),
+          });
+          return { url: 'https://proxy.example.com' };
+        },
+      });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'custom', door: proxyDoor } });
+
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
+      const [acl] = Object.values(template.findResources('AWS::WAFv2::WebACL'));
+      assert.ok(!(acl.Properties.Rules as Array<{ Name: string }>).some((r) => r.Name === 'RateLimitRule'));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('leaves the per-IP rate rule off'));
+      assert.strictEqual(warnings.length, 1);
+    });
+
+
+    it('creates no API web ACL and warns to set the WAF on Hosting', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiWafHostingStack');
+      // What BlocksStack records from `apiWaf: { enabled: true }`; plumbing only.
+      (stack as Stack & { _apiWaf?: { rateLimit: number } })._apiWaf = { rateLimit: 1000 };
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+      };
+      scheduleApiFrontDoor(stack, true, api.apiUrl);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::WAFv2::WebACL', 0);
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('apiWaf creates no web ACL'));
+      assert.strictEqual(warnings.length, 1);
     });
   });
 
@@ -1129,7 +1432,7 @@ describe('Hosting', () => {
   // ── Issue #728: SSR cache policy honors origin Cache-Control ──
 
   describe('SSR cache policy (issue #728)', () => {
-    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=31536000 for compute behaviors', () => {
+    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=86400 for compute behaviors', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1144,13 +1447,13 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // The L3 construct should create an SsrCachePolicy with these values.
-      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
-      // values to at most a year.
+      // maxTtl is 1 day (86400s): it clamps origin Cache-Control values
+      // (e.g. `s-maxage=31536000`) to at most a day at the edge.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 31536000,
+          MaxTTL: 86400,
         }),
       });
     });
@@ -1738,6 +2041,34 @@ describe('Hosting', () => {
       const has404 = errorResponses.some((r: any) => r.ErrorCode === 404);
       assert.ok(has404, 'Should configure 404 error response');
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('fails synth when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+      createSpaBuildOutput(tmpDir);
+      const notFoundPath = path.join(tmpDir, '404.html');
+      fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
+      const synth = (exports: string[] | undefined, errorPages: boolean) => () => {
+        const app = new App();
+        const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
+        // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
+        const api: BlocksStackApi = { ...MOCK_API };
+        if (exports) Reflect.set(api, HTTP_ERROR_STATUS_EXPORTS, exports);
+        new Hosting(stack, 'Hosting', { root: tmpDir, api, ...(errorPages ? { errorPages: { notFound: notFoundPath } } : {}) });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
+      };
+
+      assert.throws(synth(['api'], true), (err: Error) => {
+        assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
+        assert.match(err.message, /'api'/);
+        assert.match(err.message, /404/);
+        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
+        return true;
+      });
+
+      assert.deepStrictEqual(synth([], true)(), [], 'no httpErrorStatus namespace: synths, no warning');
+      assert.deepStrictEqual(synth(undefined, true)(), [], 'a plain { apiUrl } backend: synths, no warning');
+      assert.deepStrictEqual(synth(['api'], false)(), [], 'no 4xx error page: synths, no warning');
     });
 
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {
@@ -2354,6 +2685,26 @@ describe('Hosting', () => {
       assert.ok(
         [...visited].some((r) => r.includes('CustomCrossRegionExportWriter')),
         'the prepare-time cross-region provider role was visited',
+      );
+    });
+
+    it('checks the key policies of both alarm topic keys (regional and us-east-1) and synthesizes', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeKeyPolicyStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      addServicePrincipalTrustCheck(backend as unknown as Construct);
+      const visited: string[] = [];
+      forEachBlocksKmsKey(backend as unknown as Construct, (key) => visited.push(key.node.path));
+      buildOffRegionEdgeHosting(app, stack, backend);
+      // Synth fails if either key's cloudwatch.amazonaws.com statement lacks a source condition.
+      assert.doesNotThrow(() => app.synth());
+      assert.ok(
+        visited.some((p) => p.startsWith('EdgeKeyPolicyStack/Hosting/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the regional alarm topic key is checked (visited: ${visited.join(', ')})`,
+      );
+      assert.ok(
+        visited.some((p) => !p.startsWith('EdgeKeyPolicyStack/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the us-east-1 monitoring stack's alarm topic key is checked (visited: ${visited.join(', ')})`,
       );
     });
 
@@ -3746,3 +4097,138 @@ const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
   { kind: 'apiGateway', features: { waf: { enabled: true } } },
 ];
 void _blocksFrontDoorTypes;
+
+// `Hosting` runs `buildCommand` on every synth. A destroy reuses an existing
+// build (context `reuseFrontendBuild=true`), and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+// makes a deploy reuse one; see common/frontend-build.ts.
+describe('Hosting — skipping the frontend build', () => {
+  let tmpDir: string;
+  const savedSkip = process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  // Records that it ran, then writes the SPA output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('built.txt','1');f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<html></html>')"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-skipbuild-'));
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'skip', dependencies: { react: '^18' } }));
+    delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedSkip === undefined) delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+    else process.env.BLOCKS_SKIP_FRONTEND_BUILD = savedSkip;
+  });
+
+  const synth = (context?: Record<string, string>) => {
+    const stack = new Stack(new App(context ? { context } : undefined), 'SkipBuildStack');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD });
+  };
+  const built = () => fs.existsSync(path.join(tmpDir, 'built.txt'));
+
+  it('runs buildCommand on a normal synth', () => {
+    synth();
+    assert.ok(built(), 'buildCommand should run');
+  });
+
+  it('a destroy synth reuses an existing build instead of running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(!built(), 'buildCommand should not run when dist/ exists');
+  });
+
+  it('a destroy synth still builds when there is no build to reuse', () => {
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 deploys the existing build without running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth();
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 with no build output fails and names the variable', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    assert.throws(() => synth(), (err: Error) => {
+      assert.match(err.message, /Build output directory not found/);
+      assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD is set, so the frontend build is skipped/);
+      return true;
+    });
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 names the variable when the adapter output is missing (Next.js: .next without .open-next)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.next'), { recursive: true });
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    const stack = new Stack(new App(), 'SkipBuildNextStack');
+    assert.throws(
+      () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, framework: 'nextjs', buildCommand: BUILD }),
+      (err: Error) => {
+        assert.match(err.message, /OpenNext output not found/);
+        assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD is set, so the frontend build is skipped/);
+        // The adapter's structured error survives: same code and name, its resolution, the original as cause.
+        assert.ok(err instanceof HostingError, 'expected a HostingError');
+        assert.strictEqual(err.code, 'OpenNextOutputNotFoundError');
+        assert.strictEqual(err.name, 'OpenNextOutputNotFoundError');
+        assert.ok(err.resolution.length > 0, 'expected the adapter resolution');
+        const { cause } = err;
+        assert.ok(cause instanceof HostingError, 'expected the adapter error as cause');
+        assert.strictEqual(err.resolution, cause.resolution);
+        return true;
+      },
+    );
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('a destroy synth with BLOCKS_SKIP_FRONTEND_BUILD=1 exported and no build output still builds instead of failing', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
+  });
+});
+
+// A destroy reuses a build only when the adapter will too: `Hosting` must check
+// the same marker the framework adapter checks, or it skips `buildCommand` while
+// the adapter still runs its full build.
+describe('frontendReuseMarker', () => {
+  it('keys a Next.js app on the OpenNext output the adapter deploys, not .next', () => {
+    assert.strictEqual(
+      frontendReuseMarker('nextjs', '/app', '/app/.next', false),
+      path.join('/app', '.open-next', 'open-next.output.json'),
+    );
+  });
+
+  it('keys other frameworks, and a custom adapter, on the build output dir', () => {
+    assert.strictEqual(frontendReuseMarker('spa', '/app', '/app/dist', false), '/app/dist');
+    assert.strictEqual(frontendReuseMarker('sveltekit', '/app', '/app/build', false), '/app/build');
+    assert.strictEqual(frontendReuseMarker('nextjs', '/app', '/app/.next', true), '/app/.next');
+  });
+});
+
+describe('Hosting — the skip log names the variable, not a value', () => {
+  let tmpDir: string;
+  const saved = process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (saved === undefined) delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+    else process.env.BLOCKS_SKIP_FRONTEND_BUILD = saved;
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=true logs the variable without claiming =1', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-skiplog-'));
+    createSpaBuildOutput(tmpDir);
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = 'true';
+    const logged: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => logged.push(args.map(String).join(' '));
+    try {
+      new Hosting(new Stack(new App(), 'SkipLogStack'), 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: 'exit 1' });
+    } finally {
+      console.log = original;
+    }
+    const line = logged.find((l) => l.includes('Skipping frontend build'));
+    assert.ok(line, `expected a skip line in: ${logged.join(' | ')}`);
+    assert.ok(line.includes('BLOCKS_SKIP_FRONTEND_BUILD is set'), line);
+    assert.ok(!line.includes('=1'), line);
+  });
+});

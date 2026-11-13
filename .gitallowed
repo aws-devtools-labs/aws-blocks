@@ -6,6 +6,13 @@
 333333333333
 123456789012
 
+# Another dummy account number, already on main in
+# packages/blocks/src/cli/commands.test.ts (NOT introduced by this change). The
+# pre-commit hook scans the whole content of every staged file, not just its
+# diff, so `account: '210987654321'` there matches the account-id pattern and
+# blocks any commit that touches that file. Synthetic value, already public.
+210987654321
+
 # Pre-existing transitive dependency (@graphql-tools, already on main — NOT
 # introduced by this change) whose package name trips the internal-tooling
 # "[aA]pollo" guard. git-secrets' pre-commit hook scans staged lockfile
@@ -14,3 +21,14 @@
 # are public npm packages, not Amazon-internal references — allow them.
 @graphql-tools/apollo-engine-loader
 apollo-engine-loader
+
+# AWS's own documented example access key IDs, used in tests and benchmark
+# fixtures. The access-key-ID pattern matches any ASIA/AKIA prefix followed by
+# 16 characters, so these synthetic values trip it. The hook scans the whole
+# working tree rather than the staged diff, so one of these blocks every commit
+# in the repository, not only commits that touch the file holding it:
+#   AKIAIOSFODNN7EXAMPLE — packages/admin-ui/src/server/redact.test.ts,
+#                          packages/core/src/scripts/preflight-credentials.test.ts
+#   ASIAEXAMPLEKEY123456 — scripts/harbor-bench/test_trials.py
+AKIAIOSFODNN7EXAMPLE
+ASIAEXAMPLEKEY123456

@@ -8,6 +8,8 @@ import {
   CommitTransactionCommand,
   RollbackTransactionCommand,
   type Field,
+  type ArrayValue,
+  type ColumnMetadata,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { installClientUserAgent } from '@aws-blocks/core';
@@ -62,22 +64,103 @@ export function toField(value: unknown): Field {
 }
 
 /**
+ * Postgres `typeName` values (from `ColumnMetadata.typeName`) whose Data API
+ * `stringValue` is a JSON document that should be parsed back into a JS value,
+ * matching what the `pg` / PGlite drivers return natively. This Set holds only
+ * the scalar `json` / `jsonb` forms; the leading-underscore array-element forms
+ * (`_json` / `_jsonb`) are not members here — they are matched separately in
+ * {@link fromArrayValue} and parsed per element.
+ */
+const JSON_TYPE_NAMES = new Set(['json', 'jsonb']);
+
+/** Whether `typeName` names a scalar `json`/`jsonb` column (not its array form). */
+function isJsonTypeName(typeName: string | undefined): boolean {
+  return typeName !== undefined && JSON_TYPE_NAMES.has(typeName);
+}
+
+/**
+ * Parse a Data API `stringValue` for a `json`/`jsonb` column back into a JS
+ * value. On malformed JSON (should not happen for a value the server round-trips
+ * as json/jsonb) the raw string is returned unchanged rather than throwing, so a
+ * single odd row never fails the whole query.
+ */
+function parseJsonValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Unmarshal a Data API {@link ArrayValue} to a JS array, recursing through nested
+ * arrays. `elementTypeName` is the column's `typeName` (e.g. `_text`, `_jsonb`);
+ * when it names a `json`/`jsonb` array, each string element is JSON-parsed so an
+ * array column returns the same values as the `pg` / PGlite engines.
+ */
+function fromArrayValue(arrayValue: ArrayValue, elementTypeName?: string): unknown[] {
+  // Array element arrays are typed with nullable elements across SDK versions
+  // because a SQL array can hold NULL elements (e.g. '{a,NULL,b}'::text[]); a
+  // null element must round-trip as JS null, never be coerced.
+  if (arrayValue.stringValues !== undefined) {
+    // `_json` / `_jsonb` → an array whose non-null elements are JSON documents.
+    const isJsonArray = elementTypeName === '_json' || elementTypeName === '_jsonb';
+    return arrayValue.stringValues.map(v => (v === null ? null : isJsonArray ? parseJsonValue(v) : v));
+  }
+  if (arrayValue.longValues !== undefined) return arrayValue.longValues.map(v => (v === null ? null : Number(v)));
+  if (arrayValue.doubleValues !== undefined) return arrayValue.doubleValues.map(v => (v === null ? null : v));
+  if (arrayValue.booleanValues !== undefined) return arrayValue.booleanValues.map(v => (v === null ? null : v));
+  if (arrayValue.arrayValues !== undefined) return arrayValue.arrayValues.map(v => (v === null ? null : fromArrayValue(v, elementTypeName)));
+  return [];
+}
+
+/**
  * Unmarshal a Data API Field to a JS value.
  *
+ * Pass the column's `typeName` (from `ColumnMetadata.typeName`, available when the
+ * statement is run with `includeResultMetadata: true`) so the result matches what
+ * the `pg` / PGlite engines return for the same query:
+ *   - array columns (`text[]`, `int[]`, ...) arrive as `arrayValue` and become JS
+ *     arrays instead of `null`;
+ *   - `json` / `jsonb` columns arrive as `stringValue` and are parsed into objects
+ *     instead of being returned as raw strings.
+ * Called with no `typeName` it still unmarshals every scalar and array shape; only
+ * the json/jsonb string-parsing step needs the type.
+ *
  * @example
- * fromField({ stringValue: 'hi' })  // => 'hi'
- * fromField({ longValue: 99 })      // => 99
- * fromField({ booleanValue: true }) // => true
- * fromField({ isNull: true })       // => null
+ * fromField({ stringValue: 'hi' })                               // => 'hi'
+ * fromField({ longValue: 99 })                                   // => 99
+ * fromField({ booleanValue: true })                              // => true
+ * fromField({ isNull: true })                                    // => null
+ * fromField({ arrayValue: { stringValues: ['a', 'b'] } })        // => ['a', 'b']
+ * fromField({ stringValue: '{"estimate":3}' }, 'jsonb')          // => { estimate: 3 }
  */
-export function fromField(field: Field): unknown {
+export function fromField(field: Field, typeName?: string): unknown {
   if (field.isNull) return null;
-  if (field.stringValue !== undefined) return field.stringValue;
+  if (field.arrayValue !== undefined) return fromArrayValue(field.arrayValue, typeName);
+  if (field.stringValue !== undefined) {
+    return isJsonTypeName(typeName) ? parseJsonValue(field.stringValue) : field.stringValue;
+  }
   if (field.longValue !== undefined) return Number(field.longValue);
   if (field.doubleValue !== undefined) return field.doubleValue;
   if (field.booleanValue !== undefined) return field.booleanValue;
   if (field.blobValue !== undefined) return Buffer.from(field.blobValue);
   return null;
+}
+
+/**
+ * Map one Data API record (row) to a plain object, keyed by column name and
+ * unmarshalled with each column's `typeName` so values match the `pg` / PGlite
+ * engines. `columnMetadata` comes from `includeResultMetadata: true`.
+ */
+function mapRecord<T>(record: Field[], columnMetadata?: ColumnMetadata[]): T {
+  const row: Record<string, unknown> = {};
+  record.forEach((field, i) => {
+    const meta = columnMetadata?.[i];
+    const colName = meta?.name || `col${i}`;
+    row[colName] = fromField(field, meta?.typeName);
+  });
+  return row as T;
 }
 
 /**
@@ -87,6 +170,84 @@ export function fromField(field: Field): unknown {
  * row's DETAIL), so only the last match is trusted.
  */
 const SQLSTATE_PATTERN = /SQLState:\s*([A-Z0-9]{5})/gi;
+
+/**
+ * SQLStates the engine refuses a credential with: `28000`
+ * (invalid_authorization_specification) and `28P01` (invalid_password).
+ */
+const AUTH_SQLSTATES = new Set(['28000', '28P01']);
+
+/** Data API exceptions that carry a refused credential with no SQLState. */
+const AUTH_MESSAGE_ERROR_NAMES = new Set(['BadRequestException', 'DatabaseErrorException']);
+
+/** The message with quoted segments removed, so planted caller text cannot match. */
+const outsideQuotes = (msg: string): string => msg.replace(/"[^"]*"|'[^']*'/g, '');
+
+/**
+ * True when the Data API reports the engine refusing the credential. During a
+ * rotation the secret and the cluster disagree for a few seconds (the rotation
+ * function sets the new password on the cluster, then publishes it), so a call
+ * that reads the secret in that gap is refused. The Data API reports it as
+ * `BadRequestException` or `DatabaseErrorException` with the engine's text, and
+ * carries no SQLState on some paths, so the message is matched too.
+ */
+function isAuthFailure(e: Error): boolean {
+  const code = [...(e.message || '').matchAll(SQLSTATE_PATTERN)].at(-1)?.[1];
+  if (code) return AUTH_SQLSTATES.has(code);
+  // A server message carrying this phrasing outside quotes would be read as a
+  // refusal, retried and relabelled. Accepted: bounded to the attempts below,
+  // and it costs latency rather than correctness.
+  if (!AUTH_MESSAGE_ERROR_NAMES.has(e.name)) return false;
+  return /password authentication failed|authentication failed for user/i.test(
+    outsideQuotes(e.message || ''),
+  );
+}
+
+/** Attempts {@link withAuthRetry} makes, the first included. */
+const AUTH_RETRY_ATTEMPTS = 3;
+
+/** Multiplied by the attempt number, so the waits are 3s then 6s. */
+const AUTH_RETRY_BASE_DELAY_MS = 3000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run `send` again when the engine refused the credential, which a rotation
+ * makes transient: the statement never ran (the refusal happens before it), so
+ * a retry cannot apply anything twice. Bounded so a request stays inside the
+ * gateway's 29-second ceiling; a credential that is genuinely wrong exhausts
+ * the attempts and surfaces as `ConnectionFailed`. Only for a send that opens
+ * its own connection — a statement inside a transaction reuses one id the
+ * backoff can outlive (see `queryInTransaction`).
+ *
+ * A refusal that is not a rotation — a secret pointing at the wrong cluster, a
+ * dropped role — is indistinguishable from one, so it pays the full backoff
+ * before surfacing. Each attempt and the give-up are logged with the time
+ * spent, so that delay is attributable rather than an unexplained slow call.
+ */
+async function withAuthRetry<T>(send: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await send();
+    } catch (e) {
+      if (!(e instanceof Error) || !isAuthFailure(e)) throw e;
+      if (attempt >= AUTH_RETRY_ATTEMPTS) {
+        const spentMs = AUTH_RETRY_BASE_DELAY_MS * ((AUTH_RETRY_ATTEMPTS * (AUTH_RETRY_ATTEMPTS - 1)) / 2);
+        console.warn(
+          `[DataApiEngine] credential still refused after ${AUTH_RETRY_ATTEMPTS} attempts over ` +
+            `${spentMs / 1000}s; the credential may be wrong rather than mid-rotation`,
+        );
+        throw e;
+      }
+      const delayMs = AUTH_RETRY_BASE_DELAY_MS * attempt;
+      console.warn(
+        `[DataApiEngine] credential refused by ${e.name} (attempt ${attempt} of ` +
+          `${AUTH_RETRY_ATTEMPTS}); retrying in ${delayMs / 1000}s`,
+      );
+      await sleep(delayMs);
+    }
+  }
+}
 
 /**
  * Translate a Data API error to a DatabaseErrors name.
@@ -120,7 +281,10 @@ function translateError(e: unknown): never {
       // Matches the PGlite / pg-client engine paths.
       const request = requestError(code, e);
       if (request) throw request;
-      if (code.startsWith('08')) {
+      if (code.startsWith('08') || AUTH_SQLSTATES.has(code)) {
+        // 08xxx is a connection error; 28000/28P01 is the engine refusing the
+        // credential, which during a rotation means the Data API read the
+        // secret between `setSecret` and `finishSecret` (see isAuthFailure).
         name = DatabaseErrors.ConnectionFailed;
       } else {
         name = DatabaseErrors.QueryFailed;
@@ -130,7 +294,7 @@ function translateError(e: unknown): never {
       // unique-violation text — map to the same 409 (Conflict) as the
       // SQLState-parsed path above.
       throw uniqueConstraintConflict(e);
-    } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name)) {
+    } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name) || isAuthFailure(e)) {
       name = DatabaseErrors.ConnectionFailed;
     } else {
       name = DatabaseErrors.QueryFailed;
@@ -174,22 +338,17 @@ export class DataApiEngine implements DatabaseEngine {
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     try {
       const { sql: translated, parameters } = translateParams(sql, params);
-      const result = await this.client.send(new ExecuteStatementCommand({
-        resourceArn: this.resourceArn,
-        secretArn: this.secretArn,
-        database: this.database,
-        sql: translated,
-        parameters,
-        includeResultMetadata: true,
-      }));
-      return (result.records || []).map(record => {
-        const row: Record<string, unknown> = {};
-        record.forEach((field, i) => {
-          const colName = result.columnMetadata?.[i]?.name || `col${i}`;
-          row[colName] = fromField(field);
-        });
-        return row as T;
-      });
+      const result = await withAuthRetry(() =>
+        this.client.send(new ExecuteStatementCommand({
+          resourceArn: this.resourceArn,
+          secretArn: this.secretArn,
+          database: this.database,
+          sql: translated,
+          parameters,
+          includeResultMetadata: true,
+        })),
+      );
+      return (result.records || []).map(record => mapRecord<T>(record, result.columnMetadata));
     } catch (e) {
       translateError(e);
     }
@@ -199,13 +358,15 @@ export class DataApiEngine implements DatabaseEngine {
   async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     try {
       const { sql: translated, parameters } = translateParams(sql, params);
-      const result = await this.client.send(new ExecuteStatementCommand({
-        resourceArn: this.resourceArn,
-        secretArn: this.secretArn,
-        database: this.database,
-        sql: translated,
-        parameters,
-      }));
+      const result = await withAuthRetry(() =>
+        this.client.send(new ExecuteStatementCommand({
+          resourceArn: this.resourceArn,
+          secretArn: this.secretArn,
+          database: this.database,
+          sql: translated,
+          parameters,
+        })),
+      );
       return { rowCount: result.numberOfRecordsUpdated ?? 0 };
     } catch (e) {
       translateError(e);
@@ -215,11 +376,16 @@ export class DataApiEngine implements DatabaseEngine {
   /** Begin a transaction via BeginTransactionCommand. Returns the transaction ID as the handle. */
   async beginTransaction(): Promise<TransactionHandle> {
     try {
-      const result = await this.client.send(new BeginTransactionCommand({
-        resourceArn: this.resourceArn,
-        secretArn: this.secretArn,
-        database: this.database,
-      }));
+      // Retried like `query`/`execute`, not like the statements inside the
+      // transaction: this opens its own connection with nothing applied yet, so
+      // there is no transaction id a retry could outlive.
+      const result = await withAuthRetry(() =>
+        this.client.send(new BeginTransactionCommand({
+          resourceArn: this.resourceArn,
+          secretArn: this.secretArn,
+          database: this.database,
+        })),
+      );
       return result.transactionId;
     } catch (e) {
       translateError(e);
@@ -252,44 +418,49 @@ export class DataApiEngine implements DatabaseEngine {
     }
   }
 
-  /** Execute a query within a transaction, passing the transaction ID to ExecuteStatement. */
+  /**
+   * Execute a query within a transaction, passing the transaction ID to ExecuteStatement.
+   *
+   * No {@link withAuthRetry} here, unlike the methods above: every attempt reuses
+   * one transaction id, and the backoff can outlive the transaction, so a retry
+   * could run against one Aurora has already rolled back. The refusal surfaces as
+   * `ConnectionFailed` instead, which lets the caller roll back and retry the whole
+   * transaction on a fresh one.
+   */
   async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
     try {
       const { sql: translated, parameters } = translateParams(sql, params);
-      const result = await this.client.send(new ExecuteStatementCommand({
-        resourceArn: this.resourceArn,
-        secretArn: this.secretArn,
-        database: this.database,
-        sql: translated,
-        parameters,
-        transactionId: handle as string,
-        includeResultMetadata: true,
-      }));
-      return (result.records || []).map(record => {
-        const row: Record<string, unknown> = {};
-        record.forEach((field, i) => {
-          const colName = result.columnMetadata?.[i]?.name || `col${i}`;
-          row[colName] = fromField(field);
-        });
-        return row as T;
-      });
+      const result = await this.client.send(
+        new ExecuteStatementCommand({
+          resourceArn: this.resourceArn,
+          secretArn: this.secretArn,
+          database: this.database,
+          sql: translated,
+          parameters,
+          transactionId: handle as string,
+          includeResultMetadata: true,
+        }),
+      );
+      return (result.records || []).map(record => mapRecord<T>(record, result.columnMetadata));
     } catch (e) {
       translateError(e);
     }
   }
 
-  /** Execute a mutation within a transaction, passing the transaction ID to ExecuteStatement. */
+  /** Execute a mutation within a transaction; no auth retry, see `queryInTransaction`. */
   async executeInTransaction(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     try {
       const { sql: translated, parameters } = translateParams(sql, params);
-      const result = await this.client.send(new ExecuteStatementCommand({
-        resourceArn: this.resourceArn,
-        secretArn: this.secretArn,
-        database: this.database,
-        sql: translated,
-        parameters,
-        transactionId: handle as string,
-      }));
+      const result = await this.client.send(
+        new ExecuteStatementCommand({
+          resourceArn: this.resourceArn,
+          secretArn: this.secretArn,
+          database: this.database,
+          sql: translated,
+          parameters,
+          transactionId: handle as string,
+        }),
+      );
       return { rowCount: result.numberOfRecordsUpdated ?? 0 };
     } catch (e) {
       translateError(e);

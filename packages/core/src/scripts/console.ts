@@ -8,9 +8,16 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 export interface ConsoleOptions {
   stackId?: string;
   outputsFile?: string;
+  /** The Region the stack is in, for example the one it was deployed to. Default: the configured Region. */
+  region?: string;
 }
 
-function resolveRegion(): string {
+/**
+ * The region this machine would deploy to, resolved the same way the AWS CLI
+ * does. Exported so a deploy record captures the region at deploy time rather
+ * than leaving a reader to trust ambient config, which can differ.
+ */
+export function resolveRegion(): string {
   const fromEnv = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
   if (fromEnv) return fromEnv;
   try {
@@ -23,7 +30,7 @@ function resolveRegion(): string {
 }
 
 /** Launch the URL in the default browser. Best-effort: no opener (headless/CI) is not a failure. */
-function openInBrowser(url: string): void {
+export function openInBrowser(url: string): void {
   const opener =
     process.platform === 'darwin' ? 'open' :
     process.platform === 'win32' ? 'cmd' :
@@ -50,7 +57,7 @@ export async function openConsole(options: ConsoleOptions) {
       throw new Error('Must provide either stackId or outputsFile');
     }
 
-    const region = resolveRegion();
+    const region = options.region || resolveRegion();
     const stackUrl = `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks?filteringText=${encodeURIComponent(stackName)}`;
 
     console.log('Opening AWS Console...');

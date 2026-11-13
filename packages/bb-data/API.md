@@ -94,6 +94,7 @@ export const DatabaseErrors: {
 export interface DatabaseOptions {
     connection?: ExternalDatabaseRef;
     databaseName?: string;
+    extensions?: string[];
     logger?: ChildLogger;
     maxCapacity?: number;
     migrationsPath?: string;
@@ -105,6 +106,9 @@ export interface DatabaseOptions {
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    secretRotation?: boolean | {
+        intervalDays: number;
+    };
     storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }

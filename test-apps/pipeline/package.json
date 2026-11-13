@@ -12,7 +12,7 @@
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
     "@aws-blocks/pipeline": "*",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1"
   },
   "devDependencies": {

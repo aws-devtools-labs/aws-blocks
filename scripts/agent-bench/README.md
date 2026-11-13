@@ -212,18 +212,18 @@ dimensions* below — there is no per-task dimension to author.
 
 | Task | Template | Blocks exercised |
 |------|----------|------------------|
-| `auth-notes` | `demo` | AuthBasic + KVStore |
+| `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
 | `collab-presence-board` | `default` | Realtime + DistributedTable |
-| `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
+| `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + DistributedDatabase |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
-These 10 cells cover 18 Building Blocks across 7 templates. The matrix in
+These 10 cells cover 16 Building Blocks across 7 templates. The matrix in
 `pr-agent-bench.yml` is an explicit `include:` list of (task, template) pairs —
 not a cross-product: each task runs on the single template that pre-ships (or
 best exercises) its blocks, to bound Bedrock spend. The `task` name is part of
@@ -335,7 +335,7 @@ omitted because Opus rejects it, so builder determinism (like the judge's) rests
 on the tool/loop structure. The judge (Opus 4.8) likewise omits `temperature`,
 resting on the structured-output schema + the deterministic hard caps. Model IDs
 are pinned snapshots (the Claude 4.x IDs carry no date suffix — the version *is* the
-snapshot). Playwright is pinned to `1.60.0` and runs with `retries: 0` — a retry
+snapshot). Playwright is pinned to `1.64.1` and runs with `retries: 0` — a retry
 would mask realtime-propagation flake, and the bench wants an honest pass/fail
 for the judge. A run-stable `RUN_ID` seeds the specs' unique-but-deterministic
 data so identifiers stay collision-free across a spec's internal navigation.

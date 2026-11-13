@@ -7,6 +7,13 @@ plugins {
 }
 
 kotlin {
+    compilerOptions {
+        // Blocks.clearStoredState() is internal API. It is the only way these tests can start from
+        // a clean slate on iOS, where storage is Keychain-backed and cannot be pointed at a
+        // disposable location the way the JVM's can.
+        optIn.add("com.aws.blocks.kotlin.InternalBlocksApi")
+    }
+
     jvm()
 
     iosSimulatorArm64 {
@@ -51,6 +58,8 @@ tasks.named<Test>("jvmTest") {
     ).getOrElse("")
     systemProperty("BLOCKS_URL", url)
     environment("BLOCKS_URL", url)
+    // RUN_OIDC=1: the deployed backend federates a real, auto-approving IdP, so OidcE2ETest runs.
+    providers.environmentVariable("RUN_OIDC").orNull?.let { environment("RUN_OIDC", it) }
 }
 
 // Boots and opens an iOS simulator. The Keychain-backed tests run non-standalone against a
@@ -92,6 +101,7 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     if (url.isNotEmpty()) {
         environment("SIMCTL_CHILD_BLOCKS_URL", url)
     }
+    providers.environmentVariable("RUN_OIDC").orNull?.let { environment("SIMCTL_CHILD_RUN_OIDC", it) }
 }
 
 awsBlocks {

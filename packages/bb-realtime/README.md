@@ -35,10 +35,10 @@ The `Realtime` instance exposes three methods, all keyed by namespace name (type
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `rt.publish(namespace, channel, data)` | `Promise<void>` | Broadcast data to all subscribers (best-effort). Validates against schema. |
-| `rt.getChannel(namespace, channel)` | `Promise<RealtimeChannel<T>>` | Get a channel handle (async — `await` it). Return from API methods for client hydration. |
+| `rt.getChannel(namespace, channel, { scope? })` | `Promise<RealtimeChannel<T>>` | Get a channel handle (async — `await` it). Return from API methods for client hydration. By default the handle also opens every `/`-separated sub-channel of `channel`; pass `{ scope: 'exact' }` to limit it to `channel` (see [Sub-channels and access](#sub-channels-and-access)). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
-**Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct (no data methods), so a top-level call throws `rt.<method> is not a function` (throws `TypeError` at runtime if called during CDK synth). To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
+**Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
 
 ### Channel Handle
 
@@ -100,6 +100,8 @@ const sub = channel.subscribe((msg) => {
 });
 await sub.established; // wait for server confirmation
 ```
+
+> **A handle also opens the channel's sub-channels by default.** The token in a handle for `tenants/acme` authorizes `tenants/acme` and every channel under it, such as `tenants/acme/billing`. If a name under the channel can belong to someone else, pass `{ scope: 'exact' }`. See [Sub-channels and access](#sub-channels-and-access).
 
 ### Server-Side Subscribe
 
@@ -246,9 +248,10 @@ try {
 ```typescript
 import { RealtimeErrors } from '@aws-blocks/bb-realtime';
 
-RealtimeErrors.ValidationFailed  // data failed schema validation on publish
+RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)
 RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
+RealtimeErrors.UnsupportedCompute // default compute is not Lambda (thrown at synth time)
 ```
 
 ## Best Practices
@@ -257,6 +260,7 @@ RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
 - **Subscribe before you publish.** Realtime is fire-and-forget with no message buffering (local dev and AWS alike): a subscriber only receives messages published *after* its subscription registers (await `sub.established`). If a server-side publisher (e.g. an AsyncJob or Agent stream) may fire before the client subscribes, the client must subscribe first, then trigger the publisher, and backfill any earlier messages from a durable source (DB/history).
 - **Publish through the API**, not the channel handle — keeps authorization logic in one place.
 - **Use channels for dynamic scoping** — `room-123`, `user-456`, `game-abc`. One namespace, many channels.
+- **Scope handles to the channel when names nest** — a handle for `a` also opens `a/b` unless you pass `{ scope: 'exact' }` to `getChannel()`. See [Sub-channels and access](#sub-channels-and-access).
 - **Keep payloads small** — large messages increase latency and cost. Max 128 KiB (131,072 bytes) per published message (including wire envelope).
 - **One `Realtime` instance per domain** — use multiple namespaces within it for different message types (cursors, chat, presence).
 - **Unsubscribe when done** — especially in components that mount/unmount. Leaked subscriptions hold the WebSocket open.
@@ -352,6 +356,31 @@ Channel names are scoped by the Realtime instance and namespace: `{fullId}/{name
 - There is no enforced character limit on the user-facing channel name, but excessively long names increase DynamoDB item sizes (affecting read/write costs) and WebSocket message sizes (affecting delivery latency and billing, since messages are metered in 32 KB increments).
 
 The previous AppSync Events implementation had a 5-segment × 50-character channel name limit. That restriction no longer applies.
+
+**Grammar:** `/` separates segments (`tenants/acme/billing`). `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a `channel` that isn't a string (`undefined`, `null`, an object). Any other characters are allowed. A number is accepted and validated as its string form.
+
+### Sub-channels and access
+
+The token inside a channel handle decides which channels a client can subscribe to with it:
+
+| `getChannel()` call | Token authorizes |
+|---------------------|------------------|
+| `rt.getChannel('events', 'tenants/acme')` (default, `scope: 'subtree'`) | `tenants/acme` **and every channel under it**: `tenants/acme/billing`, `tenants/acme/x/y`, … |
+| `rt.getChannel('events', 'tenants/acme', { scope: 'exact' })` | `tenants/acme` only |
+
+So giving a client a handle for a channel is an access decision for that channel's whole subtree. The match is by `/`-separated segment, not by string prefix: a handle for `tenants/acme` never opens `tenants/acme-corp`.
+
+**The pitfall:** the default is wrong for nested names that belong to different principals. Say each tenant gets `tenants/<tenantId>` and each user gets `tenants/<tenantId>/users/<userId>`. With the default scope, a tenant-wide handle given to any member of `acme` also lets that member subscribe to every user's channel under `tenants/acme/users/`. Use `{ scope: 'exact' }` for the tenant-wide handle, or keep per-principal channels out of each other's subtrees (for example `tenant-users/<tenantId>/<userId>` beside `tenants/<tenantId>`), and keep user-supplied ids from adding segments (`encodeURIComponent(id)` encodes `/`):
+
+```typescript
+async getTenantFeed(tenantId: string) {
+  const user = await auth.requireAuth(context);
+  if (!isMember(user, tenantId)) throw new Error('Forbidden');
+  return rt.getChannel('events', `tenants/${encodeURIComponent(tenantId)}`, { scope: 'exact' });
+},
+```
+
+Use the default `'subtree'` only when a client that may read a channel may read everything under it.
 
 
 

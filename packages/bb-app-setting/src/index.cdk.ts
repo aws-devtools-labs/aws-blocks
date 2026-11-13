@@ -8,7 +8,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { markAddedChildrenBlocksOwned, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
@@ -32,6 +33,32 @@ import { BB_NAME } from './version.js';
  *   then granted `kms:Decrypt`/`Encrypt` on that specific key ARN).
  */
 export class AppSetting<T = string> extends BuildingBlockScope {
+	/**
+	 * The SSM parameter name this setting reads and writes, resolved at synth:
+	 * the explicit `name` when one is given (always the case for
+	 * {@link AppSetting.fromExisting}), else the derived default `/${fullId}`.
+	 * The same name the runtime resolves, so another Building Block's CDK layer
+	 * can grant on or reference this exact parameter (e.g. `Auth` registering an
+	 * identity provider whose client secret is this setting).
+	 *
+	 * CDK layer only (synth time) — not on the local or Lambda runtime class.
+	 *
+	 * @example
+	 * new AppSetting(scope, 'apiKey', { secret: true }).parameterName;          // '/<fullId>'
+	 * new AppSetting(scope, 'url', { name: '/my-app/url', value: 'x' }).parameterName; // '/my-app/url'
+	 */
+	public readonly parameterName: string;
+
+	/**
+	 * `true` when the parameter is an SSM SecureString (`secret: true`), for a
+	 * stack-managed setting and for {@link AppSetting.fromExisting} alike. Lets
+	 * another Building Block's CDK layer refuse a plaintext `String` parameter
+	 * where it needs a secret.
+	 *
+	 * CDK layer only (synth time) — not on the local or Lambda runtime class.
+	 */
+	public readonly secret: boolean;
+
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
 	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
@@ -69,6 +96,8 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		validateAppSettingOptions(id, internalOptions);
 
 		const parameterName = options.name ?? `/${this.fullId}`;
+		this.parameterName = parameterName;
+		this.secret = options.secret ?? false;
 
 		// Always JSON.stringify
 		// For secrets without a value, the Custom Resource Lambda generates a random string
@@ -136,9 +165,14 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 			resources: [parameterArn],
 		}));
 
-		// Pass the parameter name to the runtime via config registry
+		// Pass the parameter name to the runtime via config registry. The key is
+		// built from the block's local `id`, not its `fullId` (db-pull's generated
+		// code reads `BLOCKS_SSM_PARAM_DB_URL`, and the key is part of existing
+		// deployed config), so two settings with one local id under different scopes
+		// share it; the AppSetting runtime itself resolves its parameter by `fullId`.
+		// It therefore keeps last-one-wins instead of registerConfig's conflict check.
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-		registerConfig(this, envKey, parameterName);
+		registerSharedConfig(this, envKey, parameterName);
 	}
 
 	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
@@ -176,10 +210,17 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	// First secret in this stack — create all shared infrastructure
 	state = { params: [{ name: parameterName, keyId }] };
 	(stack as any)[SECRET_BULK_KEY] = state;
+	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	const stackChildrenBefore = new Set(stack.node.children);
 
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
+		// Lambda's 3 s default is too tight for a cold start plus one serial SSM
+		// call per secret: a slow cold start timed out and rolled the deploy back.
+		// Two minutes (the AwsCustomResource default) covers many secrets and SDK
+		// retries under SSM throttling, while a hung call still fails the deploy quickly.
+		timeout: cdk.Duration.minutes(2),
 		// Own the log group so its retention follows the stack-wide default
 		// instead of AWS's infinite retention.
 		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {
@@ -296,4 +337,8 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
 		},
 	});
+	// The shared secret-init function, provider and custom resource sit at stack
+	// scope but belong to the block, so the service-principal trust check treats
+	// their roles as AWS Blocks roles rather than the app's.
+	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 }

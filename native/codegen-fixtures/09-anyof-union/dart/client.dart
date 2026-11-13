@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -48,15 +49,15 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SearchResult> search({required dynamic query}) async {
-    final params = <String, dynamic>{
-      'query': query,
-    };
+    final params = <dynamic>[
+      query,
+    ];
     final result = await _client.call('api.search', params);
     return SearchResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<dynamic> getValue() async {
-    final result = await _client.call('api.getValue', <String, dynamic>{});
+    final result = await _client.call('api.getValue', const <dynamic>[]);
     return result as dynamic;
   }
 }

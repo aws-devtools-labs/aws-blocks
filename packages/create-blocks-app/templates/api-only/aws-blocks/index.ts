@@ -5,7 +5,8 @@
  * are building a backend for a mobile app, a CLI, or a third-party client.
  *
  * It ships a public health check plus an auth-gated CRUD resource (items) over a
- * DistributedTable, with per-user isolation and optimistic locking. Point any
+ * DistributedTable, with per-user isolation and optimistic locking, and
+ * auth-gated presigned file URLs scoped to each user's own files. Point any
  * client at the RPC endpoint; there is no web UI to serve.
  *
  * ─── IMPORTANT ───────────────────────────────────────────────────────────────
@@ -17,21 +18,32 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, FileBucket } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
+// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the caller
+// submits it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  // Users sign in with their email, matched ignoring case. Both are fixed when
+  // the user pool is created, and this is also the pool shape Amplify's client
+  // libraries expect, so a frontend can later sign in with them too.
+  users: { signInWith: ['email'], caseSensitive: false },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 export const authApi = auth.createApi();
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 // Zod schema = runtime validation + TypeScript types + DynamoDB table shape.
 const itemSchema = z.object({
-  owner: z.string(),        // partition key — per-user isolation
+  owner: z.string(),        // partition key — the owner's userSub (per-user isolation)
   itemId: z.string(),       // sort key — unique within a user
   name: z.string(),
   quantity: z.number(),
@@ -47,7 +59,19 @@ const items = new DistributedTable(scope, 'items', {
 // ─── Files ─────────────────────────────────────────────────────────────────
 // Object storage for binary files. A headless client uploads/downloads via
 // presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
-const files = new FileBucket(scope, 'files', { versioned: false });
+// Versioning is on (the FileBucket default), so an overwritten or deleted file
+// can be restored from its previous version.
+const files = new FileBucket(scope, 'files');
+
+/**
+ * Content types `createUploadUrl` will sign for. The presigned PUT only succeeds
+ * with the Content-Type it was signed with, so this list is what a client can
+ * store. Extend it for the file types your app accepts.
+ */
+const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'application/pdf', 'image/png', 'image/jpeg']);
+
+/** FileBucket path under the signed-in user's own prefix (`/` in a user id is encoded). */
+const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(userSub)}/${path}`;
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -58,17 +82,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   /**
-   * Public — mint a presigned URL to upload a file. The client PUTs the bytes
-   * directly to the returned URL with the same Content-Type. No bytes pass
-   * through the API itself.
+   * Mint a presigned URL to upload a file under the caller's own prefix. The
+   * client PUTs the bytes directly to the returned URL with the same
+   * Content-Type. No bytes pass through the API itself. A presigned URL is a
+   * bearer credential for that one object, so only a signed-in caller gets one,
+   * and only for their own files.
    */
   async createUploadUrl(path: string, contentType: string) {
-    return { url: await files.putUrl(path, { contentType }) };
+    const user = await auth.requireAuth(context);
+    if (!ALLOWED_UPLOAD_TYPES.has(contentType)) {
+      throw new ApiError(`Unsupported content type: ${contentType}`, 400, { name: 'UnsupportedContentTypeException' });
+    }
+    return { url: await files.putUrl(userPath(user.userSub, path), { contentType }) };
   },
 
-  /** Public — mint a presigned URL to download a file. The client GETs the bytes directly. */
+  /** Mint a presigned URL to download one of the caller's files. The client GETs the bytes directly. */
   async createDownloadUrl(path: string) {
-    return { url: await files.getUrl(path) };
+    const user = await auth.requireAuth(context);
+    return { url: await files.getUrl(userPath(user.userSub, path)) };
   },
 
   /** Create an item owned by the caller. */
@@ -76,7 +107,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     const itemId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const item = {
-      owner: user.username,
+      owner: user.userSub,
       itemId,
       name,
       quantity,
@@ -91,14 +122,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async listItems() {
     const user = await auth.requireAuth(context);
     return await Array.fromAsync(
-      items.query({ where: { owner: { equals: user.username } } }),
+      items.query({ where: { owner: { equals: user.userSub } } }),
     );
   },
 
   /** Fetch one of the caller's items by id. */
   async getItem(itemId: string) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     return item;
   },
@@ -113,7 +144,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async updateQuantity(itemId: string, quantity: number) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: item.version + 1 },
@@ -132,7 +163,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async setQuantity(itemId: string, quantity: number, expectedVersion: number) {
     const user = await auth.requireAuth(context);
-    const item = await items.get({ owner: user.username, itemId });
+    const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
       { ...item, quantity, version: expectedVersion + 1 },
@@ -144,7 +175,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   /** Delete one of the caller's items. */
   async deleteItem(itemId: string) {
     const user = await auth.requireAuth(context);
-    await items.delete({ owner: user.username, itemId });
+    await items.delete({ owner: user.userSub, itemId });
     return { success: true };
   },
 }));

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, blocksError } from '@aws-blocks/core';
+import { Scope } from '@aws-blocks/core';
 import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -24,53 +24,18 @@ export type {
 } from './types.js';
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
-import { EmailErrors } from './errors.js';
+import { resolveMaxBatchSize, validateBatchSize, validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-const MAX_RECIPIENTS_PER_MESSAGE = 50;
-const MAX_MESSAGE_BYTES = 40 * 1024 * 1024; // 40 MB
 const LOG_TRUNCATE_LENGTH = 80;
 
 function truncate(text: string, maxLen: number = LOG_TRUNCATE_LENGTH): string {
 	const oneLine = text.replace(/\n/g, ' ').trim();
 	if (oneLine.length <= maxLen) return oneLine;
 	return oneLine.substring(0, maxLen) + '...';
-}
-
-// Basic RFC 5322 email regex
-const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-
-function validateEmailAddress(address: string): void {
-	if (!EMAIL_REGEX.test(address)) {
-		throw blocksError(EmailErrors.InvalidInput, `Invalid email address: ${address}`);
-	}
-}
-
-function validateAddresses(addresses: string | string[]): void {
-	const list = Array.isArray(addresses) ? addresses : [addresses];
-	for (const addr of list) {
-		validateEmailAddress(addr);
-	}
-}
-
-function countRecipients(msg: { to: string | string[]; cc?: string[]; bcc?: string[] }): number {
-	const toCount = Array.isArray(msg.to) ? msg.to.length : 1;
-	const ccCount = msg.cc?.length ?? 0;
-	const bccCount = msg.bcc?.length ?? 0;
-	return toCount + ccCount + bccCount;
-}
-
-function validateRecipientCount(msg: { to: string | string[]; cc?: string[]; bcc?: string[] }): void {
-	const count = countRecipients(msg);
-	if (count > MAX_RECIPIENTS_PER_MESSAGE) {
-		throw blocksError(
-			EmailErrors.InvalidInput,
-			`Recipient count exceeds ${MAX_RECIPIENTS_PER_MESSAGE}.`,
-		);
-	}
 }
 
 function generateMockMessageId(): string {
@@ -113,6 +78,7 @@ export class EmailClient extends Scope {
 	private emails: StoredEmail[];
 	private fromAddress: string;
 	private replyTo?: string[];
+	private maxBatchSize: number;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -122,6 +88,7 @@ export class EmailClient extends Scope {
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fromAddress = options.fromAddress;
 		this.replyTo = options.replyTo;
+		this.maxBatchSize = resolveMaxBatchSize(options.maxBatchSize);
 		this.filePath = join(getMockDataDir(this), 'emails.json');
 		this.emails = this.loadFromDisk();
 	}
@@ -131,26 +98,13 @@ export class EmailClient extends Scope {
 	 *
 	 * @param message - The email message to send (to, subject, body, optional html/cc/bcc).
 	 * @returns The mock message ID for the sent email.
-	 * @throws {EmailErrors.InvalidInput} If any address fails validation.
-	 * @throws {EmailErrors.SendFailed} If the message exceeds 40 MB or recipient count exceeds 50.
+	 * @throws {EmailErrors.InvalidInput} If any address fails validation or recipient count exceeds 50.
+	 * @throws {EmailErrors.SendFailed} If the message exceeds 40 MB.
 	 */
 	async send(message: EmailMessage): Promise<SendResult> {
-		const { to, subject, body, html, cc, bcc } = message;
+		const { to, subject, body, html } = message;
 
-		validateAddresses(to);
-		validateEmailAddress(this.fromAddress);
-		if (cc) validateAddresses(cc);
-		if (bcc) validateAddresses(bcc);
-
-		validateRecipientCount({ to, cc, bcc });
-
-		const messageSize = Buffer.byteLength(
-			JSON.stringify(message),
-			'utf8',
-		);
-		if (messageSize > MAX_MESSAGE_BYTES) {
-			throw blocksError(EmailErrors.SendFailed, `Message size ${messageSize} bytes exceeds the 40 MB limit`);
-		}
+		validateMessage(message, this.fromAddress, this.replyTo);
 
 		const recipients = Array.isArray(to) ? to : [to];
 		const messageId = generateMockMessageId();
@@ -187,19 +141,22 @@ export class EmailClient extends Scope {
 	 * Messages exceeding this limit are marked as failed in the results (not thrown).
 	 * This matches SES SendBulkEmail behavior which returns per-entry status.
 	 *
+	 * A call takes at most `maxBatchSize` messages (default 100, set in `EmailOptions`). A larger
+	 * batch is rejected as a whole and nothing is recorded, the same as the deployed client.
+	 *
 	 * @param messages - Array of email messages to send.
 	 * @returns Result with per-message status in the same order as the input array.
 	 *          Each entry has status ('success' | 'failed'), messageId (on success), or error (on failure).
+	 * @throws {EmailErrors.InvalidInput} If `messages` has more entries than `maxBatchSize`. Nothing is sent.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
+		validateBatchSize(messages.length, this.maxBatchSize);
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> = [];
 
 		for (let i = 0; i < messages.length; i++) {
 			const msg = messages[i];
-			if (countRecipients(msg) > MAX_RECIPIENTS_PER_MESSAGE) {
-				results.push({ status: 'failed', error: `Recipient count exceeds ${MAX_RECIPIENTS_PER_MESSAGE}.` });
-				continue;
-			}
+			// send() runs validateMessage(), the same checks in the same order as
+			// the AWS sendBatch(), so a rejected entry gets the same error text.
 			try {
 				const sendResult = await this.send(msg);
 				results.push({ status: 'success', messageId: sendResult.messageId });

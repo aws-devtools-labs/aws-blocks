@@ -4,20 +4,51 @@
 # under test-apps/* is installed from the single root package-lock.json (npm
 # workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
 # there is no per-package or per-test-app lockfile to configure separately.
+# The create-blocks-app templates are the exception: each has its own
+# package.json and no lockfile, so they get a second npm entry.
+# scripts/ci/agent-bench-playwright is another exception: it has a lockfile on
+# purpose and no entry here, because it pins the agent bench's Playwright to
+# PW_VERSION (scripts/agent-bench/steps/3-build-and-test.sh) and is bumped with
+# it. A security PR for it fails scripts/ci/agent-bench-playwright.test.mjs
+# until PW_VERSION moves too.
+# The native SDKs under native/ are built with gradle, swift and pub, which have
+# their own entries at the end of this file. native/kotlin and native/swift also
+# have a package.json and package-lock.json of their own, outside the root
+# workspaces, but only for their changesets tooling, which is never shipped; they
+# are deliberately left out of the npm entries (alerts for them still come from
+# the dependency graph).
 #
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
 # Dependabot opens:
-#   - Version-update PRs run monthly.
-#   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
-#     and dev-dependencies (build/test only, low blast radius). Production deps
+#   - npm version-update PRs run weekly, Monday 06:00 Europe/Berlin, so they
+#     are waiting at the start of the working week.
+#   - Three groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep;
+#     dev-dependencies (build/test only, low blast radius); and
+#     production-dependencies, minor and patch only, so a weekly run opens a
+#     few PRs rather than one per package. Production majors (only on runs
+#     where that group has no open PR, dependabot/dependabot-core#14202)
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
+#   - versioning-strategy: increase raises the minimum in package.json to the
+#     new release (^3.2.0 -> ^3.3.1), as the ncu job does. It pins what "auto"
+#     already resolves to here (the root package.json is not detected as a
+#     library). Dependabot doesn't read peerDependencies (it only rewrites a
+#     peer range identical to the one it bumps, none here), so the
+#     aws-cdk-lib/constructs peer floors stay manual.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
 #     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
 #     project-reference build in one grouped PR). So they are excluded from the
 #     dev-dependencies group (minor/patch arrive as their own PRs) and their
 #     major-version updates are ignored (bump them intentionally, by hand).
+#   - The dev-dependencies group takes minor and patch updates only. A major
+#     bump of a dev dependency (a framework in a test app, a test runner) can
+#     need code or config changes, and one grouped PR with many of them can't
+#     land. Majors are raised as their own PRs, but only on runs where this
+#     group has no open PR (dependabot/dependabot-core#14202). Check
+#     `npm outdated` (root and workspaces) for dev majors before each release.
+#     Majors of vite, @vitejs/* and @sveltejs/* are ignored: they move together
+#     with TypeScript 6 as one migration (issue #984).
 #   - Cooldown: version updates wait until a release is 3 days old. This is
 #     Dependabot's default; it is set explicitly so it can't silently change
 #     and nobody lowers it by accident. Security updates are not delayed.
@@ -26,15 +57,28 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
     cooldown:
       default-days: 3
     open-pull-requests-limit: 10
     ignore:
+      # SvelteKit 3 and the Vite 8 plugins peer-depend on Vite 8, and SvelteKit
+      # 3 on TypeScript 6, so single major PRs can't resolve: a deliberate
+      # migration (issue #984).
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/*"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+    versioning-strategy: increase
     groups:
       aws-sdk:
         patterns:
@@ -42,9 +86,72 @@ updates:
           - "@smithy/*"
       dev-dependencies:
         dependency-type: development
+        update-types:
+          - "minor"
+          - "patch"
         exclude-patterns:
           - "typescript"
           - "@types/node"
+          # A group without patterns takes every match; keep the SDK together.
+          - "@aws-sdk/*"
+          - "@smithy/*"
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - "minor"
+          - "patch"
+        # As above: the SDK stays in the aws-sdk group.
+        exclude-patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+
+  # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
+  # each template's package.json, which is what scaffolded apps install from.
+  # Minor and patch only, as the ncu job does (--target minor), in one grouped
+  # PR for all templates. A major is a deliberate migration; the "*"
+  # semver-major ignore below keeps majors out. The group must not set
+  # update-types: without a lockfile a range such as ^6.4.4 has no current
+  # version, so that filter can't classify the update and Dependabot opens it
+  # as its own PR, one per template. Ignore rules instead take the first x.y.z
+  # in the range, so keep each template range a single ^x.y.z, ~x.y.z or
+  # exact x.y.z (not ^6, 6.x or >=5 <6.0.0).
+  - package-ecosystem: npm
+    directories:
+      - /packages/create-blocks-app/templates/*
+      # amplify's top-level package.json is an overlay with no dependencies and
+      # no workspaces; its dependencies live one level down.
+      - /packages/create-blocks-app/templates/amplify/aws-blocks
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase
+    ignore:
+      # Published from this repo; the templates track them with "*".
+      - dependency-name: "@aws-blocks/*"
+      # Minor and patch only: template majors move by hand.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Named so the reason survives if the "*" rule goes: Vite 8 hard-depends
+      # on lightningcss (MPL-2.0), which the licence check can't see without a
+      # lockfile, and it would ship in every scaffolded app (issue #984).
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      # @vitejs/plugin-react 6 requires Vite 8 (issue #984).
+      - dependency-name: "@vitejs/*"
+        update-types: ["version-update:semver-major"]
+      # Toolchain foundations, as in the root entry.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      templates:
+        patterns:
+          - "*"
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
@@ -55,5 +162,127 @@ updates:
       default-days: 3
     groups:
       github-actions:
+        patterns:
+          - "*"
+
+  # Native SDKs (native/kotlin, native/swift, native/dart). Each is built by its
+  # own toolchain rather than npm, so each ecosystem gets its own entry. Minor
+  # and patch only, grouped into one PR per SDK, on the same schedule and
+  # cooldown as the npm entries. A major is a deliberate migration, so majors
+  # are ignored here and moved by hand.
+  #
+  # Release notes: unlike the npm entries, nothing writes a changeset for these
+  # PRs at release time (scripts/generate-dependency-changeset.ts only reads
+  # packages/*/package.json). A maintainer adds one by hand before merging:
+  #   - Kotlin: a patch changeset for aws-blocks-kotlin in native/kotlin/.changeset
+  #     ("Require Kotlin changeset" stays red until it is pushed onto the PR).
+  #   - Swift: likewise in native/swift/.changeset, once Package.swift gains
+  #     dependencies ("Require Swift changeset").
+  #   - Dart: a `## Unreleased` entry in the CHANGELOG.md of each published
+  #     package whose pubspec.yaml moved.
+  # The native sandbox E2E jobs need AWS_ROLE_ARNS, which is set in the
+  # Dependabot secrets store as well as the Actions one, so they run on these
+  # PRs too.
+
+  # Kotlin: the root Gradle build. Versions live in the version catalog,
+  # native/kotlin/gradle/libs.versions.toml, which this entry updates.
+  # native/kotlin/e2e and native/kotlin/example/* are separate builds that
+  # consume the published SDK; they are not covered here.
+  - package-ecosystem: gradle
+    directory: /native/kotlin
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Compiler and build toolchain: a minor is a deliberate migration. A Kotlin
+      # minor is a language release and raises the Kotlin version consumers of
+      # the published library need. Patches still arrive in the group.
+      - dependency-name: "org.jetbrains.kotlin.*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "org.jetbrains.kotlin:*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "com.android.*"
+        update-types: ["version-update:semver-minor"]
+      # Pre-1.0 libraries: a 0.x minor can be a breaking release (kotlinx-datetime
+      # 0.7 changed Instant), and Dependabot classifies it as a minor.
+      - dependency-name: "org.jetbrains.kotlinx:kotlinx-datetime"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "org.jetbrains.kotlinx:atomicfu"
+        update-types: ["version-update:semver-minor"]
+    groups:
+      kotlin:
+        patterns:
+          - "*"
+
+  # Swift: the BlocksRuntime/BlocksCodegen package. It declares no remote
+  # package dependencies today; this entry covers any it gains.
+  - package-ecosystem: swift
+    directory: /native/swift
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      swift:
+        patterns:
+          - "*"
+
+  # Dart/Flutter: the published packages and the example app. pubspec.lock is
+  # gitignored (native/dart/.gitignore), so, as with the create-blocks-app
+  # templates, Dependabot updates the ranges in each pubspec.yaml.
+  # The published packages are libraries: raising a lower bound narrows what
+  # apps that depend on them can resolve, so their floors move only when a new
+  # release falls outside the current range (increase-if-necessary).
+  - package-ecosystem: pub
+    directories:
+      - /native/dart/packages/*
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase-if-necessary
+    ignore:
+      # Published from this repo; bumped together with each release.
+      - dependency-name: "blocks_*"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dart-packages:
+        patterns:
+          - "*"
+
+  # The example app is an app, not a library, so its floors follow each release
+  # (increase), as in the npm entries.
+  - package-ecosystem: pub
+    directory: /native/dart/example
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "blocks_*"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dart-example:
         patterns:
           - "*"

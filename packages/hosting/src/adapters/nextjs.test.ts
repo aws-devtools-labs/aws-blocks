@@ -3,10 +3,13 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import type { SpawnSyncOptions } from 'node:child_process';
 import semver from 'semver';
 import { spawn } from './spawn.js';
 import {
+  detectNextVersion,
   hasExistingMiddlewareManifest,
   installLinuxSharpForImageOptimizer,
   nextjsAdapter,
@@ -20,9 +23,17 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  nextStaticImmutablePaths,
+  pinNextBuildId,
+  restorePinnedNextConfig,
+  OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
+  OPENNEXT_FALLBACK_VERSION,
+  VERIFIED_OPENNEXT_RANGE,
 } from './nextjs.js';
+import { HostingError } from '../hosting_error.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import { withComputeTarget } from './shared/compute_target.js';
+import { withBuildProfile } from './shared/build_profile.js';
 import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
@@ -851,6 +862,39 @@ void describe('nextjsAdapter', () => {
     assert.deepStrictEqual(manifest.imageOptimization!.sizes, [640, 1080]);
   });
 
+  void it('records images.domains and remotePatterns hostnames for the image allowlist', () => {
+    const openNextDir = path.join(tmpDir, '.open-next');
+    for (const dir of ['server-functions/default', 'image-optimization-function', 'assets']) {
+      fs.mkdirSync(path.join(openNextDir, dir), { recursive: true });
+    }
+    fs.writeFileSync(path.join(openNextDir, 'server-functions/default/index.mjs'), 'export const handler = async () => {};');
+    fs.writeFileSync(path.join(openNextDir, 'image-optimization-function/index.mjs'), 'export const handler = async () => {};');
+    fs.writeFileSync(
+      path.join(openNextDir, 'open-next.output.json'),
+      JSON.stringify({
+        origins: {
+          default: { type: 'function', handler: 'index.handler' },
+          imageOptimizer: { type: 'function', handler: 'index.handler' },
+        },
+        behaviors: [
+          { pattern: '/_next/image*', origin: 'imageOptimizer' },
+          { pattern: '/*', origin: 'default' },
+        ],
+        additionalProps: {},
+      }),
+    );
+    fs.mkdirSync(path.join(tmpDir, '.next'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.next', 'required-server-files.json'),
+      JSON.stringify({
+        config: { images: { domains: ['images.example.com', 7], remotePatterns: [{ hostname: '**.cdn.example.com' }] } },
+      }),
+    );
+    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.deepStrictEqual(manifest.imageOptimization?.domains, ['images.example.com']);
+    assert.deepStrictEqual(manifest.imageOptimization?.remotePatterns, [{ hostname: '**.cdn.example.com' }]);
+  });
+
   void it('handles ecs/docker origin type', () => {
     const openNextDir = path.join(tmpDir, '.open-next');
     const ecsDir = path.join(openNextDir, 'server-functions', 'ecs-origin');
@@ -1237,6 +1281,51 @@ void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () =>
       'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
     );
     const projectDir = writeProjectWithNext('16.2.9');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  // ── The 5-arg signature arrived in PATCH releases, not at Next 16 ─────
+  // Published `next` packages: 4-arg up to 15.5.15, 5-arg from 15.5.16 on the
+  // 15.x line; 4-arg on 16.0.x, 16.1.x and 16.2.0–16.2.4, 5-arg from 16.2.5.
+
+  void it('DOES patch on Next 15.5.16+ (the 5-arg signature was backported)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.28');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('does NOT patch on Next 16.2.4 (still the 4-arg signature)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('16.2.4');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.doesNotMatch(out, /\{\},void 0,/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it("reads the arity from the installed next's image-optimizer source over its version", () => {
+    // The source is the ground truth: a version the range calls 4-arg, whose
+    // installed source declares the 5-arg signature, is patched.
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.7');
+    const serverDir = path.join(projectDir, 'node_modules', 'next', 'dist', 'server');
+    fs.mkdirSync(serverDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(serverDir, 'image-optimizer.js'),
+      'async function fetchInternalImage(href, _req, _res, maximumResponseBody, handleRequest) {}\n',
+    );
     patchImageOptimizerForNext16(tmp, projectDir);
     const out = fs.readFileSync(bundle, 'utf-8');
     assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
@@ -1727,6 +1816,55 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
   });
 });
 
+void describe('nextjsAdapter — a hand-written open-next.config.ts under the preview trims', () => {
+  let tmpDir: string;
+  let lenientBackup: string | undefined;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-usercfg-'));
+    mock.method(spawn, 'sync', () => undefined);
+    lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+    if (lenientBackup === undefined) delete process.env.HOSTING_LENIENT_PATCHES;
+    else process.env.HOSTING_LENIENT_PATCHES = lenientBackup;
+  });
+  const userConfig = (body: string) => fs.writeFileSync(path.join(tmpDir, 'open-next.config.ts'), `export default ${body};\n`);
+  const httpDefault = "default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' } }";
+
+  void it('edgeRoutes regional: rejects an edge function left on Lambda@Edge (global placement, CloudFront converter)', () => {
+    userConfig(`{ ${httpDefault}, functions: { edge1: { runtime: 'edge', placement: 'global', override: { converter: 'aws-cloudfront', wrapper: 'aws-lambda' }, routes: ['app/api/edge/route'], patterns: ['/api/edge'] } } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', edgeToRegional: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code === 'IncompatibleOpenNextConfigError' && /placement: 'regional'/.test(err.message),
+    );
+  });
+
+  void it('edgeRoutes regional: accepts a regional edge function on the payload 2.0 converter', () => {
+    userConfig(`{ ${httpDefault}, functions: { edge1: { runtime: 'edge', placement: 'regional', override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' }, routes: ['app/api/edge/route'], patterns: ['/api/edge'] } } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', edgeToRegional: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code !== 'IncompatibleOpenNextConfigError',
+    );
+  });
+
+  void it('incrementalRegeneration false: requires disableTagCache and the dummy queue', () => {
+    userConfig(`{ ${httpDefault} }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) =>
+        err.code === 'IncompatibleOpenNextConfigError' && /disableTagCache: true/.test(err.message) && /queue: 'dummy'/.test(err.message),
+    );
+    userConfig(`{ default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda', queue: 'dummy' } }, dangerous: { disableTagCache: true } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code !== 'IncompatibleOpenNextConfigError',
+    );
+  });
+});
+
 void describe('nextjsAdapter — incompatible open-next.config.ts', () => {
   let tmpDir: string;
   let lenientBackup: string | undefined;
@@ -1859,7 +1997,10 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
    * `node_modules/@opennextjs/aws/package.json` at the requested
    * version so warnIfOpenNextOutOfRange's local-pkg probe finds it.
    */
-  const writeFixtureWithOpenNextVersion = (version: string): void => {
+  const writeFixtureWithOpenNextVersion = (
+    version: string,
+    nextPeerRange?: string,
+  ): void => {
     const openNextPkgDir = path.join(
       tmpDir,
       'node_modules',
@@ -1869,7 +2010,12 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
     fs.mkdirSync(openNextPkgDir, { recursive: true });
     fs.writeFileSync(
       path.join(openNextPkgDir, 'package.json'),
-      JSON.stringify({ name: '@opennextjs/aws', version, main: 'index.js' }),
+      JSON.stringify({
+        name: '@opennextjs/aws',
+        version,
+        main: 'index.js',
+        ...(nextPeerRange ? { peerDependencies: { next: nextPeerRange } } : {}),
+      }),
     );
     fs.writeFileSync(path.join(openNextPkgDir, 'index.js'), '');
     buildOutputCreator = () => {
@@ -2007,6 +2153,156 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       buildArgs[flagIdx + 1],
       'true',
       `the flag must be followed by its 'true' value or OpenNext ignores it; got: ${JSON.stringify(buildArgs)}`,
+    );
+  });
+
+  const writeNextVersion = (version: string): void => {
+    const nextPkgDir = path.join(tmpDir, 'node_modules', 'next');
+    fs.mkdirSync(nextPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextPkgDir, 'package.json'),
+      JSON.stringify({ name: 'next', version, main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(nextPkgDir, 'index.js'), '');
+  };
+
+  const openNextBuildArgs = (
+    syncMock: ReturnType<typeof mock.method>,
+  ): string[] | undefined =>
+    syncMock.mock.calls
+      .map((c) => c.arguments[1])
+      .find(
+        (a): a is string[] =>
+          Array.isArray(a) &&
+          a.some((t) => typeof t === 'string' && t.startsWith('@opennextjs/aws')),
+      );
+
+  void it('builds with the verified fallback version when @opennextjs/aws is not installed', () => {
+    // Without a local install, a bare `npx @opennextjs/aws` fetches the newest
+    // release, which is usually outside VERIFIED_OPENNEXT_RANGE.
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    fs.rmSync(path.join(tmpDir, 'node_modules', '@opennextjs'), {
+      recursive: true,
+      force: true,
+    });
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = openNextBuildArgs(syncMock);
+    assert.ok(buildArgs, 'expected an OpenNext build spawn');
+    assert.ok(
+      buildArgs.includes(`@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`),
+      `expected the pinned fallback package; got: ${JSON.stringify(buildArgs)}`,
+    );
+    assert.ok(
+      semver.satisfies(OPENNEXT_FALLBACK_VERSION, VERIFIED_OPENNEXT_RANGE),
+      'the fallback version must be inside the verified range',
+    );
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('@opennextjs/aws is not installed') &&
+          c.includes(`npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}`),
+      ),
+      `expected a not-installed warning naming the pin; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('runs the installed @opennextjs/aws unpinned when the project declares it', () => {
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = openNextBuildArgs(syncMock);
+    assert.deepStrictEqual(buildArgs?.slice(0, 2), ['@opennextjs/aws', 'build']);
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('is not installed')),
+      `unexpected not-installed warning; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('throws OpenNextNotFoundError naming the pin when the fallback build fails', () => {
+    mock.method(spawn, 'sync', () => {
+      throw new Error('Command failed (exit code 1): npx');
+    });
+    assert.throws(() => nextjsAdapter({ projectDir: tmpDir }), (err: unknown) => {
+      assert.ok(err instanceof HostingError);
+      assert.strictEqual(err.name, 'OpenNextNotFoundError');
+      assert.ok(
+        err.resolution.includes(`@opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}`),
+        `resolution should name the pin; got: ${err.resolution}`,
+      );
+      assert.ok(
+        err.resolution.includes('Common issues'),
+        `resolution should also cover genuine build failures; got: ${err.resolution}`,
+      );
+      return true;
+    });
+  });
+
+  void it('throws OpenNextBuildError (not NotFound) when an installed OpenNext fails', () => {
+    mock.method(spawn, 'sync', () => {
+      throw new Error('Command failed (exit code 1): npx');
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    assert.throws(() => nextjsAdapter({ projectDir: tmpDir }), {
+      name: 'OpenNextBuildError',
+    });
+  });
+
+  void it("warns when next is outside the installed OpenNext's next peer range", () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('15.5.7');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('next@15.5.7') &&
+          c.includes('@opennextjs/aws@4.0.3') &&
+          c.includes('>=15.5.18 <16 || >=16.2.6'),
+      ),
+      `expected a peer-range warning; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('checks next against the fallback peer range when @opennextjs/aws is not installed', () => {
+    writeFixtureWithOpenNextVersion('3.10.0');
+    fs.rmSync(path.join(tmpDir, 'node_modules', '@opennextjs'), {
+      recursive: true,
+      force: true,
+    });
+    writeNextVersion('15.5.7');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('next@15.5.7') &&
+          c.includes(`@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`) &&
+          c.includes(OPENNEXT_FALLBACK_NEXT_PEER_RANGE),
+      ),
+      `expected a peer-range warning naming the fallback range; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('does NOT warn for a next prerelease inside the peer range', () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('16.3.0-canary.5');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('outside the Next.js range')),
+      `unexpected peer-range warning for a prerelease; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it("does NOT warn when next is inside OpenNext's next peer range", () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('16.2.6');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('outside the Next.js range')),
+      `unexpected peer-range warning; stderr was: ${stderrChunks.join('')}`,
     );
   });
 });
@@ -2341,5 +2637,323 @@ void describe('installLinuxSharpForImageOptimizer — sharp floor (GHSA-wq5f-xc8
     seedSharp('0.35.5', 'x64');
     installLinuxSharpForImageOptimizer(openNextDir);
     assert.strictEqual(installs.length, 0);
+  });
+});
+
+void describe('nextjsAdapter — build profile (HTTP API door, preview trims)', () => {
+  let tmpDir: string;
+  let lenientBackup: string | undefined;
+  let configDuringBuild: string | undefined;
+  let output: Record<string, unknown>;
+
+  const writeOutput = (): void => {
+    const openNextDir = path.join(tmpDir, '.open-next');
+    for (const fn of output.edgeFunctions ? ['default', 'edge1'] : ['default']) {
+      fs.mkdirSync(path.join(openNextDir, 'server-functions', fn), { recursive: true });
+      fs.writeFileSync(path.join(openNextDir, 'server-functions', fn, 'index.mjs'), 'export const handler = async () => {};');
+    }
+    fs.mkdirSync(path.join(openNextDir, 'assets'), { recursive: true });
+    fs.mkdirSync(path.join(openNextDir, 'cache'), { recursive: true });
+    fs.mkdirSync(path.join(openNextDir, 'revalidation-function'), { recursive: true });
+    fs.writeFileSync(path.join(openNextDir, 'open-next.output.json'), JSON.stringify(output));
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-profile-'));
+    configDuringBuild = undefined;
+    output = {
+      origins: { default: { type: 'function', handler: 'index.handler', bundle: '.open-next/server-functions/default', streaming: true } },
+      edgeFunctions: { edge1: { bundle: '.open-next/server-functions/edge1', handler: 'index.handler' } },
+      behaviors: [
+        { pattern: '/api/edge', origin: 'edge1' },
+        { pattern: '/*', origin: 'default' },
+      ],
+      additionalProps: {},
+    };
+    mock.method(spawn, 'sync', () => {
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeOutput();
+    });
+    lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
+    delete process.env.HOSTING_LENIENT_PATCHES;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+    if (lenientBackup === undefined) delete process.env.HOSTING_LENIENT_PATCHES;
+    else process.env.HOSTING_LENIENT_PATCHES = lenientBackup;
+  });
+
+  void it('behind an HTTP API: payload 2.0 converter, buffered wrapper, a buffered server', () => {
+    // No HOSTING_LENIENT_PATCHES: the streaming-wrapper patch must be skipped
+    // (there is no streaming wrapper to patch) rather than throw.
+    delete output.edgeFunctions;
+    output.behaviors = [{ pattern: '/*', origin: 'default' }];
+    const manifest = withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /converter: 'aws-apigw-v2',\s+wrapper: 'aws-lambda',/);
+    assert.doesNotMatch(configDuringBuild ?? '', /aws-apigw-v1|aws-lambda-streaming/);
+    assert.strictEqual(manifest.compute['default'].streaming, false);
+  });
+
+  void it('`skipIsr`: no tag cache and the dummy queue; the cache and its seed stay', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = withBuildProfile({ skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /dangerous: \{\s+disableTagCache: true,/);
+    assert.match(configDuringBuild ?? '', /queue: 'dummy',/);
+    assert.ok(manifest.cache, 'the incremental cache stays');
+    assert.strictEqual(manifest.cache?.revalidationQueue, false);
+    assert.strictEqual(manifest.cache?.revalidationFunction, undefined);
+    assert.ok(manifest.cache?.seedDirectory, 'the build snapshot still seeds the cache');
+  });
+
+  // OpenNext builds an image-optimization bundle on every build and installs
+  // `sharp` into it unless the config's `imageOptimization.install` is falsy.
+  // Record every `npm install` the adapter itself runs, and lay down the image
+  // bundle directory a real OpenNext build leaves behind.
+  const recordInstalls = (): string[][] => {
+    const installs: string[][] = [];
+    mock.restoreAll();
+    mock.method(spawn, 'sync', (bin: string, args: readonly string[]) => {
+      if (bin === 'npm' && args[0] === 'install') {
+        installs.push([...args]);
+        return;
+      }
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeOutput();
+      fs.mkdirSync(path.join(tmpDir, '.open-next', 'image-optimization-function'), { recursive: true });
+    });
+    return installs;
+  };
+
+  void it('`skipImageOptimization`: neither OpenNext nor the adapter installs sharp', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const installs = recordInstalls();
+    withBuildProfile({ skipImageOptimization: true }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /imageOptimization: \{\s+install: false,\s+\},/);
+    assert.deepStrictEqual(installs, [], 'no sharp install for an image function that is never deployed');
+  });
+
+  void it('the default profile keeps OpenNext’s sharp install and the adapter’s linux-x64 sharp', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const installs = recordInstalls();
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.doesNotMatch(configDuringBuild ?? '', /imageOptimization|install/);
+    assert.strictEqual(installs.length, 1);
+    assert.ok(installs[0].includes('--cpu=x64'), 'the linux-x64 sharp install still runs');
+  });
+
+  void it('`edgeToRegional`: an edge route is a regional handler, not Lambda@Edge', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = withBuildProfile({ edgeToRegional: true, serverInvoke: 'http-api' }, () =>
+      nextjsAdapter({ projectDir: tmpDir }),
+    );
+    const edge = manifest.compute['edge1'];
+    assert.strictEqual(edge.type, 'handler');
+    assert.strictEqual(edge.placement, 'regional');
+    assert.strictEqual(edge.streaming, false, 'buffered behind the HTTP API');
+    assert.ok(manifest.routes.some((r) => r.pattern === '/api/edge' && r.target === 'edge1'));
+  });
+
+  void it('the default profile keeps the REST (payload 1.0, streaming) build and Lambda@Edge', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = nextjsAdapter({ projectDir: tmpDir });
+    assert.match(configDuringBuild ?? '', /converter: 'aws-apigw-v1',\s+wrapper: 'aws-lambda-streaming',/);
+    assert.doesNotMatch(configDuringBuild ?? '', /disableTagCache|dummy/);
+    assert.strictEqual(manifest.compute['edge1'].type, 'edge');
+    assert.strictEqual(manifest.cache?.revalidationQueue, true);
+  });
+
+  void it('behind an HTTP API, accepts a user config with the payload 2.0 overrides and rejects the REST ones', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const cfg = path.join(tmpDir, 'open-next.config.ts');
+    fs.writeFileSync(cfg, "export default { default: { override: { converter: 'aws-apigw-v1', wrapper: 'aws-lambda-streaming' } } };\n");
+    assert.throws(() => withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir })), {
+      code: 'IncompatibleOpenNextConfigError',
+    });
+    fs.writeFileSync(cfg, "export default { default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' } } };\n");
+    assert.doesNotThrow(() => withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir })));
+  });
+
+  void it('a production build first restores a next.config left wrapped by an interrupted preview build', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const configFile = path.join(tmpDir, 'next.config.mjs');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    assert.ok(pinNextBuildId(tmpDir, 'fixed')); // the preview build was killed before restoring
+    let nextConfigDuringBuild: string | undefined;
+    mock.restoreAll();
+    mock.method(spawn, 'sync', () => {
+      nextConfigDuringBuild = fs.readFileSync(configFile, 'utf-8');
+      writeOutput();
+    });
+    nextjsAdapter({ projectDir: tmpDir }); // default profile: no pinned build id
+    assert.strictEqual(nextConfigDuringBuild, original, 'the build ran on the user config, not the wrapper');
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.mjs')));
+  });
+
+  void it('`deterministicBuildId`: next.config is wrapped with generateBuildId during the build, then restored', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const configFile = path.join(tmpDir, 'next.config.mjs');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    let nextConfigDuringBuild: string | undefined;
+    mock.restoreAll();
+    mock.method(spawn, 'sync', () => {
+      nextConfigDuringBuild = fs.readFileSync(configFile, 'utf-8');
+      writeOutput();
+    });
+    withBuildProfile({ deterministicBuildId: 'preview' }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(nextConfigDuringBuild ?? '', /generateBuildId: cfg\.generateBuildId \?\? \(async \(\) => "preview"\)/);
+    assert.match(nextConfigDuringBuild ?? '', /import blocksBase from "\.\/next\.config\.blocks-base\.mjs"/);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original, 'restored after the build');
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.mjs')));
+  });
+});
+
+void describe('pinNextBuildId', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-next-buildid-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('is a no-op without a next.config, or when the app defines generateBuildId', () => {
+    assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
+    fs.writeFileSync(path.join(tmpDir, 'next.config.js'), 'module.exports = { generateBuildId: async () => "mine" };');
+    assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
+  });
+
+  // Next loads next.config.mjs (and next.config.js in an ESM project) with a
+  // native `import()`, which does not resolve an extensionless specifier.
+  for (const [file, pkg] of [
+    ['next.config.mjs', {}],
+    ['next.config.js', { type: 'module' }],
+  ] as const) {
+    void it(`the ${file} wrapper${'type' in pkg ? ' (ESM project)' : ''} loads with a native import()`, async () => {
+      fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg));
+      fs.writeFileSync(path.join(tmpDir, file), 'export default { reactStrictMode: true };\n');
+      const restore = pinNextBuildId(tmpDir, 'fixed');
+      assert.ok(restore);
+      const mod = await import(`${pathToFileURL(path.join(tmpDir, file)).href}?t=${Date.now()}`);
+      const cfg = await mod.default('phase-production-build', {});
+      assert.strictEqual(cfg.reactStrictMode, true);
+      assert.strictEqual(await cfg.generateBuildId(), 'fixed');
+      restore();
+    });
+  }
+
+  void it('the next.config.cjs wrapper loads with require()', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.cjs'), 'module.exports = { reactStrictMode: true };\n');
+    const restore = pinNextBuildId(tmpDir, 'fixed');
+    assert.ok(restore);
+    const cfg = await createRequire(path.join(tmpDir, 'x.js'))(path.join(tmpDir, 'next.config.cjs'))('phase', {});
+    assert.strictEqual(await cfg.generateBuildId(), 'fixed');
+    restore();
+  });
+
+  void it('restorePinnedNextConfig puts back a config left wrapped by an interrupted build', () => {
+    const configFile = path.join(tmpDir, 'next.config.ts');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    assert.ok(pinNextBuildId(tmpDir, 'fixed'));
+    // The build was killed: the restore never ran.
+    assert.notStrictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), true);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
+    // Nothing to restore the second time; a user's own config is never touched.
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+  });
+
+  void it('an overlapping build: a running build keeps its wrapper, and a finished one never deletes the restored config', () => {
+    const configFile = path.join(tmpDir, 'next.config.ts');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    const restoreA = pinNextBuildId(tmpDir, 'fixed');
+    assert.ok(restoreA);
+    // Build A is still running in another process: build B leaves its wrapper alone.
+    const wrapper = fs.readFileSync(configFile, 'utf-8');
+    fs.writeFileSync(configFile, wrapper.replace(/pinned by pid \d+/, `pinned by pid ${process.ppid}`));
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
+    // Build B (or the user) put the config back anyway; A finishing must not delete it.
+    fs.renameSync(path.join(tmpDir, 'next.config.blocks-base.ts'), configFile);
+    restoreA();
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+  });
+
+  void it('restorePinnedNextConfig leaves a base file alone when the config is not our wrapper', () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.ts'), 'export default {};\n');
+    fs.writeFileSync(path.join(tmpDir, 'next.config.blocks-base.ts'), 'export default { a: 1 };\n');
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
+  });
+
+  void it('writes a CommonJS wrapper for a CommonJS project', () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.js'), 'module.exports = {};');
+    const restore = pinNextBuildId(tmpDir, 'preview');
+    assert.ok(restore);
+    assert.match(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), /module\.exports = async/);
+    restore();
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), 'module.exports = {};');
+  });
+});
+
+void describe('nextStaticImmutablePaths', () => {
+  let assetsDir: string;
+  beforeEach(() => {
+    assetsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-static-'));
+    const staticDir = path.join(assetsDir, '_next', 'static');
+    for (const dir of ['chunks', 'css', 'media', 'fixed']) fs.mkdirSync(path.join(staticDir, dir), { recursive: true });
+    fs.writeFileSync(path.join(staticDir, 'fixed', '_buildManifest.js'), '');
+    fs.writeFileSync(path.join(staticDir, 'fixed', '_ssgManifest.js'), '');
+  });
+  afterEach(() => fs.rmSync(assetsDir, { recursive: true, force: true }));
+
+  void it('keeps all of _next/static immutable without a pinned build id', () => {
+    assert.deepStrictEqual(nextStaticImmutablePaths(assetsDir, {}), ['_next/static/*']);
+  });
+
+  void it('leaves the build-id directory out with a pinned build id, so its manifests revalidate', () => {
+    assert.deepStrictEqual(nextStaticImmutablePaths(assetsDir, { deterministicBuildId: 'fixed' }), [
+      '_next/static/chunks/*',
+      '_next/static/css/*',
+      '_next/static/media/*',
+    ]);
+  });
+});
+
+void describe('detectNextVersion in a workspace', () => {
+  void it("reads the app's next, not the version hoisted to the workspace root", () => {
+    // An app pinning next@15.5.7 under a root that hoists next@16.4.2: the
+    // root's version would pick the Next 16 image-optimizer patch and hide a
+    // peer-range mismatch.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nextjs-workspace-'));
+    try {
+      const app = path.join(root, 'apps', 'web');
+      for (const [dir, version] of [
+        [root, '16.4.2'],
+        [app, '15.5.7'],
+      ] as const) {
+        const pkgDir = path.join(dir, 'node_modules', 'next');
+        fs.mkdirSync(pkgDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(pkgDir, 'package.json'),
+          JSON.stringify({ name: 'next', version, main: 'index.js' }),
+        );
+        fs.writeFileSync(path.join(pkgDir, 'index.js'), '');
+      }
+      fs.writeFileSync(path.join(app, 'package.json'), '{}');
+      assert.strictEqual(detectNextVersion(app), '15.5.7');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

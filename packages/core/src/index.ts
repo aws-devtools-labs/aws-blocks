@@ -27,7 +27,15 @@ export {
 	type ScalingSignal,
 	type ServerlessComputeOptions,
 } from './common/compute-capabilities.js';
-export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
+export {
+	_resetConfigCache,
+	getCachedConfigValue,
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+} from './common/config.js';
+export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
 export {
 	type BuildingBlockMeta,
 	buildingBlockParent,
@@ -55,6 +63,7 @@ export {
 	isContainerRuntime,
 	isJobWorker,
 	registerContainerPoller,
+	type RunContainerOptions,
 	runContainer,
 	runJobWorker,
 } from './container-runtime.js';

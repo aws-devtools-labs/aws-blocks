@@ -9,8 +9,10 @@ import { API_NAMESPACE_COMPUTE, API_NAMESPACE_EXPLICIT_COMPUTE } from '../api.js
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
+import type { ApiDirectRoute } from './api-direct-routes.js';
+import { addLoadBalancerMethod } from './api-vpc-link.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { ComputeBase } from './compute/compute.js';
+import type { ComputeApiIngress, ComputeBase } from './compute/compute.js';
 
 /**
  * Characters API Gateway allows in a literal resource path part — the same set
@@ -19,13 +21,34 @@ import type { ComputeBase } from './compute/compute.js';
  */
 const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
 
+/**
+ * Integration timeout for every API-Gateway→Lambda integration on the shared
+ * REST API, in seconds. This is API Gateway's **existing** default integration
+ * timeout for a REST integration (`LambdaIntegration` already defaults to
+ * `Duration.seconds(29)` when unset) — setting it explicitly changes no runtime
+ * behaviour; it documents the boundary in synthesized output so it is visible at
+ * review and in the template rather than implicit. A request still in flight at
+ * 29s is cut off with a 504 regardless of how long the Lambda may run: the
+ * shared handler's function timeout is the async-work ceiling (up to 900s for
+ * SQS/AsyncJob invocations) and is unreachable on the synchronous HTTP path.
+ * The explicit value is aligned with the handler's own 28s deadline guard
+ * (`APIGW_TIMEOUT_MS`), which emits a structured 504 just before this cut-off.
+ *
+ * 29s is API Gateway's default integration timeout and the hard cap for
+ * edge-optimized APIs. Regional and private REST APIs can raise it via a service
+ * quota increase (CDK validates only the lower bound, ~50 ms, so a larger value
+ * synthesizes without error). Kept at 29s here to match the handler's 28s guard.
+ */
+const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
+
 /** Inputs the shared REST API gateway is built from. @internal */
 export interface SharedGatewayProps {
 	/**
 	 * Each non-default compute that hosts API namespaces, mapped to the export
 	 * names routed to it (see {@link resolveNamespaceRoutes}). The gateway builds
-	 * one Lambda integration per compute and a literal `/aws-blocks/api/{name}`
-	 * resource per name. Namespaces on the {@link defaultCompute} need no entry —
+	 * a literal `/aws-blocks/api/{name}` resource per name, integrated with the
+	 * compute's ingress (`apiIngress()`): one Lambda integration per function
+	 * compute, or a VPC link HTTP integration per name for a load-balanced one. Namespaces on the {@link defaultCompute} need no entry —
 	 * the catch-all resources already reach it. Omitted ⇒ no fan-out.
 	 */
 	readonly namespaceRoutes?: ReadonlyMap<ComputeBase, readonly string[]>;
@@ -56,8 +79,14 @@ export interface SharedGatewayProps {
 
 /** What {@link createSharedGateway} returns. @internal */
 export interface SharedGateway {
-	/** The shared REST API that fronts every compute's function. */
+	/** The shared REST API that fronts every compute: a function, or a container's load balancer. */
 	readonly restApi: apigateway.RestApi;
+	/**
+	 * The namespace paths served by a load-balanced compute (a container), which a
+	 * CloudFront front door routes straight to the compute's load balancer
+	 * instead of through this gateway (see `addDirectApiBehaviors`).
+	 */
+	readonly directRoutes: readonly ApiDirectRoute[];
 	/** The RPC endpoint URL (`{gateway}/{stage}/aws-blocks/api`). */
 	readonly apiUrl: string;
 }
@@ -85,10 +114,11 @@ export interface SharedGateway {
  *
  * **Multi-compute fan-out.** When a namespace is assigned to a non-default
  * compute, the gateway adds a literal `/aws-blocks/api/{namespace}` resource
- * (ANY), integrated with the function of the compute hosting it. `{namespace}`
+ * (ANY), integrated with the compute hosting it: its function, or — for a
+ * container compute — its load balancer, through a VPC link. `{namespace}`
  * is the namespace's **export** name — what the client calls and dispatch
  * resolves — from {@link resolveNamespaceRoutes}. A literal resource wins over
- * the sibling `{proxy+}`, so each per-namespace path reaches ITS function while
+ * the sibling `{proxy+}`, so each per-namespace path reaches ITS compute while
  * everything else — the RPC root, auth, raw routes, and every namespace left on
  * the default compute — still reaches the default compute. The client POSTs to
  * exactly that path, so the literal resource has no `{proxy+}` subtree.
@@ -169,7 +199,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		restApi.deploymentStage.node.addDependency(apiGatewayAccount);
 	}
 
-	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler);
+	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler, {
+		timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+	});
 
 	// Nested resource tree for /aws-blocks/api. The intermediate resource
 	// gets a proxy so sub-paths (RawRoutes) still reach the function.
@@ -186,27 +218,58 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
-	// Fan out: route each non-default compute's namespaces to its own function.
+	// Fan out: route each non-default compute's namespaces to its own ingress.
+	const directRoutes: ApiDirectRoute[] = [];
 	for (const [compute, exportNames] of namespaceRoutes) {
-		const handler = compute.apiHandler();
-		if (!handler) {
+		// A compute can refuse API traffic (a container that may scale to zero
+		// tasks); only this loop knows which namespaces sent it here, so name them.
+		let ingress: ComputeApiIngress | undefined;
+		try {
+			ingress = compute.apiIngress();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(`API namespaces (${exportNames.join(', ')}) on compute '${compute.node.path}': ${message}`);
+		}
+		if (!ingress) {
 			throw new Error(
-				`Compute '${compute.node.id}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic.`,
+				`Compute '${compute.node.path}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic. ` +
+					'Give each one a serverless or container `compute`, or create it outside the scope that sets this compute.',
 			);
+		}
+		for (const name of exportNames) {
+			if (!API_GATEWAY_PATH_PART.test(name)) {
+				throw new Error(
+					`API namespace export '${name}' can't be routed to compute '${compute.node.path}': ` +
+						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
+				);
+			}
+		}
+		if (ingress.kind === 'load-balancer') {
+			// A container's HTTP server behind its internal load balancer, reached
+			// through the backend's VPC link. The integration URI carries the path,
+			// so each namespace gets its own.
+			for (const name of exportNames) {
+				const path = `${BLOCKS_RPC_PREFIX}/${name}`;
+				addLoadBalancerMethod(
+					apiResource.addResource(name),
+					ingress,
+					path,
+					cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+				);
+				directRoutes.push({ path, ingress });
+			}
+			continue;
 		}
 		// One integration per compute, reused across all of its namespace resources.
 		// API-scoped invoke permission: one Lambda::Permission per function for this
 		// API, instead of CDK's default two per method (stage + test-invoke), so the
 		// function's resource policy stays flat however many namespaces it hosts.
 		// Safe because the only routes integrating this function are the ones below.
-		const integration = new apigateway.LambdaIntegration(handler, { scopePermissionToMethod: false });
+		const integration = new apigateway.LambdaIntegration(ingress.fn, {
+			scopePermissionToMethod: false,
+			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+		});
 		for (const name of exportNames) {
-			if (!API_GATEWAY_PATH_PART.test(name)) {
-				throw new Error(
-					`API namespace export '${name}' can't be routed to compute '${compute.node.id}': ` +
-						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
-				);
-			}
 			apiResource.addResource(name).addMethod('ANY', integration);
 		}
 	}
@@ -214,7 +277,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	// `restApi.url` is `https://{id}.execute-api.{region}.amazonaws.com/{stage}/`.
 	const apiUrl = `${restApi.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 
-	return { restApi, apiUrl };
+	return { restApi, apiUrl, directRoutes };
 }
 
 /**

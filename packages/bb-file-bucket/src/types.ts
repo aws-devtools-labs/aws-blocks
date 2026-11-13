@@ -57,12 +57,95 @@ export interface FileBucketOptions {
 	 * stack-wide `logRetention` default (see `BlocksDefaults.logRetention`);
 	 * `RetentionDays.INFINITE` keeps them indefinitely (no expiry rule).
 	 *
-	 * Resolves from the stack `defaults.accessLogging` when omitted, so a
-	 * production-postured stack can opt every FileBucket into logging without
-	 * a per-block option. Ignored by the mock and browser runtimes (no AWS
-	 * resource).
+	 * Resolves from the stack `defaults.storageAccessLogging` when omitted, and
+	 * from `defaults.accessLogging` when that is unset too, so a stack can opt
+	 * every FileBucket into logging without a per-block option. Ignored by the
+	 * mock and browser runtimes (no AWS resource).
 	 */
 	accessLogging?: boolean;
+	/**
+	 * Server-side encryption at rest. S3 always encrypts objects; this only
+	 * selects the key.
+	 *
+	 * - `'aws-managed'` (default): SSE-S3 with S3-managed keys. No key charge and
+	 *   no per-request KMS cost.
+	 * - `'customer-managed'`: SSE-KMS with a **dedicated** customer-managed KMS
+	 *   key (CMK) for this bucket, with automatic yearly rotation. You control the
+	 *   key policy and every use is logged in CloudTrail. Incurs the KMS monthly
+	 *   key charge; S3 Bucket Keys are enabled to keep per-request KMS charges
+	 *   low. The key follows the bucket's removal policy (destroyed with a
+	 *   `'destroy'` bucket, retained with a `'retain'` one).
+	 * - a {@link ExternalKmsKeyRef} from {@link FileBucket.fromKmsKey}: SSE-KMS
+	 *   with an **existing** CMK you own, so several buckets (or tables) can share
+	 *   one key. The key policy must let the account's IAM principals use it —
+	 *   Blocks grants the runtime role `kms:Decrypt` / `kms:GenerateDataKey*` on
+	 *   it, which only takes effect when the key policy delegates to IAM.
+	 *
+	 * Presigned `getUrl()` / `putUrl()` URLs keep working under SSE-KMS: they are
+	 * signed by the runtime role, which holds the key permissions.
+	 *
+	 * The access-log bucket (see {@link accessLogging}) always uses SSE-S3: S3
+	 * server access logging can't deliver to an SSE-KMS bucket.
+	 *
+	 * @example
+	 * ```ts
+	 * const key = FileBucket.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+	 * new FileBucket(scope, 'invoices', { encryption: key });
+	 * ```
+	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
+	 * Ignored by the mock and browser runtimes (no AWS resource to encrypt).
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
+	 * Enable S3 Object Lock (write-once-read-many) with a default retention
+	 * period applied to every new object version. Default: off.
+	 *
+	 * - `mode: 'governance'` — principals with `s3:BypassGovernanceRetention`
+	 *   can still shorten the retention or delete a locked version.
+	 * - `mode: 'compliance'` — **nobody**, including the account root user, can
+	 *   delete a locked version or shorten its retention until it expires.
+	 * - `retentionDays` — how long each version stays locked (a positive integer,
+	 *   at most 36500).
+	 *
+	 * Locking applies to object **versions**: `delete(path)` still succeeds (it
+	 * adds a delete marker, so the file disappears from `get` and `scan`), but
+	 * permanently deleting a locked version (`delete(path, { versionId })`)
+	 * fails until its retention expires, and the noncurrent-version expiration
+	 * rule (see {@link noncurrentVersionExpirationDays}) only removes a version
+	 * once its lock has expired.
+	 *
+	 * Presigned uploads are not supported: S3 requires a signed `Content-MD5` or
+	 * checksum header on every upload to an Object Lock bucket, which a URL
+	 * presigned before the file is known can't carry. `putUrl()` and
+	 * `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported`;
+	 * upload with `put()` (the SDK adds the checksum). Downloads are unaffected.
+	 *
+	 * Requirements, checked at synth:
+	 * - versioning must stay on (`versioned: false` is rejected);
+	 * - the bucket must be retained — `removalPolicy: 'destroy'` (including the
+	 *   sandbox preset's default) is rejected, because locked objects can't be
+	 *   emptied, so a teardown would fail. Pass `removalPolicy: 'retain'` to use
+	 *   Object Lock in a sandbox.
+	 *
+	 * Adding `objectLock` to an already-deployed FileBucket is an in-place
+	 * update: CloudFormation enables Object Lock on the existing bucket. S3 can't
+	 * turn Object Lock off once it's on. Changing `mode` or `retentionDays` is
+	 * also an in-place update that applies to new versions only.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'audit-exports', {
+	 *   objectLock: { mode: 'governance', retentionDays: 365 },
+	 * });
+	 * ```
+	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
+	 *
+	 * The mock validates the option and rejects presigned uploads, but does not
+	 * enforce retention.
+	 */
+	objectLock?: ObjectLockOptions;
 	/**
 	 * Days after which NONCURRENT object versions are permanently expired,
 	 * bounding the storage cost that versioning would otherwise let grow
@@ -89,17 +172,18 @@ export interface FileBucketOptions {
 	 */
 	bucket?: ExternalBucketRef;
 	/**
-	 * CDK removal behavior for the underlying S3 bucket. When omitted,
-	 * CDK's default applies (RETAIN — the bucket and its contents are
-	 * preserved on `cdk destroy`).
+	 * CDK removal behavior for the underlying S3 bucket. When omitted, it
+	 * falls back to the stack's posture default (`BlocksDefaults.removalPolicy`
+	 * from the chosen `BlocksPresets` entry — DESTROY in `sandbox`, RETAIN in
+	 * `production`).
 	 *
 	 * Pass `'destroy'` for sandbox / ephemeral stacks where the bucket
 	 * should be dropped on teardown. This also enables `autoDeleteObjects`
 	 * so CloudFormation can empty the bucket before deletion — required
 	 * since S3 rejects DELETE on a non-empty bucket.
 	 *
-	 * Pass `'retain'` to set the policy explicitly (identical to omitting
-	 * it today, but robust against stack-layer policy overrides).
+	 * Pass `'retain'` to set the policy explicitly, keeping the bucket and its
+	 * contents on `cdk destroy` regardless of the stack default.
 	 *
 	 * Templates that apply `RemovalPolicies.of(stack).destroy()` at the
 	 * top level override this setting.
@@ -107,6 +191,63 @@ export interface FileBucketOptions {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Content types this bucket accepts on upload. Default: any content type.
+	 *
+	 * Each entry is an exact media type (`'application/pdf'`) or a `type/*`
+	 * wildcard (`'image/*'`), without parameters. Matching ignores case and
+	 * parameters, so `text/plain; charset=utf-8` matches `'text/plain'` or
+	 * `'text/*'`. A wildcard matches every subtype of its type except the types
+	 * a browser can display as a page (scripts included) or run as a script:
+	 * `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`,
+	 * `application/xml`, `text/xsl`, `text/javascript`, `text/ecmascript`,
+	 * `application/javascript`, `application/ecmascript`,
+	 * `application/x-javascript`, and any subtype ending in `+xml`
+	 * (`application/atom+xml`, …). So `'image/*'` does not accept
+	 * `image/svg+xml`, and `'text/*'` does not accept `text/html`. To accept one
+	 * of these, list it exactly (`['image/*', 'image/svg+xml']`), and serve its
+	 * downloads with `getUrl()`'s `attachment` option.
+	 *
+	 * Checked by `put()`, `putUrl()` and `createUploadHandle()` against the
+	 * effective content type — the caller's `contentType`, or
+	 * `application/octet-stream` when omitted (list it to accept uploads that
+	 * don't name a type). A content type that isn't listed throws
+	 * `ValidationFailed` (HTTP 400). Presigned uploads always sign the content
+	 * type, so the uploader can't send a different one.
+	 *
+	 * Must be a non-empty array of `type/subtype` or `type/*` strings; anything
+	 * else is rejected at synth (and by the mock at construction). Enforced by the
+	 * mock and the AWS runtime identically, including for a bucket wrapped with
+	 * `bucket`.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'avatars', { allowedContentTypes: ['image/png', 'image/jpeg'] });
+	 * ```
+	 */
+	allowedContentTypes?: string[];
+	/**
+	 * Largest upload, in bytes, this bucket accepts. Default: no limit (S3's own
+	 * limits apply).
+	 *
+	 * When set:
+	 * - `putUrl()` and `createUploadHandle()` require `contentLength` and reject
+	 *   one above the limit; the signed URL only accepts a body of exactly that
+	 *   size;
+	 * - `put()` rejects a body above the limit.
+	 *
+	 * A rejection throws `ValidationFailed` (HTTP 400). Must be a positive safe
+	 * integer (at most `Number.MAX_SAFE_INTEGER`); anything else is rejected at
+	 * synth (and by the mock at construction).
+	 * Enforced by the mock and the AWS runtime identically, including for a
+	 * bucket wrapped with `bucket`.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'uploads', { maxUploadBytes: 10 * 1024 * 1024 }); // 10 MiB
+	 * ```
+	 */
+	maxUploadBytes?: number;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -114,28 +255,92 @@ export interface FileBucketOptions {
 // ── Method options ──────────────────────────────────────────────────────────
 
 export interface PutOptions {
-	/** MIME type of the file (e.g., `image/png`). */
+	/**
+	 * MIME type of the file (e.g., `image/png`). Default: `application/octet-stream`.
+	 *
+	 * Must be a single `type/subtype` media type with optional `; name=value`
+	 * parameters (no comma-separated list, ASCII only), or `put()` throws
+	 * `ValidationFailed`. Must be in the bucket's `allowedContentTypes` when that option is set;
+	 * otherwise `put()` throws `ValidationFailed`.
+	 */
 	contentType?: string;
-	/** Custom metadata key-value pairs. */
+	/**
+	 * Custom metadata key-value pairs.
+	 *
+	 * Set when the object is written and can't be edited in place: each `put()`
+	 * replaces the object's metadata, so a `put()` without `metadata` leaves
+	 * none. To change it, `put()` the same body again with the complete new set
+	 * (see "Changing Metadata" in the README). S3 stores the keys in lowercase,
+	 * so use lowercase keys.
+	 */
 	metadata?: Record<string, string>;
 	/** Cache-Control header value. */
 	cacheControl?: string;
 }
 
 export interface GetUrlOptions {
-	/** URL expiration in seconds. Default: 3600. */
+	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
+	/**
+	 * Make the browser download the file instead of displaying it. Default: off —
+	 * the file is served with its stored content type and displayed inline when
+	 * the browser can render it.
+	 *
+	 * - `true` signs `Content-Disposition: attachment` into the URL.
+	 * - a filename (e.g. `'report.pdf'`) also suggests that name:
+	 *   `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`. Control
+	 *   characters and zero-width/directional formatting characters are
+	 *   removed, and a name that is empty, `.` or `..` afterwards throws
+	 *   `ValidationFailed`; in the quoted ASCII `filename`, quotes,
+	 *   backslashes, `%` and non-ASCII characters become `_`, while `filename*`
+	 *   carries the full UTF-8 name.
+	 *
+	 * Recommended for user-uploaded content: a file displayed inline can run as a
+	 * page (HTML, SVG) in whatever origin serves it.
+	 *
+	 * @throws `ValidationFailed` when neither a boolean nor a non-empty filename.
+	 */
+	attachment?: boolean | string;
 }
 
 export interface PutUrlOptions {
-	/** URL expiration in seconds. Default: 3600. */
+	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
-	/** Required content type for the upload. */
+	/**
+	 * Required content type for the upload. Default: `application/octet-stream`.
+	 *
+	 * Always signed into the URL: the upload must send exactly this
+	 * `Content-Type` header, or S3 (and the local dev server) rejects it with
+	 * `403 SignatureDoesNotMatch`. `createUploadHandle().upload()` sends it for
+	 * you. Must be a single `type/subtype` media type with optional `; name=value`
+	 * parameters (no comma-separated list, ASCII only). Must be in the bucket's
+	 * `allowedContentTypes` when that option is set;
+	 * otherwise the call throws `ValidationFailed`.
+	 */
 	contentType?: string;
+	/**
+	 * Exact size of the upload, in bytes. When set, it is signed into the URL and
+	 * S3 (and the local dev server) only accepts a body of exactly this size.
+	 * Browsers set `Content-Length` from the body automatically. `0` is a valid
+	 * size and signs a zero-byte upload.
+	 *
+	 * Required when the bucket sets `maxUploadBytes`, and must not exceed it.
+	 *
+	 * @throws `ValidationFailed` when not a non-negative safe integer, missing while
+	 *   `maxUploadBytes` is set, or above `maxUploadBytes`.
+	 */
+	contentLength?: number;
 }
 
 export interface ScanOptions {
-	/** Only list files whose keys start with this prefix. */
+	/**
+	 * Only list files whose keys start with this prefix.
+	 *
+	 * Validated with the same rules as object keys, except that it may be empty
+	 * and may end with `/`: a leading `/`, an empty interior segment, a `.` or
+	 * `..` segment, a backslash and control or bidirectional formatting
+	 * characters throw `ValidationFailed`.
+	 */
 	prefix?: string;
 }
 
@@ -253,6 +458,25 @@ export interface ExternalBucketRef {
 	readonly bucketName: string;
 }
 
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link FileBucket.fromKmsKey}. Pass it as the `encryption` option to encrypt
+ * the bucket with a CMK you already own — letting several buckets (or tables)
+ * share one key instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
+}
+
+/** S3 Object Lock settings for {@link FileBucketOptions.objectLock}. */
+export interface ObjectLockOptions {
+	/** `'governance'` (bypassable with `s3:BypassGovernanceRetention`) or `'compliance'` (not bypassable by anyone). */
+	mode: 'governance' | 'compliance';
+	/** Default retention, in days, applied to every new object version. Positive integer, at most 36500. */
+	retentionDays: number;
+}
+
 // ── Client handle types (hydrated by middleware) ────────────────────────────
 
 /** Client-side download handle. Works server-side and serializes via toJSON() for the wire. */
@@ -285,5 +509,6 @@ export interface FileDownloadDescriptor {
 export interface FileUploadDescriptor {
 	readonly __blocks: 'file-bucket/upload';
 	readonly url: string;
+	/** The signed content type the upload must send. Always set by current servers. */
 	readonly contentType?: string;
 }

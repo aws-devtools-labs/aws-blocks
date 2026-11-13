@@ -38,9 +38,10 @@ export const ApiNamespace: ApiNamespaceConstructor;
 export interface ApiNamespaceOptions {
     compute?: {
         resolve(): {
-            readonly type: 'serverless';
+            readonly type: 'serverless' | 'container';
         };
     };
+    httpErrorStatus?: boolean;
 }
 
 // @public
@@ -130,9 +131,7 @@ export type ContainerPollerStarter = () => ContainerPollerHandle;
 
 // @public
 export interface ContainerScaling {
-    // (undocumented)
     maxInstances: number;
-    // (undocumented)
     minInstances: number;
     // (undocumented)
     strategy?: ScalingSignal | ScalingSignal[];
@@ -166,12 +165,18 @@ export type ContainerSize = {
 export const DEFAULT_API_ERROR_NAME = "ApiError";
 
 // @public
+export type DeploymentType = 'local' | 'sandbox' | 'production';
+
+// @public
 export function dispatchJobToWorker(req: JobWorkerRequest, timeoutMs?: number): Promise<JobDispatchResult>;
 
 // Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
 //
 // @public
 export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry>;
+
+// @public
+export function getCachedConfigValue(key: string): string | undefined;
 
 // @public
 export function getConfig(key: string): Promise<string>;
@@ -181,6 +186,9 @@ export function getConfigSync(key: string): string;
 
 // @public
 export function getContainerComputeId(): string | undefined;
+
+// @public
+export function getDeploymentType(): DeploymentType;
 
 // @public
 export function getRegisteredRoutes(): readonly RegisteredRoute[];
@@ -332,7 +340,12 @@ export function _resetSdkRegistry(): void;
 export function resolvePerInstanceConcurrency(maxConcurrencyPerCPU: number, vcpu: number): number;
 
 // @public
-export function runContainer(): Promise<void>;
+export function runContainer(options?: RunContainerOptions): Promise<void>;
+
+// @public
+export interface RunContainerOptions {
+    backend?: unknown;
+}
 
 // @public
 export function runJobWorker(resolveJob: (fullId: string) => {
@@ -391,6 +404,11 @@ export interface ScopeOptions {
     bbName?: string;
     // (undocumented)
     bbVersion?: string;
+    compute?: {
+        resolve(): {
+            readonly type: 'serverless' | 'container';
+        };
+    };
     // (undocumented)
     parent?: ScopeParent;
 }

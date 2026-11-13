@@ -111,8 +111,8 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
   framework-reserved.
 
 For an **external** secret (`Secret.fromExisting(arn)` → `options.secret`) it
-imports the secret with `Secret.fromSecretCompleteArn` and grants read/write to
-it, but creates, seeds, deletes, **and tags** nothing — it is owned outside this
+imports the secret with `Secret.fromSecretCompleteArn` and grants read to it
+(plus write only when `allowRuntimeWrite: true`), but creates, seeds, deletes, **and tags** nothing — it is owned outside this
 stack (often shared across many installations), so stamping it with this stack's
 resource-group tag would mutate a resource we don't own. `registerConfig` still
 records the ARN so the runtime resolves the same identity.
@@ -126,7 +126,7 @@ error instead of a cryptic `X is not a function`.
 `index.aws.ts` captures the construct `id` and any `ExternalSecretRef` in its
 constructor and resolves the secret ARN at **call time** via `resolveSecretArn()`
 — from the `ExternalSecretRef` when wrapping an existing secret, otherwise from
-the config key `BLOCKS_SECRET_ARN_<ID>` the CDK layer registered. Deferring to
+the config key `BLOCKS_SECRET_ARN_<FULLID>` the CDK layer registered. Deferring to
 call time keeps the constructor side-effect-free w.r.t. config, so instantiating
 a Secret during CDK synth / client-spec generation (where the Lambda config env
 is absent) never throws.
@@ -159,6 +159,10 @@ is absent) never throws.
   labels automatically on each put, so the prior value becomes `'previous'`. On
   success it clears the instance read cache (a write invalidates `current`,
   `previous`, and any specific-version entries), so a later `get()` re-fetches.
+  It also increments a per-instance cache generation that `get()` snapshots
+  before fetching: a `get()` whose fetch was in flight across the write returns
+  its result but skips caching it, so it can't put the pre-write value back
+  into the cache or overwrite the entry a post-write `get()` stored.
 - `listVersions()` → `ListSecretVersionIdsCommand` (paginated, `IncludeDeprecated:
   false`), mapped to `SecretVersionInfo[]` (versionId + staging labels + created
   date — never values) and sorted newest-first.
@@ -197,6 +201,10 @@ When `options.schema` (any `StandardSchemaV1`) is provided:
 - `get()` returns the typed value (the mock reads the structured value; the AWS
   layer `JSON.parse`s the stored string), validating it. A validation failure —
   or malformed JSON on the AWS side — throws `SecretErrors.ValidationFailed`.
+  The error message is fixed and never carries the value, the library's issue
+  text (which can quote the received value), or the issue path (which a record
+  or map schema takes from the value's own keys); the issues and the first
+  failing path are kept on the non-enumerable `cause`.
 
 Without a schema the value is an opaque `string` stored/returned verbatim. The
 schema library is never a runtime dependency of this package — it is the
@@ -229,6 +237,74 @@ README's "Managing secret values" for the three approaches (auto-generated, the
 `/aws-blocks/settings` console route, and a well-known `name` + the `aws` CLI for
 CI/CD). The CDK construct's job is name + IAM grant + runtime ARN registration;
 it never carries the value.
+
+## Framework keys (`@aws-blocks/bb-secret/internal`)
+
+Some blocks generate a signing key for their own use: `Auth`
+(`session-secret`) and `Realtime` (`token-secret`). They create it with
+`frameworkKey(scope, id)` from the `./internal` subpath. The subpath
+has the same runtime conditions as `.` (cdk, aws-runtime, browser, mock) and is
+not part of the public API.
+
+**Shape.** A function, not a construct class. In `'ssm'` mode the key must be
+the exact `AppSetting` the blocks created before, at the same construct path, so
+the template does not change. A wrapping construct would add a level to the
+path, change `fullId`, and rename the SSM parameter. The function creates the
+`Secret` or `AppSetting` directly under the caller's scope and returns a small
+`FrameworkKey` handle with `get(): Promise<string>`.
+
+**CDK.** The store comes from `defaults.secretsStore` of the caller's scope:
+
+- `'secrets-manager'`: a `Secret` in framework key mode. The mode is switched on
+  by a module-private `Symbol` in the options (`framework-key-options.ts`), so a
+  plain options object can never turn it on. In this mode the `Secret` has no
+  `Name` (CloudFormation generates a unique one), a `GenerateSecretString` of 64
+  characters from `[A-Za-z0-9]` (about 381 bits), `removalPolicy: 'destroy'`,
+  and only `secretsmanager:GetSecretValue` for the app role. Its ARN goes into
+  config through `registerConfig()`, as for any `Secret`. The public `Secret`
+  defaults (fixed name, empty value, removal policy from
+  `defaults`, read and list grants) are unchanged.
+- `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
+  like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
+  or `deletionProtection` on), synth emits the warning
+  `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
+
+**Runtime.** On every `get()`, the AWS entry checks `process.env` (where the
+handler loaded the config) for the key's Secret ARN (`BLOCKS_SECRET_ARN_<FULLID>`).
+If present, the stack was synthesized in `'secrets-manager'` mode and the key is
+read from Secrets Manager; a failure there is rethrown and never retried
+against SSM. Otherwise it is read through `AppSetting` from SSM.
+
+**Stale config after an upgrade.** The S3 config object is uploaded by a
+`BucketDeployment` that CloudFormation does not order before the compute update,
+and the object key does not change between deploys. On the upgrade deploy, new
+code can cold-start while S3 still serves the previous config, which has no ARN,
+and the loader caches that for the container's life. That code tries SSM, and
+the read fails (the same deploy removed the SSM grant and the parameter). So
+when an SSM read fails, `get()` calls `refreshConfig()` from
+`@aws-blocks/core/internal`, which re-reads the config from S3 and merges it
+into `process.env` (new keys are added, keys an earlier config load set are
+updated, real environment variables are never touched). Then `get()` decides
+again: if the ARN is now present it reads Secrets Manager, otherwise it
+rethrows the original SSM error. Each `get()` makes at most one reload attempt
+and one retry. `refreshConfig()` shares one in-flight reload per container and
+runs at most once every 5 seconds per container, so a burst of failing reads
+costs one S3 GET, and a steady stream costs at most 12 a minute until the new
+config is readable.
+
+This keeps the rule that Building Block config goes through `registerConfig()`,
+never `addEnvironment()`. Making the compute depend on the config deployment
+instead is expected to create a cycle for `Realtime`, whose config holds the
+WebSocket stage URL while the stage's integrations reference the compute.
+
+The mock entry is the mock `AppSetting`, so local development does not depend on
+the setting.
+
+**Value format.** The SSM path stores 32 random bytes as base64url; the Secrets
+Manager path stores the 64-character generated string. Consumers must use the
+key as a UTF-8 string (for example an HMAC key), never as decoded bytes, so both
+formats work. `Realtime` passes it straight to `createHmac('sha256', key)`;
+`Auth` uses it as an HMAC key and as HKDF input (`Buffer.from(key, 'utf8')`).
 
 ## Non-goals (v1)
 

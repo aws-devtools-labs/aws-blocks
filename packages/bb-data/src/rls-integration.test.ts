@@ -173,3 +173,25 @@ test('integration: after GRANT authenticated TO CURRENT_USER, withRLS() works fo
   const row = await db.withRLS({ userId: 'user-1' }).queryOne<{ r: string }>(sql`SELECT current_user AS r`);
   assert.strictEqual(row?.r, 'authenticated');
 });
+
+// A caller-supplied `sub` or `role` in `claims` must not change what an RLS
+// policy reads from request.jwt.claims. Real PGlite enforces both policies.
+test('integration: claims.sub cannot impersonate another user', async () => {
+  const db = await setup();
+  const rows = await db
+    .withRLS({ userId: 'user-1', claims: { sub: 'user-2' } })
+    .query<{ id: string; user_id: string }>(sql`SELECT * FROM todos ORDER BY id`);
+  assert.deepStrictEqual(rows.map((r) => r.user_id), ['user-1', 'user-1']);
+});
+
+test('integration: claims.role cannot satisfy a policy that authorizes on the role claim', async () => {
+  const db = await setup();
+  // A policy written the documented way: admins (by role claim) see every row.
+  await engine.execute(`CREATE POLICY "admins_see_all" ON todos
+    FOR SELECT TO authenticated
+    USING ((current_setting('request.jwt.claims', true)::json->>'role') = 'admin')`);
+  const rows = await db
+    .withRLS({ userId: 'user-1', claims: { role: 'admin' } })
+    .query<{ user_id: string }>(sql`SELECT * FROM todos ORDER BY id`);
+  assert.deepStrictEqual(rows.map((r) => r.user_id), ['user-1', 'user-1'], 'no extra rows from a spoofed role claim');
+});

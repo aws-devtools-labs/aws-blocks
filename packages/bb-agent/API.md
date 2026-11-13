@@ -43,6 +43,7 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     // (undocumented)
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
+    sessionScope?: 'shared' | 'user';
     streamingMode?: 'token' | 'block';
     // (undocumented)
     systemPrompt: string;
@@ -58,6 +59,7 @@ export const AgentErrors: {
     readonly BrowserNotSupported: "BrowserNotSupportedException";
     readonly StreamFailed: "StreamFailedException";
     readonly InterruptRequired: "InterruptRequiredException";
+    readonly ConversationNotFound: "ConversationNotFoundException";
     readonly InvalidUsage: "InvalidUsageException";
 };
 
@@ -73,8 +75,8 @@ export interface AgentResult {
 
 // @public (undocumented)
 export interface AgentStreamChunk {
-    // (undocumented)
     error?: string;
+    errorName?: string;
     // (undocumented)
     input?: JSONValue;
     // (undocumented)
@@ -226,7 +228,6 @@ export interface Message {
 export interface ModelConfig {
     apiKey?: string | (() => Promise<string>);
     cannedResponses?: Record<string, string> | string;
-    // (undocumented)
     endpoint?: string;
     guardrail?: BedrockGuardrail;
     // Warning: (ae-forgotten-export) The symbol "GuardrailsConfig" needs to be exported by the entry point index.aws.d.ts
@@ -280,7 +281,6 @@ export const OllamaModels: {
 export interface StreamOptions<TContext = DefaultToolContext> {
     channelId?: string;
     context?: TContext;
-    // (undocumented)
     conversationId?: string;
     userId?: string;
 }

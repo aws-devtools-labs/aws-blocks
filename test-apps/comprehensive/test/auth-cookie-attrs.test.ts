@@ -5,12 +5,16 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import type { api as apiType } from 'aws-blocks';
+import { provisionConfirmedUser } from './test-support.js';
 
 /**
- * Session-cookie attribute convergence (D-007): AuthBasic defaults to
+ * Session-cookie attribute convergence (D-007): `Auth` defaults to
  * `SameSite=Lax` and switches to `SameSite=None; Secure; Partitioned` under
- * `crossDomain: true`. Signs in against a default and a crossDomain instance
- * and asserts the emitted `Set-Cookie`.
+ * `session: { crossDomain: true }`. Signs in against a default and a
+ * crossDomain instance and asserts the emitted `Set-Cookie`. The sign-in RPCs
+ * create no account: each test provisions its user first with
+ * `provisionConfirmedUser` — locally by sign-up + the delivered code, on a
+ * deployed stack through the secret-gated `testSupport.provisionUser`.
  *
  * `Secure` / `Partitioned` are conditioned on the request being plain-HTTP
  * localhost: the BB drops `Secure` for the `Lax` default and drops
@@ -44,10 +48,11 @@ async function rpcSetCookies(
   baseUrl: string,
   method: string,
   args: unknown[],
+  extraHeaders: Record<string, string> = {},
 ): Promise<string[]> {
   const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
   });
   const body = await resp.json();
@@ -67,11 +72,13 @@ function sessionCookie(setCookies: string[], idFragment: string): string {
 }
 
 export function authCookieAttrsTests(getApi: () => typeof apiType) {
-  describe('AuthBasic cookie attributes (D-007)', () => {
+  describe('Auth cookie attributes (D-007)', () => {
     test('same-origin default → SameSite=Lax (Secure only off localhost), never Partitioned', async () => {
       const baseUrl = getBaseUrl();
       const localhost = isHttpLocalhost(baseUrl);
-      const setCookies = await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [uniqueUser(), 'password123']);
+      const username = uniqueUser();
+      await provisionConfirmedUser(getApi(), username, 'password123', 'auth-same-origin');
+      const setCookies = await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [username, 'password123']);
       const cookie = sessionCookie(setCookies, 'auth-same-origin');
 
       assert.match(cookie, /SameSite=Lax/, 'default cookie should be SameSite=Lax');
@@ -88,7 +95,9 @@ export function authCookieAttrsTests(getApi: () => typeof apiType) {
     test('crossDomain opt-in → SameSite=None; Secure (Partitioned only off localhost)', async () => {
       const baseUrl = getBaseUrl();
       const localhost = isHttpLocalhost(baseUrl);
-      const setCookies = await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [uniqueUser(), 'password123']);
+      const username = uniqueUser();
+      await provisionConfirmedUser(getApi(), username, 'password123', 'auth-cross-domain');
+      const setCookies = await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [username, 'password123']);
       const cookie = sessionCookie(setCookies, 'auth-cross-domain');
 
       assert.match(cookie, /SameSite=None/, 'crossDomain cookie should be SameSite=None');
@@ -99,6 +108,36 @@ export function authCookieAttrsTests(getApi: () => typeof apiType) {
       } else {
         assert.match(cookie, /Partitioned/i, 'crossDomain cookie over HTTPS should set Partitioned');
       }
+    });
+
+    // On deployed compute, whether to relax the cookie comes from deploy config,
+    // so a request claiming a localhost Origin must not strip Secure/Partitioned.
+    test('deployed: a forged localhost Origin keeps Secure and Partitioned', async (t) => {
+      const baseUrl = getBaseUrl();
+      if (isHttpLocalhost(baseUrl)) {
+        t.skip('only meaningful against deployed compute');
+        return;
+      }
+      const forged = { Origin: 'http://localhost:3000' };
+      const laxUser = uniqueUser();
+      const crossUser = uniqueUser();
+      await provisionConfirmedUser(getApi(), laxUser, 'password123', 'auth-same-origin');
+      await provisionConfirmedUser(getApi(), crossUser, 'password123', 'auth-cross-domain');
+
+      const lax = sessionCookie(
+        await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [laxUser, 'password123'], forged),
+        'auth-same-origin',
+      );
+      assert.match(lax, /SameSite=Lax/, 'default cookie should be SameSite=Lax');
+      assert.match(lax, /;\s*Secure/i, 'a localhost Origin header must not drop Secure on deployed compute');
+
+      const cross = sessionCookie(
+        await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [crossUser, 'password123'], forged),
+        'auth-cross-domain',
+      );
+      assert.match(cross, /SameSite=None/, 'crossDomain cookie should be SameSite=None');
+      assert.match(cross, /;\s*Secure/i, 'SameSite=None requires Secure');
+      assert.match(cross, /Partitioned/i, 'a localhost Origin header must not drop Partitioned on deployed compute');
     });
   });
 }

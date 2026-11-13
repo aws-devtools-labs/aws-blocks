@@ -4,22 +4,24 @@
 /**
  * Shared session-cookie security policy for all Blocks auth Building Blocks.
  *
- * Historically each auth BB (`bb-auth-basic`, `bb-auth-cognito`,
- * `bb-auth-oidc`) hand-rolled its own `SameSite` / `Secure` / `Partitioned`
+ * Historically each of the three auth BBs that `Auth` (`bb-auth`) has since
+ * replaced — the removed `bb-auth-basic`, `bb-auth-cognito` and
+ * `bb-auth-oidc` — hand-rolled its own `SameSite` / `Secure` / `Partitioned`
  * selection. They drifted: basic and cognito defaulted to `SameSite=None`
  * (chosen to survive the legacy cross-port dev setup, frontend :3000 +
  * API :3001), while oidc defaulted to `SameSite=Lax`.
  *
  * With the single-origin dev proxy the API and frontend share one origin in
- * local dev, so the cross-port reason for `None` is gone. All three BBs now
- * default to `SameSite=Lax` and route every cookie set/clear through the
- * helpers in this module so they converge **structurally** rather than by
- * coincidence of matching strings.
+ * local dev, so the cross-port reason for `None` is gone. All three BBs then
+ * defaulted to `SameSite=Lax` and routed every cookie set/clear through the
+ * helpers in this module so they converged **structurally** rather than by
+ * coincidence of matching strings. `Auth` (`bb-auth`), which replaced all
+ * three, does the same.
  *
  * @module
  */
 
-import type { BlocksContext } from '@aws-blocks/core';
+import { type BlocksContext, getDeploymentType } from '@aws-blocks/core';
 
 /**
  * Inputs that determine the security attributes of a session cookie.
@@ -115,9 +117,9 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
  * Build the canonical security-attribute substring of a `Set-Cookie`
  * header (`SameSite=…[; Secure][; Partitioned]`) for the given inputs.
  *
- * BBs that assemble cookie strings by hand (`bb-auth-basic`,
- * `bb-auth-cognito`) concatenate this with the cookie name/value,
- * `HttpOnly`, `Path`, and `Max-Age`. Routing through one builder is what
+ * `bb-auth` assembles its cookie strings by hand: it concatenates this with
+ * the cookie name/value, `HttpOnly`, `Path`, and `Max-Age` (as the removed
+ * `bb-auth-basic` / `bb-auth-cognito` did before it). Routing through one builder is what
  * keeps the family from drifting again.
  *
  * @param input - Whether the deploy is cross-domain and whether the request
@@ -138,10 +140,11 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
  * (`localhost`, `127.0.0.1`, `[::1]`) by inspecting the `Origin` header
  * (falling back to `Host`).
  *
- * BBs that select cookie attributes per-request (`bb-auth-basic`,
- * `bb-auth-cognito`) use this to feed `isLocalhost`. The OIDC BB instead
- * decides localhost-ness at construction time via its runtime entry point
- * (mock vs aws), so it does not call this.
+ * `bb-auth` selects cookie attributes per request and feeds `isLocalhost`
+ * from {@link isLocalDevRequest}, which applies this check only in a local
+ * process (the removed `bb-auth-basic` / `bb-auth-cognito` did the same).
+ * The removed OIDC BB instead decided localhost-ness at construction time via
+ * its runtime entry point (mock vs aws), so it did not call this.
  *
  * We can't sniff `https://` reliably because the Blocks dev server always
  * serves plain HTTP even when fronted by HTTPS in production.
@@ -152,6 +155,29 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
 export function isLoopbackRequest(ctx: BlocksContext): boolean {
 	const origin = ctx.request.headers.get('origin') ?? ctx.request.headers.get('host') ?? '';
 	return /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/.test(origin);
+}
+
+/**
+ * Whether a request should get the plain-HTTP local-dev cookie attributes
+ * ({@link CookieSecurityInput.isLocalhost}): the process is running locally
+ * AND the request comes from a loopback origin.
+ *
+ * The local-vs-deployed half comes from deploy configuration
+ * (`getDeploymentType()`, which reads the config synth stamps on every
+ * Blocks-configured compute), never from a request header. So on deployed
+ * compute a request that sends `Origin: http://localhost` cannot drop `Secure`
+ * or `Partitioned`; the header only picks between loopback and non-loopback
+ * callers of the local dev server and tests.
+ *
+ * On compute Blocks does not configure (no deploy config present) this falls
+ * back to the header check alone, the same boundary `getDeploymentType()`
+ * documents.
+ *
+ * @param ctx - The request context.
+ * @returns `true` only for a loopback request in a local process.
+ */
+export function isLocalDevRequest(ctx: BlocksContext): boolean {
+	return getDeploymentType() === 'local' && isLoopbackRequest(ctx);
 }
 
 /**
