@@ -15,6 +15,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
+import io.ktor.http.appendEncodedPathSegments
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.io.encoding.Base64
@@ -317,7 +318,11 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("relayTo", relayTo)
         }
 
-        val authorizeUrl = server.rawRoute(config.authorizeParamsBasePath, provider)
+        // The backend mounts each provider at encodeURIComponent(id), which escapes more than a
+        // path segment needs to (`+`, `:`, `@`, `/` and others), so the id is encoded the same way.
+        val authorizeUrl = URLBuilder(server.rawRoute(config.authorizeParamsBasePath))
+            .appendEncodedPathSegments(encodeUriComponent(provider))
+            .buildString()
         val response = httpClient.post(authorizeUrl) {
             contentType(ContentType.Application.Json)
             setBody(body.toString())
@@ -698,3 +703,18 @@ suspend fun OidcClient<AnyProvider>.exchange(
     callbackUrl: String,
     iss: String? = null,
 ): OidcUser = exchange(code, verifier, state, nonce, AnyProvider(provider), callbackUrl, iss)
+
+/** [value] percent-encoded as JavaScript's `encodeURIComponent` does: UTF-8, keeping only `A-Za-z0-9-_.!~*'()`. */
+internal fun encodeUriComponent(value: String): String = buildString {
+    for (byte in value.encodeToByteArray()) {
+        val c = byte.toInt() and 0xFF
+        val char = c.toChar()
+        if (char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' || char in "-_.!~*'()") {
+            append(char)
+        } else {
+            append('%')
+            append("0123456789ABCDEF"[c shr 4])
+            append("0123456789ABCDEF"[c and 0xF])
+        }
+    }
+}
