@@ -2,6 +2,24 @@
 
 The next release is 0.2.0, because of the breaking changes marked below.
 
+- `OidcClient.signInRelay`'s `launcher` is optional. Without one, on macOS,
+  Linux and Windows, it signs in through a loopback listener on `127.0.0.1`
+  and relays to `http://127.0.0.1:<port>/oidc/callback`, as the Kotlin JVM
+  client does; `relayTo` is not used then. A `launcher`, when passed, always
+  wins. Add `OidcClient.openBrowser`, which opens the browser for that
+  sign-in, `OidcClient.signInTimeout`, after which it throws
+  `OidcCancelledException`, and a `cancel` future that stops the wait with
+  `OidcCancelledException` when it completes. `OidcCancelledException`
+  takes an optional message.
+- **Breaking:** on mobile and the web, a `signInRelay` call that leaves out
+  the `launcher` now compiles and throws a `StateError` at run time, because
+  no loopback sign-in exists there. It used to be a compile error.
+- **Breaking:** a class that implements `OidcClient` and overrides
+  `signInRelay` with a required `launcher` no longer compiles.
+- `OidcClient.signIn` throws `OidcCallbackException` for a callback that
+  carries an IdP `error` or no `code`. It threw a `TypeError` from a null
+  check. It also deletes the attempt's stored PKCE values whatever happens,
+  where a launcher error or a state mismatch left them in the token store.
 - Add `OidcClient.authState`, the current sign-in state: the state most
   recently added to `authStateChanges`, or `OidcLoading` before the first one.
   An app can read it once, such as on launch after `restore()`, without

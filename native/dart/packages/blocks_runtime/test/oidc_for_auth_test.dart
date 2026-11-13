@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime/src/loopback_session.dart'
+    show loopbackSupportedOverride;
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
@@ -321,6 +324,171 @@ void main() {
       );
       expect(user.userId, 'u1');
     });
+  });
+
+  group('OidcClient.signInRelay without a launcher', () {
+    /// Plays the browser: the backend relays the IdP's code to the relay
+    /// target the client sent to authorize-params, with the issued state.
+    Future<void> Function(Uri) browser(_AuthServer server, {String? state}) =>
+        (authorizeUrl) async {
+          final relayTo =
+              (jsonDecode(server.requests.first.body) as Map)['relayTo']
+                  as String;
+          final issued = authorizeUrl.queryParameters['state']!;
+          await http.get(
+            Uri.parse(
+              relayTo,
+            ).replace(queryParameters: {'code': 'c', 'state': state ?? issued}),
+          );
+        };
+
+    test('signs in through a loopback listener on desktop', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+      );
+      oidc.openBrowser = browser(server);
+
+      final user = await oidc.signInRelay('google');
+
+      expect(user.userId, 'u1');
+      final relayTo = Uri.parse(
+        (jsonDecode(server.requests.first.body) as Map)['relayTo'] as String,
+      );
+      expect(relayTo.scheme, 'http');
+      expect(relayTo.host, '127.0.0.1');
+      expect(relayTo.path, '/oidc/callback');
+      expect(server.requests.last.url.path, '/aws-blocks/auth/exchange');
+      // The listener is closed once the sign-in returns.
+      await expectLater(http.get(relayTo), throwsA(anything));
+    }, testOn: 'mac-os || linux || windows');
+
+    test('uses the loopback target even when relayTo is configured', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+        relayTo: 'myapp://auth',
+      );
+      oidc.openBrowser = browser(server);
+
+      await oidc.signInRelay('google');
+
+      final relayTo =
+          (jsonDecode(server.requests.first.body) as Map)['relayTo'] as String;
+      expect(relayTo, startsWith('http://127.0.0.1:'));
+    }, testOn: 'mac-os || linux || windows');
+
+    test(
+      'a redirect with another state times out instead of signing in',
+      () async {
+        final server = _AuthServer();
+        final oidc = OidcClient.forAuth(
+          BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+          providers: ['google'],
+        );
+        oidc
+          ..openBrowser = browser(server, state: 'forged')
+          ..signInTimeout = const Duration(milliseconds: 300);
+
+        await expectLater(
+          oidc.signInRelay('google'),
+          throwsA(isA<OidcCancelledException>()),
+        );
+        expect(server.requests, hasLength(1));
+      },
+      testOn: 'mac-os || linux || windows',
+    );
+
+    test('an explicit launcher wins over the loopback listener', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+        relayTo: 'myapp://auth',
+      );
+      var opened = false;
+      oidc.openBrowser = (_) async => opened = true;
+
+      await oidc.signInRelay('google', launcher: _Launcher());
+
+      expect(opened, isFalse);
+      expect(
+        (jsonDecode(server.requests.first.body) as Map)['relayTo'],
+        'myapp://auth',
+      );
+    });
+
+    test('throws a StateError without a launcher where there is no loopback '
+        'sign-in', () async {
+      loopbackSupportedOverride = false;
+      addTearDown(() => loopbackSupportedOverride = null);
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+      );
+      var opened = false;
+      oidc.openBrowser = (_) async => opened = true;
+
+      await expectLater(
+        oidc.signInRelay('google'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('needs a launcher'),
+          ),
+        ),
+      );
+      expect(server.requests, isEmpty);
+      expect(opened, isFalse);
+    });
+
+    test('cancel before the redirect throws OidcCancelledException', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+      );
+      final cancel = Completer<void>();
+      oidc.openBrowser = (_) async => cancel.complete();
+
+      await expectLater(
+        oidc.signInRelay('google', cancel: cancel.future),
+        throwsA(isA<OidcCancelledException>()),
+      );
+      expect(server.requests, hasLength(1));
+    }, testOn: 'mac-os || linux || windows');
+
+    test('an unknown provider throws before anything is bound', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+      );
+      var opened = false;
+      oidc.openBrowser = (_) async => opened = true;
+
+      await expectLater(
+        oidc.signInRelay('github'),
+        throwsA(isA<OidcUnknownProviderException>()),
+      );
+      expect(server.requests, isEmpty);
+      expect(opened, isFalse);
+    });
+
+    test('a typed client signs in without a launcher too', () async {
+      final server = _AuthServer();
+      final untyped = OidcClient.forAuth(
+        BlocksClient(baseUrl: 'http://localhost:3001', client: server.client),
+        providers: ['google'],
+      )..openBrowser = browser(server);
+      final typed = TypedOidcClient<_Provider>(untyped);
+
+      expect((await typed.signInRelay(_Provider.google)).userId, 'u1');
+    }, testOn: 'mac-os || linux || windows');
   });
 
   group('OidcClient.providerIdOf', () {
