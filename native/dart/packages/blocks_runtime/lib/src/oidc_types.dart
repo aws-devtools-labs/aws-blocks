@@ -96,8 +96,9 @@ class StatePayload {
       return StatePayload.fromJson(decoded);
     } on OidcCallbackException {
       rethrow;
-    } catch (e) {
-      throw OidcCallbackException('Failed to decode state envelope: $e');
+    } catch (_) {
+      // A fixed message: the decode error would quote part of the input.
+      throw OidcCallbackException('Undecodable state envelope');
     }
   }
 }

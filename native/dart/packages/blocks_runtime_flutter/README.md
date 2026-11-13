@@ -8,15 +8,31 @@ Flutter-specific implementations for `blocks_runtime`. Provides secure token sto
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 ```
 
-Register the Flutter implementations at app startup:
+Use `FlutterSecureStore` to keep the session cookie in the platform's secure storage, and `FlutterBrowserLauncher` to open the identity provider's sign-in page:
+
+`FlutterSecureStore` uses a platform channel, so call `WidgetsFlutterBinding.ensureInitialized()` in `main()` before creating it:
 
 ```dart
+import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
+import 'package:flutter/widgets.dart';
+
+WidgetsFlutterBinding.ensureInitialized();
+final session = PersistentSessionStore(store: FlutterSecureStore());
+await session.load();
 final client = BlocksClient(
-  baseUrl: 'https://your-api.example.com',
-  secureStore: FlutterSecureStore(),
-  browserLauncher: FlutterBrowserLauncher(),
+  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  sessionStore: session,
 );
+final oidc = OidcClient.forAuth(
+  client,
+  providers: ['google'],
+  relayTo: 'com.example.app://auth',
+);
+await oidc.signInRelay('google', launcher: FlutterBrowserLauncher());
 ```
+
+See "Using Auth" in the `blocks_runtime` README for the full sign-in flow.
 
 ## License
 

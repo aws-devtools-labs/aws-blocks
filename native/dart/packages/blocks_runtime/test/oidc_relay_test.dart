@@ -627,8 +627,9 @@ void main() {
         });
         final client = buildClient(httpClient: httpClient);
         final launcher = FakeLauncher(
-          onLaunch: (_, __) => Uri.parse(
-            '$_relayTo?error=access_denied&error_description=User+cancelled',
+          onLaunch: (url, __) => Uri.parse(
+            '$_relayTo?error=access_denied&error_description=User+cancelled'
+            '&state=${Uri.encodeComponent(url.queryParameters['state']!)}',
           ),
         );
 
@@ -643,6 +644,95 @@ void main() {
               (e) => e.message,
               'message',
               contains('access_denied'),
+            ),
+          ),
+        );
+      },
+    );
+
+    for (final (label, state) in [
+      ('no state', null),
+      ('a state from another sign-in', 'forged.sig'),
+    ]) {
+      test(
+        'an IdP error with $label fails the state check, not the IdP error',
+        () async {
+          final httpClient = MockClient((req) async {
+            if (req.url.path.contains('/auth/authorize-params/')) {
+              final csrf = (jsonDecode(req.body) as Map)['csrf'] as String;
+              return http.Response(
+                jsonEncode({
+                  'authorizeUrl': 'https://idp.example.com/authorize',
+                  'clientId': 'cid',
+                  'scopes': ['openid'],
+                  'kind': 'oidc-builtin',
+                  'state': makeStateEnvelope(csrf: csrf),
+                }),
+                200,
+              );
+            }
+            return http.Response('{}', 200);
+          });
+          final client = buildClient(httpClient: httpClient);
+          final launcher = FakeLauncher(
+            onLaunch: (_, __) => Uri.parse(
+              '$_relayTo?error=access_denied'
+              '${state == null ? '' : '&state=$state'}',
+            ),
+          );
+
+          await expectLater(
+            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+            throwsA(
+              isA<OidcCallbackException>().having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  matches(RegExp('state', caseSensitive: false)),
+                  isNot(contains('access_denied')),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    test(
+      'an IdP error with an undecodable state envelope fails the state check',
+      () async {
+        // authorize-params issues a state whose envelope isn't valid, and the
+        // callback echoes it with an IdP error. The CSRF check runs before
+        // the error is read, so the error never reaches the caller.
+        const undecodable = 'not-base64-json.sig';
+        final httpClient = MockClient((req) async {
+          if (req.url.path.contains('/auth/authorize-params/')) {
+            return http.Response(
+              jsonEncode({
+                'authorizeUrl': 'https://idp.example.com/authorize',
+                'clientId': 'cid',
+                'scopes': ['openid'],
+                'kind': 'oidc-builtin',
+                'state': undecodable,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 200);
+        });
+        final client = buildClient(httpClient: httpClient);
+        final launcher = FakeLauncher(
+          onLaunch: (_, __) =>
+              Uri.parse('$_relayTo?error=access_denied&state=$undecodable'),
+        );
+
+        await expectLater(
+          client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+          throwsA(
+            isA<OidcCallbackException>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('access_denied')),
             ),
           ),
         );
@@ -880,11 +970,17 @@ void main() {
       },
     );
 
-    test('signOut clears the session cookie', () async {
+    test('signOut clears the session cookie the server expires', () async {
       final session = InMemorySessionStore();
       session.setCookies('blocks_session=live; Path=/');
 
-      final httpClient = MockClient((_) async => http.Response('{}', 200));
+      final httpClient = MockClient(
+        (_) async => http.Response(
+          '{}',
+          200,
+          headers: {'set-cookie': 'blocks_session=; Path=/; Max-Age=0'},
+        ),
+      );
       final client = OidcClient(
         exchangePath: '/auth/exchange',
         refreshPath: '/auth/refresh',

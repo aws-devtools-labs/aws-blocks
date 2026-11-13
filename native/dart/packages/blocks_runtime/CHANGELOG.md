@@ -1,5 +1,99 @@
 ## Unreleased
 
+The next release is 0.2.0, because of the breaking changes marked below.
+
+- Add `OidcClient.authState`, the current sign-in state: the state most
+  recently added to `authStateChanges`, or `OidcLoading` before the first one.
+  An app can read it once, such as on launch after `restore()`, without
+  subscribing to the stream. This matches Kotlin's `authState.value`.
+- Add `OidcClient.providerIdOf(actionName)`, which returns the provider id of
+  an `Auth` state-machine action named `signIn:<id>`, or null for any other
+  action. An app signs in with that id through `signInRelay`.
+- The README gains a "Using Auth" section: `getAuthState()` and
+  `setAuthState` for plain actions, `forAuth` with `signInRelay` and
+  `signOut()` for federated ones, and `getAuthState()` on launch.
+- `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
+  in its envelope before it reads an IdP `error`. A redirect to the app's
+  scheme that didn't come from this sign-in now fails the state check
+  instead of reporting an IdP error.
+- **Behaviour change:** with an `authProvider`, `BlocksClient` sends the
+  session cookie on every call that has one, and adds
+  `Authorization: Bearer` only when the provider returns a token. It used to
+  drop the cookie whenever an `authProvider` was set, so an app that set an
+  `OidcClient` signed in with the session cookie as its `authProvider` sent
+  neither.
+- `OidcUser` gains the optional fields the backend sends: `displayName`,
+  `userSub`, `signInProvider` and `attributes`. Each is null when the server
+  doesn't send it.
+- `OidcClient.exchange` sends `tokens: false`, so a backend with bearer
+  tokens enabled doesn't mint tokens for a client that signs in with the
+  session cookie.
+- **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
+  provider's logout URL, or null when it has none. Open it with the app's
+  launcher to end the provider's own session; the client doesn't open it. It
+  POSTs `{signOutPath}?format=json` with an empty JSON body; it no longer
+  sends the stored refresh token, which the server ignores. On a 2xx it
+  clears the stored tokens and emits `OidcSignedOut`. It doesn't clear the
+  session store, which may hold other `Auth` blocks' cookies; the server's
+  `Set-Cookie` removes this block's cookie. On a 503
+  `SignOutIncompleteException` (the cookie was cleared but the server-side
+  session was not removed) it does the same, then throws an
+  `OidcRequestException` with that `errorName`. Any other
+  status, or a transport error, now throws: the stored tokens are cleared,
+  but the session cookie and the state are kept. It used to ignore the
+  response and drop the logout URL.
+- `OidcClient.refresh` stores the new token's expiry from `expiresIn`
+  seconds, which the auth block sends, keeping `expiresAt` as a fallback. It
+  read only `expiresAt`, so every refreshed token looked expired and every
+  `getAccessToken()` refreshed again. Refresh now also sends the provider
+  the exchange signed in with (stored under `provider`), which a backend
+  with several providers requires, and stores the rotated refresh token
+  only when the response carries one.
+- **Breaking:** `OidcClient.restore()` returns `Future<OidcUser?>` and reads
+  the backend's session route (`GET <exchangePath's directory>/session`, new
+  `OidcClient.sessionPath`) with the session cookie, plus the stored access
+  token as a bearer token when there is one and it hasn't expired. A client
+  from a custom block's `getClient()` now needs that route on the block. On
+  200 it emits `OidcSignedIn` with the server's user and returns it; on 401
+  it clears the stored tokens, emits `OidcSignedOut` and returns null; any
+  other status throws an `OidcRequestException` without changing the state
+  (a 404 means the block serves no session route), as does a 200 whose body
+  has no readable `user`. It no longer builds the user from the access
+  token's JWT claims, so the user id is the server's, and it no longer emits
+  `OidcLoading` first. It used to report signed out for a valid cookie
+  session, because a cookie session stores no tokens.
+- **Breaking for exhaustive `switch` statements over `OidcException`:** add
+  `OidcRequestException`, thrown when an auth route answers with a status
+  the client doesn't accept. It carries the `statusCode` and, as
+  `errorName`, the error name the server sent.
+- Add `OidcClient.forAuth(client, providers: …, relayTo: …)`, a client for an
+  `Auth` block's federated sign-in. It shares the app's `BlocksClient`: its
+  base URL, HTTP client, session store and, unless one is passed, token
+  store, so the session cookie the exchange sets is the one the app's calls
+  send. Its routes are derived from `callbackPath` (default
+  `/aws-blocks/auth/callback`) the way `Auth` derives them, and `signOutPath`
+  defaults to `/aws-blocks/auth/signout`; both must be under
+  `/aws-blocks/auth/`, or it throws an `ArgumentError`. It returns a plain
+  `OidcClient`; wrap it as `TypedOidcClient<E>(client)` to narrow its
+  providers to an enum. It stores its tokens and sign-in state under keys
+  prefixed with the block's base path (such as
+  `/aws-blocks/auth/access_token`), so clients for several `Auth` blocks can
+  share one token store. Clients built the other ways keep the unprefixed
+  keys. A `forAuth` client doesn't read tokens stored under the unprefixed
+  keys (`access_token`, `refresh_token`, `expires_at`, `provider`), so an
+  app that moves to `forAuth` from a client that stored bearer tokens can
+  delete them. The client doesn't, because another client may still share
+  the store.
+- Add `OidcClient.relayTo`, the relay URI `signInRelay` uses when it isn't
+  given one. `signInRelay`'s `relayTo` is now optional; with neither set, it
+  throws a `StateError` before sending anything.
+- Add `BlocksClient.httpClient`, the HTTP client it sends requests with.
+- `OidcClient` resolves the auth routes against its base URL cut at the
+  first path segment that is `aws-blocks`, keeping any API Gateway stage. It
+  used to strip one trailing `/aws-blocks/api`, so a base URL that repeated
+  it (`…/aws-blocks/api/aws-blocks/api`) sent auth requests under the RPC
+  path.
+
 - Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
   `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
   of type `P` (and send its `providerName`) instead of a name, so a typo or
