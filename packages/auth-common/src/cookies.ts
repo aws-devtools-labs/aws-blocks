@@ -54,8 +54,8 @@ export interface CookieSecurityInput {
 }
 
 /**
- * Canonical session-cookie security attributes. These are the three
- * attributes that diverged across the auth BBs; `HttpOnly`, `Path`, and
+ * Canonical session-cookie security attributes: `SameSite`, `Secure` and
+ * `Partitioned`. `HttpOnly`, `Path`, and
  * `Max-Age` are added by each BB at the cookie-construction site.
  */
 export interface CookieSecurityAttributes {
