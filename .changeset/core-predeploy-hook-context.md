@@ -1,0 +1,5 @@
+---
+"@aws-blocks/core": patch
+---
+
+Pre-deploy hooks now run on the assembly that `npm run deploy` and `npm run sandbox` are about to deploy. `npm run deploy` synthesizes the app into its CDK output directory (`output` in `cdk.json`, by default `cdk.out`), runs the hooks, then deploys that assembly with `cdk deploy --app <dir>`, as `npm run sandbox` already did; the app is still synthesized once, and `context.synth()` reads that assembly instead of synthesizing again. A hook also receives `invocation` (how the user ran the command) and `account` (the account ID the credential check verified, and its plan), and each synthesized stack carries the `account` it names and the templates of its CDK nested stacks (`nestedStacks`). A hook can return `warnings`, printed to stderr; the deploy continues. A missing assembly stops the deploy instead of passing the hooks an empty list. `@aws-blocks/core/scripts` also exports the `PredeployAccount`, `SynthesizedNestedStack` and `AccountPlanType` types.

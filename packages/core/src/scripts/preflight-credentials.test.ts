@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { classifyError } from '../telemetry/trackCommand.js';
-import { assertAwsCredentials, type CredentialProbe } from './preflight-credentials.js';
+import { type AwsPreflightResult, assertAwsCredentials, type CredentialProbe } from './preflight-credentials.js';
 
 const CLI_WITH_LOGIN = 'aws-cli/2.32.0 Python/3.13.4 Darwin/25.6.0 exe/arm64';
 
@@ -55,7 +55,7 @@ describe('assertAwsCredentials', () => {
 		return regions;
 	}
 
-	function check(probe: CredentialProbe, command = 'deploy'): Promise<void> {
+	function check(probe: CredentialProbe, command = 'deploy'): Promise<AwsPreflightResult> {
 		return assertAwsCredentials({
 			command,
 			env: { ...env, AWS_REGION: 'us-east-1' },

@@ -6,6 +6,8 @@ Full PostgreSQL database — provisions Aurora Serverless v2 by default, or conn
 
 **When NOT to use:** For simple key-value lookups, use `KVStore`. For NoSQL with secondary indexes, use `DistributedTable`. For serverless SQL without FK/RLS/triggers (multi-region, instant provisioning), use `DistributedDatabase`.
 
+**AWS Free plan:** an account on the Free plan can only create Aurora clusters with [express configuration](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-free-tier.html), which the default Aurora Serverless v2 cluster does not use, so CloudFormation fails to create it there. This package declares a pre-deploy check that `npm run deploy` and `npm run sandbox` run after they synthesize the app: when the account plan they read is Free, they stop before deploying if the app would create such a cluster, including in a CDK nested stack, and warn when that is only decided at deploy time. On a Free-plan account, upgrade to the Paid plan, use `DistributedDatabase`, or connect to an existing PostgreSQL database with `fromExisting()`. `fromExisting()` creates no cluster. Details: [DESIGN.md](./DESIGN.md#free-plan-pre-deploy-check).
+
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
 ## Quick Start

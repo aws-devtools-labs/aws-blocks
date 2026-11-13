@@ -119,6 +119,15 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
 
+### Free-plan pre-deploy check
+
+An account on the AWS Free plan can only create Aurora clusters with express configuration, which the Aurora Serverless v2 cluster above does not use. The block declares a pre-deploy hook in its `package.json` (`aws-blocks.predeploy`, `./dist/predeploy.js`, stages `sandbox` and `production`); `@aws-blocks/core`'s `deploy` and `startSandbox` run it after they synthesize the app and before `cdk deploy` (see "Pre-deploy hooks" in the core README).
+
+- The hook does nothing unless the credential check read the plan as Free (`context.account.plan === 'FREE'`). A plan that is Paid or "not available" is not checked, and the templates are not read.
+- `src/free-plan-aurora.ts` walks every synthesized stack and its CDK nested stacks (`SynthesizedStack.nestedStacks`). An `AWS::RDS::DBCluster` with a literal Aurora engine, `WithExpressConfiguration` absent or false, and no `Condition` on itself or on an enclosing nested stack resource is blocked. A value known only at deploy time, or a `Condition`, makes it undecided. Other engines (RDS Multi-AZ DB clusters) and express clusters pass.
+- Only stacks that deploy to the verified account can stop the deploy: an environment-agnostic stack, or one whose `env.account` is that account. A nested stack deploys in its parent's account. Clusters in a stack that names another account, or any account when STS returned none, get a warning.
+- A blocked cluster returns a `stop` (the deploy ends before any stack changes); undecided and other-account clusters return `warnings`. The check covers every cluster in the templates, not only the ones `Database` creates, so it runs for any app that installs this package, including through `@aws-blocks/blocks`.
+
 ### Security posture (Aurora)
 
 - **Encryption at rest** is **opt-in**, gated so new projects are secure by
