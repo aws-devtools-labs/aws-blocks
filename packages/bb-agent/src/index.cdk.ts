@@ -31,7 +31,7 @@ export class Agent extends BuildingBlockScope {
 	 * self-contained {@link AgentCoreRuntime} so it can later fold into a per-BB compute abstraction.
 	 *
 	 * The loop runs inside the AgentCore Runtime (not the shared handler Lambda), so the shared
-	 * handler no longer needs Bedrock access — the runtime's own role gets it (see AgentCoreRuntime).
+	 * handler does not need Bedrock access — the runtime's own role gets it (see AgentCoreRuntime).
 	 */
 	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
