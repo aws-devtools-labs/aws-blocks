@@ -432,7 +432,7 @@ Registration rules worth knowing before you hit them at runtime:
 
 CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. Creates self-mutating CodePipeline V2 instances with GitHub source via CodeConnections (OAuth).
 
-📖 **Full Pipeline documentation (see source repo)**
+📖 **Full Pipeline documentation:** [`@aws-blocks/pipeline` README](../pipeline/README.md)
 
 ### Hosting
 
@@ -678,7 +678,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 ```
 
-Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Examples:
+Each entry is a plain origin, matched exactly, or a regex pattern, anchored as `^(?:<entry>)$`; [`allowedOrigins` entries](#allowedorigins-entries) has the rules and what fails synth. The two entries above are plain origins. Regex examples:
 
 | Pattern | Matches |
 |---------|---------|
@@ -687,9 +687,7 @@ Each entry is treated as a **regex pattern** (anchored with `^` and `$`). Exampl
 | `^https?://(localhost\|127\\.0\\.0\\.1)(:\\d+)?$` | Localhost/127.0.0.1, any port, http or https (sandbox) |
 | `.*` | All origins (escape hatch — use with caution) |
 
-Multiple patterns are comma-separated. If a pattern is invalid regex, it falls back to literal string match.
-
-> **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
+> **Regex entries.** In a regex entry an unescaped `.` matches *any* character, so synth rejects one that is not followed by a quantifier: write `https://app\\.example\\.com`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
 
