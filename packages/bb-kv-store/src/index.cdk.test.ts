@@ -389,6 +389,46 @@ test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
 	assert.ok(groups.some((g) => g.Properties.RetentionInDays === 7));
 });
 
+test('CDK: the GSI provider waiter state machine role trusts Step Functions with aws:SourceAccount and aws:SourceArn', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::IAM::Role', {
+		AssumeRolePolicyDocument: {
+			Statement: [
+				Match.objectLike({
+					Effect: 'Allow',
+					Action: 'sts:AssumeRole',
+					Principal: { Service: 'states.amazonaws.com' },
+					Condition: {
+						StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+						ArnLike: {
+							'aws:SourceArn': {
+								'Fn::Join': [
+									'',
+									[
+										'arn:',
+										{ Ref: 'AWS::Partition' },
+										':states:',
+										{ Ref: 'AWS::Region' },
+										':',
+										{ Ref: 'AWS::AccountId' },
+										':stateMachine:*',
+									],
+								],
+							},
+						},
+					},
+				}),
+			],
+		},
+	});
+});
+
 test('CDK: GSI manager may read its own stack only, from a policy its function depends on', () => {
 	const resources = gsiTemplate();
 	const { fn, policies } = policyStatementsOf(resources, 'BlocksGsiManager');

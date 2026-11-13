@@ -55,10 +55,32 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
-	 * CORS origins the compute's API accepts, as regular-expression patterns
-	 * matched against the request `Origin` header. Empty means no cross-origin
-	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
-	 * frontend can reach a deployed API; `production` allows none by default.
+	 * CORS origins the compute's API accepts, matched against the request
+	 * `Origin` header. Empty means no cross-origin requests are allowed. The
+	 * `sandbox` preset allows localhost so a local dev frontend can reach a
+	 * deployed API; `production` allows none by default.
+	 *
+	 * Each entry is either:
+	 * - a **plain origin** (`scheme://host[:port]`, e.g. `'https://app.example.com'`),
+	 *   matched exactly and case-insensitively — its dots are literal. An
+	 *   `http`/`https` origin is compared as the browser sends it (default port
+	 *   dropped, internationalized host in punycode); user info, a path, a query
+	 *   or a fragment is rejected; or
+	 * - a **regex pattern** (any entry with regex syntax such as `^`, `$`, `\`,
+	 *   `(`, `|` or `*`), anchored as `^(?:<entry>)$` and matched case-sensitively.
+	 *   Dots must be escaped (`'https://app\\.example\\.com'`) unless followed
+	 *   by a quantifier (`.*`, `.+`), and the entry must compile on its own. For
+	 *   any subdomain use e.g. `'https://[a-z0-9-]+\\.example\\.com'` (glob
+	 *   wildcards such as `'https://*.example.com'` are not supported). Brace
+	 *   quantifiers are limited to `{n}` (`{n,m}` contains a comma, and entries
+	 *   are comma-joined), and a group repeated with `*`, `+` or `{n}` that
+	 *   itself contains `*`, `+`, `{n}` or an alternation (e.g. `(a+)+`,
+	 *   `(a|b)+`) is not supported (this does not rule out every slow pattern);
+	 *   for subdomains at any depth use e.g.
+	 *   `'https://[a-z0-9.-]+\\.example\\.com'`.
+	 *
+	 * Invalid entries fail `cdk synth` (`BlocksStack.create()` /
+	 * `BlocksBackend.create()`), and are ignored at runtime.
 	 */
 	allowedOrigins: string[];
 
@@ -161,10 +183,9 @@ export interface BlocksDefaults {
 
 	/**
 	 * Where AWS Blocks stores the secrets it generates for its own Building
-	 * Blocks. It currently applies to the `Realtime` connection token key; other
-	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
-	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
-	 * are not affected.
+	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
+	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
+	 * passed in at the CDK layer) are not affected.
 	 *
 	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
 	 *   per key, with a CloudFormation-generated name and value. The app's
@@ -174,7 +195,7 @@ export interface BlocksDefaults {
 	 *   stacks.
 	 *
 	 * Changing this value on a deployed stack creates new keys in the new store.
-	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * For `Auth`, every signed-in user is signed out once. For `Realtime`, open WebSocket connections keep working; on their next
 	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
 	 * clients without it receive `onDisconnect('error')` and must call
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set

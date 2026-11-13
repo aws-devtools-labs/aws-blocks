@@ -69,6 +69,15 @@ let package = Package(
             swiftSettings: generatedCodeSettings,
             plugins: ["BlocksCodegenBuildPlugin"]
         ),
+        // Compiles the build plugin's output for the non-identifier-names codegen fixture. This
+        // target's blocks.spec.json is a copy of the fixture's spec; PluginSpecCopyTests keeps them equal.
+        .testTarget(
+            name: "BlocksGeneratedNonIdentifierNamesTests",
+            dependencies: ["BlocksRuntime"],
+            path: "Tests/BlocksGeneratedNonIdentifierNamesTests",
+            swiftSettings: generatedCodeSettings,
+            plugins: ["BlocksCodegenBuildPlugin"]
+        ),
         // The same output under Xcode 26 app defaults: MainActor default isolation and approachable concurrency.
         .testTarget(
             name: "BlocksGeneratedMainActorTests",

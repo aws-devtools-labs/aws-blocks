@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
+import type { SqlQuery } from '@aws-blocks/data-common/core';
 import { DEFAULT_SCHEMA, quoteIdent } from './constants.js';
 import { RulesEngine } from './dialect/rules-engine.js';
 import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
@@ -109,7 +109,7 @@ export class Database extends Scope {
 		// (a cache hit) in case a file changed after startup.
 		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
 
-		const buildEngine = async (): Promise<DatabaseEngine> => {
+		const buildEngine = async (): Promise<RulesEngine> => {
 			let inner: SchemaEngine;
 			if (!resolved.shared) {
 				inner = pgliteEngine(dataDir, kind, this.schemaName);
@@ -160,6 +160,7 @@ export class Database extends Scope {
 		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
+			session: () => this.core.session(),
 			simulateConflict: () => {
 				if (this.mock) this.mock.simulateConflict();
 				else this.pendingConflict = true;

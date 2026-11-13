@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import { blocksError } from '@aws-blocks/core';
-import { splitStatements } from '@aws-blocks/data-common';
+import { splitStatements } from '@aws-blocks/data-common/core';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
 import { ASYNC_DDL, findStatementIssues, inspectStatement, stripLiteralsAndComments } from '../dialect/validation.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';

@@ -26,7 +26,7 @@ import {
 } from '../http-server.js';
 import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from '../rpc.js';
 import { redactToJson } from '../redact.js';
-import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
+import { isIpLiteral, isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import {
@@ -54,6 +54,58 @@ export function resolveDevHost(option: string | undefined, env: NodeJS.ProcessEn
 
 /** Re-exported for callers/tests; the single definition lives in `common/loopback.ts`. */
 export { isLoopbackHost } from '../common/loopback.js';
+
+/** A `Host` header: a bracketed IPv6 literal or a name/IPv4, then an optional port (range-checked below). */
+const HOST_HEADER = /^(\[[0-9a-f:.]+\]|[^\s:/?#@[\]\\]+)(?::(\d{1,5}))?$/i;
+
+/** Lowercase, and strip IPv6 brackets and a trailing root dot (`Mybox.` → `mybox`). */
+function normalizeHostname(host: string): string {
+  return host.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * Whether the dev server should serve a request with this `Host` header. This is
+ * the DNS-rebinding check: binding loopback keeps other machines out, but a page
+ * on an attacker's origin can re-point its own DNS name at `127.0.0.1` and then
+ * call the dev server as a same-origin page. The browser still sends the
+ * attacker's name in `Host`, so only these are served:
+ *
+ * - a loopback host — `localhost`, `127.x.x.x`, `[::1]`, with or without a port
+ *   (and in the FQDN form with a trailing root dot, `localhost.`);
+ * - the concrete host the dev server was told to bind (`bindHost`, from
+ *   `startDevServer({ host })` or `BLOCKS_DEV_HOST`), or the one in
+ *   `BLOCKS_DEV_HOST` (`devHost`);
+ * - with a wildcard bind (`0.0.0.0` / `::`), any IP address literal. A literal
+ *   can't be re-pointed by DNS; a DNS name is refused, and opening the app by a
+ *   name needs `BLOCKS_DEV_HOST` set to that name.
+ *
+ * A missing or malformed `Host`, or one with a port above 65535, is refused. Loopback, wildcard and IP
+ * classification is the same one the realtime WebSocket's `Origin` check uses
+ * (`common/loopback.ts`), so the two can't disagree.
+ */
+export function isAllowedDevRequestHost(
+  hostHeader: string | undefined,
+  bindHost: string,
+  devHost: string | undefined = process.env.BLOCKS_DEV_HOST,
+): boolean {
+  const match = HOST_HEADER.exec(hostHeader?.trim() ?? '');
+  if (!match) return false;
+  if (match[2] !== undefined && Number(match[2]) > 65535) return false;
+  const hostname = match[1];
+  // `normalizeHostname` strips the FQDN root dot, so `localhost.` is loopback here
+  // as it is for `BLOCKS_DEV_HOST=mybox` vs `Host: mybox.`.
+  if (isLoopbackHost(normalizeHostname(hostname))) return true;
+  for (const configured of [bindHost, devHost]) {
+    const optIn = configured?.trim();
+    if (!optIn) continue;
+    if (isWildcardHost(optIn)) {
+      if (isIpLiteral(hostname)) return true;
+    } else if (normalizeHostname(optIn) === normalizeHostname(hostname)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Resolve the CORS origin for the dev server.
@@ -973,6 +1025,17 @@ export async function startDevServer(options: DevServerOptions) {
   }
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    // DNS-rebinding guard: refuse a Host that isn't loopback or the configured
+    // dev host before anything is dispatched, proxied or given CORS headers
+    // (see isAllowedDevRequestHost).
+    if (!isAllowedDevRequestHost(req.headers.host, host)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', 'Connection': 'close' });
+      res.end(
+        'Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] ' +
+          'or the host set in BLOCKS_DEV_HOST.\n',
+      );
+      return;
+    }
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const method = req.method || 'GET';
 

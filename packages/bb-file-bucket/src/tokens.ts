@@ -29,8 +29,24 @@ interface FileTokenPayload {
 	fullId: string;
 	path: string;
 	method: 'GET' | 'PUT';
+	/** PUT: the Content-Type the upload must send (S3 signs it as a required header). */
 	contentType?: string;
+	/** PUT: the exact body size the upload must send (S3 signs it as a required header). */
+	contentLength?: number;
+	/** GET: the Content-Disposition the download is served with (S3's `response-content-disposition`). */
+	contentDisposition?: string;
 	exp: number;
+}
+
+/**
+ * Values signed into a local token alongside its method/path/expiry, mirroring
+ * the headers and response overrides an S3 presigned URL signs.
+ */
+export interface SignedFileTokenFields {
+	/** PUT: exact body size the upload must send. */
+	contentLength?: number;
+	/** GET: Content-Disposition to serve the download with. */
+	contentDisposition?: string;
 }
 
 export function mintFileToken(
@@ -40,6 +56,7 @@ export function mintFileToken(
 	expiresIn: number,
 	secret: string,
 	contentType?: string,
+	signed?: SignedFileTokenFields,
 ): string {
 	validatePresignedUrlExpiry(expiresIn);
 	const payload: FileTokenPayload = {
@@ -48,6 +65,8 @@ export function mintFileToken(
 		method,
 		exp: Math.floor(Date.now() / 1000) + expiresIn,
 		...(contentType ? { contentType } : {}),
+		...(signed?.contentLength !== undefined ? { contentLength: signed.contentLength } : {}),
+		...(signed?.contentDisposition ? { contentDisposition: signed.contentDisposition } : {}),
 	};
 	const json = JSON.stringify(payload);
 	const sig = createHmac('sha256', secret).update(json).digest('base64url');

@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Annotations as CdkAnnotations, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -429,10 +429,30 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.match(JSON.stringify(alb[0].entry.data), /`Auth` drops `Secure` from its session cookie/);
       assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
+    });
+
+    it("the 'none' door warns that the site is served without TLS, with or without an API, and names how to acknowledge it", () => {
+      const warn = (extra: Partial<HostingConstructProps> = {}, acknowledge = false) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: 'none', ...extra });
+        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      };
       // The S3 website's URL is a token at synth; its handle says it is plain HTTP.
-      const none = warn('none', { backendApi: { url: API_URL } });
-      assert.equal(none.length, 1);
-      assert.match(JSON.stringify(none[0].entry.data), /an S3 website has no TLS/);
+      // The same text with and without an API: 'none' serves no same-origin API.
+      for (const extra of [{}, { backendApi: { url: API_URL } }]) {
+        const found = warn(extra);
+        assert.equal(found.length, 1, JSON.stringify(extra));
+        const text = JSON.stringify(found[0].entry.data);
+        assert.match(text, /The 'none' front door serves the app from the public S3 website endpoint over plain HTTP \(an S3 website has no TLS\)/);
+        assert.match(text, /the HTML and scripts can be read or altered in transit/);
+        assert.match(text, /Use the CloudFront door for HTTPS/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpFrontDoor'\)/);
+        assert.doesNotMatch(text, /same-origin API|drops `Secure`/, "'none' has no same-origin API, so no cookie clause");
+        assert.equal((text.match(/no TLS|no certificate/g) ?? []).length, 1, 'says there is no TLS once');
+        // The remedy the message names clears it.
+        assert.equal(warn(extra, true).length, 0, 'acknowledged on the stack');
+      }
     });
 
     it('the ALB door with a custom domain: the URL, the trusted origin and the CORS origin are the domain', () => {

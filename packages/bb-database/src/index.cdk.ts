@@ -3,6 +3,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import { ClusterInfra } from './deploy/cluster-infra.js';
 import { configError } from './errors.js';
 import { lintMigrationFiles } from './migrations/plan.js';
@@ -47,6 +48,9 @@ export class DatabaseCluster extends BuildingBlockScope {
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
+		// First-party, but passes no official `bbName`: mark it so the
+		// service-principal trust check treats its roles as AWS Blocks roles.
+		markBlocksOwned(this);
 		const resolved = resolveClusterOptions(options, this.fullId);
 		this.type = resolved.type;
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
@@ -70,6 +74,9 @@ export class Database extends BuildingBlockScope {
 	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
+		// First-party, but passes no official `bbName`: mark it so the
+		// service-principal trust check treats its roles as AWS Blocks roles.
+		markBlocksOwned(this);
 		const resolved = registerDatabase(this, id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;

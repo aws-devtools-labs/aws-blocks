@@ -39,7 +39,7 @@ A block that owns its cluster uses the `public` schema. A block on a shared clus
 
 `Database` and `DatabaseCluster` are not generic. `ClusterType` is `'dsql' | 'aurora'`; `type` is required on `DatabaseCluster`, and `DatabaseClusterOptions` is a union discriminated on it, so capacity options exist only on `aurora` and `snapshot` is a removal policy only there. `db.cluster.kind` is the `ClusterType` union, not the literal of the constructor: the block is not generic, and a handler that must branch on the kind reads the value. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `core/construction.ts`. `DatabaseOptions` is a union discriminated on `cluster`, so an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error without constructor overloads; `types.test.ts` asserts the option rules with `@ts-expect-error`.
 
-A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`runtime/index.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`; its message, which reaches the client, names the row index and the first issue's path. The schema library's issues, whose messages can quote the row's values, are the error's non-enumerable `cause` and stay on the server. This is the first step of the typed-tables track and leaves the type argument form in place.
+A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`runtime/index.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`; its message, which reaches the client, names the row index and the first issue's path. The schema library's issues, whose messages can quote the row's values, are the error's non-enumerable `cause` and stay on the server. The type argument form stays in place.
 
 ## 4. Execution environments
 
@@ -60,6 +60,16 @@ Both kinds are reached through one `pg` pool engine (`engines/pg-engine.ts`) aut
 ### 4.3 Transaction handle lifecycle
 
 Both engines settle a handle on the first of `commitTransaction()` and `rollbackTransaction()`. A `COMMIT` that fails has already rolled the transaction back on the server, so a failed commit settles the handle too and frees its connection (DSQL: the pooled client; local: the cluster mutex). `rollbackTransaction()` on a settled handle is a no-op, and a statement on one is refused with `TransactionFailed`. `DatabaseCore.runTransaction` and the migration runner both issue `commit`, then `rollback` on failure; under this contract the second call never reaches a connection another borrower holds. A `BEGIN` or `ROLLBACK` that fails hands the DSQL client back with the error, so the pool discards the connection.
+
+### 4.4 Kysely
+
+`DatabaseDialect` (`src/kysely.ts`, the `@aws-blocks/bb-database/kysely` entry) is a Kysely dialect over the block's engine: Kysely's PostgreSQL query compiler, adapter and introspector, with the block's own driver. It is the only module of the block that imports Kysely, which is an optional peer dependency. No entry point of the block imports that module, and `kysely-free.test.ts` fails if one of them loads Kysely, so an application that does not use Kysely does not install or load it. The root entry of `@aws-blocks/data-common` loads Kysely for the adapter that `bb-data` re-exports, so the block imports `@aws-blocks/data-common/core`, which has the same exports without the adapter.
+
+Each Kysely connection is a `Session` (`runtime/session.ts`) from `DatabaseCore`: the same engine, the same conflict retry for an auto-commit statement, and the same join into the block's open `transaction()` (§4). Kysely's driver interface passes transaction control as calls, so nothing is read from statement text. `beginTransaction` maps onto the handle API (§4.3); an isolation level or an access mode becomes `SET TRANSACTION`, the first statement of the transaction. A savepoint is a statement of the open transaction.
+
+Kysely expects the number of rows that a statement changed. The engines report it (`RowCountingEngine` in `engines/handle.ts`: PGlite's `affectedRows`, and pg's `rowCount` when the command changes data), so a `RETURNING` clause or a literal in the statement cannot change the count.
+
+The callback of a Kysely transaction runs outside the block's `AsyncLocalStorage` scope, so no other statement can join that transaction. On AWS a statement on the block or on the root Kysely instance, issued inside that callback, runs on another connection. Locally it would wait for the one session forever. While such a transaction holds the mutex, a wait for it is therefore bounded (`SESSION_TRANSACTION_WAIT_MS`) and ends with a `QueryFailed` whose message names the cause. Streaming needs a cursor on one connection, which the engine interface does not have, so it is refused.
 
 ## 5. Schema migration
 
@@ -105,6 +115,10 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 
 **Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
 
+**A Kysely adapter in the block's root entry**, as `bb-data` has in `createKyselyAdapter()`. It makes Kysely a dependency that every application installs and loads. The dialect is in its own entry, so only an application that imports it loads Kysely (§4.4).
+
+**A `pg`-pool-shaped object for Kysely's own `PostgresDialect`.** It needs no Kysely import at all, and it was the first cut of the Kysely support. It has to read `begin`, `commit` and `rollback` out of statement text and invent a command tag so that Kysely's `pg` driver counts affected rows, and it looks like a `pg` pool to libraries that it does not support. Kysely's driver interface is the documented extension point and has none of these problems.
+
 **Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a 55-minute budget, the most CloudFormation's one-hour wait for a custom resource allows.
 
 ## 8. Security and cost
@@ -128,7 +142,8 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `pg-engine.ts` installs a parser that matches PGlite |
 | An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 | `db.query()` / `db.execute()` on the block inside its own `transaction()` callback | Runs in the transaction (`DatabaseCore`) | Same |
-| Another block on the same cluster, or a nested `transaction()`, called inside a `transaction()` callback | Nests in the open transaction as a savepoint: sees its writes, rolls back with it | Runs on its own connection and commits on its own |
+| Another block on the same cluster, a nested `transaction()`, or a Kysely transaction, called inside a `transaction()` callback | Nests in the open transaction as a savepoint: sees its writes, rolls back with it | Runs on its own connection and commits on its own |
+| A statement on the block or on the root Kysely instance, inside the callback of a Kysely transaction | Fails after five seconds with `QueryFailed`: the transaction holds the one session and the statement cannot join it (§4.4) | Runs on another connection, outside the transaction |
 | The `_migrations` and `_migration_progress` tables | Readable and writable by the application: the mock does not hide them | Not readable or writable by the app role: `provisionAppRole` grants it nothing on them |
 | Row Level Security policies (`aurora`) | Not enforced: statements run as PGlite's superuser, which bypasses RLS | Enforced: the app connects as `blocks_app_*`, a plain role |
 
@@ -142,12 +157,12 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 
 **Future work.** Each item states the condition for revisiting it.
 
-1. **`DatabaseCluster.fromExisting()`, `withRLS()` and `crud()`**: the remaining items of the design, now that `type: 'aurora'` gives the block a full-PostgreSQL cluster to put them on. **A customer managed KMS key on `aurora`** when the express configuration accepts one; the property is one line in `deploy/cluster-infra.ts`, and existing clusters would need a snapshot-and-restore. **A longer pool idle timeout on `aurora` when `minCapacity` is above 0**, since the cluster then never pauses and the ten-second timeout only adds IAM authentications; the runtime would read the value through `registerConfig`. **`SecondsUntilAutoPause` as an option** (300 to 86,400 seconds; the service default of 300 applies today) and **`iam-db-auth-error` log export** under production defaults.
+1. **`DatabaseCluster.fromExisting()` for an external PostgreSQL, a CLI, and statements scoped to a user for Row Level Security**: the remaining items of the design, now that `type: 'aurora'` gives the block a full-PostgreSQL cluster to put them on. A `crud()` method is not planned: an application writes its handlers with Kysely (§4.4). **A customer managed KMS key on `aurora`** when the express configuration accepts one; the property is one line in `deploy/cluster-infra.ts`, and existing clusters would need a snapshot-and-restore. **A longer pool idle timeout on `aurora` when `minCapacity` is above 0**, since the cluster then never pauses and the ten-second timeout only adds IAM authentications; the runtime would read the value through `registerConfig`. **`SecondsUntilAutoPause` as an option** (300 to 86,400 seconds; the service default of 300 applies today) and **`iam-db-auth-error` log export** under production defaults. **A `DatabaseDialect` on the user-scoped database**, so that Kysely's statements run under the same identity.
 2. **Safe replacement**, a `replaces` option naming a previous binding. The same need exists for `KVStore` and `FileBucket`, so it warrants one design across data blocks.
 3. **Compile-time binding verification** from a lock file written by deploys. The per-application uniqueness of short ids (§2.2) allows a block to be identified by the literal in its constructor. Revisit once deploys can write files back to the repository.
 4. **A copy command.** The README procedure suffices until copies are a recurring request.
 5. **Multi-region DSQL** (`regions`, `witnessRegion`). Revisit when the feature is scheduled.
-6. **A non-superuser role in PGlite** for the application's statements, with the grants the migration Lambda issues, so Row Level Security and the DML-only privilege rule are enforced locally by PostgreSQL instead of a regex guard. Revisit when `withRLS()` lands.
+6. **A non-superuser role in PGlite** for the application's statements, with the grants the migration Lambda issues, so Row Level Security and the DML-only privilege rule are enforced locally by PostgreSQL instead of a regex guard. Revisit with the user scoping.
 
 ## Appendix A. Source map
 
@@ -156,6 +171,7 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | Public types and option shapes | `src/types.ts` |
 | Constructor checks: resolution of the `cluster` option, unique ids and schemas | `src/runtime/construction.ts` (shared by all entry points) |
 | Queries, transactions, retries and result schema validation | `src/runtime/index.ts` |
+| Kysely dialect and its connections | `src/kysely.ts`, `src/runtime/session.ts` |
 | Test helpers and the internal access channel | `src/testing.ts`, `src/runtime/internal.ts` |
 | Connection pool for both cluster kinds, IAM token passwords, result type parsers | `src/engines/pg-engine.ts` |
 | Local engine, schema switching and the `sys` stub | `src/engines/pglite-cluster.ts` |

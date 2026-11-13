@@ -3,7 +3,12 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaCode, resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
+import {
+	deployTimeLambdaCode,
+	markAddedChildrenBlocksOwned,
+	resolveDynamoDbProtection,
+	scopeProviderWaiterTrust,
+} from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
@@ -299,6 +304,9 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const tableArns: string[] = [];
 	const sandboxTableArns: string[] = [];
 
+	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	const stackChildrenBefore = new Set(stack.node.children);
+
 	// Own the GSI-manager Lambdas' log groups so their retention follows the
 	// stack-wide default instead of AWS's infinite retention. Torn down with the
 	// stack (logs are not durable state).
@@ -362,6 +370,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		queryInterval: Duration.seconds(10),
 		totalTimeout: Duration.hours(2),
 	});
+	scopeProviderWaiterTrust(provider);
 
 	const shared: SharedGsiProvider = {
 		serviceToken: provider.serviceToken,
@@ -386,6 +395,11 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 			}
 		},
 	};
+
+	// The shared GSI-manager functions and provider sit at stack scope but belong
+	// to the block, so the service-principal trust check treats their roles as
+	// AWS Blocks roles rather than the app's.
+	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 
 	(stack as unknown as Record<symbol, SharedGsiProvider>)[GSI_PROVIDER_KEY] = shared;
 	return shared;

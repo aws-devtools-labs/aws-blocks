@@ -15,8 +15,16 @@ import {
 	deleteMarkerPath, isVersionEntry,
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
+import { validatePresignedUrlExpiry } from './presigned-url.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
-import { validateFileBucketOptions, assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
+import {
+	validateFileBucketOptions, assertValidKey, assertValidPrefix, presignedUploadUnsupportedMessage, VERSION_NOT_FOUND_MESSAGE,
+} from './validation.js';
+import {
+	resolvePresignedUpload, resolvePutUpload, uploadConstraintsFrom, validateUploadConstraintOptions,
+} from './upload-constraints.js';
+import type { UploadConstraints } from './upload-constraints.js';
+import { resolveContentDisposition } from './content-disposition.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
@@ -85,6 +93,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	private versioned: boolean;
 	/** Mirrors the AWS runtime: presigned uploads are rejected on an `objectLock` bucket. */
 	private readonly objectLocked: boolean;
+	/** `allowedContentTypes` / `maxUploadBytes`, enforced identically by the AWS runtime (see upload-constraints.ts). */
+	private readonly uploadConstraints: UploadConstraints;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -105,6 +115,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// CDK's external-bucket branch returns before these checks, so a wrapped
 		// bucket bypasses them here too.
 		if (!options?.bucket) validateFileBucketOptions(this.fullId, options);
+		// Upload constraints are enforced by the runtime methods, so they apply to
+		// a wrapped bucket too (validateFileBucketOptions already checked them for
+		// a provisioned one).
+		if (options?.bucket) validateUploadConstraintOptions(this.fullId, options);
+		this.uploadConstraints = uploadConstraintsFrom(options);
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.dataDir = getMockDataDir(this);
 		this.versioned = options?.versioned ?? true;
@@ -127,9 +142,15 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * (none when omitted). Metadata can't be edited in place, so to change it,
 	 * `put()` the same body again with the complete new set.
 	 *
+	 * The content type defaults to `application/octet-stream`. When the bucket
+	 * sets `allowedContentTypes` or `maxUploadBytes`, a content type that isn't
+	 * listed or a body above the limit throws `ValidationFailed` (HTTP 400).
+	 *
 	 * @param path - The object key (e.g., `uploads/photo.jpg`).
 	 * @param body - The file content.
 	 * @param options - Optional metadata and content settings.
+	 * @throws `ValidationFailed` for an invalid key, a content type not in
+	 *   `allowedContentTypes`, or a body larger than `maxUploadBytes`.
 	 *
 	 * @example
 	 * ```typescript
@@ -140,12 +161,15 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async put(path: string, body: Buffer | string, options?: PutOptions): Promise<void> {
 		this.validateKey(path);
+		const buf = typeof body === 'string' ? Buffer.from(body) : body;
+		// Same resolution and checks as the AWS runtime (upload-constraints.ts),
+		// before anything touches disk.
+		const contentType = resolvePutUpload(this.uploadConstraints, options?.contentType, buf.length);
 		const filePath = contentPath(this.dataDir, path);
 		mkdirSync(dirname(filePath), { recursive: true });
 
-		const buf = typeof body === 'string' ? Buffer.from(body) : body;
 		const meta: SidecarMeta = {
-			contentType: options?.contentType ?? 'application/octet-stream',
+			contentType,
 			metadata: options?.metadata ?? {},
 			cacheControl: options?.cacheControl,
 		};
@@ -290,19 +314,29 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	/**
 	 * Generate a presigned URL for downloading a file.
 	 *
+	 * Pass `attachment: true` (or a filename) to make the browser download the
+	 * file instead of displaying it — recommended for user-uploaded content,
+	 * since a file displayed inline can run as a page (HTML, SVG).
+	 *
 	 * @param path - The object key.
 	 * @param options - URL generation options.
 	 * @returns A presigned URL string.
+	 * @throws `ValidationFailed` for an invalid key, `expiresIn` or `attachment`.
 	 *
 	 * @example
 	 * ```typescript
 	 * const url = await bucket.getUrl('reports/q1.pdf', { expiresIn: 3600 });
+	 * const download = await bucket.getUrl('reports/q1.pdf', { attachment: 'Q1 report.pdf' });
 	 * ```
 	 */
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
 		this.validateKey(path);
-		const expiresIn = (options as any)?.expiresIn ?? 3600;
-		const token = mintFileToken(this.fullId, path, 'GET', expiresIn, LOCAL_FILE_SECRET);
+		// Validated before `attachment`, in the same order as the AWS runtime.
+		const expiresIn = validatePresignedUrlExpiry((options as any)?.expiresIn ?? 3600);
+		// Signed into the token, as S3 signs `response-content-disposition`, so the
+		// dev file-server serves exactly this header.
+		const contentDisposition = resolveContentDisposition((options as any)?.attachment);
+		const token = mintFileToken(this.fullId, path, 'GET', expiresIn, LOCAL_FILE_SECRET, undefined, { contentDisposition });
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
 		let url = `${getDevBaseUrl()}/.bb-file-bucket/${this.fullId}/${encodedPath}?token=${token}`;
 		const versionId = (options as any)?.versionId;
@@ -313,9 +347,19 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	/**
 	 * Generate a presigned URL for uploading a file.
 	 *
+	 * The URL always signs a `Content-Type` — `options.contentType`, or
+	 * `application/octet-stream` when omitted — so the upload must send exactly
+	 * that header. Pass `contentLength` to also sign the exact body size (required
+	 * when the bucket sets `maxUploadBytes`). A mismatched upload is rejected with
+	 * `403 SignatureDoesNotMatch`, by S3 and by the local dev server alike.
+	 *
 	 * @param path - The object key.
 	 * @param options - URL generation options.
 	 * @returns A presigned URL string.
+	 * @throws `ValidationFailed` for an invalid key or `expiresIn`, a content type not
+	 *   in `allowedContentTypes`, or a `contentLength` that is invalid, missing while
+	 *   `maxUploadBytes` is set, or above it.
+	 * @throws `PresignedUploadUnsupported` on a bucket with `objectLock`.
 	 *
 	 * @example
 	 * ```typescript
@@ -326,12 +370,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
-		this.validateKey(path);
-		this.assertPresignedUploadSupported();
-		const expiresIn = options?.expiresIn ?? 3600;
-		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
-		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
-		return `${getDevBaseUrl()}/.bb-file-bucket/${this.fullId}/${encodedPath}?token=${token}`;
+		return this.signUpload(path, options).url;
 	}
 
 	/**
@@ -379,9 +418,13 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * instead of `putUrl()` when you want the client to upload files
 	 * without manually managing presigned URLs.
 	 *
+	 * `upload()` always sends the signed `Content-Type` (see {@link putUrl}), on the
+	 * server and after client hydration alike.
+	 *
 	 * @param path - The object key.
 	 * @param options - URL generation options.
 	 * @returns A Transferable file upload handle.
+	 * @throws The same errors as {@link putUrl}.
 	 *
 	 * @example
 	 * ```typescript
@@ -398,17 +441,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
-		this.validateKey(path);
-		this.assertPresignedUploadSupported();
-		const expiresIn = options?.expiresIn ?? 3600;
-		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
-		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
-		const url = `${getDevBaseUrl()}/.bb-file-bucket/${this.fullId}/${encodedPath}?token=${token}`;
-		const contentType = options?.contentType;
+		const { url, contentType } = this.signUpload(path, options);
 		return {
 			upload: async (body: Blob | File | ArrayBuffer) => {
-				const headers: Record<string, string> = {};
-				if (contentType) headers['Content-Type'] = contentType;
+				// Always send the signed Content-Type: the dev file-server (like S3) rejects a mismatch.
+				const headers: Record<string, string> = { 'Content-Type': contentType };
 				const res = await fetch(url, { method: 'PUT', body, headers });
 				if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
 			},
@@ -426,6 +463,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 *
 	 * @param options - Listing options.
 	 * @returns An async iterable of file info objects.
+	 * @throws `ValidationFailed` when `prefix` breaks the key rules (see `ScanOptions.prefix`).
 	 *
 	 * @example
 	 * ```typescript
@@ -435,6 +473,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async *scan(options?: ScanOptions): AsyncIterable<FileInfo> {
+		// Same prefix rules as the AWS runtime.
+		assertValidPrefix(options?.prefix);
 		const root = contentRoot(this.dataDir);
 		for (const absPath of this.walkDir(root)) {
 			const relPath = relative(root, absPath).replace(/\\/g, '/');
@@ -487,7 +527,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.validateKey(path);
 		const vPath = versionContentPath(this.dataDir, path, versionId);
 		if (!existsSync(vPath)) {
-			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
+			throw blocksError(FileBucketErrors.VersionNotFound, VERSION_NOT_FOUND_MESSAGE);
 		}
 		const body = readFileSync(vPath);
 		const meta = this.readVersionMeta(path, versionId);
@@ -543,6 +583,23 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			versions[0].isCurrent = true;
 		}
 		return versions;
+	}
+
+	/**
+	 * Mint a local presigned PUT for `path`, signing the same values the AWS
+	 * runtime signs into an S3 URL: the Content-Type (always) and `contentLength`
+	 * (when given). The dev file-server rejects an upload that sends anything
+	 * else. Shared by `putUrl()` and `createUploadHandle()`; checks run in the
+	 * same order as the AWS runtime.
+	 */
+	private signUpload(path: string, options?: PutUrlOptions): { url: string; contentType: string } {
+		this.validateKey(path);
+		this.assertPresignedUploadSupported();
+		const { contentType, contentLength } = resolvePresignedUpload(this.uploadConstraints, options);
+		const expiresIn = options?.expiresIn ?? 3600;
+		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, contentType, { contentLength });
+		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
+		return { url: `${getDevBaseUrl()}/.bb-file-bucket/${this.fullId}/${encodedPath}?token=${token}`, contentType };
 	}
 
 	private assertPresignedUploadSupported(): void {

@@ -445,6 +445,11 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    * cross-origin), image optimization or TLS; an app with a server fails synth
    * (use `'cloudfront'` or `{ kind: 'alb' }`). `s3-website` is the internal
    * mechanism, not a front door. It takes no settings.
+   *
+   * Because the site is served without TLS, `'none'` always warns at synth
+   * (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
+   * If that is intended, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`.
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>

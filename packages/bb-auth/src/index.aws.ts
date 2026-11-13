@@ -26,7 +26,7 @@
  * same Lambda; the layer routes it to the block (`presignup-trigger.ts`).
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { ApiError, getDeploymentType } from '@aws-blocks/core';
 import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
@@ -89,15 +89,22 @@ function deployedStubIdp(
 }
 
 /**
- * The AWS layer: the session secret is the `session-secret` `AppSetting` child
- * — the same construct id, and so the same SSM parameter, `AuthCognito` uses —
- * so existing sessions keep verifying after the switch. The native engine
+ * The AWS layer: the session secret is the `session-secret` framework key
+ * (`frameworkKey()` from `@aws-blocks/bb-secret/internal`), at the same
+ * construct id `AuthCognito` used. Under `defaults.secretsStore: 'ssm'` that is
+ * the same SSM parameter, so existing sessions keep verifying after the switch;
+ * under `'secrets-manager'` (the production preset) it is a new Secrets Manager
+ * secret, chosen from the ARN that arrives on the compute's environment.
+ *
+ * Only a successful read is cached. A failed read (throttling, a network blip,
+ * IAM still propagating at cold start) is retried on the next request instead
+ * of breaking the container for its lifetime. The native engine
  * drives Cognito through the SDK; it is built only when the configuration has a
  * user pool, and creates its SDK client lazily.
  */
 const AWS_LAYER: AuthLayer = {
 	sessionSecret(auth) {
-		const setting = new AppSetting(auth, 'session-secret', { secret: true });
+		const setting = frameworkKey(auth, 'session-secret');
 		let cached: string | undefined;
 		return async () => {
 			if (cached) return cached;

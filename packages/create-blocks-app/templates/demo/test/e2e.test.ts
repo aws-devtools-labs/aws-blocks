@@ -25,25 +25,8 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 // the local auth block just issued for `name` (it finds the block's .bb-data/
 // files itself). On AWS, Cognito emails it instead.
 
-test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
-    server = spawn('npm', ['run', 'dev:server'], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWin,
-      shell: isWin,
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-    server.unref();
-    await setTimeout(2000);
-  }
-
-  app = await import('aws-blocks');
-  api = app.api;
-  authApi = app.authApi;
-  hello = app.hello;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
       const response = await fetch(readinessUrl);
@@ -54,6 +37,29 @@ test.before(async () => {
     await setTimeout(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
+test.before(async () => {
+  if (!await isServerRunning(serverPort)) {
+    server = spawn('npm', ['run', 'dev:server'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWin,
+      shell: isWin,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    server.unref();
+  }
+
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
+  hello = app.hello;
 });
 
 // The installed cookie jar carries the session cookie across calls, so after

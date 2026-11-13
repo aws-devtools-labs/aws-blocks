@@ -4,16 +4,22 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializePgliteWithRetry, type TransactionHandle } from '@aws-blocks/data-common';
+import { initializePgliteWithRetry, type TransactionHandle } from '@aws-blocks/data-common/core';
 import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { PGlite } from '@electric-sql/pglite';
-import { quoteIdent } from '../constants.js';
-import type { CountedRows, RowCountingEngine } from '../dialect/rules-engine.js';
+import { quoteIdent, SESSION_TRANSACTION_WAIT_MS } from '../constants.js';
 import { ASYNC_DDL } from '../dialect/validation.js';
-import { translated, translatePgError } from '../errors.js';
+import { sessionTransactionOpen, translated, translatePgError } from '../errors.js';
 import { currentTransactionHandle } from '../runtime/tx-scope.js';
 import type { ClusterType } from '../types.js';
-import { EngineTransaction, isSettled, openTransaction, withTransaction } from './handle.js';
+import {
+	type CountedRows,
+	EngineTransaction,
+	isSettled,
+	openTransaction,
+	type RowCountingEngine,
+	withTransaction,
+} from './handle.js';
 
 // How PGlite stands in for DSQL's asynchronous DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC …
 // VALIDATE CONSTRAINT` return a job id that `sys.jobs` lists until `sys.wait_for_job(job_id)` sees it finish.
@@ -152,6 +158,8 @@ class PgliteCluster {
 	private ready?: Promise<PGlite>;
 	private readonly mutex = new Mutex();
 	private currentSchema?: string;
+	/** The top-level transaction that holds the mutex. */
+	holder?: ClusterTransaction;
 
 	constructor(
 		readonly dataDir: string,
@@ -236,7 +244,22 @@ class PgliteCluster {
 	}
 
 	acquire(): Promise<() => void> {
-		return this.mutex.acquire();
+		const acquired = this.mutex.acquire();
+		if (!this.holder?.fromSession) return acquired;
+		// A Kysely transaction holds the session. A statement issued inside its callback on anything but
+		// its transaction object cannot join it and would wait for it forever, so this wait is bounded.
+		return new Promise((resolve, reject) => {
+			let waiting = true;
+			const timer = setTimeout(() => {
+				waiting = false;
+				reject(sessionTransactionOpen(SESSION_TRANSACTION_WAIT_MS));
+			}, SESSION_TRANSACTION_WAIT_MS);
+			void acquired.then((release) => {
+				clearTimeout(timer);
+				if (waiting) resolve(release);
+				else release();
+			});
+		});
 	}
 
 	forSchema(schema: string): SchemaEngine {
@@ -300,16 +323,16 @@ export class SchemaEngine implements RowCountingEngine {
 		return { rows, rowCount: affectedRows };
 	}
 
-	private exclusiveCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
+	queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
 		return translate(() => this.exclusive(() => this.counted<T>(sql, params)));
 	}
 
 	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.exclusiveCounted<T>(sql, params)).rows;
+		return (await this.queryCounted<T>(sql, params)).rows;
 	}
 
 	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.exclusiveCounted(sql, params)).rowCount };
+		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
 	}
 
 	async beginTransaction(): Promise<TransactionHandle> {
@@ -332,7 +355,12 @@ export class SchemaEngine implements RowCountingEngine {
 			release();
 			throw e;
 		}
-		return new ClusterTransaction(this, release);
+		const tx: ClusterTransaction = new ClusterTransaction(this, () => {
+			this.cluster.holder = undefined;
+			release();
+		});
+		this.cluster.holder = tx;
+		return tx;
 	}
 
 	// A COMMIT that fails has rolled the transaction back, so the handle is settled either way and the mutex

@@ -4,7 +4,7 @@
 // The transaction a transaction() callback runs in, so a block-level statement inside the callback can
 // join it (core/index.ts) and a sibling block on the same local cluster can nest in it (pglite-cluster.ts).
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { TransactionHandle } from '@aws-blocks/data-common';
+import type { TransactionHandle } from '@aws-blocks/data-common/core';
 
 export class TransactionScope {
 	/** Cleared once the transaction has committed or rolled back. */

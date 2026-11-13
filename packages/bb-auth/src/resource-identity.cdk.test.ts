@@ -81,6 +81,11 @@ const AUTH_VARIANTS: Record<string, string> = {
 
 const fixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8')) as Fixture;
 
+// The golden comparisons above run with `secretsStore: 'ssm'` (synthIdentity's
+// default): that is the configuration under which an AuthCognito app keeps its
+// `session-secret` parameter and its signed-in users. The production preset's
+// own store, `'secrets-manager'`, is covered by its own describe block below.
+
 const synthesized: Record<string, SynthesizedAuth> = {};
 function synthOnce(name: string): SynthesizedAuth {
 	synthesized[name] ??= synthIdentity(AUTH_VARIANTS[name]);
@@ -213,4 +218,71 @@ describe('Auth — deployed resource identity equals AuthCognito (golden fixture
 			});
 		});
 	}
+});
+
+describe("Auth: production preset with secretsStore 'secrets-manager'", () => {
+	const SM = synthIdentity("new Auth(stack, 'auth')", 'production', [], 'secrets-manager');
+	const expected = fixture.variants.default;
+
+	test('the session secret is a generated Secrets Manager secret, deleted with the stack, no fixed name', () => {
+		const secrets = Object.entries(SM.template.Resources).filter(
+			([, r]) => r.Type === 'AWS::SecretsManager::Secret',
+		);
+		assert.strictEqual(secrets.length, 1);
+		const [, secret] = secrets[0];
+		assert.strictEqual(secret.DeletionPolicy, 'Delete');
+		assert.strictEqual(secret.Properties?.Name, undefined);
+		assert.deepStrictEqual(secret.Properties?.GenerateSecretString, {
+			ExcludePunctuation: true,
+			PasswordLength: 64,
+		});
+		assert.strictEqual(
+			(secret.Metadata as { 'aws:cdk:path'?: string } | undefined)?.['aws:cdk:path'],
+			`${BLOCK_PATH_PREFIX}session-secret/secret/Resource`,
+		);
+	});
+
+	test('there is no session-secret SSM parameter (no BlocksSecretsBulk)', () => {
+		assert.strictEqual(SM.identity.resources.BlocksSecretsBulk, undefined);
+	});
+
+	test('every other AuthCognito resource keeps its logical ID, type, path and physical name', () => {
+		const { BlocksSecretsBulk: _bulk, ...expectedRest } = expected.resources;
+		const actualRest = Object.fromEntries(
+			Object.entries(SM.identity.resources).filter(([, r]) => r.Type !== 'AWS::SecretsManager::Secret'),
+		);
+		assert.deepStrictEqual(actualRest, expectedRest);
+		assert.deepStrictEqual(SM.identity.configKeys, expected.configKeys);
+	});
+
+	test('the secret ARN reaches the runtime through config only (no compute env var), and the app role gets only GetSecretValue', () => {
+		const [secretId] =
+			Object.entries(SM.template.Resources).find(([, r]) => r.Type === 'AWS::SecretsManager::Secret') ?? [];
+		assert.deepStrictEqual(SM.config.BLOCKS_SECRET_ARN_TESTSTACK_AUTH_SESSION_SECRET, { Ref: secretId });
+		for (const r of Object.values(SM.template.Resources)) {
+			if (r.Type !== 'AWS::Lambda::Function') continue;
+			const vars =
+				(r.Properties?.Environment as { Variables?: Record<string, unknown> } | undefined)?.Variables ?? {};
+			assert.deepStrictEqual(
+				Object.keys(vars).filter((k) => k.startsWith('BLOCKS_SECRET_ARN_')),
+				[],
+			);
+		}
+
+		const statements = Object.values(SM.template.Resources)
+			.filter((r) => r.Type === 'AWS::IAM::Policy')
+			.flatMap(
+				(r) =>
+					(
+						r.Properties as {
+							PolicyDocument: { Statement: { Action: string | string[]; Resource: unknown }[] };
+						}
+					).PolicyDocument.Statement,
+			);
+		const onSecret = statements.filter((st) => JSON.stringify(st.Resource) === JSON.stringify({ Ref: secretId }));
+		assert.deepStrictEqual(
+			onSecret.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action])),
+			['secretsmanager:GetSecretValue'],
+		);
+	});
 });
