@@ -12,6 +12,7 @@
 import { migrate } from './commands/migrate.js';
 import * as commands from './commands.js';
 import type { Context } from './context.js';
+import { docs, docsForms } from './docs.js';
 
 export type FlagType = 'boolean' | 'string' | 'optional-string';
 
@@ -27,6 +28,17 @@ export interface FlagSpec {
 	description: string;
 	/** Collect every occurrence into an array. */
 	multiple?: boolean;
+	/**
+	 * A string option that people type as they would grep: grep's own flags or `--` right after it (`--search -i
+	 * term`, `--search -- term`) are dropped, and the next argument is its value.
+	 */
+	grepHabits?: boolean;
+	/**
+	 * A string option given with no value at the end of the line (`ApiError --section`) means this boolean flag
+	 * instead of an error: there is nothing it could have meant to take. The flag need not be one the command
+	 * declares (docs' `--section` sets `toc`, the headings, which has no option of its own).
+	 */
+	bare?: string;
 }
 
 export interface ArgSpec {
@@ -89,6 +101,11 @@ export interface CommandSpec {
 	 * which prints that verb's usage without side effects.
 	 */
 	verbs?: readonly string[];
+	/**
+	 * Arguments after `--` are more positional arguments, as `--` means in POSIX (`cdk-blocks docs --exports --
+	 * schema`), rather than an error. Only for a command whose positionals are names, never flags it forwards.
+	 */
+	operandsAfterDashDash?: boolean;
 	/** The shape of the `--output json` result; absent when the command has no JSON output. */
 	json?: JsonObjectShape;
 	/**
@@ -300,6 +317,68 @@ export const COMMANDS: readonly CommandSpec[] = [
 		aws: true,
 		handler: commands.sandboxConsole,
 	},
+	{
+		path: ['docs'],
+		group: 'Develop',
+		summary: 'Read the AWS Blocks docs: a block, an export or option, one section, or a search',
+		description: [
+			'Print the docs that ship in @aws-blocks/blocks, looked up by name.',
+			'',
+			...docsForms('cdk-blocks docs'),
+			'',
+			'Every printed doc starts with "# <folder>/<file>" (# bb-kv-store/README.md, # README.md), and that doc',
+			'path prints the file again (cdk-blocks docs bb-cron-job/DESIGN.md). guide is the package README and',
+			'troubleshooting its TROUBLESHOOTING.md.',
+		].join('\n'),
+		args: [
+			{
+				name: 'name',
+				description: 'A block, an export, an option, Owner.member, a doc path, guide or troubleshooting',
+				variadic: true,
+			},
+		],
+		flags: [
+			{
+				name: 'api',
+				type: 'boolean',
+				description: "The block's API report (exact signatures) instead of its README",
+			},
+			{
+				name: 'section',
+				type: 'string',
+				value: 'topic',
+				multiple: true,
+				bare: 'toc',
+				description: 'The part of the docs about a topic; repeatable; with no topic, the headings',
+			},
+			{
+				name: 'exports',
+				type: 'boolean',
+				description:
+					'The names @aws-blocks/blocks and its entries export, and which entry to use; names after it filter the list',
+			},
+			{
+				name: 'search',
+				type: 'string',
+				value: 'term',
+				grepHabits: true,
+				description: 'Matching lines in every doc, or in the named blocks, with their section',
+			},
+		],
+		examples: [
+			{ command: 'cdk-blocks docs', description: 'The blocks, their classes and what each does' },
+			{ command: 'cdk-blocks docs DistributedTable core', description: 'Two READMEs in one call' },
+			{ command: 'cdk-blocks docs DistributedTable --api', description: 'Its exact signatures' },
+			{ command: 'cdk-blocks docs ifFieldEquals', description: 'Where an option is declared and documented' },
+			{ command: 'cdk-blocks docs Secret.get', description: 'A member of an export' },
+			{ command: 'cdk-blocks docs DistributedTable --section query', description: 'The part about queries' },
+			{ command: 'cdk-blocks docs KVStore --section local', description: 'How it behaves locally' },
+			{ command: 'cdk-blocks docs --exports Error', description: 'Importable names containing "Error"' },
+			{ command: 'cdk-blocks docs --search ConditionalCheckFailed', description: 'Search every doc' },
+		],
+		operandsAfterDashDash: true,
+		handler: docs,
+	},
 	// ── Deploy ───────────────────────────────────────────────────────────────
 	{
 		path: ['deploy'],
@@ -325,7 +404,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		json: { ...DEPLOY_RESULT, live: null },
 		examples: [
 			{ command: 'cdk-blocks deploy', description: 'Deploy to production' },
-			{ command: 'cdk-blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
+			{
+				command: 'cdk-blocks deploy --wait-live=300',
+				description: 'Deploy, then wait up to 300s for the new build',
+			},
 			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
 			{ command: 'API_URL=$(cdk-blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
@@ -456,7 +538,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{
 				name: 'force',
 				type: 'boolean',
-				description: 'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
+				description:
+					'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
 			},
 		],
 		examples: [{ command: 'cdk-blocks generate client', description: 'Write aws-blocks/client.js' }],
@@ -510,7 +593,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 				command: 'cdk-blocks db migrate aws-blocks/migrations',
 				description: 'Apply pending migrations to the local database',
 			},
-			{ command: 'cdk-blocks db status aws-blocks/migrations', description: 'Show applied and pending migrations' },
+			{
+				command: 'cdk-blocks db status aws-blocks/migrations',
+				description: 'Show applied and pending migrations',
+			},
 			{ command: 'cdk-blocks db pull', description: 'Introspect the database and write its files' },
 		],
 		handler: commands.db,
@@ -525,7 +611,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'options', description: '--force overwrites an existing copy', variadic: true },
 		],
 		passthrough: true,
-		examples: [{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
+		examples: [
+			{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
+		],
 		handler: commands.vendorize,
 	},
 	{
@@ -590,7 +678,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Show help for a command',
 		args: [{ name: 'command', description: 'For example "sandbox destroy"', variadic: true }],
-		examples: [{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' }],
+		examples: [
+			{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' },
+		],
 		handler: commands.help,
 	},
 ];

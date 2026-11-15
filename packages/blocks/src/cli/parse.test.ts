@@ -102,6 +102,22 @@ describe('parseArgv', () => {
 		);
 	});
 
+	it("reads docs' --section before another option as a bare --section, and only docs' --section", () => {
+		const search = parseArgv(['docs', 'core', '--section', '--search', 'withAuth']);
+		assert.strictEqual(search.flags.toc, true);
+		assert.strictEqual(search.flags.search, 'withAuth');
+		assert.strictEqual(search.flags.section, undefined);
+		assert.deepStrictEqual(search.positionals, ['core']);
+		const api = parseArgv(['docs', 'DistributedTable', '--section', '--api', '--section', 'queries']);
+		assert.strictEqual(api.flags.toc, true);
+		assert.strictEqual(api.flags.api, true);
+		assert.deepStrictEqual(api.flags.section, ['queries']);
+		// A negative number is still a value, and any other option that needs one still errors without it.
+		assert.deepStrictEqual(parseArgv(['docs', 'core', '--section', '-1']).flags.section, ['-1']);
+		usageError(['docs', 'core', '--search', '--section'], /option --search needs a value/);
+		usageError(['dev', '--port', '--host', 'x'], /option --port needs a value/);
+	});
+
 	it('rejects missing and unexpected arguments', () => {
 		usageError(['whoami', 'extra'], /unexpected argument "extra"/);
 		usageError(['generate', 'client', 'a', 'b', 'c'], /unexpected argument "c"/);
@@ -308,7 +324,10 @@ describe('usage errors through main', () => {
 		const run = await runCli(['deplyo'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 2);
 		assert.strictEqual(run.stdout, '');
-		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- cdk-blocks --help\n$/);
+		assert.match(
+			run.stderr,
+			/^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- cdk-blocks --help\n$/,
+		);
 	});
 
 	it('exits 2 for a command group without a subcommand', async () => {
