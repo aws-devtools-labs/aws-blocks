@@ -1,0 +1,5 @@
+---
+'@aws-blocks/core': patch
+---
+
+`cdk synth` fails when a scope or block id puts a character into a resource name that the resource's service rejects. Ids are joined, unescaped, into the name of each resource under them, so `new Scope('@acme/shop')` with a `KVStore` under it synthesizes a DynamoDB table named `<stack>-@acme/shop-<id>`, which the deploy rejects after the stack has started to create, and the stack rolls back. The error names the id, the characters, the resource names and what the service accepts. It covers the names of DynamoDB tables, SQS queues, EventBridge Scheduler schedules, Cognito user pools, Secrets Manager secrets and Bedrock knowledge bases and data sources that are literal strings at synth. An id is not rejected on its own: `'@acme/shop'` still synthesizes when the blocks under it name nothing from it or name only resources that accept `@` and `/`, and local development is unchanged. Use lowercase letters, digits and hyphens in ids: every service accepts them.
