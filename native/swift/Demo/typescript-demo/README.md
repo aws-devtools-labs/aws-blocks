@@ -4,15 +4,15 @@ Full-stack TypeScript application with AWS Blocks.
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 ## Documentation Location
 
-**All Blocks documentation is in `node_modules/@aws-blocks/blocks/README.md`:**
+**All Blocks documentation comes from `npx --no -- cdk-blocks docs`:**
 
-The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Read the README to discover available Building Blocks and their usage.
+The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Run `npx --no -- cdk-blocks docs` to list the Building Blocks, and `npx --no -- cdk-blocks docs <block>` for one block's usage.
 
 ## For Humans
 
@@ -34,4 +34,4 @@ npm run deploy      # Deploy to production
 - **Frontend:** `src/index.ts` - Import backend APIs directly (type-safe)
 - **Infrastructure:** Inferred from code, works locally and on AWS
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one.**

@@ -42,7 +42,7 @@ const userPath = (username: string, path: string) => `users/${encodeURIComponent
 const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'application/pdf', 'image/png', 'image/jpeg']);
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Blocks: npx --no -- cdk-blocks docs (one block: npx --no -- cdk-blocks docs <block>)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -81,7 +81,7 @@ const greetingJob = new AsyncJob<{ name: string }>(scope, 'greeting-job', {
   },
 });
 
-// Auth: email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Auth: email + password sign-in (npx --no -- cdk-blocks docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the user enters
 // it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {

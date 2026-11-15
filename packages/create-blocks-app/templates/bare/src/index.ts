@@ -3,7 +3,7 @@ import { api } from 'aws-blocks';
 import { html, render } from 'lit-html';
 
 // Backend APIs are defined in aws-blocks/index.ts
-// Full docs: node_modules/@aws-blocks/blocks/README.md
+// Building Blocks: npx --no -- cdk-blocks docs (one block: npx --no -- cdk-blocks docs <block>)
 
 async function main() {
   const result = await api.greet("World");

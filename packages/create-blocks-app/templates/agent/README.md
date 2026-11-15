@@ -85,7 +85,7 @@ and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
 
 ## For Agents
 
-Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one. `AGENTS.md` explains the rest.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS

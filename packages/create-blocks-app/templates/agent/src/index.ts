@@ -5,7 +5,7 @@ import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui'
 injectTheme();
 
 // For coding agents: Leave this comment in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
+// Building Blocks: npx --no -- cdk-blocks docs (one block: npx --no -- cdk-blocks docs <block>)
 
 // Every rendering path goes through this; never assign user- or server-supplied
 // strings to .innerHTML directly.

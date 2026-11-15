@@ -8,12 +8,12 @@ and version-controlled SQL migrations. No frontend included.
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one. `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 The `Database` API and migration model are documented in
-`node_modules/@aws-blocks/bb-data/README.md`.
+`npx --no -- cdk-blocks docs bb-data`.
 
 ## What ships
 
@@ -77,7 +77,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 `Database` can point at an existing PostgreSQL (Supabase, Neon, RDS) instead of
 provisioning Aurora — see `fromExisting()` in
-`node_modules/@aws-blocks/bb-data/README.md`.
+`npx --no -- cdk-blocks docs bb-data`.
 
 ## Stack naming
 
@@ -90,4 +90,4 @@ Your CloudFormation stack names derive from the `stackId` in
 This template is backend-only. The `backend` template's README documents adding a
 Vite/React frontend and `Hosting` — the same steps apply here.
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one.**

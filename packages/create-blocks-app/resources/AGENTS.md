@@ -6,7 +6,7 @@
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `DistributedTable`, `DistributedTableErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
+- **AWS Blocks docs** come from one command; use it instead of reading files in `node_modules`, `.d.ts` and the docs' `API.md` files included. `npx --no -- cdk-blocks docs` lists the blocks. `npx --no -- cdk-blocks docs DistributedTable` prints a block's README (name several blocks in one call); add `--api` for exact signatures. A name that is an export, a type or interface, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`) prints its import line, its declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`KVStore --section local` for how it behaves on your machine), `--exports [filter]` lists what you can import and from which entry, and `--search <term>` searches every doc.
 
 ## Framework model
 
@@ -41,7 +41,7 @@ When a request names a call such as `orders.create(...)`, export `const orders =
 
 ### Auth on the frontend
 
-There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures it: `store` picks where users live — a Cognito user pool (the default: email + password, on by default, plus `providers` entries of `type: 'google'`, `'apple'`, `'facebook'`, `'amazon'`, `'saml'` or `'oidc'`), or `store: 'builtin'` (no user pool: `type: 'oidc'` entries, `github()` and `stubIdp()`, verified by your backend). One block holds one kind of user; password users and backend-verified IdP users need two `Auth` blocks. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures it: `store` picks where users live — a Cognito user pool (the default: email + password, on by default, plus `providers` entries of `type: 'google'`, `'apple'`, `'facebook'`, `'amazon'`, `'saml'` or `'oidc'`), or `store: 'builtin'` (no user pool: `type: 'oidc'` entries, `github()` and `stubIdp()`, verified by your backend). One block holds one kind of user; password users and backend-verified IdP users need two `Auth` blocks. Full docs: `npx --no -- cdk-blocks docs Auth`.
 
 ```ts
 // aws-blocks/index.ts
@@ -125,7 +125,7 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 ### Live data: push with Realtime, or poll safely
 
-For data that changes while the page is open (dashboards, counters, feeds), prefer **push over poll**: the `Realtime` block delivers updates to the browser as they happen. A backend method returns a channel handle (`await rt.getChannel(namespace, channel)`), the frontend calls `subscribe(handler)` on it, and the backend calls `rt.publish(...)` when the data changes. See the `bb-realtime` docs for the full API.
+For data that changes while the page is open (dashboards, counters, feeds), prefer **push over poll**: the `Realtime` block delivers updates to the browser as they happen. A backend method returns a channel handle (`await rt.getChannel(namespace, channel)`), the frontend calls `subscribe(handler)` on it, and the backend calls `rt.publish(...)` when the data changes. See `npx --no -- cdk-blocks docs Realtime` for the full API.
 
 If you poll instead, every open tab calls the backend on a timer: each call is a Lambda invocation and an API Gateway request, so a careless poller wastes money and can hit the stage's rate limit. A safe poller:
 
@@ -223,13 +223,13 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `params` is a positional array.
 - Errors return HTTP `200` with an `{"error":{...}}` body — check the body, not the status.
 - Auth is an `HttpOnly` session cookie: save it on sign-in with `curl -c cookies.txt` and resend it with `-b cookies.txt`.
-- More examples: `TROUBLESHOOTING.md` in the docs folder (see the **AWS Blocks docs** bullet above).
+- More examples: `npx --no -- cdk-blocks docs troubleshooting` (see the **AWS Blocks docs** bullet above).
 
 ## Rules
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
-- **To store data, reach for a storage Building Block** — default to `DistributedTable` for app records you list or query as a collection (todos, notes, orders); use `KVStore` for values you read and write by one key, structured or not (settings, flags, caches, sessions, per-user preferences). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
-- **The framework model above covers the common path.** For a block's specific API surface, read its `README.md`; open `API.md` only for an exact signature and `DESIGN.md` only when you are stuck (see the **AWS Blocks docs** bullet for where the docs folder lives).
+- **To store data, reach for a storage Building Block** — default to `DistributedTable` for app records you list or query as a collection (todos, notes, orders); use `KVStore` for values you read and write by one key, structured or not (settings, flags, caches, sessions, per-user preferences). Both are constructed with a `Scope` and used inside your API methods; read their docs (`npx --no -- cdk-blocks docs DistributedTable`, with `--api` for exact signatures) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is `npx --no -- cdk-blocks docs`.
+- **The framework model above covers the common path.** Read a block's own docs (`npx --no -- cdk-blocks docs <block>`, with `--api` for exact signatures) when you need a block's specific API surface (see the **AWS Blocks docs** bullet).
 
 ## Deploying (requires AWS credentials)
 

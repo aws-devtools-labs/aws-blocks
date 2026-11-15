@@ -17,20 +17,20 @@ npm run test:e2e   # waits for heartbeat's first run (about a minute)
 
 `api.lastRun('heartbeat')` returns the latest run, or `null` before the first
 one. Schedules take `rate(<n> minutes|hours|days)` (one minute minimum) or a
-6-field `cron(...)` expression; see the CronJob section of
-`node_modules/@aws-blocks/blocks/README.md`.
+6-field `cron(...)` expression; see
+`npx --no -- cdk-blocks docs CronJob`.
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one. `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 ## Documentation Location
 
-**All Blocks documentation is in `node_modules/@aws-blocks/blocks/README.md`:**
+**All Blocks documentation comes from `npx --no -- cdk-blocks docs`:**
 
-The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Read the README to discover available Building Blocks and their usage.
+The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Run `npx --no -- cdk-blocks docs` to list the Building Blocks, and `npx --no -- cdk-blocks docs <block>` for one block's usage.
 
 ## For Humans
 
@@ -83,7 +83,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 - **Backend:** `aws-blocks/index.ts` — Define APIs and Building Blocks
 - **Infrastructure:** Inferred from code, works locally and on AWS
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <block>` prints one.**
 
 ## Stack naming
 

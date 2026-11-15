@@ -15,8 +15,8 @@
  * The schema lives in aws-blocks/migrations/*.sql — numbered files that run once,
  * automatically, on first query locally and on deploy in AWS.
  *
- * For the full list of blocks and how to use them, see:
- *   node_modules/@aws-blocks/blocks/README.md
+ * For the full list of blocks and how to use them, run:
+ *   npx --no -- cdk-blocks docs   (one block: npx --no -- cdk-blocks docs <block>)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import {
@@ -33,7 +33,7 @@ import {
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Email + password sign-in (npx --no -- cdk-blocks docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the caller
 // submits it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {
