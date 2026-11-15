@@ -4,6 +4,12 @@
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
   an arm named like another type already does.
+- Accept `build` 5, which `build_runner` 2.17.1 requires; `build` 5.0.0 is the
+  retracted 4.1.0 republished as a major, and only packages that
+  implement `BuildStep` are affected
+  ([dart-lang/build#5223](https://github.com/dart-lang/build/issues/5223)).
+  `build` 4 stays accepted, so consumers on `mockito` or other `build <5`
+  packages still resolve.
 - **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
