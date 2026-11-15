@@ -167,13 +167,7 @@ MFA and passkeys apply only to email + password users; federated users get MFA f
 
 ## Building Block documentation
 
-Every Building Block ships its docs inside the `@aws-blocks/blocks` package under `docs/<block>/`: each `docs/<block>/` folder contains that block's `README.md`, plus `API.md`, `DESIGN.md`, and `CHANGELOG.md` where present. To read them, locate the bundled folder:
-
-```bash
-node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
-```
-
-If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`), the framework's own `API.md`, `TROUBLESHOOTING.md`, and `CHANGELOG.md` (version history — read when troubleshooting), plus one subfolder per block; the catalog below lists every block.
+Every Building Block ships its docs inside the `@aws-blocks/blocks` package, and `cdk-blocks docs` prints them by name for the version this app has installed: `npx --no -- cdk-blocks docs` lists the blocks, `npx --no -- cdk-blocks docs <block>` prints a block's README (add `--api` for its API report), and a name such as `ApiError` or `ifFieldEquals` prints its import line, declaration and the docs about it. `npx --no -- cdk-blocks docs --help` lists the rest. The catalog below lists every block.
 
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |

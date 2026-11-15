@@ -1,7 +1,7 @@
 import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from '@aws-blocks/blocks';
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
 // Hover over Scope below to see the docstring with complete Building Block index
 
 const scope = new Scope('my-app');
@@ -27,7 +27,7 @@ new Dashboard(scope, 'dashboard', {
   metrics: { metrics, metricConfigs: [{ name: 'OrdersPlaced' }] },
 });
 
-// Auth: email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Auth: email + password sign-in (npx --no -- cdk-blocks docs Auth).
 // `authApi` is the sign-up, sign-in and sign-out API a client calls. Sign-up
 // confirms the email address with a 6-digit code; once the caller submits it
 // they are signed in automatically. On AWS, Cognito emails the code.

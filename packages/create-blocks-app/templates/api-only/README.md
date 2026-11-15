@@ -12,7 +12,7 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more). `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
@@ -130,4 +130,4 @@ Your CloudFormation stack names derive from the `stackId` in
 This template is backend-only. The `backend` template's README documents adding a
 Vite/React frontend and `Hosting` — the same steps apply here.
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).**
