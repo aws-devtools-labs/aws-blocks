@@ -762,6 +762,63 @@ describe('per-app dev config', () => {
 		assert.deepStrictEqual(resolveDevConfig(fixtureApp({})), { source: 'none' });
 	});
 
+	it('detects astro and nuxt, and starts each on the frontend port', () => {
+		assert.deepStrictEqual(resolveDevConfig(fixtureApp({ dependencies: { astro: '*' } })), {
+			frontendCommand: 'npx astro dev --port 3100',
+			frontendPort: 3100,
+			source: 'astro',
+		});
+		assert.deepStrictEqual(resolveDevConfig(fixtureApp({ devDependencies: { nuxt: '*' } })), {
+			frontendCommand: 'npx nuxt dev --port 3100',
+			frontendPort: 3100,
+			source: 'nuxt',
+		});
+		assert.strictEqual(
+			resolveDevConfig(fixtureApp({ dependencies: { astro: '*' } }), { 'frontend-port': '3200' }).frontendCommand,
+			'npx astro dev --port 3200',
+		);
+		assert.strictEqual(
+			resolveDevConfig(fixtureApp({ dependencies: { nuxt: '*' }, blocks: { dev: { frontendPort: 3300 } } }))
+				.frontendCommand,
+			'npx nuxt dev --port 3300',
+		);
+	});
+
+	it('detects the framework before the vite it builds on, and next before every other', () => {
+		// Astro and Nuxt run Vite themselves, and an app can also list vite: `npx vite` would not serve its pages.
+		assert.strictEqual(
+			resolveDevConfig(fixtureApp({ devDependencies: { vite: '*', astro: '*' } })).source,
+			'astro',
+		);
+		assert.strictEqual(resolveDevConfig(fixtureApp({ devDependencies: { vite: '*', nuxt: '*' } })).source, 'nuxt');
+		// The order in which Hosting picks the adapter that builds the app: next, then nuxt, then astro.
+		assert.strictEqual(resolveDevConfig(fixtureApp({ dependencies: { astro: '*', nuxt: '*' } })).source, 'nuxt');
+		assert.strictEqual(
+			resolveDevConfig(fixtureApp({ dependencies: { astro: '*', nuxt: '*', vite: '*', next: '*' } })).source,
+			'next',
+		);
+	});
+
+	it('keeps a frontendCommand you set, and "frontend": false, over a detected astro or nuxt', () => {
+		for (const dependency of ['astro', 'nuxt']) {
+			const own = fixtureApp({
+				dependencies: { [dependency]: '*' },
+				blocks: { dev: { frontendCommand: 'npm run web', frontendPort: 4321 } },
+			});
+			assert.strictEqual(resolveDevConfig(own).frontendCommand, 'npm run web', dependency);
+			assert.strictEqual(resolveDevConfig(own).source, 'package.json', dependency);
+			const flagged = resolveDevConfig(fixtureApp({ dependencies: { [dependency]: '*' } }), {
+				'frontend-command': 'npm run web',
+			});
+			assert.strictEqual(flagged.frontendCommand, 'npm run web', dependency);
+			const backendOnly = fixtureApp({
+				dependencies: { [dependency]: '*' },
+				blocks: { dev: { frontend: false } },
+			});
+			assert.strictEqual(resolveDevConfig(backendOnly).frontendCommand, undefined, dependency);
+		}
+	});
+
 	it('reads a package.json that starts with a UTF-8 byte order mark, as npm does', () => {
 		const root = fixtureApp({});
 		const path = join(root, 'package.json');

@@ -171,7 +171,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Run the app locally, with reload; no AWS',
 		description:
 			'Run the app locally against local mocks, with reload on save. No AWS account is needed.\n' +
-			'The frontend command comes from package.json "blocks.dev", or is detected from vite or next.',
+			'The frontend command comes from package.json "blocks.dev", or is detected from next, nuxt, astro or vite.',
 		flags: [
 			{
 				name: 'port',

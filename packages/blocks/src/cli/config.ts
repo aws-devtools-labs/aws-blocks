@@ -7,10 +7,11 @@
  *     "blocks": { "dev": { "port": 3000, "frontendPort": 3100 } }
  *
  * Without `blocks.dev.frontendCommand`, the frontend is detected from the app's
- * dependencies: `next` runs the Next.js dev server, `vite` runs Vite, and
- * neither runs the backend only. A detected dev server listens on
- * `frontendPort` (default 3100). `"frontend": false` runs the backend only, as
- * `--no-frontend` does. Command-line flags override all of these.
+ * dependencies: `next` runs the Next.js dev server, `nuxt` runs Nuxt, `astro`
+ * runs Astro, `vite` runs Vite, and none of them runs the backend only. A
+ * detected dev server listens on `frontendPort` (default 3100).
+ * `"frontend": false` runs the backend only, as `--no-frontend` does.
+ * Command-line flags override all of these.
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,7 +39,7 @@ export interface DevPackageConfig extends DevConfig {
 
 export interface ResolvedDevConfig extends DevConfig {
 	/** Where the frontend setting came from. */
-	source: 'flags' | 'package.json' | 'vite' | 'next' | 'none';
+	source: 'flags' | 'package.json' | (typeof FRONTENDS)[number]['dependency'] | 'none';
 }
 
 interface AppPackageJson {
@@ -49,9 +50,20 @@ interface AppPackageJson {
 
 const DEFAULT_FRONTEND_PORT = 3100;
 
-/** The frontend dev servers that auto-detection knows, by dependency name, in priority order. */
+/**
+ * The frontend dev servers that auto-detection knows, by dependency name, in priority order: the order in
+ * which Hosting picks the adapter that builds the app, with `vite` last, because Nuxt and Astro apps can
+ * list `vite` too and `npx vite` does not serve their pages. A SvelteKit app lists `vite` and runs it.
+ *
+ * Each command binds the loopback interface and takes the port the dev server proxies to. `vite` exits
+ * when the port is taken (`--strictPort`). `nuxt dev` and `astro dev` have no such flag and move to
+ * another port, so the app answers 502 until the frontend port is free; the dev server frees a port
+ * that an earlier run left bound before it starts the frontend.
+ */
 const FRONTENDS = [
 	{ dependency: 'next', command: (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}` },
+	{ dependency: 'nuxt', command: (port: number) => `npx nuxt dev --port ${port}` },
+	{ dependency: 'astro', command: (port: number) => `npx astro dev --port ${port}` },
 	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
 ] as const;
 
@@ -229,6 +241,6 @@ export function frontendPortWarning(config: ResolvedDevConfig): string | undefin
 	return (
 		`the frontend command ${JSON.stringify(config.frontendCommand)} does not contain the frontend port ${port}, ` +
 		'which the dev server proxies to; if the frontend listens on another port, the app answers 502. ' +
-		'Put the port in the command, or drop "frontendCommand" so cdk-blocks dev detects next or vite and starts it on that port.'
+		'Put the port in the command, or drop "frontendCommand" so cdk-blocks dev detects next, nuxt, astro or vite and starts it on that port.'
 	);
 }
