@@ -10,6 +10,7 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { pathToFileURL } from 'node:url';
 import semver from 'semver';
 import { spawn } from './spawn.js';
 import { withBuildProfile } from './shared/build_profile.js';
@@ -422,5 +423,166 @@ void describe('astroAdapter — app build environment', () => {
     astroAdapter({ projectDir: tmp });
     assert.equal(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
     assert.equal(buildEnv?.PATH, process.env.PATH);
+  });
+});
+
+// Only `dist/` is uploaded for the server function, without the app's
+// `node_modules`. An app that names `@astrojs/node` itself must therefore be
+// built with its dependencies bundled, or the server exits at start with
+// ERR_MODULE_NOT_FOUND on the first bare import.
+void describe('astroAdapter — build of an app that configures its own adapter', () => {
+  type VitePlugin = {
+    name?: string;
+    apply?: 'build' | 'serve';
+    config?: () => { ssr?: { noExternal?: unknown } };
+  };
+  type BuiltConfig = {
+    output?: string;
+    adapter?: unknown;
+    integrations?: unknown;
+    image?: unknown;
+    vite: { define?: unknown; plugins: VitePlugin[]; ssr?: { external?: unknown; noExternal?: unknown } };
+  };
+
+  let tmp: string;
+  /** argv of every command the adapter ran. */
+  let commands: string[][];
+  /** Copy of the config the build was pointed at (`--config`), if any. */
+  let buildConfigCopy: string | undefined;
+
+  const writeConfig = (adapterName: string, output = "output: 'server',"): void => {
+    fs.writeFileSync(
+      path.join(tmp, 'astro.config.mjs'),
+      `export default {
+  ${output}
+  adapter: { name: '${adapterName}', hooks: {} },
+  integrations: [{ name: 'user-integration', hooks: {} }],
+  image: { service: { entrypoint: 'astro/assets/services/noop' } },
+  vite: {
+    define: { __USER__: '1' },
+    plugins: [{ name: 'user-plugin' }],
+    ssr: { external: ['kept-external'], noExternal: ['some-pkg'] },
+  },
+};
+`,
+    );
+  };
+
+  // Both configs are files written at run time, so they can only be loaded
+  // by path.
+  const loadConfigs = async (): Promise<{ built: BuiltConfig; app: BuiltConfig }> => {
+    assert.ok(buildConfigCopy, 'the build must run with a config that bundles the server dependencies');
+    const built: { default: BuiltConfig } = await import(pathToFileURL(buildConfigCopy).href);
+    const app: { default: BuiltConfig } = await import(pathToFileURL(path.join(tmp, 'astro.config.mjs')).href);
+    return { built: built.default, app: app.default };
+  };
+
+  /**
+   * `ssr.noExternal` as Vite resolves it for `command`: a plugin applies to
+   * its `apply` command only, and `true` from a plugin's `config` hook wins
+   * over a list in the config.
+   */
+  const resolvedNoExternal = (vite: BuiltConfig['vite'], command: 'build' | 'serve'): unknown => {
+    const fromPlugins = vite.plugins
+      .filter((plugin) => plugin.apply === undefined || plugin.apply === command)
+      .map((plugin) => plugin.config?.().ssr?.noExternal);
+    return fromPlugins.includes(true) ? true : vite.ssr?.noExternal;
+  };
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-adapter-user-adapter-'));
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'astro'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'node_modules', 'astro', 'package.json'),
+      JSON.stringify({ name: 'astro', version: '5.0.0' }),
+    );
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'app', scripts: { build: 'astro build' } }));
+    commands = [];
+    buildConfigCopy = undefined;
+    // Stand in for `astro build`: keep the config it was pointed at (the
+    // adapter removes its own file after the build) and emit a server entry.
+    mock.method(spawn, 'sync', (bin: string, args: readonly string[]) => {
+      commands.push([bin, ...args]);
+      const flag = args.indexOf('--config');
+      if (flag !== -1) {
+        // Two directories deep, like the original, so its relative import of
+        // the app's config still resolves.
+        const copyDir = path.join(tmp, 'node_modules', '.copy-for-test');
+        fs.mkdirSync(copyDir, { recursive: true });
+        buildConfigCopy = path.join(copyDir, 'build-config.mjs');
+        fs.copyFileSync(path.join(tmp, args[flag + 1]), buildConfigCopy);
+      }
+      const serverDir = path.join(tmp, 'dist', 'server');
+      fs.mkdirSync(serverDir, { recursive: true });
+      fs.writeFileSync(path.join(serverDir, 'entry.mjs'), 'export const handler = () => {};');
+    });
+  });
+  afterEach(() => {
+    mock.restoreAll();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('bundles every dependency into the server output of an app that wires @astrojs/node', async () => {
+    writeConfig('@astrojs/node');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    const { built } = await loadConfigs();
+    assert.strictEqual(resolvedNoExternal(built.vite, 'build'), true, 'the build leaves no dependency as a bare import');
+  });
+
+  it('bundles for the default output too, which emits a server for on-demand pages', async () => {
+    writeConfig('@astrojs/node', '');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    const { built } = await loadConfigs();
+    assert.strictEqual(resolvedNoExternal(built.vite, 'build'), true);
+    assert.strictEqual(built.output, undefined, 'the output mode stays the app\'s');
+  });
+
+  it('keeps the adapter and the rest of the config the app wrote', async () => {
+    writeConfig('@astrojs/node');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    const { built, app } = await loadConfigs();
+    assert.strictEqual(built.adapter, app.adapter, 'the app keeps its own adapter instance');
+    assert.strictEqual(built.output, 'server');
+    assert.strictEqual(built.integrations, app.integrations);
+    assert.strictEqual(built.image, app.image);
+    assert.strictEqual(built.vite.define, app.vite.define);
+    assert.deepStrictEqual(built.vite.ssr, app.vite.ssr);
+    assert.strictEqual(built.vite.plugins[0], app.vite.plugins[0], 'the app\'s Vite plugins still run, first');
+    // The dev server `astro build` starts to sync content collections must
+    // see the app's own setting: `noExternal: true` there breaks CJS packages.
+    assert.deepStrictEqual(resolvedNoExternal(built.vite, 'serve'), ['some-pkg']);
+  });
+
+  it('changes nothing in the project', () => {
+    writeConfig('@astrojs/node');
+    const packageJson = fs.readFileSync(path.join(tmp, 'package.json'), 'utf-8');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    assert.deepStrictEqual(
+      commands.map(([bin, ...args]) => [bin, ...args.slice(0, 2)]),
+      [['npm', 'run', 'build']],
+      'nothing is installed: the app already has its adapter',
+    );
+    assert.deepStrictEqual(
+      fs.readdirSync(tmp).sort(),
+      ['astro.config.mjs', 'dist', 'node_modules', 'package.json'],
+      'the build-only config is removed after the build',
+    );
+    assert.strictEqual(fs.readFileSync(path.join(tmp, 'package.json'), 'utf-8'), packageJson);
+  });
+
+  it('builds an app that wires another adapter from its own config, as before', () => {
+    writeConfig('@example/other-adapter');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    assert.deepStrictEqual(commands, [['npm', 'run', 'build']]);
   });
 });

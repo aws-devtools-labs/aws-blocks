@@ -22,7 +22,11 @@
  * imports the user's config and force-merges `output: 'server'` +
  * `adapter: node({ mode: 'standalone' })`. The bridge is removed after
  * build (success or failure). When the user already configured
- * `@astrojs/node`, the bridge is skipped.
+ * `@astrojs/node`, their adapter and config are kept, and the bridge
+ * only makes the build bundle the app's dependencies into the server
+ * output, because the Lambda zip ships `dist/` without `node_modules`.
+ * Any other user-configured adapter is built from the user's config
+ * as-is.
  */
 import { spawn } from './spawn.js';
 import { appBuildEnv } from './shared/app_build_env.js';
@@ -62,6 +66,10 @@ export type AstroAdapterOptions = {
    * payload ceiling. Set to `Infinity` or `0` to opt out (not
    * recommended; oversized requests then fail mid-stream at the
    * platform boundary instead of with a clean 413).
+   *
+   * Applies when the adapter wires `@astrojs/node` for the app. An app
+   * that configures `@astrojs/node` itself keeps its own adapter
+   * options, and this value is not applied to it.
    */
   bodySizeLimit?: number;
 };
@@ -158,16 +166,25 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     // canonical `[NoAdapterInstalled]` build crash.
     const userConfiguredAdapter = config.adapter !== undefined;
     const useBridge = userOutput !== 'static' && !userConfiguredAdapter;
+    // The user's own `@astrojs/node` stays, in any output mode (a `static`
+    // config with an adapter still emits a server for its on-demand
+    // pages). Its build must bundle the app's dependencies like the
+    // transparent build does: only `dist/` is uploaded, so an import the
+    // build leaves pointing at `node_modules` crashes the server at start.
+    // `@astrojs/node` is the name that adapter registers its integration under.
+    const bundleForUserNodeAdapter = config.adapter?.name === '@astrojs/node';
     let cleanupBridge: (() => void) | undefined;
     if (useBridge) {
-      cleanupBridge = installAstroBridge(projectDir, bodySizeLimit);
+      cleanupBridge = installAstroBridge(projectDir, { adapter: 'node', bodySizeLimit });
+    } else if (bundleForUserNodeAdapter) {
+      cleanupBridge = installAstroBridge(projectDir, { adapter: 'user' });
     } else if (userOutput !== 'static') {
       process.stderr.write(
         '✨ Detected user-configured adapter in astro.config; using user config as-is.\n',
       );
     }
     try {
-      runAstroBuild(projectDir, buildCommand, useBridge);
+      runAstroBuild(projectDir, buildCommand, cleanupBridge !== undefined);
     } finally {
       cleanupBridge?.();
     }
@@ -327,9 +344,10 @@ type AstroConfigShape = {
    * adapter when this field is set — checking node_modules alone is
    * unreliable because `@astrojs/node` can land in node_modules from a
    * prior install or as a transitive dep without ever being wired in
-   * astro.config.
+   * astro.config. Its `name` tells `@astrojs/node` from any other
+   * adapter.
    */
-  adapter?: unknown;
+  adapter?: { name?: string };
   image?: {
     domains?: string[];
     remotePatterns?: unknown;
@@ -404,9 +422,20 @@ const assertAstroVersion = (projectDir: string): void => {
 const userHasAstroJsNode = (projectDir: string): boolean =>
   projectHasPackage('@astrojs/node', projectDir);
 
+/**
+ * What the config bridge changes for the build:
+ *   - `node`: the app wired no adapter, so the bridge sets `output: 'server'`
+ *     and `@astrojs/node` standalone, and bundles the app's dependencies.
+ *   - `user`: the app wired `@astrojs/node` itself, so the bridge keeps the
+ *     app's config and only bundles the app's dependencies.
+ */
+type AstroBridgeMode =
+  | { adapter: 'node'; bodySizeLimit: number }
+  | { adapter: 'user' };
+
 const installAstroBridge = (
   projectDir: string,
-  bodySizeLimit: number,
+  mode: AstroBridgeMode,
 ): (() => void) => {
   const userConfigPath = findAstroConfigPath(projectDir);
   if (!userConfigPath) {
@@ -435,14 +464,23 @@ const installAstroBridge = (
   );
   fs.writeFileSync(
     path.join(bridgeDir, BRIDGE_CONFIG_FILE),
-    buildBridgeConfigSource(userConfigRelative, bodySizeLimit),
+    mode.adapter === 'node'
+      ? buildBridgeConfigSource(userConfigRelative, mode.bodySizeLimit)
+      : buildBundlingBridgeConfigSource(userConfigRelative),
     'utf-8',
   );
 
-  installAstroJsNode(projectDir);
-  process.stderr.write(
-    '✨ Installed Astro bridge (transparent build)\n',
-  );
+  if (mode.adapter === 'node') {
+    installAstroJsNode(projectDir);
+    process.stderr.write(
+      '✨ Installed Astro bridge (transparent build)\n',
+    );
+  } else {
+    process.stderr.write(
+      '✨ Detected @astrojs/node in astro.config; keeping it and bundling the ' +
+        "app's dependencies into the server output for this build.\n",
+    );
+  }
 
   return (): void => {
     try {
@@ -598,6 +636,41 @@ export default {
       // \`vite.ssr.noExternal: ['my-pkg']\` in your astro.config.
       noExternal: true,
     },
+  },
+};
+`;
+
+/**
+ * Bridge for an app that wired `@astrojs/node` itself: the app's config is
+ * passed through unchanged, plus one Vite plugin that sets
+ * `ssr.noExternal: true`, so the server output imports nothing from the
+ * app's `node_modules` (which the Lambda zip does not contain).
+ *
+ * The setting comes from a plugin with `apply: 'build'` rather than from
+ * `vite.ssr` so that it reaches the Vite build only. `astro build` also
+ * starts a Vite dev server to sync content collections, and there
+ * `noExternal: true` runs CJS-only packages through the module runner,
+ * which fails with "module is not defined".
+ *
+ * A package the app lists in `vite.ssr.external` stays external: Vite gives
+ * an explicit `external` list priority over `noExternal: true`.
+ */
+const buildBundlingBridgeConfigSource = (
+  userConfigRelativePath: string,
+): string => `import userConfig from '${userConfigRelativePath}';
+
+export default {
+  ...userConfig,
+  vite: {
+    ...(userConfig.vite ?? {}),
+    plugins: [
+      ...((userConfig.vite ?? {}).plugins ?? []),
+      {
+        name: 'aws-blocks-hosting:bundle-server-dependencies',
+        apply: 'build',
+        config: () => ({ ssr: { noExternal: true } }),
+      },
+    ],
   },
 };
 `;
