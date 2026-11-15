@@ -21,5 +21,12 @@ try {
 	process.exit(1);
 }
 
+// A reader that stops early (`| head`) closes the pipe: stop quietly, as a Unix tool that gets SIGPIPE does,
+// rather than with Node's unhandled 'error' event and its stack.
+process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+	if (error.code === 'EPIPE') process.exit(0);
+	throw error;
+});
+
 // Set explicitly: Node does not exit 130 on its own once a SIGINT handler is installed.
 process.exitCode = await main(process.argv.slice(2));

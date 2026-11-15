@@ -249,6 +249,7 @@ npx --no -- cdk-blocks --version
 | | `cdk-blocks sandbox preview` | Deploy the sandbox with a hosted preview of the frontend once and exit; prints the preview URL |
 | | `cdk-blocks sandbox destroy [--yes]` | Delete your sandbox stack; never production |
 | | `cdk-blocks sandbox console` | Open the AWS console for the sandbox stack |
+| | `cdk-blocks docs [name...] [--api] [--section <topic>] [--exports [filter...]] [--search <term>]` | Print the Building Block docs installed with `@aws-blocks/blocks`, by name: the blocks, a block's README or API report, an export, option or `Owner.member` with its import line and declaration, one section, or matching lines |
 | Deploy | `cdk-blocks deploy [--wait-live[=SECONDS]]` | Deploy the production stack; the target is printed first |
 | | `cdk-blocks destroy [--yes]` | Delete the production stack, after a confirmation |
 | | `cdk-blocks whoami` | Show the AWS identity and Region that `deploy` uses (with `.env.production` applied), and the stacks that `sandbox` and `deploy` would affect |
