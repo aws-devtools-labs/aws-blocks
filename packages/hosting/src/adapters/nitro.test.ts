@@ -626,6 +626,25 @@ void describe('nitroAdapter — preset + feature validation', () => {
     assert.strictEqual(presetSeen, 'aws-lambda');
   });
 
+  void it('runs the app build without the cdk condition a synth sets in NODE_OPTIONS', () => {
+    writePackageJson(tmpDir);
+    let buildEnv: Record<string, string> | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      buildEnv = opts?.env;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: opts?.env?.NITRO_PRESET } });
+    });
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=4096';
+    try {
+      nitroAdapter({ projectDir: tmpDir });
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+    }
+    assert.strictEqual(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
+    assert.strictEqual(buildEnv?.NITRO_PRESET, 'aws-lambda');
+  });
+
   void it('Web Functions start node-server from index.mjs (no run.sh)', () => {
     writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: 'node-server' } });
     writePackageJson(tmpDir);

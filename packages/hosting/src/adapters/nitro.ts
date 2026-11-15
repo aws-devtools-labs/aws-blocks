@@ -15,6 +15,7 @@
  * only sees compute resources, route patterns, and a static-assets dir.
  */
 import { spawn } from './spawn.js';
+import { appBuildEnv } from './shared/app_build_env.js';
 import { validateCacheControl } from './shared/cache_control.js';
 import {
   warnIfVercelCron,
@@ -512,6 +513,8 @@ const cleanNitroBuildCaches = (projectDir: string): void => {
  * TanStack Start, and standalone Nitro apps because each one wires its
  * own `build` script. We pass NITRO_PRESET via env so any Nitro-backed
  * framework targets the right runtime without per-framework branching.
+ * The build runs without the synth's `cdk` export condition (see
+ * `appBuildEnv`).
  */
 const runNitroBuild = (
   projectDir: string,
@@ -530,7 +533,7 @@ const runNitroBuild = (
     spawn.sync(bin!, args, {
       cwd: projectDir,
       stdio: 'inherit',
-      env: { ...process.env, NITRO_PRESET: preset },
+      env: appBuildEnv({ NITRO_PRESET: preset }),
     });
   } catch (error) {
     throw new HostingError(

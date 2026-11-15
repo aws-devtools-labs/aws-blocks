@@ -95,6 +95,21 @@ void describe('runBuild', () => {
     assert.ok(result.stdout.includes('hello_from_env'));
   });
 
+  void it('runs the command without the cdk condition a synth sets in NODE_OPTIONS', () => {
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=512';
+    try {
+      const result = runBuild({
+        command: 'node -e "process.stdout.write(process.env.NODE_OPTIONS)"',
+        cwd: tmpDir,
+      });
+      assert.strictEqual(result.stdout, '--max-old-space-size=512');
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+    }
+  });
+
   void it('uses the specified working directory', () => {
     const subDir = path.join(tmpDir, 'subdir');
     fs.mkdirSync(subDir);

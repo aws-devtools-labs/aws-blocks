@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { HostingError } from '../hosting_error.js';
+import { appBuildEnv } from '../adapters/shared/app_build_env.js';
 
 export type BuildRunnerOptions = {
   /**
@@ -48,6 +49,8 @@ const formatBuildOutput = (output: string): string => {
  *
  * Runs the user's build command (e.g., 'npm run build') synchronously
  * and returns the output. Throws HostingError if the command fails.
+ * The command runs without the synth's `cdk` export condition in
+ * `NODE_OPTIONS` (see `appBuildEnv`).
  */
 export const runBuild = (options: BuildRunnerOptions): BuildRunnerResult => {
   const { command, cwd, env } = options;
@@ -60,10 +63,7 @@ export const runBuild = (options: BuildRunnerOptions): BuildRunnerResult => {
     // Shell execution is intentional to support compound commands (e.g., "npm ci && npm run build").
     const stdout = execSync(command, {
       cwd,
-      env: {
-        ...process.env,
-        ...env,
-      },
+      env: appBuildEnv(env),
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 50 * 1024 * 1024, // 50 MB
