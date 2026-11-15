@@ -101,11 +101,15 @@ await store.delete('lock', { ifValueEquals: expectedVal });
 
 All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), so `error.status === 409` on the client and `isBlocksError` still matches by name. A conflict is flagged **retriable** when a value check participated (a stale-value optimistic-lock conflict — re-read and retry may succeed). For `put`, `ifNotExists` and `ifValueEquals` compose with OR, so a failure whenever `ifValueEquals` was set — including the combined `ifNotExists`+`ifValueEquals` case — is the stale-value case and is retriable; a pure `ifNotExists` `put` conflict is **not** retriable. For `delete` (independent checks, not OR), a pure `ifExists` conflict — or a combined `ifExists`+`ifValueEquals` conflict — is **not** retriable; only a value-only `ifValueEquals` delete conflict is. A blind retry of a non-retriable conflict fails identically.
 
+**A conditional write is atomic on one key.** A `put` or `delete` with `ifNotExists`, `ifExists` or `ifValueEquals` checks the condition and writes in one step: on AWS it is a single DynamoDB request with a condition expression, so no other write to that key can land between the check and the write, and the local mock does the same inside the dev server. Two concurrent `put(key, value, { ifNotExists: true })` calls therefore create the key once; the other call fails with `ConditionalCheckFailed`. That makes `ifNotExists` a safe idempotent create and `ifValueEquals` a compare-and-swap.
+
+**It is not a multi-item transaction.** Each condition covers the one key being written, so nothing makes writes to several keys succeed or fail together. For a transaction across several rows, use a SQL block: `DistributedDatabase` (Aurora DSQL), or `Database` (PostgreSQL) for large transactions or ones that must not fail at commit under contention.
+
 ### Error Handling
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable when a value check participated (any `put` conflict where `ifValueEquals` was set, since `put` composes with OR; a value-only `ifValueEquals` `delete` conflict) — not retriable for a pure `ifNotExists` `put` or any `ifExists` `delete`. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. Serializes to JSON-RPC **409 (Conflict)** (the HTTP status is 409 too when the namespace sets `httpErrorStatus: true`); retriable when a value check participated (any `put` conflict where `ifValueEquals` was set, since `put` composes with OR; a value-only `ifValueEquals` `delete` conflict) — not retriable for a pure `ifNotExists` `put` or any `ifExists` `delete`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value failed the configured `schema` validation. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | The serialized item exceeds the 400 KB DynamoDB per-item size limit. (In the AWS layer, DynamoDB raises a generic `ValidationException`; KVStore re-maps the size-specific case to this name.) |
 
@@ -197,7 +201,9 @@ const legacy = new KVStore(scope, 'legacy', {
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior.
+Mock data persists to disk at `.bb-data/{fullId}/store.json` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior.
+
+**Concurrent conditional writes:** the mock keeps the store in the dev server's memory and checks a condition and applies the write with no other request in between, so concurrent conditional writes to one key behave as on AWS (one wins, the others fail with `ConditionalCheckFailed`). It reads `store.json` only when the store is constructed, so two processes on the same `.bb-data` (two dev servers, or a script beside the dev server) don't see each other's writes and can overwrite them.
 
 
 

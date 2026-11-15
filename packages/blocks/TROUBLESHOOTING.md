@@ -108,6 +108,18 @@ lsof -i :3000
 pkill -f "tsx watch"
 ```
 
+## `502 Frontend server unavailable` in local dev
+
+`npm run dev` serves the app on port 3000 (`blocks.dev.port`) and passes page requests on to the frontend's own dev server (Vite or Next.js), which listens on `blocks.dev.frontendPort` (default 3100). When nothing answers on that port, the page request gets HTTP 502 with the body `Frontend server unavailable`. API calls to `/aws-blocks/api` keep working, so the backend is not the problem. The dev server's output says which case it is:
+
+| What the dev server printed | Cause | Fix |
+|---|---|---|
+| Nothing yet; the first page load came right after `npm run dev` | The frontend is still starting | Wait for the `➜  http://localhost:3000/` line, then reload |
+| `Frontend did not start: ...` and `(API only — frontend unavailable)` | The frontend did not listen on its port within about 30 seconds: it failed to start (its errors are printed above this line), or port 3100 is held by a process the dev server could not stop (at startup it stops a leftover listener on the port and says so when it cannot) | Fix the error the frontend printed; for a busy port, stop the process holding it (`lsof -i :3100`) or set another port with `"blocks": { "dev": { "frontendPort": 3200 } }` in `package.json`; then restart `npm run dev` |
+| `Frontend dev server exited (...); restarting in ...ms` | The frontend crashed; the dev server restarts it | Usually nothing: reload once it is back. If it keeps crashing, fix the error printed before the exit |
+| `... exceeded 5 restarts within 10s — leaving it down` | The frontend crashed more than 5 times in 10 seconds | Fix the error printed above, then restart `npm run dev` |
+| A warning that the frontend command does not contain the frontend port | A custom `blocks.dev.frontendCommand` starts the frontend on another port than the one the dev server proxies to | Put the port in the command, or remove `frontendCommand` so the dev server detects Vite or Next.js and starts it on `frontendPort` |
+
 ## Auth cookies not persisting
 
 Session cookies are `HttpOnly; SameSite=Lax`, plus `Secure` over HTTPS. With `crossDomain: true` (frontend and API on different domains) they are `HttpOnly; Secure; SameSite=None; Partitioned` instead (`Partitioned` is dropped on localhost). In local dev, the dev server serves the app and API from one origin, so cookies work without extra setup. If testing with `curl`, you need to save and resend cookies:

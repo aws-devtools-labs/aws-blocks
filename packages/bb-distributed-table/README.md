@@ -152,6 +152,10 @@ await table.delete(key, { ifFieldEquals: { status: 'archived' } });
 
 All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed` (the value is `'ConditionalCheckFailedException'`; match the constant, not a string or the message). They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically). Left uncaught, the error reaches the client under that name; when your API promises its own error name, catch it and throw that `ApiError` instead (see [Error Handling](#error-handling)).
 
+**A conditional write is atomic on one item on AWS.** A `put` or `delete` with `ifNotExists`, `ifExists` or `ifFieldEquals` is a single DynamoDB request with a condition expression, so no other write to that item can land between the check and the write. Two concurrent `put(item, { ifNotExists: true })` calls for one key therefore create the item once; the other call fails with `ConditionalCheckFailed`. This makes `ifNotExists` a safe uniqueness or idempotency guard and `ifFieldEquals` a compare-and-swap.
+
+**It is not a multi-item transaction.** Each condition covers the one item being written, and `putBatch()` / `deleteBatch()` take no conditions, so nothing makes writes to several items succeed or fail together. For a transaction across several rows, use a SQL block: `DistributedDatabase` (Aurora DSQL), or `Database` (PostgreSQL) for large transactions or ones that must not fail at commit under contention.
+
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
 ### Reads and schema evolution
@@ -199,7 +203,7 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable only for `ifFieldEquals` optimistic-lock conflicts (not `ifNotExists` / `ifExists`). |
+| `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to JSON-RPC **409 (Conflict)** (the HTTP status is 409 too when the namespace sets `httpErrorStatus: true`); retriable only for `ifFieldEquals` optimistic-lock conflicts (not `ifNotExists` / `ifExists`). |
 | `DistributedTableErrors.ValidationFailed` | `ValidationFailedException` | An item failed the configured `schema` validation on `put()` / `putBatch()`. |
 | `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The call's input shape is wrong: a key that isn't an object with every key field (`get('alice')`, or a composite key without its sort key), an item without its key fields, `indexes` not given as an object, missing `where`, partition key not given as `{ equals }`, unknown index (the message lists the declared ones), an `order` other than `'asc'` / `'desc'`, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug; the mock and the AWS runtime both throw it before calling DynamoDB. |
 | `DistributedTableErrors.ItemTooLarge` | `ItemTooLargeException` | A `put`/`putBatch` item exceeds DynamoDB's 400 KB per-item size limit. |
@@ -339,7 +343,9 @@ const legacy = new DistributedTable(scope, 'legacy', {
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior. Index queries are implemented via in-memory filtering — correctness is preserved but performance characteristics differ from DynamoDB.
+Mock data persists to disk at `.bb-data/{fullId}/data.json` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior. Index queries are implemented via in-memory filtering — correctness is preserved but performance characteristics differ from DynamoDB.
+
+- **`limit`:** caps the items `query()` yields after the key conditions, in sort-key order, the same as on AWS; there is no cursor locally either (see Paging under [Query](#query)). `scan()` also stops after `limit` items, but in the mock's insertion order locally and DynamoDB's own order on AWS, so the items you get can differ.
 
 
 
