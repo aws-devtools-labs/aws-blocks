@@ -16,7 +16,7 @@ const store = new KVStore(scope, id, options?)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. Pass `{ consistentRead: true }` to read a write that just succeeded (see [Read Consistency](#read-consistency)). |
 | `put(key, value, options?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set; accepts an optional expiry. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a value. |
 | `scan(options?)` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items unless `{ includeExpired: true }`. Expensive on large datasets. |
@@ -61,6 +61,21 @@ await cache.put('config:theme', 'dark');
 - TTL composes with conditional writes: `put(key, value, { ifNotExists: true, ttlSeconds: 60 })`.
 
 TTL is a retention control, not an authorization one. Anything security-sensitive (session validity, token revocation) must still be checked on read.
+
+### Read Consistency
+
+On AWS, `get` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`). A read issued right after a `put` may briefly return `null` or the previous value. When the next step depends on a value that was just written, pass `{ consistentRead: true }`:
+
+```typescript
+await users.put(username, record, { ifNotExists: true });
+
+// Strongly consistent: reflects every write that succeeded before the read
+const fresh = await users.get(username, { consistentRead: true });
+```
+
+- **It costs twice the read capacity** of an eventually consistent read, so leave it off for reads that tolerate a value up to a second old (caches, feature flags).
+- **The local mock is always strongly consistent.** It accepts the option and reads the same way either way, so a missing `consistentRead` never shows up in local tests. Test read-after-write flows in a sandbox.
+- `scan` is always eventually consistent.
 
 ### Conditional Operations
 

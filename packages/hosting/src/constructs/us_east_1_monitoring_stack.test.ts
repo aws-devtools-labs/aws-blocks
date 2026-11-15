@@ -32,6 +32,26 @@ void describe('UsEast1MonitoringStack', () => {
     });
   });
 
+  void it("scopes its key's CloudWatch grant to this account's us-east-1 alarms", () => {
+    build().hasResourceProperties('AWS::KMS::Key', {
+      KeyPolicy: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Condition: {
+              StringEquals: { 'aws:SourceAccount': '123456789012' },
+              ArnLike: {
+                'aws:SourceArn': {
+                  'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-east-1:123456789012:alarm:*']],
+                },
+              },
+            },
+          }),
+        ]),
+      },
+    });
+  });
+
   void it('creates the CloudFront 5xx alarm with full parity to the regional one', () => {
     const template = build();
     template.hasResourceProperties(

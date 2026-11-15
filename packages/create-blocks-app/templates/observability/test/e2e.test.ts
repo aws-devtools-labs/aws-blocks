@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
@@ -46,7 +46,7 @@ async function waitForServer() {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
 }
@@ -86,7 +86,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -129,7 +129,7 @@ async function waitForRecord(predicate: (record: Record<string, unknown>) => boo
   for (let i = 0; i < 25; i++) {
     const [record] = jsonRecords(predicate);
     if (record) return record;
-    await setTimeout(200);
+    await sleep(200);
   }
   return undefined;
 }

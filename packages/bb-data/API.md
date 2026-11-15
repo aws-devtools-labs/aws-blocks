@@ -106,6 +106,9 @@ export interface DatabaseOptions {
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    secretRotation?: boolean | {
+        intervalDays: number;
+    };
     storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }

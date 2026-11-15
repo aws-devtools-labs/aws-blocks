@@ -99,6 +99,28 @@ export interface BlocksDefaults {
 	pointInTimeRecovery: boolean | { retentionDays: number };
 
 	/**
+	 * Whether stateful resources that hold generated credentials rotate them on a
+	 * schedule by default — e.g. the Aurora `postgres` secret a `Database`
+	 * provisions. On in `production`, off in `sandbox`. A block whose service has
+	 * no equivalent ignores it.
+	 *
+	 * `true` rotates on the block's default interval; `false` disables rotation;
+	 * `{ intervalDays: n }` rotates every `n` days (a block validates `n` against
+	 * its service's supported range — Secrets Manager accepts 1–1000 days).
+	 * Rotation only has an interval when it is on, so the two are one field.
+	 *
+	 * Optional, so adding it breaks no hand-written literal: both presets set it,
+	 * and an absent value means off, as for every other optional field here.
+	 *
+	 * Off in `sandbox` because rotation is not free in a throwaway stack: its
+	 * VPC-attached Lambda holds a teardown for minutes on its network interfaces
+	 * (1157s against 622s for a whole stack without rotation, measured once), and
+	 * in a block's own VPC it adds an interface endpoint billed per availability
+	 * zone. Neither buys a stack that rarely outlives one interval anything.
+	 */
+	secretRotation?: boolean | { intervalDays: number };
+
+	/**
 	 * How long CloudWatch Logs keeps log events written by Blocks-managed log
 	 * groups (the core handler Lambda, migration/GSI Lambdas, hosting compute,
 	 * `bb-logger`, and API Gateway access logs) before expiring them. Without a
@@ -183,10 +205,9 @@ export interface BlocksDefaults {
 
 	/**
 	 * Where AWS Blocks stores the secrets it generates for its own Building
-	 * Blocks. It currently applies to the `Realtime` connection token key; other
-	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
-	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
-	 * are not affected.
+	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
+	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
+	 * passed in at the CDK layer) are not affected.
 	 *
 	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
 	 *   per key, with a CloudFormation-generated name and value. The app's
@@ -196,7 +217,7 @@ export interface BlocksDefaults {
 	 *   stacks.
 	 *
 	 * Changing this value on a deployed stack creates new keys in the new store.
-	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * For `Auth`, every signed-in user is signed out once. For `Realtime`, open WebSocket connections keep working; on their next
 	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
 	 * clients without it receive `onDisconnect('error')` and must call
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set
@@ -359,6 +380,9 @@ export const BlocksPresets = {
 		deletionProtection: false,
 		allowedOrigins: ['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$'],
 		pointInTimeRecovery: false,
+		// Off so a sandbox teardown stays quick and a throwaway stack pays for no
+		// endpoint — see the `secretRotation` field doc for the measurements.
+		secretRotation: false,
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
@@ -376,6 +400,7 @@ export const BlocksPresets = {
 		deletionProtection: true,
 		allowedOrigins: [],
 		pointInTimeRecovery: true,
+		secretRotation: true,
 		logRetention: RetentionDays.ONE_YEAR,
 		throttling: { rateLimit: 1000, burstLimit: 2000 },
 		// Off by default even in production: enabling access logging mutates the

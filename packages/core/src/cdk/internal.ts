@@ -52,9 +52,17 @@ export { foreignComputeProblem } from './compute/compute-ownership.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // VPC integration helpers a concrete container compute needs to hook into the
 // central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve
-// subnets, and declare its own requirement so the lazy VPC materializes.
+// subnets, and declare its own requirement so the lazy VPC materializes — plus
+// the finalize step, so a Building Block's tests can run endpoint provisioning.
 export { registerVpcRequirements } from './vpc-requirements-registry.js';
-export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, isVpcInitialized } from './vpc.js';
+export {
+	anyRequirementNeedsVpc,
+	finalizeVpc,
+	getOrCreateVpc,
+	getVpcContext,
+	initializeVpc,
+	isVpcInitialized,
+} from './vpc.js';
 // Resolve the owning backend root (BlocksStack/BlocksBackend), so a container
 // compute can create the shared VPC + ECS cluster once per backend at a fixed id
 // rather than once per compute or per stack.

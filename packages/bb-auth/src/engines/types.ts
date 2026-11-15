@@ -757,7 +757,8 @@ export interface BearerTokens {
 export interface AuthLayer {
 	/**
 	 * Where the session-signing secret comes from. AWS: the `session-secret`
-	 * `AppSetting` child (the same SSM parameter `AuthCognito` uses). Mock:
+	 * framework key (Secrets Manager or SSM, per `defaults.secretsStore`; under
+	 * `'ssm'` the same SSM parameter `AuthCognito` uses). Mock:
 	 * `.bb-data/<fullId>/state.json` (the same file `AuthCognito`'s mock uses).
 	 * Called once, in the constructor; the returned function is called per
 	 * request and should cache.

@@ -18,9 +18,11 @@ dependencies:
   app_links: ^7.0.0
 
 dev_dependencies:
-  # analyzer 14.5.0 (2026-10-06) removed a setter build_runner 2.16.1 still uses, so
-  # `dart run build_runner build` fails to compile. Drop this cap once build_runner ships a fix.
-  analyzer: '<14.5.0'
+  # Not ^2.16.2 like the sibling packages: Flutter 3.41 pins meta 1.17.0, which
+  # admits analyzer 10.0.1 at most and so build_runner 2.15.1 at most. Newer
+  # Flutter admits analyzer 14.5 or later, and pub then resolves build_runner
+  # 2.16.2 or later, which compiles against it. ^2.14.0 admits both, so no cap
+  # is needed.
   build_runner: ^2.14.0
   flutter_test:
     sdk: flutter
