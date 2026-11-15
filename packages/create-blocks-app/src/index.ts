@@ -10,6 +10,7 @@ import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
+import semver from 'semver';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1048,6 +1049,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  import { api } from \'aws-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
+  // Only a backend that hosts the app builds its Next.js; the backend-only templates define no `Hosting`.
+  const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
+  if (backendStack.includes('new Hosting(')) await warnIfNextOutsideHostingRange(targetDir, existingPkg);
 }
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
@@ -1101,6 +1105,49 @@ function printTypeScriptSteps(pkg: PackageDeps): void {
     console.log('(if the script used --noEmit, set "noEmit": true in that tsconfig instead).');
   }
   console.log(`Details: ${TYPESCRIPT_STEPS_URL}`);
+  console.log('');
+}
+
+/**
+ * The `next` versions `Hosting` builds as a server-rendered app when the project
+ * installs no `@opennextjs/aws`: the `next` peer range of the OpenNext version its
+ * Next.js adapter then builds with. A copy of `OPENNEXT_FALLBACK_NEXT_PEER_RANGE`
+ * in `@aws-blocks/hosting` (`src/adapters/nextjs.ts`), which create-blocks-app does
+ * not depend on at runtime; `cli.test.ts` checks that the two are equal.
+ */
+export const HOSTING_NEXT_RANGE = '>=15.5.28 <16 || >=16.4.1';
+
+/**
+ * Warns when an existing project's `next` is outside the range `Hosting` builds as a
+ * server-rendered app, so the project hears of it here and not first from the
+ * hosting build of its first deploy. It is the check the Next.js adapter of
+ * `@aws-blocks/hosting` makes before its OpenNext build: the range is the `next` peer
+ * range of the installed `@opennextjs/aws`, else {@link HOSTING_NEXT_RANGE}. The
+ * version is the installed `next`, else the range package.json declares, which is
+ * outside only when no version it allows is inside (a tag or a path says nothing).
+ * Printed, never applied: upgrading `next` is the project's step.
+ */
+async function warnIfNextOutsideHostingRange(targetDir: string, pkg: PackageDeps): Promise<void> {
+  const declared = pkg.dependencies?.next ?? pkg.devDependencies?.next;
+  if (typeof declared !== 'string') return;
+  // What the project's own node_modules holds of each package: its package.json, or `undefined`.
+  const [openNext, next] = await Promise.all(
+    ['@opennextjs/aws', 'next'].map((name) =>
+      readFile(join(targetDir, 'node_modules', name, 'package.json'), 'utf-8').then((text) => JSON.parse(text), () => undefined),
+    ),
+  );
+  const range: unknown = openNext ? openNext.peerDependencies?.next : HOSTING_NEXT_RANGE;
+  if (typeof range !== 'string' || !semver.validRange(range)) return;
+  const version: string | undefined = typeof next?.version === 'string' && semver.valid(next.version) ? next.version : undefined;
+  // `includePrerelease`, as in the adapter: a canary inside the range is not a mismatch.
+  const inside = version
+    ? semver.satisfies(version, range, { includePrerelease: true })
+    : !semver.validRange(declared) || semver.intersects(declared, range, { includePrerelease: true });
+  if (inside) return;
+  console.log(`⚠️  Next.js: this project has next@${version ?? declared}. \`Hosting\` builds a server-rendered Next.js app with OpenNext,`);
+  console.log(`   which supports next ${range}. Outside that range the hosting build warns and goes on`);
+  console.log('   with a combination OpenNext was not released for. Upgrading `next` is up to you: nothing was changed.');
+  console.log('   A static export (`output: \'export\'`, hosted with `framework: \'static\'`) has no minimum version.');
   console.log('');
 }
 

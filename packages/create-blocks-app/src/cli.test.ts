@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { HOSTING_NEXT_RANGE, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -899,6 +899,67 @@ describe('create-blocks-app auto-detection', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
+  });
+
+  it('warns, without failing or editing, when an existing project\'s next is outside the range Hosting builds server-rendered', () => {
+    // `installed` is the version in node_modules/next, read before the range package.json declares.
+    // `openNextPeer` is the `next` peer range of an @opennextjs/aws the project installs, which Hosting
+    // then builds with and checks against, instead of the OpenNext it falls back to (HOSTING_NEXT_RANGE).
+    type Project = { declared?: string; installed?: string; openNextPeer?: string; template?: string; warns?: string };
+    const projects: Record<string, Project> = {
+      'installed-14': { declared: '^14.2.0', installed: '14.2.35', warns: 'next@14.2.35' },
+      'declared-14': { declared: '^14.2.0', warns: 'next@^14.2.0' },
+      'installed-old-15': { declared: '^15.0.0', installed: '15.5.7', warns: 'next@15.5.7' },
+      'installed-old-16': { declared: '^16.0.0', installed: '16.4.0', warns: 'next@16.4.0' },
+      'installed-15': { declared: '^14.2.0', installed: '15.5.28' },
+      'installed-16': { declared: '^16.0.0', installed: '16.4.1' },
+      // A range that allows a supported version says nothing until it is installed; nor does a tag.
+      'declared-15': { declared: '^15.0.0' },
+      'declared-any': { declared: '*' },
+      'declared-tag': { declared: 'latest' },
+      'own-opennext-inside': { declared: '~15.1.12', installed: '15.1.12', openNextPeer: '~15.1.12 || ^16.1.5' },
+      'own-opennext-outside': { declared: '^15.5.30', installed: '15.5.30', openNextPeer: '~15.1.12 || ^16.1.5', warns: 'next@15.5.30' },
+      'no-next': {},
+      // A backend-only template adds no Hosting, so nothing it adds builds the project's Next.js.
+      'backend-only-14': { declared: '^14.2.0', installed: '14.2.35', template: 'backend' },
+    };
+    for (const [name, { declared, installed, openNextPeer, template = 'nextjs', warns }] of Object.entries(projects)) {
+      const tmpDir = join(__dirname, `../.test-existing-next-range-${name}`);
+      mkdirSync(tmpDir, { recursive: true });
+      const manifest = JSON.stringify({ name: 'my-app', version: '1.0.0', ...(declared && { dependencies: { next: declared } }) });
+      writeFileSync(join(tmpDir, 'package.json'), manifest);
+      const installedPackages = { next: installed && { version: installed }, '@opennextjs/aws': openNextPeer && { version: '3.10.0', peerDependencies: { next: openNextPeer } } };
+      for (const [pkgName, pkg] of Object.entries(installedPackages)) {
+        if (!pkg) continue;
+        mkdirSync(join(tmpDir, 'node_modules', pkgName), { recursive: true });
+        writeFileSync(join(tmpDir, 'node_modules', pkgName, 'package.json'), JSON.stringify({ name: pkgName, ...pkg }));
+      }
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, `${name}: ${result.stderr}`);
+        assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'index.ts')), `${name}: the backend is still added`);
+        const range = openNextPeer ?? HOSTING_NEXT_RANGE;
+        if (warns) {
+          assert.ok(result.stdout.includes(warns), `${name}: expected a warning naming ${warns}; stdout was: ${result.stdout}`);
+          assert.ok(result.stdout.includes(range), `${name}: expected a warning naming ${range}; stdout was: ${result.stdout}`);
+          assert.match(result.stdout, /output: 'export'/, `${name}: the warning leaves a static export out`);
+        } else {
+          assert.ok(!result.stdout.includes(range), `${name}: unexpected warning; stdout was: ${result.stdout}`);
+        }
+        const after = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+        assert.strictEqual(after.dependencies?.next, declared, `${name}: the project's next changed`);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
+  it('keeps its copy of the next range Hosting falls back to equal to the Next.js adapter\'s', async () => {
+    // A runtime path, as in resolvedDevConfig: the range is internal to `@aws-blocks/hosting`, which
+    // create-blocks-app does not depend on at runtime, so the test loads the sibling package's build.
+    const adapter = pathToFileURL(join(__dirname, '../../hosting/dist/adapters/nextjs.js')).href;
+    const { OPENNEXT_FALLBACK_NEXT_PEER_RANGE } = await import(adapter);
+    assert.strictEqual(HOSTING_NEXT_RANGE, OPENNEXT_FALLBACK_NEXT_PEER_RANGE);
   });
 
   it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
