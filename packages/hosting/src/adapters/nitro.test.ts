@@ -569,6 +569,19 @@ void describe('nitroAdapter — preset + feature validation', () => {
     );
   });
 
+  void it('reports whether the aws-lambda server streams: awsLambda.streaming, or the aws-lambda-streaming preset', () => {
+    // The door integrates the server by this flag, so it must match the handler built.
+    const streaming = (nitroJson: Record<string, unknown>): boolean | undefined => {
+      writeMinimalNitroOutput(tmpDir, { nitroJson });
+      writePackageJson(tmpDir);
+      return nitroAdapter({ projectDir: tmpDir, skipBuild: true }).compute.default?.streaming;
+    };
+    assert.strictEqual(streaming({ preset: 'aws-lambda' }), false);
+    assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: false } } }), false);
+    assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: true } } }), true);
+    assert.strictEqual(streaming({ preset: 'aws-lambda-streaming' }), true);
+  });
+
   void it('builds with the node-server preset when targeting Lambda Web Functions', () => {
     writePackageJson(tmpDir);
     let presetSeen: string | undefined;

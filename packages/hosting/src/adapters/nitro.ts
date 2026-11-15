@@ -53,8 +53,11 @@ export type NitroAdapterOptions = {
    * Defaults to `'aws-lambda'` which produces an AWS Lambda handler.
    * To enable response streaming, set `nitro.awsLambda.streaming: true`
    * in the user's `nuxt.config.ts` (the adapter reads this from
-   * `.output/nitro.json`). `'node-server'` produces a plain Node HTTP
-   * server (run via the Lambda Web Adapter).
+   * `.output/nitro.json`). The CloudFront door and the API Gateway REST door
+   * invoke the handler to match: with response streaming when it is on, with
+   * a plain (buffered) invoke when it is off, which sends the response whole
+   * and limits it to 6 MB. `'node-server'` produces a
+   * plain Node HTTP server (run via the Lambda Web Adapter).
    *
    * When the run targets Lambda Web Functions (`compute.type:
    * 'web-function'`, see `withComputeTarget`) the default is
@@ -425,7 +428,11 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   };
 
   const resolvedPreset = nitroInfo.preset ?? effectivePreset;
-  const awsLambdaStreaming = nitroInfo.config?.awsLambda?.streaming === true;
+  // A build that reports the `aws-lambda-streaming` preset (accepted by
+  // `validateNitroPreset`) is a streaming handler too. The door integrates the
+  // server by this flag, so it must not say buffered for a handler that streams.
+  const awsLambdaStreaming =
+    nitroInfo.config?.awsLambda?.streaming === true || resolvedPreset === 'aws-lambda-streaming';
   validateNitroPreset(resolvedPreset);
   warnNitroUnsupportedFeatures(nitroInfo);
   // Nuxt/Nitro projects can also carry a vercel.json with crons (e.g. set up
