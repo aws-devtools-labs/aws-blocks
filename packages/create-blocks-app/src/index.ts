@@ -329,6 +329,23 @@ function mayIgnore(pattern: string, name: string): boolean {
 }
 
 /**
+ * Whether the `.gitignore` lines ignore a directory called `name` at the
+ * project root. Git applies the last matching line, so a later `!name` wins.
+ * A pattern for a path below the root (`packages/site/node_modules`) does not
+ * count; `name`, `name/`, `/name`, `name/*` and `name` after a leading
+ * double-star segment do (see {@link mayIgnore}).
+ */
+function ignoresRootDirectory(lines: string[], name: string): boolean {
+  let ignored = false;
+  for (const line of lines) {
+    const negated = line.startsWith('!');
+    const pattern = (negated ? line.slice(1) : line).replace(/^(\*\*\/|\/)/, '').replace(/\/\**$/, '');
+    if (!pattern.includes('/') && mayIgnore(pattern, name)) ignored = !negated;
+  }
+  return ignored;
+}
+
+/**
  * Adds the aws-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
@@ -337,7 +354,8 @@ function mayIgnore(pattern: string, name: string): boolean {
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
  * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
- * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES}
+ * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES},
+ *   and `node_modules` when no existing line ignores it (these steps add dependencies)
  * - Monorepo detection and file: path rewriting
  * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
  *   (published CLI only; a range the project already lists in `dependencies`
@@ -446,10 +464,15 @@ async function addBlocksWorkspace(targetDir: string, options: {
     const name = exception.slice(1).replace(/\/$/, '');
     return !patterns.some(pattern => mayIgnore(pattern, name));
   });
-  if (toAdd.length > 0 || secretsToAdd.length > 0) {
+  // The dependencies added above make the next install create `node_modules`.
+  // The templates ignore it in their `gitignore`; a project that has no line
+  // for it (often one with no `.gitignore` at all) gets the same.
+  const dependencyLines = ignoresRootDirectory(existing, 'node_modules') ? [] : ['node_modules'];
+  if (dependencyLines.length > 0 || toAdd.length > 0 || secretsToAdd.length > 0) {
     // Keep a CRLF file CRLF: appending LF-only lines would mix line endings.
     const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
     const secretLines = secretsToAdd.length > 0 ? [...secretsToAdd, ...exceptions] : [];
+    if (dependencyLines.length > 0) gitignore += `${eol}# Dependencies${eol}${dependencyLines.join(eol)}${eol}`;
     if (toAdd.length > 0) gitignore += `${eol}# AWS Blocks${eol}${toAdd.join(eol)}${eol}`;
     if (secretLines.length > 0) {
       gitignore += `${eol}# Secrets and key material — never commit${eol}${secretLines.join(eol)}${eol}`;
@@ -457,7 +480,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     await writeFile(gitignorePath, gitignore);
     // These lines change what the project ignores (`.env.*` also covers
     // `.env.development` / `.env.production`), so list them.
-    console.log(`  ✓ Modified .gitignore (+${[...toAdd, ...secretLines].join(', ')})`);
+    console.log(`  ✓ Modified .gitignore (+${[...dependencyLines, ...toAdd, ...secretLines].join(', ')})`);
   }
 
   // Install dependencies

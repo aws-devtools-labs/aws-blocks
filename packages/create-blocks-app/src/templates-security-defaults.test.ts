@@ -78,6 +78,12 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
         assert.strictEqual(checkIgnore(path).status, 1, `${name}/gitignore must not ignore ${path}`);
       }
     });
+
+    // Adding AWS Blocks to an existing project ignores `node_modules` too; keep the two in step.
+    it(`template "${name}" ignores node_modules`, () => {
+      copyFileSync(join(templateDir, 'gitignore'), join(repo, '.gitignore'));
+      assert.strictEqual(checkIgnore('node_modules/pkg/index.js').status, 0);
+    });
   }
 });
 
@@ -224,6 +230,52 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
       try {
         assert.deepStrictEqual(notIgnored(dir, [path, ...SECRET_PATHS]), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  // The scaffold adds dependencies, so the next `npm install` creates
+  // `node_modules`; without a line for it, `git add -A` stages the directory.
+  const withoutNodeModules: Record<string, Record<string, string>> = {
+    'a project with no .gitignore': { 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }) },
+    'a project whose .gitignore has no node_modules line': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'dist\n*.log\n',
+    },
+    'an Amplify Gen 2 project': {
+      'package.json': JSON.stringify({ name: 'amplify-app', version: '1.0.0' }),
+      'amplify/backend.ts': 'export const backend = defineBackend({});',
+    },
+    // Neither a line for one package's `node_modules` nor `dist/*` covers the root one.
+    'a project whose .gitignore only ignores a nested node_modules': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'packages/site/node_modules\ndist/*\n',
+    },
+    // Git applies the last matching line.
+    'a project whose .gitignore un-ignores node_modules after ignoring it': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\n!node_modules\n',
+    },
+  };
+  for (const [label, files] of Object.entries(withoutNodeModules)) {
+    it(`ignores node_modules in ${label}`, () => {
+      const dir = addBlocks(files);
+      try {
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  for (const line of ['node_modules', 'node_modules/', '/node_modules', '/node_modules/', '**/node_modules']) {
+    it(`adds no node_modules line when the existing .gitignore has ${line}`, () => {
+      const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), [line]);
       } finally {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }

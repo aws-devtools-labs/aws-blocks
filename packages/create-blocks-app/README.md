@@ -40,6 +40,8 @@ This writes `aws-blocks/tsconfig.json`, a TypeScript project that checks the bac
 
 In an npm workspaces monorepo, the app's `aws-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["aws-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/aws-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
 
+It also adds to your `.gitignore` (or creates one): the AWS Blocks build and local-data paths, secret and key-material patterns such as `.env` and `*.pem`, and `node_modules` when no line of the file already covers it. Lines you already have are kept, and the CLI prints the ones it adds.
+
 ### Add Blocks to an Amplify Gen 2 Project
 
 Already have an Amplify Gen 2 app? Run from your project root:
