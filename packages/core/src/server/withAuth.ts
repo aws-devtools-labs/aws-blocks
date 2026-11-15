@@ -237,7 +237,9 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * 2. Existing request context (Lambda handler already set it up)
  * 3. Registered cookie providers — Next.js and Nuxt are built-in, plus any
  *    you've added via `registerCookieProvider`
- * 4. Throws if no cookies found
+ * 4. No cookies found: if `cookies` was passed as `null` or an empty string
+ *    (the request carries none), runs `fn` without cookies; if `cookies` was
+ *    omitted, throws
  *
  * **Built-in providers:**
  *
@@ -250,6 +252,11 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * @param cookies - Optional explicit cookie string. If omitted, auto-detects
  *   from the request context or registered providers. Pass this for frameworks
  *   without a registered provider (or use `registerCookieProvider` to add one).
+ *   `null` or an empty string (what `request.headers.get('cookie')` returns for
+ *   a visitor with no cookies) still auto-detects; when nothing is detected
+ *   either, `fn` runs without cookies, like a signed-out browser call: public
+ *   API methods work, and a method that requires a session answers its own
+ *   `401`.
  * @returns The return value of `fn`.
  *
  * @example
@@ -266,7 +273,8 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  *   return { posts, profile };
  * });
  *
- * // Explicit cookies for any framework
+ * // Explicit cookies for any framework. `headers.get('cookie')` is `null` for
+ * // a visitor without cookies; the calls then run signed out.
  * const posts = await withAuth(
  *   () => api.listMyPosts(),
  *   request.headers.get('cookie'),
@@ -291,7 +299,8 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * });
  * ```
  *
- * @throws {Error} If no cookies are found and no provider detected them.
+ * @throws {Error} If `cookies` is omitted, no cookies are found and no provider
+ *   detected them.
  */
 export async function withAuth<T>(
   fn: () => Promise<T>,
@@ -313,12 +322,20 @@ export async function withAuth<T>(
     return store.run(detected, fn);
   }
 
+  if (cookies !== undefined) {
+    // The caller passed the request's cookies and it has none. An empty store
+    // value forwards nothing, so `fn` runs like a signed-out browser call.
+    const store = getRequestCookieStore();
+    return store.run('', fn);
+  }
+
   const providerNames = providers.map(p => p.name).join(', ');
   throw new ApiError(
     `withAuth: No authentication cookies found. ` +
     `Tried providers: [${providerNames || 'none registered'}]. ` +
     `Ensure the user is logged in and cookies are being forwarded, ` +
-    `or pass cookies explicitly as the second argument.`,
+    `or pass cookies explicitly as the second argument ` +
+    `(null or an empty string when the request has none).`,
     401,
   );
 }

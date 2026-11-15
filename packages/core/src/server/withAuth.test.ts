@@ -135,6 +135,116 @@ describe('withAuth', () => {
 
     assert.deepStrictEqual(captured, ['shared-session=1', 'shared-session=1']);
   });
+
+  for (const [label, noCookies] of [['null', null], ['an empty string', ''], ['a blank string', '  ']] as const) {
+    test(`explicit ${label} runs fn without cookies when no provider detects any`, async () => {
+      const store = new AsyncLocalStorage<string>();
+      (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = store;
+
+      const saved = _getProviders().slice();
+      clearCookieProviders();
+
+      try {
+        let called = false;
+        let captured: string | undefined;
+        const result = await withAuth(async () => {
+          called = true;
+          captured = store.getStore();
+          return 'public';
+        }, noCookies);
+
+        assert.strictEqual(result, 'public');
+        assert.ok(called, 'fn should run');
+        assert.ok(!captured, 'fn should see no cookies');
+      } finally {
+        for (const p of saved) registerCookieProvider(p.name, p.detect);
+      }
+    });
+  }
+
+  test('explicit null still uses cookies detected by a provider', async () => {
+    const store = new AsyncLocalStorage<string>();
+    (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = store;
+
+    const saved = _getProviders().slice();
+    clearCookieProviders();
+    registerCookieProvider('custom', async () => 'provider-cookie=value');
+
+    try {
+      let captured: string | undefined;
+      await withAuth(async () => {
+        captured = store.getStore();
+        return 'ok';
+      }, null);
+
+      assert.strictEqual(captured, 'provider-cookie=value');
+    } finally {
+      clearCookieProviders();
+      for (const p of saved) registerCookieProvider(p.name, p.detect);
+    }
+  });
+
+  test('explicit null still uses the cookies of an existing context', async () => {
+    const store = new AsyncLocalStorage<string>();
+    (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = store;
+
+    let inner: string | undefined;
+    await store.run('existing-cookies', async () => {
+      await withAuth(async () => {
+        inner = store.getStore();
+      }, null);
+    });
+
+    assert.strictEqual(inner, 'existing-cookies');
+  });
+
+  test('concurrent calls with and without cookies stay isolated', async () => {
+    const store = new AsyncLocalStorage<string>();
+    (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = store;
+
+    const saved = _getProviders().slice();
+    clearCookieProviders();
+
+    try {
+      // Both calls are suspended at the same time before either reads the store.
+      let open = () => {};
+      const gate = new Promise<void>(resolve => { open = resolve; });
+      let entered = 0;
+      const read = async () => {
+        if (++entered === 2) open();
+        await gate;
+        return store.getStore();
+      };
+      const [signedIn, anonymous] = await Promise.all([
+        withAuth(read, 'session=user'),
+        withAuth(read, null),
+      ]);
+
+      assert.strictEqual(signedIn, 'session=user');
+      assert.ok(!anonymous, 'the anonymous call should see no cookies');
+    } finally {
+      for (const p of saved) registerCookieProvider(p.name, p.detect);
+    }
+  });
+
+  test('undefined cookies still auto-detect and throw 401 when nothing is found', async () => {
+    const store = new AsyncLocalStorage<string>();
+    (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = store;
+
+    const saved = _getProviders().slice();
+    clearCookieProviders();
+
+    try {
+      let called = false;
+      await assert.rejects(
+        () => withAuth(async () => { called = true; }, undefined),
+        (err: ApiError) => err instanceof ApiError && err.status === 401,
+      );
+      assert.strictEqual(called, false);
+    } finally {
+      for (const p of saved) registerCookieProvider(p.name, p.detect);
+    }
+  });
 });
 
 describe('Cookie Provider Registry', () => {
