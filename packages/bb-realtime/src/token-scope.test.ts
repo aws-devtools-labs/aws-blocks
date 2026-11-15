@@ -11,11 +11,19 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { isClientChannelPath, mintChannelToken, mintConnectToken, validateChannelToken } from './utils.js';
+import { createHmac } from 'node:crypto';
+import { isBlocksError } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { Realtime, RealtimeErrors } from './index.js';
+import { LOCAL_TOKEN_SECRET } from './local-dev.js';
+import { isClientChannelPath, mintChannelToken, mintConnectToken, validateChannelName, validateChannelToken } from './utils.js';
 
 const SECRET = 'test-secret-key';
 const INSTANCE_PREFIX = 'myapp-rt';
 const CHANNEL = `${INSTANCE_PREFIX}/chat/room-1`;
+const anySchema: StandardSchemaV1<unknown> = {
+	'~standard': { version: 1, vendor: 'test', validate: (value) => ({ value }) },
+};
 
 describe('Token scope isolation: connect tokens cannot subscribe to channels', () => {
 	it('channel token validates for its own channel', () => {
@@ -117,5 +125,171 @@ describe('isClientChannelPath', () => {
 		const fits = prefix + 'é'.repeat((1024 - prefix.length) / 2);
 		assert.strictEqual(isClientChannelPath(fits), true);
 		assert.strictEqual(isClientChannelPath(fits + 'é'), false);
+	});
+});
+
+describe('Channel token scope: exact vs subtree', () => {
+	const TENANT = `${INSTANCE_PREFIX}/events/tenants/acme`;
+
+	it('a token minted with scope "exact" for a is rejected for a/b', () => {
+		const token = mintChannelToken(TENANT, SECRET, 3600, 'exact');
+		assert.ok(validateChannelToken(token, SECRET, TENANT), 'exact token should validate for its own channel');
+		assert.strictEqual(validateChannelToken(token, SECRET, `${TENANT}/billing`), null, 'exact token must NOT authorize a sub-channel');
+		assert.strictEqual(validateChannelToken(token, SECRET, `${TENANT}-other`), null);
+	});
+
+	it('the default (subtree) token keeps authorizing sub-channels', () => {
+		const token = mintChannelToken(TENANT, SECRET);
+		assert.ok(validateChannelToken(token, SECRET, `${TENANT}/billing`), 'default token keeps today\'s subtree scope');
+		assert.strictEqual(validateChannelToken(token, SECRET, `${TENANT}-other`), null, 'subtree scope is /-separated, not a string prefix');
+	});
+
+	it('the default token payload is byte-identical to the pre-scope format', () => {
+		const token = mintChannelToken(TENANT, SECRET, 60);
+		const payload = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString());
+		assert.deepStrictEqual(Object.keys(payload), ['channel', 'exp']);
+	});
+
+	it('a token without a scope field (issued before scope existed) still validates for sub-channels', () => {
+		const payload = JSON.stringify({ channel: TENANT, exp: Math.floor(Date.now() / 1000) + 60 });
+		const sig = createHmac('sha256', SECRET).update(payload).digest('base64url');
+		const legacy = `${Buffer.from(payload).toString('base64url')}.${sig}`;
+		assert.ok(validateChannelToken(legacy, SECRET, TENANT));
+		assert.ok(validateChannelToken(legacy, SECRET, `${TENANT}/billing`));
+	});
+
+	function signed(payload: Record<string, unknown>): string {
+		const json = JSON.stringify(payload);
+		const sig = createHmac('sha256', SECRET).update(json).digest('base64url');
+		return `${Buffer.from(json).toString('base64url')}.${sig}`;
+	}
+	const exp = () => Math.floor(Date.now() / 1000) + 60;
+
+	it('a signed token with a scope field is rejected for subscriptions', () => {
+		assert.strictEqual(validateChannelToken(signed({ channel: TENANT, exp: exp(), scope: 'everything' }), SECRET, TENANT), null);
+		assert.strictEqual(validateChannelToken(signed({ channel: TENANT, exp: exp(), scope: 'exact' }), SECRET, `${TENANT}/billing`), null);
+	});
+
+	it('a signed token with both or neither of channel / exact is rejected', () => {
+		assert.strictEqual(validateChannelToken(signed({ channel: TENANT, exact: TENANT, exp: exp() }), SECRET, TENANT), null);
+		assert.strictEqual(validateChannelToken(signed({ exp: exp() }), SECRET, TENANT), null);
+	});
+
+	it('an exact token carries its path under "exact", not "channel"', () => {
+		const token = mintChannelToken(TENANT, SECRET, 60, 'exact');
+		const payload = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString());
+		assert.deepStrictEqual(Object.keys(payload), ['exact', 'exp']);
+		assert.strictEqual(payload.exact, TENANT);
+	});
+
+	it('returns the normalized channel and scope', () => {
+		assert.deepStrictEqual(
+			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60, 'exact'), SECRET, TENANT), exp: 0 },
+			{ channel: TENANT, exp: 0, scope: 'exact' },
+		);
+		assert.deepStrictEqual(
+			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60), SECRET, `${TENANT}/billing`), exp: 0 },
+			{ channel: TENANT, exp: 0, scope: 'subtree' },
+		);
+	});
+
+	it('a validator from before scope existed refuses an exact token', () => {
+		// The subscribe check from before `scope` existed, verbatim: HMAC over the
+		// re-stringified payload, then a `channel` prefix match. It must not grant
+		// an exact token anything, let alone subtree access.
+		function preScopeValidate(token: string, secret: string, requestedChannel: string) {
+			const [payloadB64, sig] = token.split('.');
+			const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+			const expectedSig = createHmac('sha256', secret).update(JSON.stringify(payload)).digest('base64url');
+			if (sig !== expectedSig) return null;
+			if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+			if (!payload.channel) return null;
+			if (!payload.channel.includes('/')) return null;
+			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(`${payload.channel}/`)) return null;
+			return payload;
+		}
+		const exact = mintChannelToken(TENANT, SECRET, 60, 'exact');
+		assert.strictEqual(preScopeValidate(exact, SECRET, TENANT), null);
+		assert.strictEqual(preScopeValidate(exact, SECRET, `${TENANT}/billing`), null);
+		assert.ok(preScopeValidate(mintChannelToken(TENANT, SECRET, 60), SECRET, `${TENANT}/billing`), 'default tokens still work on old code');
+	});
+});
+
+describe('getChannel() scope option (mock)', () => {
+	const rt = new Realtime({ id: 'scope-test' }, 'rt', {
+		namespaces: { events: Realtime.namespace(anySchema) },
+	});
+
+	async function tokenFor(channel: string, options?: { scope?: 'exact' | 'subtree' }) {
+		const descriptor = (await rt.getChannel('events', channel, options)).toJSON();
+		assert.strictEqual(typeof descriptor.token, 'string');
+		return { channel: descriptor.channel, token: String(descriptor.token) };
+	}
+
+	it('{ scope: "exact" } mints a token that rejects sub-channels', async () => {
+		const { channel, token } = await tokenFor('tenants/acme', { scope: 'exact' });
+		assert.ok(validateChannelToken(token, LOCAL_TOKEN_SECRET, channel));
+		assert.strictEqual(validateChannelToken(token, LOCAL_TOKEN_SECRET, `${channel}/billing`), null);
+	});
+
+	it('no options keeps the subtree scope', async () => {
+		const { channel, token } = await tokenFor('tenants/acme');
+		assert.ok(validateChannelToken(token, LOCAL_TOKEN_SECRET, `${channel}/billing`));
+	});
+
+	it('rejects an unknown scope value', async () => {
+		await assert.rejects(
+			() => rt.getChannel('events', 'room-1', { scope: 'all' as unknown as 'exact' }),
+			(e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed),
+		);
+	});
+});
+
+describe('Channel name grammar', () => {
+	const rt = new Realtime({ id: 'grammar-test' }, 'rt', {
+		namespaces: { events: Realtime.namespace(anySchema) },
+	});
+	const invalid = ['', '/a', 'a/', 'a//b', '/', '.', '..', 'a/../b', 'a/./b', '../a'];
+	const valid = ['room-1', 'tenants/acme', 'tenants/acme/billing', 'a.b', '..a', 'user@example.com', 'a b'];
+
+	it('validateChannelName rejects empty segments and . / .. segments', () => {
+		for (const name of invalid) {
+			assert.throws(() => validateChannelName(name), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed), JSON.stringify(name));
+		}
+		for (const name of valid) validateChannelName(name);
+	});
+
+	it('validateChannelName rejects undefined, null and objects, and validates numbers as strings', () => {
+		for (const name of [undefined, null, {}, [], true]) {
+			assert.throws(() => validateChannelName(name as unknown as string), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed), String(name));
+		}
+		validateChannelName(42 as unknown as string);
+		validateChannelName(0 as unknown as string);
+	});
+
+	it('publish() checks the channel name before running the schema', async () => {
+		let validated = 0;
+		const counting: StandardSchemaV1<unknown> = {
+			'~standard': { version: 1, vendor: 'test', validate: (value) => { validated++; return { value }; } },
+		};
+		const rt2 = new Realtime({ id: 'grammar-order-test' }, 'rt', { namespaces: { events: Realtime.namespace(counting) } });
+		await assert.rejects(() => rt2.publish('events', 'a//b', {}), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed));
+		assert.strictEqual(validated, 0);
+	});
+
+	it('publish(), subscribe() and getChannel() reject invalid channel names', async () => {
+		for (const name of invalid) {
+			await assert.rejects(() => rt.publish('events', name, {}), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed), `publish ${JSON.stringify(name)}`);
+			assert.throws(() => rt.subscribe('events', name, () => {}), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed), `subscribe ${JSON.stringify(name)}`);
+			await assert.rejects(() => rt.getChannel('events', name), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed), `getChannel ${JSON.stringify(name)}`);
+		}
+	});
+
+	it('publish(), subscribe() and getChannel() accept valid channel names', async () => {
+		for (const name of valid) {
+			await rt.publish('events', name, {});
+			rt.subscribe('events', name, () => {})();
+			await rt.getChannel('events', name);
+		}
 	});
 });

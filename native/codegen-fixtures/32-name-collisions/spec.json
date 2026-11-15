@@ -1,0 +1,497 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "api.getCart",
+      "params": [],
+      "result": {
+        "name": "GetCartResult",
+        "schema": {
+          "$ref": "#/components/schemas/Cart"
+        }
+      }
+    },
+    {
+      "name": "api.getOrder",
+      "params": [],
+      "result": {
+        "name": "GetOrderResult",
+        "schema": {
+          "$ref": "#/components/schemas/Order"
+        }
+      }
+    },
+    {
+      "name": "api.getTicket",
+      "params": [],
+      "result": {
+        "name": "GetTicketResult",
+        "schema": {
+          "$ref": "#/components/schemas/Ticket"
+        }
+      }
+    },
+    {
+      "name": "api.getKind",
+      "params": [],
+      "result": {
+        "name": "GetKindResult",
+        "schema": {
+          "$ref": "#/components/schemas/Kind"
+        }
+      }
+    },
+    {
+      "name": "api.putItems",
+      "params": [
+        {
+          "name": "item",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "sku": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sku"
+            ]
+          }
+        },
+        {
+          "name": "items",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sku": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "sku",
+                "qty"
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "PutItemsResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count"
+              ]
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sku": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sku"
+                ]
+              }
+            }
+          },
+          "required": [
+            "item",
+            "items"
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.getFeeds",
+      "params": [],
+      "result": {
+        "name": "GetFeedsResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "feed": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ]
+                }
+              ]
+            },
+            "feeds": {
+              "type": "array",
+              "items": {
+                "x-blocks-transferable": "realtime/channel",
+                "x-blocks-type-args": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "count": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "count"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "feed",
+            "feeds"
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.act",
+      "params": [],
+      "result": {
+        "name": "ActResult",
+        "schema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "pick"
+                  ]
+                },
+                "item": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sku"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "qty": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "qty"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "action",
+                "item",
+                "items"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "skip"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "reason"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.check",
+      "params": [
+        {
+          "name": "result",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "CheckResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "passed"
+          ]
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Cart": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "item": {
+            "type": "object",
+            "properties": {
+              "sku": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sku"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sku": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "sku",
+                "qty"
+              ]
+            }
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label"
+              ]
+            }
+          },
+          "tagsValue": {
+            "type": "object",
+            "properties": {
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "weight"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "item",
+          "items",
+          "tags",
+          "tagsValue"
+        ]
+      },
+      "Kind": {
+        "type": "string",
+        "enum": [
+          "x",
+          "y"
+        ]
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "shipped"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "Ticket": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bug",
+              "task"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "urgent",
+                "later"
+              ]
+            }
+          },
+          "payload": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "body"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "count"
+                    ]
+                  },
+                  "total": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "type",
+                  "total"
+                ]
+              }
+            ]
+          },
+          "payloads": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "plain"
+                      ]
+                    },
+                    "raw": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "raw"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "rich"
+                      ]
+                    },
+                    "html": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "html"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "status",
+          "kind",
+          "kinds",
+          "payload",
+          "payloads"
+        ]
+      }
+    }
+  }
+}

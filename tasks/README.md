@@ -37,7 +37,7 @@ Two independent counters back the helpers so neither perturbs the other:
 
 A few tasks need a server-side hook the grader can read because it has no real
 side channel (e.g. `cognito-profile`'s `api.getLastCode`, which surfaces the
-most-recently delivered OTP since the grader has no mailbox). Such hooks MUST be
+most-recently delivered sign-up verification code since the grader has no mailbox). Such hooks MUST be
 gated: annotated `@blocksSkipCodegen` and returning `null` unless
 `process.env.BLOCKS_MOCK === 'true'`, so they are inert in a real deployment.
 The harness exports `BLOCKS_MOCK=true` for the graded dev server.

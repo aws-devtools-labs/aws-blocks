@@ -218,6 +218,15 @@ describe('ApiGatewayRestConstruct — static plan', () => {
 	it('deploys a prod stage', () => {
 		t.hasResourceProperties('AWS::ApiGateway::Stage', { StageName: 'prod' });
 	});
+
+	it('creates no CloudWatch role or account setting (the stage configures no logging)', () => {
+		t.resourceCountIs('AWS::ApiGateway::Account', 0);
+		t.resourcePropertiesCountIs(
+			'AWS::IAM::Role',
+			{ AssumeRolePolicyDocument: { Statement: [Match.objectLike({ Principal: { Service: 'apigateway.amazonaws.com' } })] } },
+			0,
+		);
+	});
 });
 
 describe('ApiGatewayRestConstruct — with backend proxy', () => {

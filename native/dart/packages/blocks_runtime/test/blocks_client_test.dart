@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -84,6 +85,134 @@ void main() {
       expect(sentBody!['method'], 'hello.greet');
       expect(sentBody!['params'], {'name': 'world'});
       expect(sentBody!['id'], isA<int>());
+    });
+
+    // The server reads params positionally (an object by its values, in
+    // order), so generated clients send an array, as the TypeScript client
+    // does, with `null` in a left-out optional's slot.
+    test('sends list params as a positional array, null slots kept', () async {
+      String? sentRaw;
+      final mockClient = MockClient((req) async {
+        sentRaw = req.body;
+        return http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': 'ok', 'id': 1}),
+          200,
+        );
+      });
+      final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
+      await client.call('api.echoArgs', ['a', null, 'c']);
+      final sent = jsonDecode(sentRaw!) as Map<String, dynamic>;
+      expect(sent['method'], 'api.echoArgs');
+      expect(sent['params'], ['a', null, 'c']);
+      expect(sentRaw, contains('"params":["a",null,"c"]'));
+    });
+
+    test(
+      'a JSON-RPC error on HTTP 401 (httpErrorStatus) decodes like on HTTP 200',
+      () async {
+        final body = jsonEncode({
+          'jsonrpc': '2.0',
+          'error': {
+            'code': 401,
+            'message': 'Authentication required',
+            'data': {'name': 'NotAuthenticatedException'},
+          },
+          'id': 1,
+        });
+        for (final status in [401, 200]) {
+          final client = BlocksClient(
+            baseUrl: 'http://test/aws-blocks/api',
+            client: MockClient((_) async => http.Response(body, status)),
+          );
+          await expectLater(
+            client.call('api.authRequired', []),
+            throwsA(
+              isA<BlocksRpcException>()
+                  .having((e) => e.code, 'code', 401)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'Authentication required',
+                  )
+                  .having(
+                    (e) => (e.data as Map)['name'],
+                    'data.name',
+                    'NotAuthenticatedException',
+                  ),
+            ),
+            reason: 'HTTP $status',
+          );
+        }
+      },
+    );
+
+    test(
+      'with an auth provider, a 401 JSON-RPC error refreshes and runs the method once more',
+      () async {
+        // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
+        var calls = 0;
+        final client = BlocksClient(
+          baseUrl: 'http://test/aws-blocks/api',
+          client: MockClient((_) async {
+            calls++;
+            return http.Response(
+              jsonEncode({
+                'jsonrpc': '2.0',
+                'error': {'code': 401, 'message': 'Authentication required'},
+                'id': calls,
+              }),
+              401,
+            );
+          }),
+          authProvider: _RefreshingAuthProvider(),
+        );
+        await expectLater(
+          client.call('api.authRequired', []),
+          throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+        );
+        expect(calls, 2);
+      },
+    );
+
+    test('resends the same list params after a 401 refresh', () async {
+      final sentParams = <Object?>[];
+      var calls = 0;
+      final mockClient = MockClient((req) async {
+        sentParams.add(
+          (jsonDecode(req.body) as Map<String, dynamic>)['params'],
+        );
+        calls++;
+        return calls == 1
+            ? http.Response('{}', 401)
+            : http.Response(
+                jsonEncode({'jsonrpc': '2.0', 'result': 'ok', 'id': 2}),
+                200,
+              );
+      });
+      final client = BlocksClient(
+        baseUrl: 'http://test',
+        client: mockClient,
+        authProvider: _RefreshingAuthProvider(),
+      );
+      expect(await client.call('api.f', ['x', null, 1]), 'ok');
+      expect(sentParams, [
+        ['x', null, 1],
+        ['x', null, 1],
+      ]);
+    });
+
+    test('rejects params that are neither a list nor a map', () async {
+      var sent = false;
+      final mockClient = MockClient((_) async {
+        sent = true;
+        return http.Response('{}', 200);
+      });
+      final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
+      await expectLater(
+        () => client.call('api.f', 'not params'),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(sent, isFalse);
     });
 
     test('sends x-blocks-user-agent header', () async {
@@ -277,6 +406,14 @@ void main() {
       expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
     });
   });
+}
+
+class _RefreshingAuthProvider implements AuthProvider {
+  @override
+  Future<String?> getAccessToken() async => 'token';
+
+  @override
+  Future<void> onAuthFailure() async {}
 }
 
 /// Streamed response that reports the URL it was received from, as clients

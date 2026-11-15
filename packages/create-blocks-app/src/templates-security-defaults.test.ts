@@ -244,10 +244,16 @@ function methodBody(source: string, method: string): string {
 }
 
 describe('create-blocks-app template key-value methods require auth', () => {
-  for (const name of ['demo', 'auth-cognito']) {
-    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
+  for (const name of templateNames) {
+    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    if (!existsSync(backend)) continue;
+    const source = stripComments(readFileSync(backend, 'utf-8'));
+    // Deny by default: an `auth.protect` namespace runs its methods only after the
+    // session check (the auth.protect test below checks they are in `methods`).
+    if (/export const api = auth\.protect\(/.test(source)) continue;
 
     for (const method of ['getValue', 'setValue']) {
+      if (!source.includes(`async ${method}(`)) continue;
       it(`template "${name}" gates ${method} with requireAuth before touching the store`, () => {
         const body = methodBody(source, method);
         const gate = body.indexOf('auth.requireAuth(context)');
@@ -259,14 +265,33 @@ describe('create-blocks-app template key-value methods require auth', () => {
   }
 });
 
-/** AuthCognito methods that take `context` and throw 401 without a signed-in session. */
+describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
+  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
+  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+
+  it('the template\'s api namespace is auth.protect(...)', () => {
+    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
+  });
+
+  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
+    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
+      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
+      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    });
+  }
+});
+
+/** `Auth` methods that take `context` and throw 401 without a signed-in session. */
 const SESSION_GATED_AUTH_METHODS = [
-  'fetchUserAttributes',
+  'getUserAttributes',
   'updateUserAttributes',
   'confirmUserAttribute',
   'sendUserAttributeVerificationCode',
   'updatePassword',
-  'fetchDevices',
+  'scanDevices',
+  'rememberDevice',
   'forgetDevice',
 ];
 
@@ -287,20 +312,8 @@ const UNGATED: Record<string, Record<string, string>> = {
   agent: { 'api.ping': 'public: liveness probe, touches no data' },
   amplify: { 'api.greet': PUBLIC_GREETING },
   'api-only': { 'api.health': 'public: liveness probe, touches no data' },
-  'auth-cognito': {
-    'hello.greet': PUBLIC_GREETING,
-    'api.ping': 'public: liveness probe, touches no data',
-    'api.fetchUserAttributes': SESSION_GATED,
-    'api.updateDepartment': SESSION_GATED,
-    'api.updateEmail': SESSION_GATED,
-    'api.confirmAttribute': SESSION_GATED,
-    'api.sendAttributeVerificationCode': SESSION_GATED,
-    'api.changePassword': SESSION_GATED,
-    'api.listDevices': SESSION_GATED,
-    'api.forgetCurrentDevice': SESSION_GATED,
-    'api.signOutEverywhere': "public: signs out the caller's own session, a no-op without one",
-    'api.getLastCode': 'public: local mock only, returns null when BLOCKS_STACK_NAME is set (every deployed Lambda)',
-  },
+  // `api` is `auth.protect(...)`: deny-by-default, checked by the auth.protect test above.
+  auth: { 'hello.greet': PUBLIC_GREETING },
   backend: { 'api.greet': PUBLIC_GREETING },
   bare: { 'api.greet': PUBLIC_GREETING },
   // The template has no auth block. Its store only holds what the two cron handlers write.
@@ -476,6 +489,125 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
       assert.deepStrictEqual(spreads, [], `${name}: copy the fields a caller may set instead of spreading the argument`);
     });
   }
+});
+
+/**
+ * FileBucket methods that sign a URL. Whoever holds the URL (or the handle
+ * built on it) can read or write that key until it expires, with no further
+ * auth check, so only a gated method may hand one out.
+ */
+const PRESIGNING_METHODS = ['getUrl', 'putUrl', 'getFileHandle', 'createUploadHandle'];
+
+/**
+ * Every `<x>.getUrl|putUrl|getFileHandle|createUploadHandle(…)` call in `file`,
+ * with the API method it sits in (`undefined` when it is outside every
+ * ApiNamespace method, e.g. in a module-level helper).
+ *
+ * Matches on the method name, whatever the receiver, as `<bucket>.<method>(…)`
+ * or `<bucket>['<method>'](…)`. Templates must call the FileBucket presign
+ * methods that way: a destructured or `bind`-aliased call
+ * (`const { getUrl } = files`) is not seen by this check.
+ */
+function presignedUrlCalls(file: string): { call: string; method?: TemplateMethod }[] {
+  const methods = apiMethods(file);
+  const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+  const calls: { call: string; method?: TemplateMethod }[] = [];
+  const presignedName = (callee: ts.Expression): string | undefined => {
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
+      return callee.argumentExpression.text;
+    }
+    return undefined;
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && PRESIGNING_METHODS.includes(presignedName(node.expression) ?? '')) {
+      // Offsets match across parses of the same text, so the enclosing method is the one whose body spans the call.
+      const method = methods.find((m) => m.body.pos <= node.pos && node.end <= m.body.end);
+      calls.push({ call: node.expression.getText(sourceFile), method });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return calls;
+}
+
+/** The presigned-URL calls in `file` that a signed-out caller could reach, each with why. */
+function ungatedPresignedUrlCalls(file: string, allowed: Record<string, string>): string[] {
+  return presignedUrlCalls(file).flatMap(({ call, method }) => {
+    if (!method) return [`${call} (outside an API method, so its gate can't be checked)`];
+    // Checked before the gate: a URL-signing method listed in UNGATED is fixed by removing it from the list.
+    if (method.name in allowed) return [`${method.name} → ${call} (listed in UNGATED)`];
+    if (!gatesFirst(method.body)) return [`${method.name} → ${call} (does not start with requireAuth/requireRole)`];
+    return [];
+  });
+}
+
+// A presigned URL is a bearer credential for one object: an ungated method that
+// mints one lets anyone on the internet read or write that key. Checked across
+// every template, so a new template (or a new method) can't ship one signed out.
+describe('create-blocks-app template methods that return a presigned URL require auth', () => {
+  // Counted when the tests are registered, not inside them, so the guard below
+  // holds under --test-name-pattern / --test-only too.
+  const callsPerTemplate: Record<string, number> = {};
+  for (const name of templateNames) {
+    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    if (!existsSync(dir)) continue;
+    const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+      .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
+      .map((f) => join(dir, f));
+    callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
+
+    it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
+      const allowed = UNGATED[name] ?? {};
+      for (const file of files) {
+        assert.deepStrictEqual(
+          ungatedPresignedUrlCalls(file, allowed),
+          [],
+          `${name} (${file}): start these methods with \`await auth.requireAuth(context)\` before signing a URL, and keep them out of UNGATED`,
+        );
+      }
+    });
+  }
+
+  // Guards against the check passing because it found nothing to check.
+  for (const name of ['api-only', 'demo']) {
+    it(`finds the presigned-URL calls template "${name}" ships`, () => {
+      assert.ok((callsPerTemplate[name] ?? 0) > 0, `${name}: expected at least one presigned-URL call, found none`);
+    });
+  }
+});
+
+describe('ungatedPresignedUrlCalls', () => {
+  it('flags a presigned URL minted signed out, outside an API method, or by a method listed as public', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-presign-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `const sign = (path: string) => files.getUrl(path);
+      export const api = new ApiNamespace(scope, 'api', (context) => ({
+        async gated(path: string) { const user = await auth.requireAuth(context); return files.putUrl(path); },
+        async role(path: string) { await auth.requireRole(context, 'admin'); return files.getFileHandle(path); },
+        async open(path: string) { return { url: await files.getUrl(path) }; },
+        async late(path: string) { const url = await files.createUploadHandle(path); await auth.requireAuth(context); return url; },
+        async listed(path: string) { await auth.requireAuth(context); return files.getUrl(path); },
+        async publicSigner(path: string) { return files.putUrl(path); },
+        async indexed(path: string) { return files['getFileHandle'](path); },
+      }));`,
+    );
+    try {
+      assert.deepStrictEqual(ungatedPresignedUrlCalls(file, { 'api.listed': 'test', 'api.publicSigner': 'test' }), [
+        "files.getUrl (outside an API method, so its gate can't be checked)",
+        'api.open → files.getUrl (does not start with requireAuth/requireRole)',
+        'api.late → files.createUploadHandle (does not start with requireAuth/requireRole)',
+        'api.listed → files.getUrl (listed in UNGATED)',
+        // Listed and ungated: the fix is to drop it from UNGATED (and gate it), so name the listing.
+        'api.publicSigner → files.putUrl (listed in UNGATED)',
+        "api.indexed → files['getFileHandle'] (does not start with requireAuth/requireRole)",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('argumentSpreads', () => {

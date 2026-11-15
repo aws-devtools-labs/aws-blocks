@@ -71,7 +71,7 @@ import type { IApplicationLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalanc
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import { ASSET_BEHAVIOR_OPTIONS, assetsS3Origin, cf, inlineFunction, trimSlashes } from './cf_helpers.js';
-import { customErrorResponses } from './error_responses.js';
+import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
 import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { proxyRulesJs } from './proxy_rules.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
@@ -128,10 +128,13 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
           protocolPolicy,
           customHeaders,
         });
+    // Server routes: the origin's TTLs, clamped to a day (as the SSR cache
+    // policy behind the CloudFront door), so a long origin `s-maxage` on a
+    // rendered page can't pin it at the edge for longer.
     const cachePolicy = new CachePolicy(scope, 'CfAlbCache', {
       defaultTtl: Duration.seconds(0),
       minTtl: Duration.seconds(0),
-      maxTtl: Duration.days(365),
+      maxTtl: Duration.days(1),
       cookieBehavior: CacheCookieBehavior.all(),
       headerBehavior: CacheHeaderBehavior.none(),
       queryStringBehavior: CacheQueryStringBehavior.all(),
@@ -227,11 +230,13 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
 
     // The app's error pages, as on the CloudFront door: every 404 / 500 from
     // any origin answers with the page (served from S3).
-    const errorResponses = customErrorResponses(app.errorPages, {
+    const pageResponses = customErrorResponses(app.errorPages, {
       pathPrefix: buildPrefix(input),
       hasCompute: Boolean(origins.server),
       pageKeys: true,
     });
+    // A server's 5xx is never cached (as on the CloudFront door).
+    const errorResponses = origins.server ? withServerErrorsNotCached(pageResponses) : pageResponses;
 
     const additionalBehaviors: Record<string, BehaviorOptions> = {};
     for (const [pattern, target] of plan.behaviors) additionalBehaviors[pattern] = behaviorFor(target);

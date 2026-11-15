@@ -6,8 +6,10 @@ import * as cdk from 'aws-cdk-lib';
 import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
-import { Construct } from 'constructs';
+import { Construct, type IConstruct } from 'constructs';
+import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { validateAllowedOrigins } from '../cors.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
@@ -28,9 +30,16 @@ import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from 
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
-import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import {
+	coverBlocksRoot,
+	coverStackLevelAdditions,
+	recordFrameworkChildren,
+	snapshotChildren,
+} from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
+import { HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports } from '../rpc-dispatch.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -184,10 +193,24 @@ export const UPGRADE_GUIDE_URL =
  * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
  * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
  *
+ * Also validates `defaults.allowedOrigins` (see `validateAllowedOrigins` in
+ * `../cors.ts`), so an entry the runtime would ignore — a regex that does not
+ * compile on its own, or one with an unescaped `.` — fails the synth instead.
+ * Unresolved CDK tokens are skipped: their value is not known until deploy.
+ *
  * @internal
  */
-export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
-	if (props.defaults) return;
+export function assertBlocksDefaults(
+	props: { defaults?: { allowedOrigins?: readonly unknown[] } },
+	kind: 'BlocksStack' | 'BlocksBackend',
+): void {
+	if (props.defaults) {
+		const origins = props.defaults.allowedOrigins;
+		if (Array.isArray(origins)) {
+			validateAllowedOrigins(origins.filter((o) => !(typeof o === 'string' && cdk.Token.isUnresolved(o))));
+		}
+		return;
+	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
 			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
@@ -239,8 +262,11 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is
 	// written at synth (after every block has granted) beside the template.
+	// The same set is checked for service-principal trusts that carry no
+	// aws:SourceAccount / aws:SourceArn condition (Lambda execution roles excepted).
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
+	addServicePrincipalTrustCheck(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,
@@ -350,14 +376,19 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	}
 	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
+	// Keyed by export name, resolved from the imported backend module.
+	const namespaceRoutes = resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner));
+	applyStrictNamespacePlacement(owner, defaultCompute, namespaceRoutes);
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		// Keyed by export name, resolved from the imported backend module.
-		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner)),
+		namespaceRoutes,
 		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
+	// Recorded for `Hosting`, which warns when its CloudFront error pages would
+	// replace these namespaces' 4xx responses (see HTTP_ERROR_STATUS_EXPORTS).
+	Reflect.set(owner, HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports(backendModule));
 	// Container namespaces skip the gateway only where CloudFront is the API's front
 	// door. On the `apigateway` tier a CloudFront Hosting forwards them to the gateway
 	// like every other path, so its stage — WAF, throttling, access logs — sees them.
@@ -367,6 +398,77 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	for (const { ingress } of owner._apiDirectRoutes) admitCloudFront(ingress.loadBalancer);
 	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
+}
+
+/**
+ * Tell each compute which API namespaces it serves when
+ * `defaults.strictNamespacePlacement` is on, or warn that the bare endpoint serves
+ * every namespace when it is off.
+ *
+ * On: sets the placement map (namespace export name → compute `fullId`, for
+ * every namespace on a non-default compute) as the `BLOCKS_API_NAMESPACE_COMPUTES`
+ * environment variable of every API compute, the default one included, and
+ * stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). The
+ * dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
+ * compute, a namespace placed elsewhere — including on the bare
+ * `/aws-blocks/api` endpoint — and, on a non-default compute, every namespace
+ * that isn't its own. Nothing is set when no namespace has its own compute: the
+ * default compute serves them all either way.
+ *
+ * The map goes in each compute's environment, not through `registerConfig()`
+ * (AGENTS.md rule 3), on purpose. A compute reads `blocks-config.json` once, at
+ * Lambda init or container boot, and a config change doesn't change the
+ * compute's own definition, so warm Lambda environments and running tasks would
+ * keep the old map until they happen to recycle. An environment change is part
+ * of the function and task definition, so turning the option on or moving a
+ * namespace rolls every API compute. The map is small (a few bytes per placed
+ * namespace), and synth refuses one over {@link MAX_API_NAMESPACE_COMPUTES_BYTES},
+ * far under Lambda's 4 KB environment limit.
+ *
+ * @throws {Error} When the encoded map is larger than {@link MAX_API_NAMESPACE_COMPUTES_BYTES}.
+ * @internal
+ */
+export function applyStrictNamespacePlacement(
+	owner: SharedGatewayOwner,
+	defaultCompute: ComputeBase,
+	namespaceRoutes: ReadonlyMap<ComputeBase, readonly string[]>,
+): void {
+	if (namespaceRoutes.size === 0) return;
+	if (!owner.defaults.strictNamespacePlacement) {
+		const placed = [...namespaceRoutes.values()].flat();
+		cdk.Annotations.of(defaultCompute).addWarningV2(
+			'blocks:apigateway:bare-endpoint-serves-placed-namespaces',
+			`API namespaces on their own compute (${placed.join(', ')}) can also be called through the bare ` +
+				'/aws-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
+				"only on its own compute, add `strictNamespacePlacement: true` to the stack's `defaults` (keep the " +
+				'preset you already use); the typed clients already call each namespace at its own path. If raw ' +
+				'callers still need the bare endpoint for these namespaces, acknowledge this warning by calling ' +
+				"`Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` " +
+				'on the stack or backend returned by `create()`.',
+		);
+		return;
+	}
+	const entries: Array<[string, string]> = [];
+	for (const [compute, exportNames] of namespaceRoutes) {
+		for (const name of exportNames) entries.push([name, compute.fullId]);
+	}
+	// Sorted, so reordering the backend's exports doesn't change (and roll) every compute.
+	entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	const encoded = JSON.stringify(Object.fromEntries(entries));
+	const bytes = Buffer.byteLength(encoded, 'utf8');
+	if (bytes > MAX_API_NAMESPACE_COMPUTES_BYTES) {
+		throw new Error(
+			`[Blocks] strictNamespacePlacement: the ${API_NAMESPACE_COMPUTES_KEY} placement map for ${entries.length} ` +
+				`API namespaces is ${bytes} bytes, over the ${MAX_API_NAMESPACE_COMPUTES_BYTES}-byte limit for a value ` +
+				"in each compute's environment (Lambda allows 4 KB for all of them). Place fewer namespaces on their " +
+				'own compute, or give the namespaces and computes shorter ids.',
+		);
+	}
+	defaultCompute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
+	for (const compute of namespaceRoutes.keys()) {
+		compute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
+		compute.setEnv(API_COMPUTE_ID_KEY, compute.fullId);
+	}
 }
 
 /**
@@ -658,6 +760,11 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
 		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
 		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
+		// What the app's backend module adds — on the backend and at stack scope —
+		// is the app's own unless a Building Block or framework helper marks it
+		// (see recordFrameworkChildren and coverStackLevelAdditions below).
+		const backendChildrenBeforeModule = snapshotChildren(backend);
+		const stackChildrenBeforeModule = snapshotChildren(cdk.Stack.of(backend));
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -669,6 +776,10 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 				);
 			}
 		}
+		const addedByModule = (scope: Construct, before: ReadonlySet<IConstruct>) =>
+			new Set(scope.node.children.filter((c) => !before.has(c)));
+		const backendModuleChildren = addedByModule(backend, backendChildrenBeforeModule);
+		const stackModuleChildren = addedByModule(cdk.Stack.of(backend), stackChildrenBeforeModule);
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared REST API gateway now that the backend module has
@@ -721,7 +832,12 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		// Last, so every role a block or finalizer hoisted to stack scope exists.
-		coverStackLevelAdditions(backend, stackChildrenBefore);
+		coverStackLevelAdditions(backend, stackChildrenBefore, stackModuleChildren);
+		// The backend's direct children the framework added: everything but what
+		// the backend module added. Roles under the rest are app-owned unless a
+		// Building Block or framework helper sits above them (see isAppOwnedRole
+		// in blocks-roles.ts), the same split BlocksStack.create() records.
+		recordFrameworkChildren(backend, new Set(backend.node.children.filter((c) => !backendModuleChildren.has(c))));
 		warnOnMixedBoundaries(backend);
 
 		return backend;

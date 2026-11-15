@@ -660,7 +660,10 @@ describe('cdk-blocks migrate', () => {
 			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
 			// templates have changed them since; migrate leaves them as they are. config is new in the
 			// templates and no released app had it or a wrapper for it, so migrate adds nothing for it.
-			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config'];
+			// typecheck and build run no wrapper either: the Vite templates now run `tsc -b --force`
+			// over project references, an optional move that also needs new tsconfig files (see
+			// docs/guides/upgrading-older-apps.md, "Keep Node types out of the frontend").
+			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config', 'typecheck', 'build'];
 			const pick = (scripts: Record<string, string>) =>
 				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
 			const expected = pick(current.scripts);

@@ -72,6 +72,13 @@ export function hostingContainerApiTests(ctx: ComputeTestContext) {
       assert.strictEqual(served.requestUrl, `${hostingApiUrl()}/containerApi`);
     });
 
+    test("a Lambda handler behind the same door sees the Hosting distribution's URL too", async () => {
+      const reports = ApiNamespaceClient<{ whereAmI(): Promise<WhereAmI> }>('reports', { url: hostingApiUrl() });
+      const served = await reports.whereAmI();
+      assert.ok(served.functionName, 'a Lambda function served it');
+      assert.strictEqual(served.requestUrl, `${hostingApiUrl()}/reports`);
+    });
+
     test('a 35 s call completes: Hosting reaches the container directly', async () => {
       assert.deepStrictEqual(await containerApi().sleep(35_000), { sleptMs: 35_000 });
     });

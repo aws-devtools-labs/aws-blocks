@@ -4,7 +4,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-realtime`
 **Type:** Client-facing
-**AWS Services:** API Gateway WebSocket, DynamoDB, SSM Parameter Store
+**AWS Services:** API Gateway WebSocket, DynamoDB, AWS Secrets Manager or SSM Parameter Store (token secret, per `defaults.secretsStore`)
 
 ## Design Decisions
 
@@ -14,7 +14,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **No `publish()` on `RealtimeChannel`:** Channel handles are subscribe-only. Publishing goes through `rt.publish()` from API methods. Authorization stays in user code.
 
-**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
+**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from Secrets Manager or SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
 
 **No `unsubscribe_success` acknowledgment:** The server does not send a confirmation when a client unsubscribes. Unlike `subscribe`, which needs `established` for auth confirmation, unsubscribe is fire-and-forget — the client has already stopped listening. Adding an ack would cost a PostToConnection call per unsubscribe for zero functional benefit.
 
@@ -56,6 +56,10 @@ A failed subscribe rejects only that subscription's `established` promise — ot
 - **Channel token:** Scoped to a specific channel (1-hour TTL). Sent in the subscribe message. Gates who can subscribe to a channel.
 
 Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix with a `$connect` suffix (e.g., `collab$connect`). It authorizes the `$connect` handshake only: a subscribe needs a channel token, whose scope always has a `/` after the instance prefix (`validateChannelToken` with a `requestedChannel` rejects any token whose scope has none).
+
+**Channel token scope:** a default channel token's payload is `{ "channel": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`; it authorizes its channel and every `/`-separated sub-channel (`validateChannelToken` accepts a requested channel equal to the token's, or starting with it plus `/`). This is the `getChannel()` default, `scope: 'subtree'`, and it is byte-for-byte the format minted before `scope` existed, so tokens issued by an older deployment keep validating with the same subtree scope. A `scope: 'exact'` token's payload is `{ "exact": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`, and it authorizes its channel only. The path sits under `exact` rather than `channel` on purpose: a validator from before `scope` existed returns `null` for a payload without `channel`, so if old code checks an exact token (a warm container during an update, or after a rollback) the handle stops working instead of being granted subtree access. A payload with both `channel` and `exact`, with neither, or with a `scope` field is rejected. The native clients pass tokens through unchanged. The internal token a server-side `subscribe()` mints for its own WebSocket is always exact, since it only ever subscribes to its one channel.
+
+**Channel names:** the `channel` argument of `publish()`, `subscribe()` and `getChannel()` may contain `/`, but not an empty name, a leading or trailing `/`, an empty segment, or a `.` or `..` segment (`validateChannelName`). Without the rule, `a//b` and `a/` produce paths that differ from, yet sit under, `a`, and `..` segments read like path traversal even though no path is resolved.
 
 **Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
 
@@ -132,7 +136,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | AppSetting (secret: true) | HMAC signing key, auto-generated |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
 
 ### DynamoDB Connections Table
 
@@ -188,7 +192,8 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 |----------|-------|
 | `BLOCKS_RT_WS_URL` | `wss://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
-| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting) |
+| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
+| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). If a new container starts with the previous deploy's config (no ARN) and its SSM read fails, it reloads the config once and switches to Secrets Manager |
 
 The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 

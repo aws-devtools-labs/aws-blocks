@@ -4,12 +4,14 @@
 
 // Replays the E2E Hosting matrix's REST API deletes through API Gateway's
 // delete quota, to check how long they wait on each other or to evaluate a
-// per-leg `teardown-at` schedule. .github/workflows/pr-checks.yml sets no
-// `teardown-at` today (a leg's missing value counts as 0, no wait): fixed
-// delays went stale as the suites changed.
+// per-leg `teardown-at` schedule or `account-offset` layout.
+// .github/workflows/pr-checks.yml sets no `teardown-at` today (a leg's
+// missing value counts as 0, no wait): fixed delays went stale as the suites
+// changed. It spreads the legs over the E2E accounts with `account-offset`
+// instead (a missing value counts as 0, the PR's own account).
 //
 //   node scripts/ci/hosting-teardown-replay.mjs [--search[=budget]] [--holdout]
-//     [--schedule=JSON] [runId ...]
+//     [--schedule=JSON] [--offsets=JSON] [runId ...]
 //
 // Inputs, read with the gh CLI for each PR Checks run (latest attempt;
 // default: RUNS below, the runs the earlier values were searched on):
@@ -29,12 +31,18 @@
 //
 // Model: a leg's destroy starts at teardown-at seconds from its job start,
 // or when the suite is done if that is later, and its deletes keep their
-// offsets from it. Deletes go through FIFO at one per 30 seconds (capacity
-// 1). Only the matrix's own deletes are modeled: Telemetry, the other E2E
-// jobs and other PRs' runs in the same account are not, and neither are
-// CloudFormation's own retries, so the modeled wait is a proxy for how much
-// the matrix's deletes crowd each other, not a prediction of DELETE_FAILED
-// (the report lists the ones the logs show, with their modeled wait). It
+// offsets from it. Each account takes deletes FIFO at one per 30 seconds
+// (capacity 1); legs with the same account-offset share an account, and
+// different offsets are different accounts (the pool has more accounts than
+// the largest offset). Only the matrix's own deletes are modeled: Telemetry,
+// the other E2E jobs and other PRs' runs in the same accounts are not, and
+// neither are CloudFormation's own retries, so the modeled wait is a proxy
+// for how much the matrix's deletes crowd each other, not a prediction of
+// DELETE_FAILED
+// (the report lists the ones the logs show, with their modeled wait). Other
+// runs in the same account cause most of those (see the matrix comment in
+// pr-checks.yml), which is why spreading over accounts helps more than
+// a schedule. It
 // reports, per schedule: total, p90 and max modeled queue wait, deletes
 // waiting over 270 s (CloudFormation gives up after about 4.5 minutes), the
 // runner time the waits cost (mean per run), and how far the end of the
@@ -50,6 +58,9 @@
 // --holdout: the same search, from no wait, on the even-indexed runs,
 // evaluated on the odd ones, and the other way round.
 // --schedule: evaluate a teardown-at JSON object instead of pr-checks.yml's.
+// --offsets: evaluate an account-offset JSON object instead of pr-checks.yml's.
+// Every report also shows the matrix with no wait in one account, the
+// layout before the legs were spread.
 //
 // Tests: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
@@ -199,8 +210,12 @@ export async function loadRun(run) {
 	return { run, legs, othersEnd: Math.max(0, ...others) };
 }
 
-/** Replay one run under a schedule `{ leg: teardownAt }`. `waits` is per delete, in delete order, with its leg. */
-export function replay(r, schedule) {
+/**
+ * Replay one run under a schedule `{ leg: teardownAt }` and an account layout
+ * `{ leg: accountOffset }` (legs with the same offset share one account's
+ * quota). `waits` is per delete, in delete order, with its leg.
+ */
+export function replay(r, schedule, offsets = {}) {
 	const times = [];
 	let hostingEnd = 0;
 	let hostingEndBefore = 0;
@@ -208,19 +223,20 @@ export function replay(r, schedule) {
 	for (const [leg, L] of Object.entries(r.legs)) {
 		const shift = Math.max(0, (schedule[leg] ?? 0) - L.ready);
 		cost += shift;
-		for (const d of L.deletes) times.push({ leg, t: L.start + L.ready + shift + d });
-		for (const t of L.earlier) times.push({ leg, t, earlier: true });
+		const account = offsets[leg] ?? 0;
+		for (const d of L.deletes) times.push({ leg, account, t: L.start + L.ready + shift + d });
+		for (const t of L.earlier) times.push({ leg, account, t, earlier: true });
 		hostingEnd = Math.max(hostingEnd, L.start + L.end + shift);
 		hostingEndBefore = Math.max(hostingEndBefore, L.start + L.end);
 	}
 	times.sort((a, b) => a.t - b.t);
 	const waits = [];
-	let free = -Infinity;
-	for (const { leg, t, earlier } of times) {
-		const s = Math.max(t, free + DELETE_INTERVAL);
+	const free = new Map();
+	for (const { leg, account, t, earlier } of times) {
+		const s = Math.max(t, (free.get(account) ?? -Infinity) + DELETE_INTERVAL);
 		// An earlier deploy's delete takes the quota, but no schedule changes its wait.
 		if (!earlier) waits.push({ leg, wait: s - t });
-		free = s;
+		free.set(account, s);
 	}
 	const slowest = (h) => Math.max(h, r.othersEnd);
 	return {
@@ -231,8 +247,8 @@ export function replay(r, schedule) {
 	};
 }
 
-export function summary(runs, schedule) {
-	const all = runs.map((r) => replay(r, schedule));
+export function summary(runs, schedule, offsets = {}) {
+	const all = runs.map((r) => replay(r, schedule, offsets));
 	const waits = all.flatMap((a) => a.waits.map((w) => w.wait)).sort((a, b) => a - b);
 	return {
 		sum: waits.reduce((a, b) => a + b, 0),
@@ -246,24 +262,24 @@ export function summary(runs, schedule) {
 	};
 }
 
-function print(name, s, base) {
+function print(name, s, base, baseName = 'no wait') {
 	const m = (x) => (x / 60).toFixed(1);
-	const cut = base ? `, ${(100 * (1 - s.sum / base.sum)).toFixed(0)}% less than no wait` : '';
+	const cut = base ? `, ${(100 * (1 - s.sum / base.sum)).toFixed(0)}% less than ${baseName}` : '';
 	console.log(
 		`${name.padEnd(14)} deletes ${s.n} | wait > ${GIVE_UP} s ${s.over} | modeled wait total ${m(s.sum)} min${cut}, p90 ${s.p90.toFixed(0)} s, max ${s.max.toFixed(0)} s | runner time ${m(s.cost)} min/run | Hosting end moves up to ${m(s.hostingMax)} min | slowest E2E job end moves up to ${m(s.gateMax)} min`,
 	);
 }
 
-export function search(runs, legs, budget, start = {}) {
-	const first = summary(runs, start);
+export function search(runs, legs, budget, start = {}, offsets = {}) {
+	const first = summary(runs, start, offsets);
 	const from = first.gateMax <= 0 && first.cost <= budget ? start : {};
 	if (from !== start) console.log('(the schedule breaks the limits; searching from no wait)');
 	const best = Object.fromEntries(legs.map((l) => [l, from[l] ?? 0]));
-	let score = summary(runs, best).sum;
+	let score = summary(runs, best, offsets).sum;
 	for (let pass = 0; pass < 3; pass++) {
 		for (const leg of legs) {
 			for (let v = 0; v <= 3600; v += 15) {
-				const s = summary(runs, { ...best, [leg]: v });
+				const s = summary(runs, { ...best, [leg]: v }, offsets);
 				if (s.gateMax <= 0 && s.cost <= budget && s.sum < score) {
 					score = s.sum;
 					best[leg] = v;
@@ -276,7 +292,7 @@ export function search(runs, legs, budget, start = {}) {
 
 async function main(argv) {
 	const flag = (name) => argv.find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
-	const unknownFlag = argv.find((a) => a.startsWith('--') && !/^--(search|holdout|schedule)(=|$)/.test(a));
+	const unknownFlag = argv.find((a) => a.startsWith('--') && !/^--(search|holdout|schedule|offsets)(=|$)/.test(a));
 	if (unknownFlag) throw new Error(`Unknown option: ${unknownFlag}`);
 	const value = (name) => flag(name)?.split('=').slice(1).join('=');
 	const budget = Number(value('search') || 1050);
@@ -298,6 +314,19 @@ async function main(argv) {
 	if (unknown.length > 0) throw new Error(`--schedule: not a Hosting leg: ${unknown.join(', ')}`);
 	const bad = Object.entries(current).filter(([, v]) => !Number.isFinite(v) || v < 0);
 	if (bad.length > 0) throw new Error(`--schedule: not a number of seconds: ${bad.map(([l]) => l).join(', ')}`);
+	if (flag('offsets') && !value('offsets')) throw new Error('--offsets=<json>: no account offsets given');
+	const offsets = value('offsets')
+		? JSON.parse(value('offsets'))
+		: Object.fromEntries(matrix.map((m) => [m.framework, m['account-offset'] ?? 0]));
+	if (typeof offsets !== 'object' || offsets === null || Array.isArray(offsets)) {
+		throw new Error('--offsets: expected an object of leg -> account offset');
+	}
+	const unknownLeg = Object.keys(offsets).filter((l) => !legs.includes(l));
+	if (unknownLeg.length > 0) throw new Error(`--offsets: not a Hosting leg: ${unknownLeg.join(', ')}`);
+	const badOffset = Object.entries(offsets).filter(([, v]) => !Number.isInteger(v) || v < 0);
+	if (badOffset.length > 0) {
+		throw new Error(`--offsets: not a whole number: ${badOffset.map(([l]) => l).join(', ')}`);
+	}
 	const runs = (await pool(ids.length > 0 ? ids : RUNS, 3, loadRun)).filter((r) => Object.keys(r.legs).length > 0);
 	if (runs.length === 0) throw new Error('No run had a Hosting destroy to replay.');
 	console.log(`${runs.length} runs. Destroy ready, minutes from job start (median, max):`);
@@ -309,12 +338,15 @@ async function main(argv) {
 		if (v.length > 0)
 			console.log(`  ${leg.padEnd(24)} ${(v[v.length >> 1] / 60).toFixed(1)}  ${(v.at(-1) / 60).toFixed(1)}`);
 	}
-	const none = summary(runs, {});
-	print('no wait', none);
-	print(value('schedule') ? 'schedule' : 'pr-checks', summary(runs, current), none);
+	const oneAccount = summary(runs, {});
+	print('one account', oneAccount);
+	const none = summary(runs, {}, offsets);
+	print('no wait', none, oneAccount, 'one account');
+	print(value('schedule') ? 'schedule' : 'pr-checks', summary(runs, current, offsets), oneAccount, 'one account');
 	console.log(`teardown-at: ${JSON.stringify(current)}`);
+	console.log(`account-offset: ${JSON.stringify(offsets)}`);
 	const failed = runs.flatMap((r) => {
-		const w = replay(r, {}).waits;
+		const w = replay(r, {}, offsets).waits;
 		return Object.entries(r.legs)
 			.filter(([, L]) => L.failed)
 			.map(
@@ -323,11 +355,11 @@ async function main(argv) {
 			);
 	});
 	console.log(
-		`Logged REST API DELETE_FAILED, with no wait: ${failed.length} legs${failed.length ? `: ${failed.join(', ')}` : ''}`,
+		`Logged REST API DELETE_FAILED, with no wait in the evaluated accounts: ${failed.length} legs${failed.length ? `: ${failed.join(', ')}` : ''}`,
 	);
 	if (flag('search')) {
-		const found = search(runs, legs, budget, current);
-		print('search', summary(runs, found), none);
+		const found = search(runs, legs, budget, current, offsets);
+		print('search', summary(runs, found, offsets), none);
 		console.log(`search teardown-at: ${JSON.stringify(found)}`);
 	}
 	if (flag('holdout')) {
@@ -337,8 +369,8 @@ async function main(argv) {
 			[even, odd, 'even -> odd'],
 			[odd, even, 'odd -> even'],
 		]) {
-			const found = search(fit, legs, budget);
-			print(name, summary(test, found), summary(test, {}));
+			const found = search(fit, legs, budget, {}, offsets);
+			print(name, summary(test, found, offsets), summary(test, {}, offsets));
 			console.log(`  fitted teardown-at: ${JSON.stringify(found)}`);
 		}
 	}

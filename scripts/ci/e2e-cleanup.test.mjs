@@ -465,7 +465,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 		try {
 			const r = await run(dir, process.execPath, [SCRIPT, '--', 'bash', '-c', 'exit 3'], id);
 			assert.equal(r.status, 0);
-			assert.match(r.output, /^::warning title=E2E cleanup failed::'bash -c exit 3' exited with 3/m);
+			assert.match(r.output, /^::error title=E2E cleanup failed::'bash -c exit 3' exited with 3/m);
 			assert.match(readFileSync(join(dir, 'summary.md'), 'utf8'), /### E2E cleanup failed/);
 		} finally {
 			cleanup();
@@ -482,7 +482,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 				`test-${process.pid}-f`,
 			);
 			assert.equal(r.status, 0, r.output);
-			assert.match(r.output, /^::warning title=E2E cleanup failed::.*exited with SIGTERM/m);
+			assert.match(r.output, /^::error title=E2E cleanup failed::.*exited with SIGTERM/m);
 			assert.doesNotMatch(r.output, /Cleanup finished/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

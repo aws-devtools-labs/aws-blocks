@@ -20,10 +20,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import com.aws.blocks.kotlin.oidc.AnyProvider
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.signIn
 import kotlinx.coroutines.launch
 
 /**
@@ -39,8 +40,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AuthScreen(
-    client: OidcClient<AuthApi.GetClient.Provider>?,
-    loadError: String?,
+    client: OidcClient<AnyProvider>,
     restoredState: AuthState?,
     modifier: Modifier = Modifier
 ) {
@@ -56,49 +56,41 @@ fun AuthScreen(
         Text("Auth", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
 
-        if (client == null) {
-            Text(loadError?.let { "Error: $it" } ?: "Loading providers...")
-        } else {
-            val authState by client.authState.collectAsState()
-            // Loading means the client has not signed in or out yet, so it has no opinion and
-            // the restored session stands in. Signing in or out gives it one, and it wins.
-            val username = when (val state = authState) {
-                is OidcAuthState.SignedIn -> state.user.username
-                OidcAuthState.SignedOut -> null
-                OidcAuthState.Loading -> restoredState
-                    ?.takeIf { it.state == AuthState.State.SignedIn }
-                    ?.user
-                    ?.username
-            }
+        val authState by client.authState.collectAsState()
+        // Loading means the client has not signed in or out yet, so it has no opinion and
+        // the restored session stands in. Signing in or out gives it one, and it wins.
+        val username = when (val state = authState) {
+            is OidcAuthState.SignedIn -> state.user.username
+            OidcAuthState.SignedOut -> null
+            OidcAuthState.Loading -> restoredState
+                ?.takeIf { it.state == AuthState.State.SignedIn }
+                ?.user
+                ?.username
+        }
 
-            if (username != null) {
-                Text("Signed in as: $username")
+        if (username != null) {
+            Text("Signed in as: $username")
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {
+                scope.launch {
+                    runCatching { client.signOut() }
+                        .onSuccess { output = "Signed out" }
+                        .onFailure { output = "Error: ${it.message}" }
+                }
+            }) { Text("Sign Out") }
+        } else {
+            client.providers.forEach { provider ->
+                Button(
+                    onClick = {
+                        scope.launch {
+                            runCatching { client.signIn(provider) }
+                                .onSuccess { output = "Signed in as: ${it.username}" }
+                                .onFailure { output = "Error: ${it.message}" }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Sign in with $provider") }
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    scope.launch {
-                        runCatching { client.signOut() }
-                            .onSuccess { output = "Signed out" }
-                            .onFailure { output = "Error: ${it.message}" }
-                    }
-                }) { Text("Sign Out") }
-            } else {
-                // `entries` is what the spec named when it was generated; `client.providers` is
-                // what the deployed backend reports now, so show the ones both agree on.
-                AuthApi.GetClient.Provider.entries
-                    .filter { it.providerName in client.providers }
-                    .forEach { provider ->
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    runCatching { client.signIn(provider) }
-                                        .onSuccess { output = "Signed in as: ${it.username}" }
-                                        .onFailure { output = "Error: ${it.message}" }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Sign in with ${provider.providerName}") }
-                        Spacer(Modifier.height(8.dp))
-                    }
             }
         }
 

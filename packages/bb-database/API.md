@@ -7,9 +7,21 @@
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
-import { sql } from '@aws-blocks/data-common';
-import { SqlQuery } from '@aws-blocks/data-common';
+import { sql } from '@aws-blocks/data-common/core';
+import { SqlQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+
+// @public
+export interface AuroraClusterOptions {
+    maxCapacity?: number;
+    minCapacity?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
+    removalPolicy?: 'retain' | 'destroy' | 'snapshot';
+    // (undocumented)
+    type: 'aurora';
+}
 
 // @public
 export interface ClusterRef {
@@ -18,7 +30,7 @@ export interface ClusterRef {
 }
 
 // @public
-export type ClusterType = 'dsql';
+export type ClusterType = 'dsql' | 'aurora';
 
 // @public
 export class Database extends Scope {
@@ -61,7 +73,7 @@ export interface DatabaseClusterLike {
 }
 
 // @public
-export type DatabaseClusterOptions = DsqlClusterOptions;
+export type DatabaseClusterOptions = DsqlClusterOptions | AuroraClusterOptions;
 
 // @public
 export const DatabaseErrors: {
@@ -75,19 +87,13 @@ export const DatabaseErrors: {
 };
 
 // @public
-export type DatabaseOptions = OwnedDatabaseOptions | DsqlDatabaseOptions;
+export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions;
 
 // @public
 export interface DsqlClusterOptions {
     removalPolicy?: 'retain' | 'destroy';
     // (undocumented)
     type: 'dsql';
-}
-
-// @public
-export interface DsqlDatabaseOptions extends DatabaseBlockOptions {
-    // (undocumented)
-    cluster: DatabaseClusterLike;
 }
 
 // @public
@@ -100,6 +106,12 @@ export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
 // @public
 export interface QueryOptions<T> {
     schema?: StandardSchemaV1<unknown, T>;
+}
+
+// @public
+export interface SharedDatabaseOptions extends DatabaseBlockOptions {
+    // (undocumented)
+    cluster: DatabaseClusterLike;
 }
 
 export { sql }

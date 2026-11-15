@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -17,7 +18,7 @@ class AuthApi {
   AuthApi(this._client);
 
   Future<OidcClient> getClient() async {
-    final result = await _client.call('auth.getClient', <String, dynamic>{});
+    final result = await _client.call('auth.getClient', const <dynamic>[]);
     return OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore);
   }
 }
@@ -28,7 +29,7 @@ class LegacyAuthApi {
   LegacyAuthApi(this._client);
 
   Future<OidcClient> getClient() async {
-    final result = await _client.call('legacyAuth.getClient', <String, dynamic>{});
+    final result = await _client.call('legacyAuth.getClient', const <dynamic>[]);
     return OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore);
   }
 }

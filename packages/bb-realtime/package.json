@@ -59,7 +59,7 @@
   },
   "dependencies": {
     "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/bb-app-setting": "^0.4.0",
+    "@aws-blocks/bb-secret": "^0.3.0",
     "@aws-blocks/bb-lambda-compute": "^0.7.0",
     "@aws-blocks/bb-distributed-table": "^0.3.0",
     "@aws-blocks/bb-logger": "^0.3.0",
@@ -68,6 +68,7 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@aws-blocks/bb-app-setting": "^0.4.0",
     "@types/node": "^20.19.43",
     "@types/ws": "^8.18.2",
     "typescript": "^5.9.3"

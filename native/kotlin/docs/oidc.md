@@ -1,10 +1,32 @@
 # Signing in with OIDC
 
+An AWS Blocks `Auth` block serves its OIDC sign-in routes at fixed paths, so the OIDC client is built
+from the server and the provider ids, with no backend call:
+
 ```kotlin
-val blocks = Blocks()
-val client = blocks.authApi.getClient()
-val user = client.signIn(AuthApi.GetClient.Provider.Google)
+import com.aws.blocks.kotlin.Blocks
+import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.signIn
+import com.example.myapp.generated.Servers
+
+val blocks = Blocks(Servers.local) // or Blocks() for the spec's default server
+val oidc = OidcClient.forAuth(
+    blocks.client(),
+    providers = listOf("google"), // the keys of the backend's providers
+    relayTo = "com.yourcompany.yourapp://auth/callback", // as in oidc { relayTo } below
+)
+
+val user = oidc.signIn("google") // opens the browser; oidc.authState follows along
+oidc.signOut()
 ```
+
+The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, not names a spec
+declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`,
+hence the `signIn` import (see [Typed providers](#typed-providers)).
+
+Sign-in stores the backend's session cookie, which every generated API client sends, so methods the
+backend gates with `requireAuth` work after it. If the backend moves its routes with
+`redirects.callbackPath`, pass that path's directory as `basePath`.
 
 `signIn` suspends until the flow finishes. Bringing your window to the front afterwards is the
 app's job; `signIn` returning is the signal.
@@ -41,8 +63,8 @@ so the runtime serves a page there. By default that is a built-in styled page. A
 it per outcome, from a JVM source set:
 
 ```kotlin
-client.signIn(
-    provider = AuthApi.GetClient.Provider.Google,
+oidc.signIn(
+    provider = "google",
     options = OidcSignInOptions(
         OidcSignInPlatformOptions(
             // Send the browser to your own page, so the user ends on a real domain.
@@ -90,8 +112,10 @@ would not want to see it, such as third-party analytics.
 
 ## Typed providers
 
-`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. When the
-spec names an OIDC client's providers, the method's object gets a `Provider` enum that implements
+`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. A client
+from `forAuth` is an `OidcClient<AnyProvider>`, as above. When a method of the spec returns an OIDC
+client (`getClient()`) and the spec names that client's providers, the method's object gets a
+`Provider` enum that implements
 `OidcProvider`, whose constants carry the names the backend knows them by, and `getClient()`
 returns a client typed by it:
 

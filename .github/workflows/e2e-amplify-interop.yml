@@ -16,8 +16,9 @@ concurrency:
   group: e2e-amplify-interop-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# id-token: write is granted per job, only to the jobs that assume an AWS role,
+# so the jobs that only read the PR can't request an OIDC token.
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -46,6 +47,9 @@ jobs:
           fi
 
   e2e-amplify-interop-smoke:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Amplify Interop (Smoke)
     # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
     timeout-minutes: 40
@@ -158,6 +162,9 @@ jobs:
           node scripts/ci/amplify-sandbox-teardown.mjs /tmp/amplify-interop-test int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   e2e-amplify-interop:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: E2E Amplify Interop (Browser)
     # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
     timeout-minutes: 40

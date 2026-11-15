@@ -64,6 +64,53 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(all.contains("case priority"))
     }
 
+    // MARK: - Void Methods
+
+    /// A method with no result discards what `execute` returns rather than binding an unused `let`, which warns
+    /// and fails an app's build that treats warnings as errors.
+    private let voidMethodsSpec = """
+    {
+        "openrpc": "1.3.2",
+        "info": { "title": "test", "version": "1.0.0" },
+        "methods": [
+            { "name": "api.ping", "params": [], "result": { "name": "PingResult", "schema": { "type": "null" } } },
+            {
+                "name": "api.remember",
+                "params": [{ "name": "note", "required": true, "schema": { "type": "string" } }],
+                "result": { "name": "RememberResult", "schema": { "type": "null" } }
+            },
+            { "name": "api.count", "params": [], "result": { "name": "CountResult", "schema": { "type": "integer" } } }
+        ]
+    }
+    """
+
+    func testVoidMethodDiscardsTheResult() throws {
+        let output = try generate(from: voidMethodsSpec)
+        for name in ["ping", "remember"] {
+            let start = try XCTUnwrap(output.api.range(of: "func \(name)("), "func \(name)")
+            let body = output.api[start.lowerBound...].prefix { $0 != "}" }
+            XCTAssertTrue(body.contains("-> Void {"), String(body))
+            XCTAssertTrue(body.contains("_ = try await client.execute(request)"), String(body))
+            XCTAssertFalse(body.contains("let result"), String(body))
+        }
+        // A method with a result still binds and decodes it.
+        XCTAssertTrue(output.api.contains("let result = try await client.execute(request)"))
+    }
+
+    #if os(macOS)
+    func testVoidMethodCompilesWithWarningsAsErrors() throws {
+        let output = try generate(from: voidMethodsSpec)
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+            func use(_ api: Api) async throws { try await api.ping(); try await api.remember(note: "n") }
+            """,
+            moduleFlags: ["-warnings-as-errors"]
+        )
+    }
+    #endif
+
     // MARK: - Format Types
 
     func testGeneratesUUIDType() throws {
@@ -212,7 +259,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(
-            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)"),
+            output.api.contains("return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)"),
             "expected the channel to decode through Decodable, got:\n\(output.api)"
         )
         XCTAssertFalse(output.api.contains("{ data in"), "expected no message decoder in generated code, got:\n\(output.api)")
@@ -399,6 +446,64 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(output.api.contains("[String: UpdateAttributes.ResultValue?]"), "Map value type should be optional")
+    }
+
+    // MARK: - unknown
+
+    /// `unknown` is any JSON value: `JSONValue`, not a synthesized empty struct (which drops the
+    /// value and fails to decode anything but an object).
+    func testUnknownGeneratesJSONValue() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.store",
+                "params": [{ "name": "payload", "required": true, "schema": { "type": "unknown" } }],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Entry" } }
+            }],
+            "components": { "schemas": { "Entry": {
+                "type": "object",
+                "properties": {
+                    "payload": { "type": "unknown" },
+                    "nullablePayload": { "oneOf": [{ "type": "unknown" }, { "type": "null" }] },
+                    "tags": { "type": "array", "items": { "type": "unknown" } },
+                    "claims": { "oneOf": [
+                        { "type": "object", "additionalProperties": { "type": "unknown" } },
+                        { "type": "null" }
+                    ] }
+                },
+                "required": ["payload", "nullablePayload", "tags"]
+            } } }
+        }
+        """)
+
+        XCTAssertTrue(output.models.contains("public let payload: JSONValue\n"))
+        XCTAssertTrue(output.models.contains("public let nullablePayload: JSONValue?"))
+        XCTAssertTrue(output.models.contains("public let tags: [JSONValue]"))
+        XCTAssertTrue(output.models.contains("public let claims: [String: JSONValue]?"))
+        XCTAssertTrue(output.api.contains("func store(payload: JSONValue)"))
+        XCTAssertFalse(output.models.contains("ClaimsValue"), "No struct is synthesized for an unknown value")
+        XCTAssertFalse(output.models.contains("struct Payload"), "No struct is synthesized for an unknown value")
+        XCTAssertTrue(output.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"), "JSONValue is a BlocksRuntime type")
+    }
+
+    func testModelsWithoutJSONValueDoNotImportRuntime() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.get", "params": [],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Todo" } }
+            }],
+            "components": { "schemas": { "Todo": {
+                "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"]
+            } } }
+        }
+        """)
+
+        XCTAssertFalse(output.models.contains("import BlocksRuntime"))
     }
 
     // MARK: - Unknown Transferable
@@ -591,7 +696,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         )
         XCTAssertTrue(output.api.contains("guard let result else { return nil }"), "a nullable result returns nil for a null body, got:\n\(output.api)")
         XCTAssertTrue(
-            output.api.contains("return try JSONDecoder().decode(RealtimeChannel<MaybeChannel.ResultMessage>.self, from: result)"),
+            output.api.contains("return try self.client.makeDecoder().decode(RealtimeChannel<MaybeChannel.ResultMessage>.self, from: result)"),
             "a nullable bound channel hydrates through RealtimeChannel's Decodable, got:\n\(output.api)"
         )
         // A message decoder formed in generated code inherits MainActor default isolation and traps when the socket task calls it.
@@ -760,7 +865,8 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("-> RealtimeChannel<GetChannel.ResultMessage>"), "return type must qualify the nested type-arg, got:\n\(output.api)")
     }
 
-    func testNestedOIDCClientDecodesAsItsDescriptorWithAWarning() throws {
+    /// A nested `oidc/client` hydrates through the client's decoder (`BlocksClient.makeDecoder()` carries the client).
+    func testNestedOIDCClientHydratesThroughTheClientsDecoder() throws {
         let output = try generate(from: """
         {
             "openrpc": "1.3.2",
@@ -773,11 +879,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             ]
         }
         """)
-        XCTAssertTrue(output.api.contains("public let client: JSONValue"), "a nested oidc/client decodes as its descriptor, got:\n\(output.api)")
-        XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "a direct oidc/client still hydrates, got:\n\(output.api)")
-        XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [
-            "swift: auth.getSetup returns an oidc/client below the top level, which decodes as JSONValue; return it directly to get an OIDCClient."
-        ])
+        XCTAssertTrue(output.api.contains("public let client: OIDCClient<String>"), "a nested oidc/client hydrates, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "a direct oidc/client hydrates, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [])
     }
 
     // MARK: - OIDC Provider Enums
@@ -808,7 +912,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             public enum GetClient {
 
                 /// The providers `auth.getClient` signs in with.
-                public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                public nonisolated enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
                     case google
                     case github
                     case mySso = "my-sso"
@@ -856,8 +960,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
                 }}, "required": ["client"]
             }}}
         """))
-        XCTAssertTrue(output.api.contains("public let client: JSONValue"), "got:\n\(output.api)")
-        XCTAssertFalse(output.api.contains("Provider"), "a client that decodes as JSONValue gets no provider enum, got:\n\(output.api)")
+        // Below the top level a client hydrates untyped: only an operation's own client gets a provider enum.
+        XCTAssertTrue(output.api.contains("public let client: OIDCClient<String>"), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("enum Provider"), "a nested client gets no provider enum, got:\n\(output.api)")
     }
 
     func testProviderCaseNamesAreLegalSwift() throws {
@@ -868,7 +973,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }}}
         """))
         XCTAssertTrue(output.api.contains("""
-                public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                public nonisolated enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
                     case `default`
                     case _1password = "1password"
                     case google = "Google"
@@ -892,7 +997,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             output.api.contains("public func getClient(provider: GetClient.Provider) async throws -> OIDCClient<GetClient.ResultProvider> {"),
             "got:\n\(output.api)"
         )
-        XCTAssertTrue(output.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"), "got:\n\(output.api)")
+        XCTAssertTrue(
+            output.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(output.api)"
+        )
         XCTAssertEqual(output.warnings, [
             "swift: auth.getClient names its providers Auth.GetClient.ResultProvider, since its operation already declares or uses a type named Provider."
         ])
@@ -913,7 +1021,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """))
         XCTAssertTrue(variants.api.contains("public struct Provider: Codable {"), "got:\n\(variants.api)")
         XCTAssertTrue(
-            variants.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            variants.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
             "got:\n\(variants.api)"
         )
         // A nested type naming the `Provider` model must not resolve to the provider enum.
@@ -929,7 +1037,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
         }
         """)
-        XCTAssertTrue(model.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"), "got:\n\(model.api)")
+        XCTAssertTrue(
+            model.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(model.api)"
+        )
         XCTAssertFalse(model.api.contains("public enum Provider: String"), "got:\n\(model.api)")
         // With no other types in the operation enum, nothing there can name the model, so the enum keeps its name.
         let unshadowed = try generate(from: """
@@ -1002,9 +1113,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }}, "required": ["client"] } } }
         }
         """)
-        XCTAssertTrue(output.models.contains("public let client: JSONValue"), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("public let client: OIDCClient<String>"), "got:\n\(output.models)")
         XCTAssertFalse(output.models.contains("enum"), "a client in a model gets no provider enum, got:\n\(output.models)")
-        XCTAssertFalse(output.api.contains("Provider"), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("enum Provider"), "got:\n\(output.api)")
     }
 
     func testDefaultNamespaceClientIsTypedByItsProviderEnum() throws {

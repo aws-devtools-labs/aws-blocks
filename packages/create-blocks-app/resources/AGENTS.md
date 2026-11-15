@@ -4,8 +4,9 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `DistributedTable`, `DistributedTableErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
+- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
 
@@ -13,7 +14,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Backend defines APIs; the frontend imports the same names as a typed client
 
-- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`. You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
+- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`; a namespace whose methods need a signed-in user is best declared with `auth.protect(scope, '<name>', { public, methods })` (see below). You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
 - The frontend imports those **same export names** from `'aws-blocks'`:
 
   ```ts
@@ -26,22 +27,80 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`. In browser code, send it as `submitAuthAction(authApi, { action: 'signUp', … })` instead, so the rest of the page sees the result; see **Auth on the frontend**.)
+
+When a request names a call such as `orders.create(...)`, export `const orders = new ApiNamespace(scope, 'orders', …)` and define `create` there. Adding `create` to `api`, or exporting `ordersApi`, does not provide `orders.create`. Update frontend callers and tests to the requested name; keep existing methods unless the request replaces them.
+
+### Errors that reach the client
+
+- Throw `new ApiError(message, status, { name, retriable })` (in `aws-blocks/`, import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
+- A plain `Error` (even with `name` or `status` set on it) or a thrown non-`Error` reaches the client as an unnamed `500` with the message `Internal error`. Clients match the name, not the message: `isBlocksError(e, 'OrderNotFound')`.
+- In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`. `isBlocksError(e, name)` narrows `e` to `Error & { name }`, which has no `status`, so check `e instanceof ApiError` before reading `e.status`: `npm run build` type-checks `test/` too.
+- `get()` on `DistributedTable`, `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
+- `FileBucket.getUrl()` signs a URL without checking that the file exists, and `delete()` of a missing file succeeds. Call `get()` first when a download or delete must reject a missing file.
 
 ### Auth on the frontend
 
-An auth Building Block supplies the backend only. The frontend must let a user sign in.
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures it: `store` picks where users live — a Cognito user pool (the default: email + password, on by default, plus `providers` entries of `type: 'google'`, `'apple'`, `'facebook'`, `'amazon'`, `'saml'` or `'oidc'`), or `store: 'builtin'` (no user pool: `type: 'oidc'` entries, `github()` and `stubIdp()`, verified by your backend). One block holds one kind of user; password users and backend-verified IdP users need two `Auth` blocks. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
 
-- On the backend, call `await auth.requireAuth(context)` at the top of each protected method. It throws when the user is not signed in.
+```ts
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  // Email sign-in, matched ignoring case — fixed once the user pool exists (see below).
+  users: { signInWith: ['email'], caseSensitive: false, groups: ['admins'] }, // groups: optional, for requireRole
+  // Local dev only: no email is sent, so log the codes. Ignored on AWS (Cognito emails them).
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
+export const authApi = auth.createApi();               // the state machine the sign-in UI drives
+// Deny by default: `methods` runs only after the session check, with the signed-in user.
+export const notesApi = auth.protect(scope, 'notesApi', {
+  public: (context) => ({                              // no session needed
+    async health() {
+      return { ok: true };
+    },
+  }),
+  methods: (context, user) => ({                       // 401 NotAuthenticatedException if signed out
+    async myNotes() {
+      return user.userSub;                             // key per-user data on userSub
+    },
+  }),
+});
+export const adminApi = auth.protect(scope, 'adminApi', {
+  methods: () => ({ async adminReport() {} }),
+}, { role: 'admins' });                                // 403 NotAuthorizedException if not in the group
+// A plain ApiNamespace is public: each method must await its own guard.
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async myProfile() {
+    const user = await auth.requireAuth(context);      // 401 NotAuthenticatedException if signed out
+    return user.attributes.email;
+  },
+}));
+```
+
+- **Prefer `auth.protect(scope, '<name>', { public: (context) => ({ ... }), methods: (context, user) => ({ ... }) })` for any namespace with signed-in methods.** `methods` runs only after the session check (and the group check, with `{ role }` as the last argument), once per call, with the typed `user`; `public` methods need no session. A signed-out call to anything but a public method gets 401. This way a forgotten guard can't expose a method.
+- **In a plain `ApiNamespace`, gate every method that needs a user.** Its methods are public by default: call `await auth.requireAuth(context)` (or `await auth.requireRole(context, '<group>')`) at the top. Always `await` it: a guard that isn't awaited protects nothing, and no lint rule in this project catches the missing `await`. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
+- **Pass options inline.** The block narrows its types to the literal options: `requireRole` accepts only declared `users.groups`, and methods your configuration doesn't enable are compile errors. Don't route the options through a variable typed `AuthOptions`.
+- **Sign-up always confirms the email address with a 6-digit code.** With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it — no second password entry — but the code is always required. Locally the code goes to `codeDelivery` and to `.bb-data/<scope id>-<auth id>/last-code.json` (e.g. `.bb-data/my-app-auth/last-code.json`); once deployed, Amazon Cognito emails it (its default sender is limited to 50 emails a day).
+- **The flow over `authApi`** (what the `Authenticator` does for you, and what tests call): `setAuthState({ action: 'signUp', username, password, email })` → state `confirmingSignUp`; `setAuthState({ action: 'confirmSignUp', username, code })`; `setAuthState({ action: 'autoSignIn', username })` → `signedIn`. Later: `{ action: 'signIn', username, password }` and `{ action: 'signOut' }`. This app's pool uses `users: { signInWith: ['email'], caseSensitive: false }`: the email *is* the username (omit `email`), it matches ignoring case, and `user.username` is an id Cognito generates — show `user.displayName` (on `AuthState.user` / `onAuthChange`, the email) and read the address server-side from `user.attributes.email`. (Without `signInWith`, the block's default is `['username', 'email']`: users choose a username, which must not look like an email address, and can also sign in with their email once it is confirmed.)
+- **`signInWith` and `caseSensitive` are permanent.** Cognito fixes both when the user pool is created; changing them later means a new pool and migrating every user, so the block refuses the change at synth. Decide before the first deploy that holds real users. The email + case-insensitive shape is also what Amplify's client libraries expect, so a frontend can later sign in with them against the same pool (see "Planning to use Amplify client libraries?" in `bb-auth/README.md`).
+- **Errors cross the wire by name.** Match them with `isBlocksError(e, 'NotAuthenticatedException')` (from `@aws-blocks/blocks/client` on the frontend) or `isAuthError(e, AuthErrors.NotAuthenticated)` on the backend.
+- **Decide `users.signInWith` and custom attributes before the first deploy** — Cognito can't change them on an existing user pool. The first synth writes a baseline under `aws-blocks/baselines/` (commit it); from then on synth refuses such a change. **Never change the block's id** (`'auth'`) or its scope after deploying: that creates a new, empty user pool and removes the old one along with its users.
+
+`Auth` supplies the backend only; the frontend must let a user sign in. On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui` — it renders sign-up, the code step and sign-in, and submits the automatic sign-in for you:
+
+- On the backend, define signed-in methods with `auth.protect(...)`, or call `await auth.requireAuth(context)` at the top of each protected method of a plain `ApiNamespace`. Either throws when the user is not signed in.
 - On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
   - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
   - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
-  - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
-- `AuthBasic` without a `codeDelivery` config signs the user in at sign-up. It has no email confirmation step.
+  - `onAuthChange(authApi, callback)`: calls `callback(user)` with the current user, then again each time the user signs in or out through `Authenticator` or `submitAuthAction`. Use it when you render the content yourself.
+  - `submitAuthAction(authApi, { action: 'signIn', username, password })`: submits an auth action from your own form, returns the resulting `AuthState`, and notifies `onAuthChange` and `AuthenticatedContent`. A direct `authApi.setAuthState()` call sets the session cookie but notifies nothing on the page, so the UI stays signed out until a reload. Call `setAuthState` directly only in Node tests and scripts.
+- `codeDelivery` never skips the code step: every sign-up confirms its email with a code, with or without the hook. Locally the code is written to `.bb-data/<scope id>-<auth id>/last-code.json`, and passed to the hook too; the deployed app ignores the hook and Amazon Cognito emails the code.
 
 When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
 
-`Authenticator` emits stable testids. For `AuthBasic` and `AuthCognito` the fields are `authenticator-username` / `authenticator-password` and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; OIDC and federated actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
+`Authenticator` emits stable testids. The fields are `authenticator-username` / `authenticator-password` (on an email sign-in pool the username field is labelled Email and takes the address) and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; social, OIDC and SAML sign-in actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
 
 ### The deployed frontend finds the backend on its own
 
@@ -131,14 +190,23 @@ export function pollDashboard(render: (data: Dashboard) => void, intervalMs = 5_
 
 Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` when it unmounts.
 
+### Typechecking: `npm run typecheck`
+
+- An app with a `tsconfig.app.json` (the Vite templates) checks the browser code and the backend as separate TypeScript projects: `src/` without Node types, `aws-blocks/` (through `aws-blocks/tsconfig.json`) with them. `process` or `Buffer` in `src/` fails with `TS2591`, and a `node:` import with `TS2307`: that code runs in the browser. Keep it in `aws-blocks/`, or read build-time values with `import.meta.env`.
+- Run `npm run typecheck` (`tsc -b --force`), never `npx tsc --noEmit` at the root: that root `tsconfig.json` only lists references, so it checks nothing. `TS6305 ... has not been built` means `tsc` ran without `-b`.
+- `TS6307 ... is not listed within the file list of project` means the backend imports a file its project does not include. `TROUBLESHOOTING.md` in the docs folder has the fix for this and the other errors of the layout.
+- A Next.js or backend-only app has one `tsconfig.json` with Node types, and `npm run typecheck` is `tsc --noEmit`.
+
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
+2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app). To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server.
    - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
+   - Restart only to check restart or persistence behavior (local data in `.bb-data/` survives restarts). Add no sleeps or port checks: the test setup already waits for readiness.
+   - Read a block doc section once. Open `.d.ts` files or source only for a concrete unanswered question or an observed error.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
@@ -161,7 +229,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
 - **To store data, reach for a storage Building Block** — default to `DistributedTable` for app records you list or query as a collection (todos, notes, orders); use `KVStore` for values you read and write by one key, structured or not (settings, flags, caches, sessions, per-user preferences). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
-- **The framework model above covers the common path.** Read a block's own docs (`README.md`, then `API.md` / `DESIGN.md` where present) when you need a block's specific API surface — not every block has all three, so a missing file is not an error (see the **AWS Blocks docs** bullet for where the docs folder lives).
+- **The framework model above covers the common path.** For a block's specific API surface, read its `README.md`; open `API.md` only for an exact signature and `DESIGN.md` only when you are stuck (see the **AWS Blocks docs** bullet for where the docs folder lives).
 
 ## Deploying (requires AWS credentials)
 

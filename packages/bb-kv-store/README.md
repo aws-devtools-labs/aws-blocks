@@ -16,7 +16,7 @@ const store = new KVStore(scope, id, options?)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. Pass `{ consistentRead: true }` to read a write that just succeeded (see [Read Consistency](#read-consistency)). |
 | `put(key, value, options?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set; accepts an optional expiry. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a value. |
 | `scan(options?)` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items unless `{ includeExpired: true }`. Expensive on large datasets. |
@@ -34,7 +34,7 @@ const store = new KVStore(scope, id, options?)
 | `removalPolicy` | `'destroy' \| 'retain'` | Removal behavior for the underlying DynamoDB table. When omitted, the stack-wide `defaults` (from `BlocksPresets.sandbox`/`production`, chosen at `BlocksStack.create`) apply — `production` retains data on `cdk destroy`, `sandbox` destroys it. Pass `'destroy'`/`'retain'` to override for this one store. The table's deletion protection also follows the stack `defaults`. Ignored by the mock and browser runtimes. |
 | `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | DynamoDB Point-in-Time Recovery (continuous backups). `true` enables the default 35-day window; `{ retentionDays: n }` enables PITR and pins the window (`1`–`35`); `false` disables it. When omitted, the stack-wide `defaults` apply (on under `production`, off under `sandbox`). Ignored by the mock and browser runtimes. |
-| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; pass `KVStore.fromKmsKey(arn)` to reuse an existing CMK across stores. Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; pass `KVStore.fromKmsKey(arn)` to reuse an existing CMK across stores. Any other value (e.g. a typo from untyped JavaScript or config) fails the synth with an error listing the valid values, rather than falling back to `'aws-managed'`. Ignored by the mock and browser runtimes. |
 
 ### Expiring Items (TTL)
 
@@ -61,6 +61,21 @@ await cache.put('config:theme', 'dark');
 - TTL composes with conditional writes: `put(key, value, { ifNotExists: true, ttlSeconds: 60 })`.
 
 TTL is a retention control, not an authorization one. Anything security-sensitive (session validity, token revocation) must still be checked on read.
+
+### Read Consistency
+
+On AWS, `get` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`). A read issued right after a `put` may briefly return `null` or the previous value. When the next step depends on a value that was just written, pass `{ consistentRead: true }`:
+
+```typescript
+await users.put(username, record, { ifNotExists: true });
+
+// Strongly consistent: reflects every write that succeeded before the read
+const fresh = await users.get(username, { consistentRead: true });
+```
+
+- **It costs twice the read capacity** of an eventually consistent read, so leave it off for reads that tolerate a value up to a second old (caches, feature flags).
+- **The local mock is always strongly consistent.** It accepts the option and reads the same way either way, so a missing `consistentRead` never shows up in local tests. Test read-after-write flows in a sandbox.
+- `scan` is always eventually consistent.
 
 ### Conditional Operations
 

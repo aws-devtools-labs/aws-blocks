@@ -8,6 +8,7 @@ import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
 import { WEB_FUNCTION_ENTRY_SHIM, WebFunctionConstruct, renderEntryShim } from './web_function_construct.js';
+import { SSR_CACHE_GUARD_ENTRY_FILE, SSR_CACHE_GUARD_FILE } from './ssr_cache_guard.js';
 import { HostingError } from '../hosting_error.js';
 import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 
@@ -174,7 +175,12 @@ void describe('HostingConstruct — compute.type web-function', () => {
     webFunctionHosting(stack);
     const shim = fs.readFileSync(path.join(tmpDir, 'bundle', WEB_FUNCTION_ENTRY_SHIM), 'utf-8');
     assert.match(shim, /AWS_LAMBDA_HTTP_ENDPOINT/);
-    assert.match(shim, /"\.\/server\/entry\.mjs"/);
+    // The shim boots the SSR cache guard entry, which sits next to the server
+    // entry (same working directory) and imports it after loading the guard.
+    assert.ok(shim.includes(`"./server/${SSR_CACHE_GUARD_ENTRY_FILE}"`));
+    const guardEntry = fs.readFileSync(path.join(tmpDir, 'bundle', 'server', SSR_CACHE_GUARD_ENTRY_FILE), 'utf-8');
+    assert.ok(guardEntry.includes(`import "./${SSR_CACHE_GUARD_FILE}";`));
+    assert.match(guardEntry, /await import\("\.\/entry\.mjs"\)/);
   });
 
   void it('falls back to a JS entrypoint when serverEntry is unset (Nitro index.mjs)', () => {
@@ -184,7 +190,9 @@ void describe('HostingConstruct — compute.type web-function', () => {
       return httpServer(bundle, { entrypoint: 'index.mjs', serverEntry: undefined });
     });
     const shim = fs.readFileSync(path.join(tmpDir, 'bundle', WEB_FUNCTION_ENTRY_SHIM), 'utf-8');
-    assert.match(shim, /"\.\/index\.mjs"/);
+    assert.ok(shim.includes(`"./${SSR_CACHE_GUARD_ENTRY_FILE}"`));
+    const guardEntry = fs.readFileSync(path.join(tmpDir, 'bundle', SSR_CACHE_GUARD_ENTRY_FILE), 'utf-8');
+    assert.match(guardEntry, /await import\("\.\/index\.mjs"\)/);
   });
 
   void it('forwards Blocks env, timeout, and webFunction tuning', () => {

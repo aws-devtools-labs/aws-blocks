@@ -62,16 +62,16 @@
 
     <!-- Auth -->
     <div class="section">
-      <h2 style="margin-top:0;">Auth (Basic)</h2>
+      <h2 style="margin-top:0;">Auth (email + password)</h2>
       <div class="row">
         <button onclick="authRequired()">Require Auth</button>
       </div>
       <div id="auth-result" class="result"></div>
     </div>
 
-    <!-- AuthOIDC -->
+    <!-- Auth — OIDC -->
     <div class="section">
-      <h2 style="margin-top:0;">AuthOIDC (Stub IdP)</h2>
+      <h2 style="margin-top:0;">Auth — OIDC (Stub IdP)</h2>
       <div class="row">
         <button onclick="oidcSignInGoogle()">Sign in with Google</button>
         <button onclick="oidcSignInCorporate()">Sign in with Corporate</button>
@@ -79,7 +79,6 @@
       </div>
       <div class="row">
         <button onclick="oidcGetUser()">Get Current User</button>
-        <button onclick="oidcHandleCallback()">Handle Redirect Callback</button>
       </div>
       <div id="oidc-result" class="result"></div>
     </div>

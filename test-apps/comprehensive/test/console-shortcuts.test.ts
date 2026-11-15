@@ -11,8 +11,15 @@ function getBaseUrl(): string {
   return apiUrl.replace(/\/aws-blocks\/api$/, '');
 }
 
+// Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+// production run must not read the sandbox's.
+const outputsFile =
+  process.env.BLOCKS_TEST_ENV === 'production'
+    ? '.blocks-sandbox/outputs.production.json'
+    : '.blocks-sandbox/outputs.json';
+
 function getStackName(): string {
-  const outputs = JSON.parse(readFileSync('.blocks-sandbox/outputs.json', 'utf-8'));
+  const outputs = JSON.parse(readFileSync(outputsFile, 'utf-8'));
   return Object.keys(outputs)[0];
 }
 

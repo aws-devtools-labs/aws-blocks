@@ -1,0 +1,417 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * In-process tests of the `Auth` CDK class: the `synthGuard` stubs, the
+ * `createApi()` sentinel, `fromExisting()`, and the synth-time option checks.
+ * None of these needs a template, so they run without the child-process
+ * harness; everything that inspects CloudFormation lives in the `*.cdk.test.ts`
+ * files that synth under `--conditions=cdk`.
+ */
+
+import assert from 'node:assert';
+import { describe, test } from 'node:test';
+import type { ScopeParent } from '@aws-blocks/core';
+import * as cdk from 'aws-cdk-lib';
+import { requiresUserPool } from './cdk/contract.js';
+import { Auth, stubIdp } from './index.cdk.js';
+import { resolveOptions } from './resolve-options.js';
+import { synthIdentity } from './test-support/identity.js';
+import type { AuthOptions, AuthShape, DirectOidcProvider, SamlProvider } from './types.js';
+
+/**
+ * Every runtime method of {@link AuthShape} (`createApi` and `protect` have their own CDK stand-ins).
+ * The type below fails to compile when `AuthShape` gains a method that is not
+ * listed — i.e. one without a `synthGuard` stub on the CDK class.
+ */
+const RUNTIME_METHODS = [
+	'requireAuth',
+	'requireRole',
+	'checkAuth',
+	'getCurrentUser',
+	'getAuthSession',
+	'signOut',
+	'getSignInUrl',
+	'signUp',
+	'confirmSignUp',
+	'resendSignUpCode',
+	'signIn',
+	'confirmSignIn',
+	'autoSignIn',
+	'resetPassword',
+	'confirmResetPassword',
+	'updatePassword',
+	'getUserAttributes',
+	'updateUserAttributes',
+	'confirmUserAttribute',
+	'sendUserAttributeVerificationCode',
+	'deleteUser',
+	'setUpTotp',
+	'verifyTotpSetup',
+	'updateMfaPreference',
+	'getMfaPreference',
+	'scanDevices',
+	'rememberDevice',
+	'forgetDevice',
+	'startPasskeyRegistration',
+	'completePasskeyRegistration',
+	'listPasskeys',
+	'deletePasskey',
+] as const satisfies readonly (keyof AuthShape)[];
+/** `admin` is a getter, stubbed separately (see its test below). */
+type Unlisted = Exclude<keyof AuthShape, (typeof RUNTIME_METHODS)[number] | 'createApi' | 'protect' | 'admin'>;
+const everyMethodListed: [Unlisted] extends [never] ? true : Unlisted = true;
+
+/** A bare stack that the CDK `Scope` accepts as a parent (test plumbing). */
+function newStack(): ScopeParent {
+	const stack = Object.assign(new cdk.Stack(new cdk.App(), 'TestStack'), { id: 'TestStack' });
+	return stack as unknown as ScopeParent;
+}
+
+/** Construct `Auth` with `options` and return the thrown message (or fail). */
+function constructError(options: AuthOptions, id = 'auth'): string {
+	try {
+		new Auth(newStack(), id, options);
+	} catch (e) {
+		return e instanceof Error ? e.message : String(e);
+	}
+	assert.fail('expected the Auth constructor to throw');
+}
+
+/** Options as an untyped JavaScript caller might pass them (test plumbing). */
+function untyped(options: unknown): AuthOptions {
+	return options as AuthOptions;
+}
+
+/** A directly federated OIDC provider, for a `store: 'builtin'` block. */
+const OKTA: Record<string, DirectOidcProvider> = {
+	okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' },
+};
+/** A pool-backed provider that needs no secret, for a Cognito block with `emailPassword: false`. */
+const CORP: Record<string, SamlProvider> = { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/m' } };
+
+describe('Auth (CDK) — synthGuard stubs', () => {
+	test('the stub list covers every AuthShape runtime method (compile-time)', () => {
+		assert.strictEqual(everyMethodListed, true);
+	});
+
+	for (const method of RUNTIME_METHODS) {
+		test(`${method}() throws the actionable synthGuard message`, () => {
+			const fn: unknown = Reflect.get(Auth.prototype, method);
+			assert.strictEqual(typeof fn, 'function', `Auth (CDK) has no ${method}() stub`);
+			assert.throws(
+				() => (fn as () => unknown).call(undefined),
+				new RegExp(`^Error: Auth\\.${method}\\(\\) cannot be called during CDK synth`),
+			);
+		});
+	}
+});
+
+describe('Auth (CDK) — the admin getter', () => {
+	test('reading auth.admin during synth throws the actionable synthGuard message', () => {
+		const getter = Object.getOwnPropertyDescriptor(Auth.prototype, 'admin')?.get;
+		assert.strictEqual(typeof getter, 'function', 'Auth (CDK) has an admin getter stub');
+		assert.throws(() => getter?.call(undefined), /^Error: Auth\.admin\(\) cannot be called during CDK synth/);
+	});
+});
+
+describe('Auth (CDK) — createApi and fromExisting', () => {
+	test('createApi() returns a function tagged Symbol.for("blocks:ApiNamespace") = "auth"', () => {
+		const api = Auth.prototype.createApi.call(undefined);
+		assert.strictEqual(typeof api, 'function');
+		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespace')), 'auth');
+	});
+
+	test('protect() builds a real namespace at synth: tagged, routed by compute, methods synthGuarded', () => {
+		// `protect` reads nothing from the instance, so (like `createApi` above) it
+		// runs off the prototype — an in-process `Auth` needs a full BlocksStack.
+		const compute = { resolve: () => ({ type: 'serverless' as const }) };
+		const api: unknown = Reflect.apply(Auth.prototype.protect, undefined, [
+			newStack(),
+			'notesApi',
+			{ public: () => ({ async health() {} }), methods: () => ({ async other() {} }) },
+			{ compute },
+		]);
+		assert.ok(typeof api === 'function');
+		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespace')), 'notesApi');
+		const resolveCompute: unknown = Reflect.get(api, Symbol.for('blocks:ApiNamespaceCompute'));
+		assert.strictEqual(typeof resolveCompute, 'function');
+		assert.deepStrictEqual((resolveCompute as () => unknown)(), { type: 'serverless' });
+		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespaceExplicitCompute')), true);
+		// The handler (and with it every method and the session check) is runtime-only.
+		assert.throws(() => api(), /^Error: Auth\.protect\(\) cannot be called during CDK synth/);
+	});
+
+	test('fromExisting() returns a reference object, not an Auth', () => {
+		assert.deepStrictEqual(Auth.fromExisting('us-east-1_abc', 'client-1'), {
+			__brand: 'ExternalUserPoolRef',
+			userPoolId: 'us-east-1_abc',
+			clientId: 'client-1',
+		});
+	});
+});
+
+describe('Auth (CDK) — requiresUserPool', () => {
+	const secret = { fullId: 's', get: async () => 'x' };
+	const cases: [string, AuthOptions | undefined, boolean][] = [
+		['zero-config (email + password default)', undefined, true],
+		['emailPassword: true', { emailPassword: true }, true],
+		['emailPassword options object', { emailPassword: { selfSignUp: false } }, true],
+		["store: 'builtin' (direct OIDC only)", { store: 'builtin', providers: OKTA }, false],
+		[
+			"type: 'oidc' on the Cognito store",
+			{
+				emailPassword: false,
+				providers: {
+					okta: {
+						type: 'oidc',
+						issuer: 'https://dev-1.okta.com',
+						clientId: '0oa1',
+						clientSecret: secret,
+					},
+				},
+			},
+			true,
+		],
+		[
+			'social',
+			{ emailPassword: false, providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } } },
+			true,
+		],
+		['SAML', { emailPassword: false, providers: CORP }, true],
+		['wrapped existing pool', { emailPassword: false, userPool: Auth.fromExisting('us-east-1_x') }, true],
+	];
+	for (const [name, options, expected] of cases) {
+		// The CDK layer reads the resolved options, exactly as the constructor resolves them.
+		test(`${name} → ${expected}`, () =>
+			assert.strictEqual(requiresUserPool(resolveOptions(options ?? {})), expected));
+	}
+	test('an unset social entry does not count (resolved shape)', () => {
+		assert.strictEqual(
+			requiresUserPool({
+				emailPassword: false,
+				oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+				socialProviders: {},
+			}),
+			false,
+		);
+	});
+});
+
+describe('Auth (CDK) — synth-time option checks', () => {
+	test('an unsupported users.authFlow throws (untyped callers)', () => {
+		assert.match(
+			constructError(untyped({ users: { authFlow: 'USER_SRP_AUTH' } })),
+			/users\.authFlow 'USER_SRP_AUTH'/,
+		);
+	});
+
+	test("passkeys without users.authFlow: 'USER_AUTH' throws", () => {
+		const message = constructError({
+			passkeys: { relyingPartyId: 'example.com', origins: ['https://example.com'] },
+		});
+		assert.match(message, /passkeys requires `users\.authFlow: 'USER_AUTH'`/);
+	});
+
+	test('passkeys without a relyingPartyId or origins throws', () => {
+		const users = { authFlow: 'USER_AUTH' } as const;
+		assert.match(
+			constructError({ users, passkeys: { relyingPartyId: '', origins: ['https://example.com'] } }),
+			/relyingPartyId is required/,
+		);
+		assert.match(constructError({ users, passkeys: { relyingPartyId: 'example.com', origins: [] } }), /origins/);
+	});
+
+	test("featurePlan: 'lite' with passkeys, USER_AUTH or EMAIL MFA throws", () => {
+		assert.match(
+			constructError({ featurePlan: 'lite', users: { authFlow: 'USER_AUTH' } }),
+			/users\.authFlow: 'USER_AUTH' require `featurePlan: 'essentials'`/,
+		);
+		assert.match(
+			constructError({
+				featurePlan: 'lite',
+				users: { authFlow: 'USER_AUTH' },
+				passkeys: { relyingPartyId: 'example.com', origins: ['https://example.com'] },
+			}),
+			/passkeys/,
+		);
+		assert.match(
+			constructError({
+				featurePlan: 'lite',
+				userPool: Auth.fromExisting('us-east-1_x'),
+				mfa: { mode: 'optional', types: ['EMAIL'] },
+			}),
+			/mfa\.types: \['EMAIL'\]/,
+		);
+	});
+
+	test('Email MFA on a BB-created pool without `email` throws and points at `email` and fromExisting', () => {
+		const message = constructError({ mfa: { mode: 'optional', types: ['EMAIL'] } });
+		assert.match(message, /`email: \{ fromAddress \}`/);
+		assert.match(message, /Auth\.fromExisting/);
+	});
+
+	test("users.preferredChallenge: 'EMAIL_OTP' on a BB-created USER_AUTH pool without `email` throws and points at `email` and fromExisting", () => {
+		const message = constructError({ users: { authFlow: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' } });
+		assert.match(message, /preferredChallenge: 'EMAIL_OTP'/);
+		assert.match(message, /SES/);
+		assert.match(message, /`email: \{ fromAddress \}`/);
+		assert.match(message, /Auth\.fromExisting/);
+	});
+
+	describe('email (SES sender)', () => {
+		const sender = { fromAddress: 'no-reply@example.com' };
+
+		test('refused on a wrapped pool: its email configuration belongs to its owner', () => {
+			const message = constructError({ email: sender, userPool: Auth.fromExisting('us-east-1_x') });
+			assert.match(
+				message,
+				/^Auth 'TestStack-auth': `email` configures the email sender of a user pool this block creates/,
+			);
+			assert.match(message, /Auth\.fromExisting/);
+		});
+
+		test("refused when the configuration creates no pool (store: 'builtin')", () => {
+			const message = constructError(untyped({ email: sender, store: 'builtin', providers: OKTA }));
+			assert.match(message, /`email` .* no user pool/);
+		});
+
+		test('fromAddress and replyTo must be email addresses', () => {
+			for (const fromAddress of ['', 'no-reply', 'a b@example.com', '@example.com']) {
+				assert.match(
+					constructError({ email: { fromAddress } }),
+					/`email\.fromAddress` must be an email address/,
+					JSON.stringify(fromAddress),
+				);
+			}
+			assert.match(
+				constructError({ email: { ...sender, replyTo: 'support' } }),
+				/`email\.replyTo` must be an email address/,
+			);
+			assert.match(constructError(untyped({ email: {} })), /`email\.fromAddress` must be an email address/);
+		});
+
+		test('sesVerifiedDomain must be the domain of fromAddress', () => {
+			assert.match(
+				constructError({ email: { ...sender, sesVerifiedDomain: 'other.example' } }),
+				/`email\.sesVerifiedDomain` \('other\.example'\) must be the domain of `email\.fromAddress` \('example\.com'\)/,
+			);
+			// Exactly that domain: a subdomain sender is refused (the JSDoc says so).
+			assert.match(
+				constructError({
+					email: { fromAddress: 'no-reply@mail.example.com', sesVerifiedDomain: 'example.com' },
+				}),
+				/must be the domain of `email\.fromAddress` \('mail\.example\.com'\)/,
+			);
+		});
+
+		test('sesRegion must look like an AWS Region', () => {
+			assert.match(
+				constructError({ email: { ...sender, sesRegion: 'virginia' } }),
+				/`email\.sesRegion` must be an AWS Region such as 'us-east-1'/,
+			);
+		});
+
+		test('configurationSetName must not be empty', () => {
+			assert.match(
+				constructError({ email: { ...sender, configurationSetName: '' } }),
+				/`email\.configurationSetName` must be a non-empty SES configuration set name/,
+			);
+		});
+	});
+
+	test("users.preferredChallenge: 'EMAIL_OTP' is allowed on a wrapped pool, and wherever it enables nothing", () => {
+		// A real synth (child process, `--conditions=cdk`): it must succeed.
+		const ok = (construct: string) => assert.ok(synthIdentity(construct).template.Resources, construct);
+		ok(
+			"new Auth(stack, 'auth', { users: { authFlow: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' }, userPool: Auth.fromExisting('us-east-1_x') })",
+		);
+		// USER_PASSWORD_AUTH ignores the hint: no first factor is enabled, so no SES is needed.
+		ok("new Auth(stack, 'auth', { users: { preferredChallenge: 'EMAIL_OTP' } })");
+		for (const preferredChallenge of ['PASSWORD', 'SMS_OTP']) {
+			ok(
+				`new Auth(stack, 'auth', { users: { authFlow: 'USER_AUTH', preferredChallenge: '${preferredChallenge}' } })`,
+			);
+		}
+	});
+
+	test('empty users.signInWith throws', () => {
+		assert.match(constructError({ users: { signInWith: [] } }), /signInWith must contain at least one/);
+	});
+
+	test('emailPassword: false with mfa, passkeys or deviceTracking throws (email + password only)', () => {
+		assert.match(
+			constructError({ emailPassword: false, providers: CORP, mfa: 'optional' }),
+			/^Auth 'auth': `mfa: 'optional'` needs email \+ password sign-in, which `emailPassword: false` disables\./,
+		);
+		assert.match(
+			constructError({ emailPassword: false, providers: CORP, users: { deviceTracking: {} } }),
+			/`users\.deviceTracking` needs email \+ password sign-in/,
+		);
+	});
+
+	test('a real synth of emailPassword: false with mfa or passkeys fails, naming both options', () => {
+		// A child process under `--conditions=cdk`, as `cdk synth` runs the app.
+		const okta = "providers: { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/m' } }";
+		assert.throws(
+			() => synthIdentity(`new Auth(stack, 'auth', { emailPassword: false, ${okta}, mfa: 'required' })`),
+			/`mfa: 'required'` needs email \+ password sign-in, which `emailPassword: false` disables/,
+		);
+		assert.throws(
+			() =>
+				synthIdentity(
+					`new Auth(stack, 'auth', { emailPassword: false, ${okta}, users: { authFlow: 'USER_AUTH' }, passkeys: { relyingPartyId: 'example.com', origins: ['https://example.com'] } })`,
+				),
+			/`passkeys` needs email \+ password sign-in, which `emailPassword: false` disables/,
+		);
+		// `mfa: 'off'` (or `{ mode }` omitted) is not a contradiction.
+		assert.ok(synthIdentity(`new Auth(stack, 'auth', { emailPassword: false, ${okta}, mfa: 'off' })`).template);
+	});
+
+	test('a stubIdp() provider throws at synth outside a sandbox: the stub IdP is local and sandbox only', () => {
+		const configs: AuthOptions[] = [
+			{ store: 'builtin', providers: { corp: stubIdp() } },
+			{
+				store: 'builtin',
+				providers: { ...OKTA, corp: stubIdp({ users: [{ sub: 'u', email: 'u@example.com', name: 'U' }] }) },
+			},
+		];
+		for (const options of configs) {
+			const message = constructError(options);
+			assert.match(
+				message,
+				/providers\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments/,
+			);
+			// …and says how to keep the stub for local and sandbox only.
+			assert.match(message, /sandboxMode=true/);
+			assert.match(message, /select providers with getDeploymentType\(\)/);
+		}
+	});
+
+	test('emailPassword: false with no provider at all throws (no way to sign in)', () => {
+		// The resolver's message (it names the block), as in the mock and AWS entries.
+		assert.match(
+			constructError({ emailPassword: false }),
+			/^Auth 'auth': `emailPassword: false` .*leaves no way to sign in/,
+		);
+	});
+
+	test("store: 'builtin' with no provider throws the resolver's message (names the block)", () => {
+		assert.match(
+			constructError({ store: 'builtin', providers: {} }),
+			/^Auth 'auth': `store: 'builtin'` needs at least one provider/,
+		);
+	});
+
+	test("admin on a pool-less (store: 'builtin') configuration throws", () => {
+		assert.match(
+			constructError(untyped({ store: 'builtin', providers: OKTA, admin: {} })),
+			/`admin` needs `store: 'cognito'`/,
+		);
+	});
+
+	test('a fullId over 128 chars throws even when no pool is provisioned', () => {
+		const longId = 'a'.repeat(130);
+		assert.match(constructError({ store: 'builtin', providers: OKTA }, longId), /Cognito's limit is 128/);
+	});
+});

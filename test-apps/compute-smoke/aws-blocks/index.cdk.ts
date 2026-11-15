@@ -44,6 +44,17 @@ if (!FRONT_DOORS.includes(apiFrontDoor)) {
 // prefixes. Keep the name short: resource names derive from it, and in sandbox
 // mode the FileBucket's must fit S3's 63 characters with a CI suffix like
 // `pr-1234-12` (56).
+// A second axis, set per leg in the same matrix: COMPUTE_STRICT_NAMESPACE_PLACEMENT
+// ('true' or 'false', default 'false') turns on `defaults.strictNamespacePlacement`,
+// so the bare /aws-blocks/api endpoint refuses the namespaces placed on their own
+// compute (test/api-namespace-compute.test.ts and container-api-namespace.test.ts
+// assert either behaviour). It doesn't change the stack name: one leg sets it.
+const strictPlacementFlag = process.env.COMPUTE_STRICT_NAMESPACE_PLACEMENT ?? 'false';
+if (strictPlacementFlag !== 'true' && strictPlacementFlag !== 'false') {
+  throw new Error(`COMPUTE_STRICT_NAMESPACE_PLACEMENT must be 'true' or 'false'; got '${strictPlacementFlag}'.`);
+}
+const strictNamespacePlacement = strictPlacementFlag === 'true';
+
 const leg = { apigateway: 'gw', cloudfront: 'cf' }[apiFrontDoor];
 const stackName = sandboxMode
   ? `bb-test-compute-${id}-${leg}${suffix ? `-${suffix}` : ''}`
@@ -79,6 +90,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   apiFrontDoor,
   defaults: {
     ...BlocksPresets.sandbox,
+    strictNamespacePlacement,
     vpc: {
       // Vpc.fromLookup needs a Stack scope to cache the context lookup, and it
       // must resolve BEFORE this BlocksStack is built (BlocksStack.create wires
@@ -121,4 +133,5 @@ if (apiFrontDoor === 'cloudfront') {
 // cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
 cdk.Tags.of(app).add('blocks:purpose', 'compute-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:api-front-door', apiFrontDoor);
+cdk.Tags.of(blocksStack).add('blocks:strict-namespace-placement', String(strictNamespacePlacement));
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -12,11 +12,43 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+
+/**
+ * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
+ * address with a 6-digit code, then signs the user in. Locally no email is
+ * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
+ * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ *
+ * `user` defaults to this file's clients (the cookie jar `installCookieJar`
+ * installs); pass `createTestClient(app)` for another user with a session of
+ * their own, signed in at the same time.
+ */
+async function signUpAndSignIn(username: string, password: string, user = { authApi }) {
+  const signUp = await user.authApi.setAuthState({ action: 'signUp', username, password });
+  assert.strictEqual(signUp.state, 'confirmingSignUp');
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  return await user.authApi.setAuthState({ action: 'autoSignIn', username });
+}
+
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
 
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
@@ -28,24 +60,16 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
+  await waitForServer();
 
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -59,7 +83,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -101,11 +125,7 @@ test('files: signed-out callers cannot mint presigned URLs', async () => {
 
 // Only the allowed content types get a presigned upload URL.
 test('files: an unsupported content type is declined', async () => {
-  await authApi.setAuthState({
-    action: 'signUp',
-    username: `ctype-${Date.now().toString(36)}`,
-    password: 'password123',
-  });
+  await signUpAndSignIn(`ctype-${Date.now().toString(36)}@example.com`, 'TestPass123!');
   await assert.rejects(api.createUploadUrl('page.html', 'text/html'), { status: 400 });
 });
 
@@ -115,11 +135,7 @@ test('files: an unsupported content type is declined', async () => {
 // so it runs with no AWS. The Content-Type on the PUT must match the one the
 // upload URL was signed with (presigned-URL parity with S3).
 test('files: presigned upload/download round-trips', async () => {
-  const state = await authApi.setAuthState({
-    action: 'signUp',
-    username: `files-${Date.now().toString(36)}`,
-    password: 'password123',
-  });
+  const state = await signUpAndSignIn(`files-${Date.now().toString(36)}@example.com`, 'TestPass123!');
   assert.strictEqual(state.state, 'signedIn');
 
   const path = 'reports/data.txt';
@@ -141,7 +157,7 @@ test('files: presigned upload/download round-trips', async () => {
 
   // Paths are scoped per user: another user asking for the same path gets
   // their own (empty) object, not this one.
-  await authApi.setAuthState({ action: 'signUp', username: `other-${Date.now().toString(36)}`, password: 'password123' });
+  await signUpAndSignIn(`other-${Date.now().toString(36)}@example.com`, 'TestPass123!');
   const { url: otherUrl } = await api.createDownloadUrl(path);
   const otherRes = await fetch(otherUrl);
   assert.notStrictEqual(otherRes.status, 200, "another user must not read this user's file");
@@ -151,11 +167,10 @@ test('files: presigned upload/download round-trips', async () => {
 // scaffolded app is validated end to end: signup, then an item round-trip.
 // When you replace the sample API, update or delete this test.
 test('items: auth-gated CRUD round-trip', async () => {
-  const username = `e2e-${Date.now().toString(36)}`;
-  const password = 'password123';
+  const username = `e2e-${Date.now().toString(36)}@example.com`;
+  const password = 'TestPass123!';
 
-  // signUp creates the account and signs in (no code delivery configured).
-  const state = await authApi.setAuthState({ action: 'signUp', username, password });
+  const state = await signUpAndSignIn(username, password);
   assert.strictEqual(state.state, 'signedIn');
 
   const item = await api.createItem('Widget', 3);
@@ -187,10 +202,10 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
 
-  const username = `e2e-lock-${Date.now().toString(36)}`;
-  const password = 'password123';
+  const username = `e2e-lock-${Date.now().toString(36)}@example.com`;
+  const password = 'TestPass123!';
 
-  const state = await authApi.setAuthState({ action: 'signUp', username, password });
+  const state = await signUpAndSignIn(username, password);
   assert.strictEqual(state.state, 'signedIn');
 
   const item = await api.createItem('Locked', 1); // version 1
@@ -215,4 +230,29 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   assert.strictEqual(current.version, 2);
 
   await api.deleteItem(item.itemId);
+});
+
+// Items are private: every method reads and writes only the caller's own.
+// When you replace the sample API, update or delete this test.
+test('items: another user can neither see nor change them', async () => {
+  const password = 'TestPass123!';
+  // Two users signed in at once, each with a cookie jar of their own.
+  const owner = createTestClient(app);
+  const other = createTestClient(app);
+  assert.strictEqual((await signUpAndSignIn(`e2e-owner-${Date.now().toString(36)}@example.com`, password, owner)).state, 'signedIn');
+  assert.strictEqual((await signUpAndSignIn(`e2e-other-${Date.now().toString(36)}@example.com`, password, other)).state, 'signedIn');
+  const mine = await owner.api.createItem('Private', 1);
+  assert.ok(mine.owner, "the item is keyed on the owner's userSub");
+
+  const theirs = await other.api.listItems();
+  assert.ok(!theirs.some((i) => i.itemId === mine.itemId), "listItems leaked the owner's item");
+  await assert.rejects(() => other.api.getItem(mine.itemId), /not found/i);
+  await assert.rejects(() => other.api.updateQuantity(mine.itemId, 9), /not found/i);
+  await assert.rejects(() => other.api.setQuantity(mine.itemId, 9, 1), /not found/i);
+  await other.api.deleteItem(mine.itemId); // a no-op outside the caller's own items
+
+  const after = await owner.api.getItem(mine.itemId);
+  assert.strictEqual(after.quantity, 1);
+  assert.strictEqual(after.version, 1);
+  await owner.api.deleteItem(mine.itemId);
 });

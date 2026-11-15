@@ -9,8 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -37,24 +37,18 @@ let isLocalMock = false;
 // would already exist when you rerun `npm run test:e2e` against the same server.
 const creds = { username: `agent-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 
-test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
-    server = spawn('npm', ['run', 'dev:server'], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWin,
-      shell: isWin,
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-    server.unref();
-    await setTimeout(2000);
-  }
+// Sign up the way the sign-in UI does: sign-up confirms the email with a code,
+// then signs the user in. Locally no email is sent: getLastAuthCode reads the
+// code the local auth block issued.
+async function signUpAndSignIn() {
+  await authApi.setAuthState({ action: 'signUp', ...creds });
+  await authApi.setAuthState({ action: 'confirmSignUp', username: creds.username, code: await getLastAuthCode(creds.username) });
+  return await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
+}
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the Blocks server to be ready without depending on the sample API,
+// and record which runtime it reports.
+async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
       const response = await fetch(readinessUrl);
@@ -66,9 +60,31 @@ test.before(async () => {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
+test.before(async () => {
+  if (!await isServerRunning(serverPort)) {
+    server = spawn('npm', ['run', 'dev:server'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWin,
+      shell: isWin,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    server.unref();
+  }
+
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  const mod = await import('aws-blocks');
+  api = mod.api;
+  authApi = mod.authApi;
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -82,7 +98,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -125,7 +141,7 @@ test('Agent - a chat turn returns the model text', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  const signedUp = await signUpAndSignIn();
   assert.strictEqual(signedUp.state, 'signedIn');
 
   const { text } = await api.chat('hello there');
@@ -140,9 +156,8 @@ test('Agent - a tool-calling turn runs the tool handler', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  await authApi.setAuthState({ action: 'signIn', ...creds }).catch(async () => {
-    await authApi.setAuthState({ action: 'signUp', ...creds });
-  });
+  const signedIn = await authApi.setAuthState({ action: 'signIn', ...creds });
+  if (signedIn.state !== 'signedIn') await signUpAndSignIn();
 
   // Mentioning the tool's name (its camelCase words "save"/"note") makes the
   // canned provider emit a toolUse for `saveNote`; Strands runs the handler,

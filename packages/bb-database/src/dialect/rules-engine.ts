@@ -2,38 +2,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { blocksError } from '@aws-blocks/core';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { EngineTransaction, withTransaction } from '../engines/handle.js';
-import { DSQL_PERMISSION_ERROR_NAME, serializationConflict } from '../errors.js';
+import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import { type CountedRows, EngineTransaction, type RowCountingEngine, withTransaction } from '../engines/handle.js';
+import { PERMISSION_ERROR_NAME, serializationConflict } from '../errors.js';
+import type { ClusterType } from '../types.js';
 import { inspectStatement, type StatementInfo, TransactionTracker, validateStatement } from './validation.js';
 
-const DDL_NOT_ALLOWED_MESSAGE =
-	'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime of a DSQL cluster. ' +
-	'Put them in a migration file; the migration Lambda runs DDL with dsql:DbConnectAdmin.';
+const ddlNotAllowed = (kind: ClusterType): string =>
+	`DDL statements (CREATE, ALTER, DROP) and TRUNCATE are not allowed in the app runtime of a ${kind} cluster: the ` +
+	'app role has SELECT, INSERT, UPDATE and DELETE only. Put DDL in a migration file; the migration Lambda runs it as ' +
+	'the cluster admin.';
 
-export interface CountedRows<T> {
-	rows: T[];
-	rowCount: number;
-}
-
-/**
- * What the mock wraps: an engine that also reports the affected-row count of a statement issued inside a
- * transaction, so DML with `RETURNING` (or none) counts toward the row limit by what it changed, not by what
- * it returned.
- */
-export interface RowCountingEngine extends DatabaseEngine {
-	queryCountedInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<CountedRows<T>>;
-}
+// TRUNCATE needs its own privilege, which the deployed app role is never granted; locally PGlite would allow it.
+const TRUNCATE = /^\s*TRUNCATE\b/i;
 
 const DELETE_TARGET = /^\s*DELETE\s+FROM\s+(?:ONLY\s+)?((?:"[^"]+"|[\w.])+)/i;
 
-export class DsqlRulesEngine implements DatabaseEngine {
+/**
+ * The local stand-in for a deployed cluster's rules, over a PGlite schema engine. Every kind gets
+ * `simulateConflict()` and the DDL guard that matches the deployed app role's DML-only grants. A `dsql`
+ * cluster also gets dsql-lint on each statement and the per-transaction row and size limits; an `aurora`
+ * cluster is PostgreSQL and needs neither.
+ */
+export class RulesEngine implements RowCountingEngine {
 	private shouldConflict = false;
 	private allowDdl = false;
 	/** The per-transaction limit tracker, keyed by the inner engine's handle. */
 	private readonly trackers = new WeakMap<EngineTransaction, TransactionTracker>();
 
-	constructor(private readonly inner: RowCountingEngine) {}
+	constructor(
+		private readonly inner: RowCountingEngine,
+		readonly kind: ClusterType,
+	) {}
+
+	private get limited(): boolean {
+		return this.kind === 'dsql';
+	}
 
 	simulateConflict(): void {
 		this.shouldConflict = true;
@@ -54,25 +58,26 @@ export class DsqlRulesEngine implements DatabaseEngine {
 	private guard(sql: string): StatementInfo {
 		const info = inspectStatement(sql);
 		if (!this.allowDdl) {
-			validateStatement(sql, info.cleaned);
-			if (info.kind === 'ddl') throw blocksError(DSQL_PERMISSION_ERROR_NAME, DDL_NOT_ALLOWED_MESSAGE);
+			if (this.limited) validateStatement(sql, info.cleaned);
+			if (info.kind === 'ddl' || TRUNCATE.test(info.cleaned))
+				throw blocksError(PERMISSION_ERROR_NAME, ddlNotAllowed(this.kind));
 		}
 		return info;
 	}
 
-	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+	// Every statement takes one of the two counted methods; the others return a part of their result.
+	async queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
 		const info = this.guard(sql);
-		if (info.kind !== 'dml') return this.inner.query<T>(sql, params);
-		const { rows } = await this.dml(info, sql, params, (handle) =>
-			this.inner.queryCountedInTransaction<T>(handle, sql, params),
-		);
-		return rows;
+		if (info.kind !== 'dml' || !this.limited) return this.inner.queryCounted<T>(sql, params);
+		return this.dml(info, sql, params, (handle) => this.inner.queryCountedInTransaction<T>(handle, sql, params));
 	}
 
-	execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		const info = this.guard(sql);
-		if (info.kind !== 'dml') return this.inner.execute(sql, params);
-		return this.dml(info, sql, params, (handle) => this.inner.executeInTransaction(handle, sql, params));
+	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+		return (await this.queryCounted<T>(sql, params)).rows;
+	}
+
+	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
+		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
 	}
 
 	// A DML statement reaching the engine directly is one transaction on DSQL (a statement inside a
@@ -109,25 +114,31 @@ export class DsqlRulesEngine implements DatabaseEngine {
 		return this.inner.rollbackTransaction(handle);
 	}
 
-	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
+	async queryCountedInTransaction<T>(
+		handle: TransactionHandle,
+		sql: string,
+		params?: unknown[],
+	): Promise<CountedRows<T>> {
 		const info = this.guard(sql);
-		if (info.kind !== 'dml') return this.inner.queryInTransaction<T>(handle, sql, params);
-		const { rows } = await this.trackedInTransaction(handle, info, sql, params, () =>
-			this.inner.queryCountedInTransaction<T>(handle, sql, params),
-		);
-		return rows;
+		const run = () => this.inner.queryCountedInTransaction<T>(handle, sql, params);
+		if (info.kind !== 'dml' || !this.limited) return run();
+		return this.trackedInTransaction(handle, info, sql, params, run);
 	}
 
-	executeInTransaction(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		const info = this.guard(sql);
-		if (info.kind !== 'dml') return this.inner.executeInTransaction(handle, sql, params);
-		return this.trackedInTransaction(handle, info, sql, params, () =>
-			this.inner.executeInTransaction(handle, sql, params),
-		);
+	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
+		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
+	}
+
+	async executeInTransaction(
+		handle: TransactionHandle,
+		sql: string,
+		params?: unknown[],
+	): Promise<{ rowCount: number }> {
+		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
 	}
 
 	private track(handle: TransactionHandle): void {
-		if (handle instanceof EngineTransaction) this.trackers.set(handle, new TransactionTracker());
+		if (this.limited && handle instanceof EngineTransaction) this.trackers.set(handle, new TransactionTracker());
 	}
 
 	// The catalog and count queries run in the same transaction as the statement.

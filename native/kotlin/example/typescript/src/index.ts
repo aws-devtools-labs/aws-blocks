@@ -296,8 +296,13 @@ const COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#F9CA24', '#6C5CE7', '#A29BFE'
 const userId = Math.random().toString(36).substring(2, 8);
 const myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
 
+// A peer's colour must be a #rrggbb hex value: it lands in a `style` attribute,
+// where escaping alone wouldn't stop it adding CSS declarations.
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const FALLBACK_COLOR = '#888888';
+
 function cursorSvg(color: string): string {
-  return `<svg viewBox="0 0 24 24" fill="${color}" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="0 0 24 24" fill="${escapeHtml(color)}" xmlns="http://www.w3.org/2000/svg">
     <path d="M5 3l14 8-6.5 1.5L11 19z" stroke="#000" stroke-width="1"/>
   </svg>`;
 }
@@ -308,12 +313,13 @@ function initCursorTracking() {
   const remoteCursors = new Map<string, HTMLElement>();
   const lastSeen = new Map<string, number>();
 
-  function getOrCreateCursor(id: string, color: string): HTMLElement {
+  function getOrCreateCursor(id: string, peerColor: string): HTMLElement {
+    const color = HEX_COLOR.test(peerColor) ? peerColor : FALLBACK_COLOR;
     let el = remoteCursors.get(id);
     if (!el) {
       el = document.createElement('div');
       el.className = 'cursor-dot';
-      el.innerHTML = `${cursorSvg(escapeHtml(color))}<span class="label" style="background:${escapeHtml(color)};color:#fff">${escapeHtml(id)}</span>`;
+      el.innerHTML = `${cursorSvg(color)}<span class="label" style="background:${escapeHtml(color)};color:#fff">${escapeHtml(id)}</span>`;
       cursorArea.appendChild(el);
       remoteCursors.set(id, el);
     }

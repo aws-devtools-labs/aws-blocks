@@ -2,45 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Installs a cookie jar on `global.fetch` so that `Set-Cookie` response
- * headers persist across requests. Node's native fetch doesn't do this.
+ * The suites' shared cookie jar on `global.fetch`: `installCookieJar()` from
+ * `@aws-blocks/blocks/utils`, the one an app's e2e suite uses. Call it once
+ * before any API imports; it returns a cleanup function that restores the
+ * original fetch, and throws if a jar is already installed.
  *
- * Call once before any API imports. Returns a cleanup function that
- * restores the original fetch.
- *
- * @throws If a cookie jar is already installed.
+ * It is the framework's own (not a local copy) so that `createTestClient()`
+ * users, which step past that jar, never send or receive its cookies.
  */
-let installed = false;
-
-export function installCookieJar(): () => void {
-  if (installed) throw new Error('Cookie jar is already installed. Do NOT attempt to install or clean up nested cookie jar management.');
-  installed = true;
-
-  const jar = new Map<string, string>();
-  const nativeFetch = global.fetch;
-
-  global.fetch = (async (input: any, init?: any) => {
-    if (jar.size > 0) {
-      const cookieHeader = Array.from(jar.values()).join('; ');
-      init = init ?? {};
-      init.headers = { ...init.headers, cookie: cookieHeader };
-    }
-
-    const response = await nativeFetch(input, init);
-
-    for (const sc of response.headers.getSetCookie?.() ?? []) {
-      const [pair] = sc.split(';');
-      const [name, ...rest] = pair.split('=');
-      const value = rest.join('=');
-      if (value && !sc.includes('Max-Age=0')) {
-        jar.set(name.trim(), `${name.trim()}=${value}`);
-      } else {
-        jar.delete(name.trim());
-      }
-    }
-
-    return response;
-  }) as typeof fetch;
-
-  return () => { global.fetch = nativeFetch; installed = false; };
-}
+export { installCookieJar } from '@aws-blocks/blocks/utils';

@@ -117,38 +117,29 @@ w.testError = () => run('ctx-result', () => api.throwError('intentional test err
 w.authRequired = () => run('auth-result', () => api.authRequired());
 
 // ============================================================================
-// AuthOIDC (Client-initiated PKCE against stub IdP)
+// Auth — OIDC (server-initiated sign-in against the stub IdP)
 // ============================================================================
+//
+// Each federated provider is a `signIn:<id>` action in the auth state, and the
+// action carries the sign-in URL. The backend handles the IdP callback, sets
+// the session cookie and lands the browser back on `/`.
 
-const auth = await oidcAuthApi.getClient();
-w.oidcSignInGoogle = () => auth.signIn('google');
-w.oidcSignInCorporate = () => auth.signIn('corporate');
-
-w.oidcHandleCallback = async () => {
-  try {
-    const user = await auth.handleRedirectCallback();
-    if (user) {
-      show('oidc-result', `Signed in! ${JSON.stringify(user, null, 2)}`);
-      window.history.replaceState({}, '', '/');
-    } else {
-      show('oidc-result', 'No pending OIDC flow', false);
-    }
-  } catch (e: any) {
-    show('oidc-result', `Error: ${e.message}`, false);
+async function oidcSignIn(provider: 'google' | 'corporate') {
+  const state = await oidcAuthApi.getAuthState();
+  const action = state.actions.find((a) => a.name === `signIn:${provider}`);
+  if (!action?.url) {
+    show('oidc-result', `No sign-in action for ${provider}`, false);
+    return;
   }
-};
+  window.location.assign(action.url);
+}
+
+w.oidcSignInGoogle = () => oidcSignIn('google');
+w.oidcSignInCorporate = () => oidcSignIn('corporate');
 
 w.oidcGetUser = () => run('oidc-result', () => api.oidcGetCurrentUser());
 
-w.oidcSignOut = async () => {
-  await auth.signOut();
-  show('oidc-result', 'Signed out');
-};
-
-// Auto-handle callback if we landed here with ?code=&state=
-if (window.location.search.includes('code=') && window.location.search.includes('state=')) {
-  w.oidcHandleCallback();
-}
+w.oidcSignOut = () => run('oidc-result', () => api.oidcSignOut());
 
 // ============================================================================
 // AsyncJob
@@ -218,18 +209,24 @@ const realtimeArea = document.getElementById('realtime-area')!;
 const cursors = new Map<string, HTMLElement>();
 const statusEl = document.getElementById('realtime-status')!;
 
+// A peer's colour must be a #rrggbb hex value: it lands in a `style` attribute,
+// where escaping alone wouldn't stop it adding CSS declarations.
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const FALLBACK_COLOR = '#888888';
+
 function cursorSvg(color: string): string {
-  return `<svg viewBox="0 0 24 24" fill="${color}" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="0 0 24 24" fill="${escapeHtml(color)}" xmlns="http://www.w3.org/2000/svg">
     <path d="M5 3l14 8-6.5 1.5L11 19z" stroke="#000" stroke-width="1"/>
   </svg>`;
 }
 
-function getOrCreateCursor(id: string, color: string): HTMLElement {
+function getOrCreateCursor(id: string, peerColor: string): HTMLElement {
+  const color = HEX_COLOR.test(peerColor) ? peerColor : FALLBACK_COLOR;
   let el = cursors.get(id);
   if (!el) {
     el = document.createElement('div');
     el.className = 'cursor-dot';
-    el.innerHTML = `${cursorSvg(escapeHtml(color))}<span class="label" style="background:${escapeHtml(color)};color:#000">${escapeHtml(id)}</span>`;
+    el.innerHTML = `${cursorSvg(color)}<span class="label" style="background:${escapeHtml(color)};color:#000">${escapeHtml(id)}</span>`;
     realtimeArea.appendChild(el);
     cursors.set(id, el);
   }

@@ -23,15 +23,75 @@ public final nonisolated class AuthApi: Sendable {
 
     public enum SetAuthState {
 
-        public struct SignIn: Codable {
-            public let password: String
-            public let username: String
-        }
-
         public struct SignUp: Codable {
             public let password: String
             public let username: String
             public let attributes: [String: String]
+
+            public init(password: String, username: String, attributes: [String: String] = [:]) {
+                self.password = password
+                self.username = username
+                self.attributes = attributes
+            }
+
+            private struct DynamicKey: CodingKey {
+                var stringValue: String
+                var intValue: Int? { nil }
+                init?(stringValue: String) { self.stringValue = stringValue }
+                init?(intValue: Int) { return nil }
+            }
+
+            private static let fixedFieldNames: Set<String> = [
+                "password",
+                "username",
+                "action",
+            ]
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynamicKey.self)
+                try c.encode(self.password, forKey: DynamicKey(stringValue: "password")!)
+                try c.encode(self.username, forKey: DynamicKey(stringValue: "username")!)
+                for (k, v) in self.attributes where !Self.fixedFieldNames.contains(k) {
+                    try c.encode(v, forKey: DynamicKey(stringValue: k)!)
+                }
+            }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: DynamicKey.self)
+                self.password = try c.decode(String.self, forKey: DynamicKey(stringValue: "password")!)
+                self.username = try c.decode(String.self, forKey: DynamicKey(stringValue: "username")!)
+                var extras: [String: String] = [:]
+                for key in c.allKeys where !Self.fixedFieldNames.contains(key.stringValue) {
+                    extras[key.stringValue] = try c.decode(String.self, forKey: key)
+                }
+                self.attributes = extras
+            }
+        }
+
+        public struct ResetPassword: Codable {
+            public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
+        }
+
+        public struct SignIn: Codable {
+            public let password: String
+            public let username: String
+
+            public init(password: String, username: String) {
+                self.password = password
+                self.username = username
+            }
+        }
+
+        public struct SignInWithPasskey: Codable {
+            public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ConfirmSignUp: Codable {
@@ -51,24 +111,40 @@ public final nonisolated class AuthApi: Sendable {
                 try c.encodeIfPresent(self.password, forKey: .password)
                 try c.encode(self.username, forKey: .username)
             }
+
+            public init(code: String, password: String? = nil, username: String) {
+                self.code = code
+                self.password = password
+                self.username = username
+            }
         }
 
         public struct ResendSignUpCode: Codable {
             public let username: String
-        }
 
-        public struct ResetPassword: Codable {
-            public let username: String
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ConfirmResetPassword: Codable {
             public let code: String
             public let newPassword: String
             public let username: String
+
+            public init(code: String, newPassword: String, username: String) {
+                self.code = code
+                self.newPassword = newPassword
+                self.username = username
+            }
         }
 
         public struct AutoSignIn: Codable {
             public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ConfirmSignIn: Codable {
@@ -77,31 +153,68 @@ public final nonisolated class AuthApi: Sendable {
 
             public struct Code: Codable {
                 public let code: String
+
+                public init(code: String) {
+                    self.code = code
+                }
             }
 
             public struct MfaType: Codable {
                 public let mfaType: String
+
+                public init(mfaType: String) {
+                    self.mfaType = mfaType
+                }
             }
 
             public struct NewPassword: Codable {
                 public let newPassword: String
+
+                public init(newPassword: String) {
+                    self.newPassword = newPassword
+                }
             }
 
             public struct TotpSetup: Codable {
                 public let code: String
                 public let sharedSecret: String
+
+                public init(code: String, sharedSecret: String) {
+                    self.code = code
+                    self.sharedSecret = sharedSecret
+                }
             }
 
             public struct Email: Codable {
                 public let email: String
+
+                public init(email: String) {
+                    self.email = email
+                }
             }
 
             public struct Password: Codable {
                 public let password: String
+
+                public init(password: String) {
+                    self.password = password
+                }
             }
 
             public struct FirstFactor: Codable {
                 public let firstFactor: String
+
+                public init(firstFactor: String) {
+                    self.firstFactor = firstFactor
+                }
+            }
+
+            public struct Webauthn: Codable {
+                public let credential: String
+
+                public init(credential: String) {
+                    self.credential = credential
+                }
             }
 
             public enum ConfirmSignInChallenge: Codable {
@@ -112,6 +225,7 @@ public final nonisolated class AuthApi: Sendable {
                 case email(Email)
                 case password(Password)
                 case firstFactor(FirstFactor)
+                case webauthn(Webauthn)
 
                 enum CodingKeys: String, CodingKey {
                     case challenge
@@ -141,6 +255,9 @@ public final nonisolated class AuthApi: Sendable {
                     case .firstFactor(let params):
                         try container.encode("firstFactor", forKey: .challenge)
                         try params.encode(to: encoder)
+                    case .webauthn(let params):
+                        try container.encode("webauthn", forKey: .challenge)
+                        try params.encode(to: encoder)
                     }
                 }
 
@@ -155,6 +272,7 @@ public final nonisolated class AuthApi: Sendable {
                     case "email": self = .email(try Email(from: decoder))
                     case "password": self = .password(try Password(from: decoder))
                     case "firstFactor": self = .firstFactor(try FirstFactor(from: decoder))
+                    case "webauthn": self = .webauthn(try Webauthn(from: decoder))
                     default:
                         throw DecodingError.dataCorruptedError(forKey: .challenge, in: container, debugDescription: "Unknown value: \(disc)")
                     }
@@ -183,16 +301,95 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
+        public struct CompletePasskeyRegistration: Codable {
+            public let credential: String
+
+            public init(credential: String) {
+                self.credential = credential
+            }
+        }
+
+        public struct DeletePasskey: Codable {
+            public let credentialId: String
+
+            public init(credentialId: String) {
+                self.credentialId = credentialId
+            }
+        }
+
+        public struct VerifyTotpSetup: Codable {
+            public let code: String
+
+            public init(code: String) {
+                self.code = code
+            }
+        }
+
+        public struct UpdateMfaPreference: Codable {
+            public let email: Email?
+            public let sms: Sms?
+            public let totp: Totp?
+
+            enum CodingKeys: String, CodingKey {
+                case email
+                case sms
+                case totp
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encodeIfPresent(self.email, forKey: .email)
+                try c.encodeIfPresent(self.sms, forKey: .sms)
+                try c.encodeIfPresent(self.totp, forKey: .totp)
+            }
+
+            public init(email: Email? = nil, sms: Sms? = nil, totp: Totp? = nil) {
+                self.email = email
+                self.sms = sms
+                self.totp = totp
+            }
+
+            public enum Email: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+
+            public enum Sms: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+
+            public enum Totp: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+        }
+
         public enum Input: Codable {
-            case signIn(SignIn)
             case signUp(SignUp)
+            case resetPassword(ResetPassword)
+            case signIn(SignIn)
+            case signInWithPasskey(SignInWithPasskey)
             case confirmSignUp(ConfirmSignUp)
             case resendSignUpCode(ResendSignUpCode)
             case signOut
-            case resetPassword(ResetPassword)
             case confirmResetPassword(ConfirmResetPassword)
             case autoSignIn(AutoSignIn)
             case confirmSignIn(ConfirmSignIn)
+            case startPasskeyRegistration
+            case completePasskeyRegistration(CompletePasskeyRegistration)
+            case listPasskeys
+            case deletePasskey(DeletePasskey)
+            case setUpTotp
+            case verifyTotpSetup(VerifyTotpSetup)
+            case getMfaPreference
+            case updateMfaPreference(UpdateMfaPreference)
 
             enum CodingKeys: String, CodingKey {
                 case action
@@ -201,11 +398,17 @@ public final nonisolated class AuthApi: Sendable {
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
+                case .signUp(let params):
+                    try container.encode("signUp", forKey: .action)
+                    try params.encode(to: encoder)
+                case .resetPassword(let params):
+                    try container.encode("resetPassword", forKey: .action)
+                    try params.encode(to: encoder)
                 case .signIn(let params):
                     try container.encode("signIn", forKey: .action)
                     try params.encode(to: encoder)
-                case .signUp(let params):
-                    try container.encode("signUp", forKey: .action)
+                case .signInWithPasskey(let params):
+                    try container.encode("signInWithPasskey", forKey: .action)
                     try params.encode(to: encoder)
                 case .confirmSignUp(let params):
                     try container.encode("confirmSignUp", forKey: .action)
@@ -215,9 +418,6 @@ public final nonisolated class AuthApi: Sendable {
                     try params.encode(to: encoder)
                 case .signOut:
                     try container.encode("signOut", forKey: .action)
-                case .resetPassword(let params):
-                    try container.encode("resetPassword", forKey: .action)
-                    try params.encode(to: encoder)
                 case .confirmResetPassword(let params):
                     try container.encode("confirmResetPassword", forKey: .action)
                     try params.encode(to: encoder)
@@ -227,6 +427,26 @@ public final nonisolated class AuthApi: Sendable {
                 case .confirmSignIn(let params):
                     try container.encode("confirmSignIn", forKey: .action)
                     try params.encode(to: encoder)
+                case .startPasskeyRegistration:
+                    try container.encode("startPasskeyRegistration", forKey: .action)
+                case .completePasskeyRegistration(let params):
+                    try container.encode("completePasskeyRegistration", forKey: .action)
+                    try params.encode(to: encoder)
+                case .listPasskeys:
+                    try container.encode("listPasskeys", forKey: .action)
+                case .deletePasskey(let params):
+                    try container.encode("deletePasskey", forKey: .action)
+                    try params.encode(to: encoder)
+                case .setUpTotp:
+                    try container.encode("setUpTotp", forKey: .action)
+                case .verifyTotpSetup(let params):
+                    try container.encode("verifyTotpSetup", forKey: .action)
+                    try params.encode(to: encoder)
+                case .getMfaPreference:
+                    try container.encode("getMfaPreference", forKey: .action)
+                case .updateMfaPreference(let params):
+                    try container.encode("updateMfaPreference", forKey: .action)
+                    try params.encode(to: encoder)
                 }
             }
 
@@ -234,15 +454,24 @@ public final nonisolated class AuthApi: Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .action)
                 switch disc {
-                case "signIn": self = .signIn(try SignIn(from: decoder))
                 case "signUp": self = .signUp(try SignUp(from: decoder))
+                case "resetPassword": self = .resetPassword(try ResetPassword(from: decoder))
+                case "signIn": self = .signIn(try SignIn(from: decoder))
+                case "signInWithPasskey": self = .signInWithPasskey(try SignInWithPasskey(from: decoder))
                 case "confirmSignUp": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                 case "resendSignUpCode": self = .resendSignUpCode(try ResendSignUpCode(from: decoder))
                 case "signOut": self = .signOut
-                case "resetPassword": self = .resetPassword(try ResetPassword(from: decoder))
                 case "confirmResetPassword": self = .confirmResetPassword(try ConfirmResetPassword(from: decoder))
                 case "autoSignIn": self = .autoSignIn(try AutoSignIn(from: decoder))
                 case "confirmSignIn": self = .confirmSignIn(try ConfirmSignIn(from: decoder))
+                case "startPasskeyRegistration": self = .startPasskeyRegistration
+                case "completePasskeyRegistration": self = .completePasskeyRegistration(try CompletePasskeyRegistration(from: decoder))
+                case "listPasskeys": self = .listPasskeys
+                case "deletePasskey": self = .deletePasskey(try DeletePasskey(from: decoder))
+                case "setUpTotp": self = .setUpTotp
+                case "verifyTotpSetup": self = .verifyTotpSetup(try VerifyTotpSetup(from: decoder))
+                case "getMfaPreference": self = .getMfaPreference
+                case "updateMfaPreference": self = .updateMfaPreference(try UpdateMfaPreference(from: decoder))
                 default:
                     throw DecodingError.dataCorruptedError(forKey: .action, in: container, debugDescription: "Unknown value: \(disc)")
                 }

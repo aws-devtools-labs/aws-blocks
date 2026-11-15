@@ -6,7 +6,6 @@
 // ============================================================
 
 import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';
-import '@aws-blocks/bb-auth-oidc/middleware';
 import '@aws-blocks/bb-realtime/mock-middleware';
 import '@aws-blocks/bb-file-bucket/middleware';
 

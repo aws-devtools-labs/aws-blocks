@@ -41,6 +41,7 @@ import {
 	getVpcContext,
 	initializeVpc,
 	registerVpcRequirements,
+	sourceScopedConditions,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -53,6 +54,13 @@ import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { bundleContainerAsset } from './bundle.js';
+import {
+	CUSTOM_IMAGE_APP_DIR,
+	DEFAULT_CONTAINER_APP_DIR,
+	DEFAULT_CONTAINER_IMAGE,
+	DEFAULT_CONTAINER_USER,
+	DEFAULT_CONTAINER_WORKDIR,
+} from './default-image.js';
 import {
 	buildContainerApiWidgets,
 	buildContainerHealthWidgets,
@@ -131,18 +139,8 @@ const STOP_TIMEOUT_SECONDS = 120;
  */
 const DRAIN_GRACE_SECONDS = STOP_TIMEOUT_SECONDS - 10;
 
-/**
- * Default container image when the workload didn't set `image`. A stock, public,
- * AWS-hosted Node image on the SAME Node major as the Lambda runtime
- * ({@link DEFAULT_NODE_RUNTIME}, Node 24), so container and function behavior
- * match. Pulled remotely by ECS at task start — Blocks builds NO image, so a
- * deploy never needs a local Docker daemon. The app code is delivered separately
- * as an S3 asset and fetched at boot (see `bootstrap.mjs`).
- */
-const DEFAULT_CONTAINER_IMAGE = 'public.ecr.aws/docker/library/node:24-slim';
-
-/** Absolute in-container path the bootstrap runs from (also runs itself from here). */
-const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
+/** File name of the bootstrap inside the boot directory (it runs itself from there). */
+const BOOTSTRAP_FILE = 'bootstrap.mjs';
 
 /** SQS queue URLs an AsyncJob assigned to a container registers here so the compute's
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
@@ -330,6 +328,13 @@ export class ContainerCompute extends ComputeBase {
 		workerAsset.grantRead(taskRole);
 		pkgAsset.grantRead(taskRole);
 
+		// The default image runs as its unprivileged `node` user, booting from a
+		// directory that user owns. A custom image keeps its own default user (it
+		// may need root, or already run as a user of its own) and the `/app` boot
+		// directory, so existing custom images behave exactly as before.
+		const usesDefaultImage = options?.image === undefined;
+		const appDir = usesDefaultImage ? DEFAULT_CONTAINER_APP_DIR : CUSTOM_IMAGE_APP_DIR;
+
 		this.container = this.taskDefinition.addContainer('Backend', {
 			// Stock public Node image by default, or the customer's image verbatim —
 			// either way via fromRegistry (a remote pull, never a local build). The
@@ -343,7 +348,12 @@ export class ContainerCompute extends ComputeBase {
 			// sanctioned ECS "generic image + command override" pattern; see
 			// bootstrap.mjs.
 			entryPoint: ['node', '-e'],
-			command: [this.buildBootstrapLauncher(assetPath)],
+			command: [this.buildBootstrapLauncher(assetPath, appDir)],
+			// Not root: ports 8080/8081 aren't privileged and the boot dir is owned
+			// by this user. The image sets no WORKDIR, so start in the user's home
+			// rather than the root-owned `/`, so relative writes work. Both are
+			// omitted for a custom image (its own USER and WORKDIR apply).
+			...(usesDefaultImage ? { user: DEFAULT_CONTAINER_USER, workingDirectory: DEFAULT_CONTAINER_WORKDIR } : {}),
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
@@ -352,6 +362,8 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CONFIG_KEY: configKey,
 				BLOCKS_COMPUTE_ID: this.fullId,
 				BLOCKS_SERVICE_MODE: 'worker',
+				// Where bootstrap.mjs writes the bundles and main.js finds worker.js.
+				BLOCKS_APP_DIR: appDir,
 				// Where bootstrap.mjs fetches each app bundle from (same bucket; the
 				// three files are individually-keyed S3 assets).
 				BLOCKS_CODE_BUCKET: mainAsset.s3BucketName,
@@ -363,6 +375,7 @@ export class ContainerCompute extends ComputeBase {
 			stopTimeout: cdk.Duration.seconds(STOP_TIMEOUT_SECONDS),
 		});
 		this.container.addEnvironment('BLOCKS_DRAIN_GRACE_SECONDS', String(DRAIN_GRACE_SECONDS));
+		this.scopeExecutionRoleTrust(this.taskDefinition);
 
 		// Leave DesiredCount out of the template when autoscaling owns the task
 		// count. CloudFormation sends a declared DesiredCount on every update of the
@@ -839,13 +852,28 @@ export class ContainerCompute extends ComputeBase {
 				effect: cdk.aws_iam.Effect.ALLOW,
 				principals: [new ServicePrincipal('ecs-tasks.amazonaws.com')],
 				actions: ['sts:AssumeRole'],
-				conditions: {
-					StringEquals: { 'aws:SourceAccount': stack.account },
-					ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:ecs:${stack.region}:${stack.account}:*` },
-				},
+				conditions: sourceScopedConditions(stack, 'ecs', '*'),
 			}),
 		);
 		roleAny[KEY] = true;
+	}
+
+	/**
+	 * Scope the trust of the task execution role CDK creates for `taskDefinition`
+	 * (image pull and log delivery; it exists once a container with a log driver
+	 * is added) the same way as the task-role trust in {@link appendEcsTrustOnce}:
+	 * `aws:SourceAccount` + an `arn:<partition>:ecs:<region>:<account>:*`
+	 * `aws:SourceArn`. CDK renders that role with a single `ecs-tasks` trust
+	 * statement and no prop to shape it, so its condition is set by override.
+	 */
+	private scopeExecutionRoleTrust(taskDefinition: ecs.FargateTaskDefinition): void {
+		const cfnRole = taskDefinition.executionRole?.node.defaultChild;
+		if (!cfnRole || !cdk.CfnResource.isCfnResource(cfnRole)) return;
+		const stack = cdk.Stack.of(taskDefinition);
+		cfnRole.addPropertyOverride(
+			'AssumeRolePolicyDocument.Statement.0.Condition',
+			sourceScopedConditions(stack, 'ecs', '*'),
+		);
 	}
 
 	/**
@@ -891,23 +919,26 @@ export class ContainerCompute extends ComputeBase {
 	 * The container's own code (`main.js`/`worker.js`) lives in S3 and is fetched
 	 * at boot — but the fetcher itself (`bootstrap.mjs`) can't be fetched the same
 	 * way without a chicken-and-egg. So we inline the committed `bootstrap.mjs`
-	 * verbatim: write it to {@link BOOTSTRAP_PATH} and import it. The script then
+	 * verbatim: write it to `<appDir>/bootstrap.mjs` and import it. The script then
 	 * reads `BLOCKS_CODE_BUCKET`/`BLOCKS_CODE_PREFIX`, downloads the bundles with
 	 * the task role, and execs the parent. No extra S3 round-trip for the booter,
 	 * and nothing baked into the image.
 	 *
 	 * @param assetDir - the synth-time asset dir containing `bootstrap.mjs`.
+	 * @param appDir - the in-container boot directory (writable by the container
+	 *   user): the default image's non-root dir, or `/app` for a custom image.
 	 */
-	private buildBootstrapLauncher(assetDir: string): string {
+	private buildBootstrapLauncher(assetDir: string, appDir: string): string {
 		const bootstrapSource = readFileSync(join(assetDir, 'bootstrap.mjs'), 'utf8');
 		const b64 = Buffer.from(bootstrapSource, 'utf8').toString('base64');
 		// Write the ESM bootstrap to disk, then import() it (node -e runs CJS, so we
 		// can't inline ESM syntax directly — import() of a file works from CJS).
+		const bootstrapPath = `${appDir}/${BOOTSTRAP_FILE}`;
 		return [
 			'const {writeFileSync,mkdirSync}=require("node:fs");',
-			'mkdirSync("/app",{recursive:true});',
-			`writeFileSync(${JSON.stringify(BOOTSTRAP_PATH)},Buffer.from(${JSON.stringify(b64)},"base64"));`,
-			`import(${JSON.stringify(BOOTSTRAP_PATH)}).catch(e=>{console.error(e);process.exit(1);});`,
+			`mkdirSync(${JSON.stringify(appDir)},{recursive:true});`,
+			`writeFileSync(${JSON.stringify(bootstrapPath)},Buffer.from(${JSON.stringify(b64)},"base64"));`,
+			`import(${JSON.stringify(bootstrapPath)}).catch(e=>{console.error(e);process.exit(1);});`,
 		].join('');
 	}
 }

@@ -117,6 +117,21 @@ export function registerSharedConfig(scope: Construct, key: string, value: unkno
 }
 
 /**
+ * Add `value` to the comma-separated list registered under `key` for one backend,
+ * keeping what earlier registrations added — for framework keys several
+ * constructs each contribute entries to (every CloudFront front door of a backend
+ * adds its hosts to `BLOCKS_PUBLIC_HOSTS`). `value` may be a token: the entries
+ * are joined as a string, which CloudFormation resolves.
+ *
+ * @internal
+ */
+export function appendSharedConfigList(scope: Construct, key: string, value: string): void {
+	const registry = getRegistry(getBlocksRoot(scope));
+	const existing = registry.entries.get(key);
+	registry.entries.set(key, typeof existing === 'string' && existing !== '' ? `${existing},${value}` : value);
+}
+
+/**
  * Whether two config values are the same registration: the same object or token,
  * equal strings (an unresolved CDK token is a string, and the same token yields the
  * same string), or equal plain JSON.

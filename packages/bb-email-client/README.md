@@ -33,6 +33,62 @@ const failed = result.results.filter(r => r.status === 'failed').length;
 console.log(`Sent: ${sent}, Failed: ${failed}`);
 ```
 
+## Security: don't expose sending as an open relay
+
+Every `ApiNamespace` method is a public, internet-reachable endpoint with no auth by default. A
+method that passes caller input straight to `send()` or `sendBatch()` is an **open relay**: anyone
+who finds the endpoint can send mail of their choosing, to recipients of their choosing, from your
+verified domain. That burns your SES sending quota, can get your account's sending paused, and
+damages your domain's reputation.
+
+Don't do this:
+
+```typescript
+import type { EmailMessage } from '@aws-blocks/bb-email-client';
+
+// ❌ Open relay: anyone on the internet chooses the recipient and the content
+export const api = new ApiNamespace(scope, 'api', () => ({
+  async sendEmail(message: EmailMessage) {
+    return await emailClient.send(message);
+  },
+}));
+```
+
+Instead, gate the method with `auth.requireAuth(context)` from an auth block, and build the
+message on the server so the caller can't choose the recipients or the content:
+
+```typescript
+import { Scope, ApiNamespace, ApiError } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { EmailClient } from '@aws-blocks/bb-email-client';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth');
+// App-owned profile data, keyed by the user's `userSub`. The app writes each user's address here.
+const profiles = new KVStore<{ email: string }>(scope, 'profiles');
+const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@example.com' });
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async sendMeASummary() {
+    const user = await auth.requireAuth(context); // throws 401 for a caller who isn't signed in
+    // Look the address up from app-owned data, so this only ever mails the signed-in user.
+    const profile = await profiles.get(user.userSub);
+    if (!profile) throw new ApiError('No email address on file', 404);
+    return await emailClient.send({
+      to: profile.email,
+      subject: 'Your summary',
+      body: 'Here is your summary.',
+    });
+  },
+}));
+```
+
+Authentication alone does not stop a signed-in user from sending a lot of mail. The block does
+not rate-limit callers, so if a gated method still sends on the caller's behalf, add your own
+per-user limit. `sendBatch()` takes at most `maxBatchSize` messages per call (default 100), which
+bounds what a single request can send but not how many requests a caller makes.
+
 ## API
 
 ### `new EmailClient(scope, id, options)`
@@ -42,6 +98,7 @@ console.log(`Sent: ${sent}, Failed: ${failed}`);
 | `fromAddress` | `string` | ✅ | Verified sender email address |
 | `replyTo` | `string[]` | ❌ | Reply-to addresses |
 | `configurationSet` | `string` | ❌ | SES configuration set name |
+| `maxBatchSize` | `number` | ❌ | Most messages one `sendBatch()` call accepts (positive integer, default `100`). An invalid value throws `InvalidInputException` from the constructor, and at synth |
 
 ### `emailClient.send(message): Promise<SendResult>`
 
@@ -64,7 +121,12 @@ directly via `TemplateContent`.
 
 Returns `{ results: Array<{ status, messageId?, error? }> }`.
 
-Never throws on send failures. Both partial and total failures are reported per-entry in the
+A call takes at most `maxBatchSize` messages (default 100). A larger batch throws
+`InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is
+sent. To send more, split the messages across calls, or raise `maxBatchSize` for a trusted
+server-side job; keep the default on anything reachable from the internet.
+
+Apart from that, never throws on send failures. Both partial and total failures are reported per-entry in the
 `results` array (with `status: 'failed'`). A failed entry's `error` is a stable message naming
 the error code or the SES entry status (e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`);
 the raw SES error text is logged server-side, not returned.
@@ -167,6 +229,7 @@ This package uses a custom `"cdk"` export condition:
 ## Limits
 
 - **Per-message recipients**: 50 recipients max per message (To + CC + BCC combined)
+- **Batch size**: at most `maxBatchSize` messages per `sendBatch()` call (default 100); a larger batch is rejected before anything is sent
 - **Batch API destinations**: 50 destinations per `SendBulkEmail` API call (handled automatically via chunking)
 - **Message size**: 40 MB per message
 - **SES sandbox rate**: 1 email/sec (request production access for higher throughput)

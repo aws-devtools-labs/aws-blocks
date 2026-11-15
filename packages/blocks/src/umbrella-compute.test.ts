@@ -469,6 +469,27 @@ describe('apiFrontDoor: cloudfront', () => {
 	});
 });
 
+describe('@aws-blocks/blocks/cdk public surface', () => {
+	// Framework-internal seams live on `@aws-blocks/core/cdk/internal`; the
+	// umbrella re-exports `@aws-blocks/core/cdk` wholesale, so this pins that
+	// none of them reach customers through it (`check:api` does not report the
+	// cdk entry).
+	test('does not re-export the baseline protocol or the deploy-time Lambda helpers', async () => {
+		const umbrella: Record<string, unknown> = await import('@aws-blocks/blocks/cdk');
+		assert.ok('BlocksStack' in umbrella, 'resolved the cdk entry');
+		for (const name of [
+			'BASELINE_FORMAT_VERSION',
+			'baselineDir',
+			'claimBaseline',
+			'hasOrphanedBaselines',
+			'readBaselineFormatVersion',
+			'deployTimeLambdaCode',
+			'deployTimeLambdaEntry',
+		]) {
+			assert.ok(!(name in umbrella), `${name} must not be on @aws-blocks/blocks/cdk`);
+		}
+	});
+});
 // A namespace given its own `Compute` through the public `compute` option, end
 // to end through the real Compute block and LambdaCompute.
 describe('ApiNamespace compute option', () => {
@@ -778,11 +799,12 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
 		const [behavior] = dist.Properties.DistributionConfig.CacheBehaviors;
 		const functions = ofType(resources, 'AWS::CloudFront::Function');
-		assert.strictEqual(functions.length, 1);
-		assert.deepStrictEqual(behavior.FunctionAssociations, [
-			{ EventType: 'viewer-request', FunctionARN: { 'Fn::GetAtt': [functions[0][0], 'FunctionARN'] } },
-		]);
-		const code: string = functions[0][1].Properties.FunctionCode;
+		// Its own function; the gateway behaviors carry the public-host stamp.
+		assert.strictEqual(behavior.FunctionAssociations.length, 1);
+		assert.strictEqual(behavior.FunctionAssociations[0].EventType, 'viewer-request');
+		const stamp = functions.find(([id]) => id === behavior.FunctionAssociations[0].FunctionARN['Fn::GetAtt'][0]);
+		assert.ok(stamp, 'the behavior names a function in the stack');
+		const code: string = stamp[1].Properties.FunctionCode;
 		assert.match(code, /request\.headers\['x-blocks-forwarded-host'\] = \{ value: request\.headers\.host\.value \}/);
 		assert.match(code, /delete request\.headers\['x-blocks-forwarded-stage'\]/);
 		assert.match(code, /delete request\.headers\['x-forwarded-host'\]/, 'a client X-Forwarded-Host never reaches the container');
@@ -915,9 +937,14 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const resources = Template.fromStack(stack).toJSON().Resources as Resources;
 		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
 		assert.strictEqual(dist.Properties.DistributionConfig.CacheBehaviors, undefined, 'only the gateway default behavior');
-		for (const type of ['AWS::CloudFront::VpcOrigin', 'AWS::CloudFront::Function', 'Custom::AWS']) {
+		for (const type of ['AWS::CloudFront::VpcOrigin', 'Custom::AWS']) {
 			assert.strictEqual(ofType(resources, type).length, 0, type);
 		}
+		// The one function is the gateway behavior's public-host stamp; no direct-route stamp.
+		const gatewayStamps = (dist.Properties.DistributionConfig.DefaultCacheBehavior.FunctionAssociations ?? []).map(
+			(a: { FunctionARN: { 'Fn::GetAtt': [string, string] } }) => a.FunctionARN['Fn::GetAtt'][0],
+		);
+		assert.deepStrictEqual(ofType(resources, 'AWS::CloudFront::Function').map(([id]) => id), gatewayStamps);
 		const vpcLink = ofType(resources, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
 		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
 		const warnings = isolatedWarning(stack);

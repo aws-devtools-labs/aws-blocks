@@ -29,6 +29,7 @@ import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { getBlocksRoot, getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 
@@ -109,10 +110,7 @@ export class AgentCoreRuntime extends Scope {
 					effect: Effect.ALLOW,
 					principals: [new ServicePrincipal('bedrock-agentcore.amazonaws.com')],
 					actions: ['sts:AssumeRole'],
-					conditions: {
-						StringEquals: { 'aws:SourceAccount': stack.account },
-						ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:bedrock-agentcore:${stack.region}:${stack.account}:*` },
-					},
+					conditions: sourceScopedConditions(stack, 'bedrock-agentcore', '*'),
 				}),
 			);
 			// Bedrock model access for the loop (no Building Block grants this, and the loop no longer

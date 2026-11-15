@@ -99,3 +99,10 @@ val generateVersion by tasks.registering {
 kotlin.sourceSets.named("commonMain") {
     kotlin.srcDir(generateVersion.map { versionOutputDir })
 }
+
+// The golden source the code generator produces for spec names that are not identifiers.
+// Compiling it here, against this runtime, checks that it is valid Kotlin, which the golden
+// comparison in :codegen:test does not. The golden is read in place so the two cannot drift.
+kotlin.sourceSets.named("jvmTest") {
+    kotlin.srcDir("../../codegen-fixtures/43-non-identifier-names/kotlin")
+}

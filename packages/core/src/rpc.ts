@@ -379,7 +379,8 @@ function clipName(name: string): string {
 
 /**
  * Why `pathname` can't carry a call into `bodyNamespace`, or `undefined` when it
- * can. The bare endpoint carries any namespace. A per-namespace path must be
+ * can. The bare endpoint carries any namespace (which compute serves which
+ * namespace is the dispatcher's `servesNamespace` check). A per-namespace path must be
  * exactly `/aws-blocks/api/{namespace}` — one segment, so a deeper path is
  * rejected the same way whichever compute serves it — and must name the body's
  * namespace exactly (export names are case-sensitive). Names are clipped before

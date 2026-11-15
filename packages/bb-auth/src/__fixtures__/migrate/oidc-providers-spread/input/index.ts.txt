@@ -1,0 +1,13 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthOIDC, google, stubIdp } from '@aws-blocks/bb-auth-oidc';
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+
+const scope = new Scope('app');
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+
+// Built outside the block, and spread into its providers.
+const shared = [stubIdp({ name: 'dev' })];
+
+export const auth = new AuthOIDC(scope, 'sso', {
+	providers: [...shared, google({ clientId: 'g', clientSecret: () => googleSecret.get() })],
+});

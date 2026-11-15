@@ -25,6 +25,11 @@ package com.aws.blocks.kotlin
  *   is held in memory for the life of the process and the user signs in again on the next launch.
  *   Choose the value once and keep it: changing it later points the application at a different
  *   directory, which reads as the user being signed out.
+ *
+ *   On desktop the stored session is encrypted with a key kept in a file beside it, protected only
+ *   by file permissions (owner-only on Linux and macOS; on Windows, the user profile's inherited
+ *   access control list, which also lets administrators read it). That does not protect it from
+ *   other processes running as the same OS user; leave this unset to keep the session in memory only.
  */
 data class BlocksConfig(
     val server: BlocksServer,

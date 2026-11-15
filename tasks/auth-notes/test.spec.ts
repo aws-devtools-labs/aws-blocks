@@ -2,7 +2,8 @@ import { test, expect, type Page, type APIRequestContext } from '@playwright/tes
 
 const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 8_000;
-const PASSWORD = 'correct-horse-battery-staple';
+// Satisfies a default Cognito-style policy (upper, lower, digit, symbol, >= 8).
+const PASSWORD = 'Correct-Horse-Battery-9';
 
 const RUN = process.env.RUN_ID || String(Date.now());
 let rpcSeq = 0;
@@ -33,13 +34,43 @@ async function rpc(
 	return { status: res.status(), body: await res.json().catch(() => null) };
 }
 
-// Sign up (or in) through the DOM, establishing the auth session cookie on
-// this page's context — after this, page.request calls the api as this user.
-async function signUp(page: Page, username: string): Promise<void> {
-	await expect(page.getByTestId('auth-username')).toBeVisible({ timeout: T });
-	await page.getByTestId('auth-username').fill(username);
+// The grader has no mailbox: read the sign-up confirmation code back through the
+// mock-gated api.getLastCode() hook (the PROMPT requires it), matching on this
+// user's email so a stale code from an earlier test is never picked up.
+async function fetchCode(ctx: APIRequestContext, email: string): Promise<string> {
+	let code = '';
+	await expect
+		.poll(
+			async () => {
+				const { body } = await rpc(ctx, 'api.getLastCode', []);
+				const last = body?.result;
+				const who = String(last?.username ?? '');
+				if (last && typeof last.code === 'string' && (who === email || who.includes(email.split('@')[0]))) {
+					code = last.code;
+					return code;
+				}
+				return '';
+			},
+			{ timeout: T, message: 'code not delivered — check api.getLastCode returns { username, code } in mock mode' },
+		)
+		.not.toBe('');
+	return code;
+}
+
+// Sign up through the DOM — credentials, then the emailed confirmation code —
+// establishing the auth session cookie on this page's context. After this,
+// page.request calls the api as this user. `base` is a uniq() seed; the email
+// is derived from it.
+async function signUp(page: Page, base: string): Promise<void> {
+	const email = `${base}@example.com`;
+	await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
+	await page.getByTestId('auth-email').fill(email);
 	await page.getByTestId('auth-password').fill(PASSWORD);
 	await page.getByTestId('auth-submit').click();
+	await expect(page.getByTestId('auth-code')).toBeVisible({ timeout: T });
+	const code = await fetchCode(page.request, email);
+	await page.getByTestId('auth-code').fill(code);
+	await page.getByTestId('auth-code-submit').click();
 	await expect(page.getByTestId('note-textarea')).toBeVisible({ timeout: T });
 }
 
@@ -51,13 +82,13 @@ test.describe('auth-notes', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		await expect(page.getByTestId('auth-username')).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 		await expect(page.getByTestId('auth-password')).toBeVisible();
 		await expect(page.getByTestId('note-textarea')).toHaveCount(0, { timeout: T });
 
 		await signUp(page, uniq('alice'));
 		await expect(page.getByTestId('note-save')).toBeVisible();
-		await expect(page.getByTestId('auth-username')).toHaveCount(0, { timeout: T });
+		await expect(page.getByTestId('auth-email')).toHaveCount(0, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
@@ -86,7 +117,7 @@ test.describe('auth-notes', () => {
 		await signUp(page, uniq('alice'));
 
 		await page.getByTestId('auth-signout').click();
-		await expect(page.getByTestId('auth-username')).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 		await expect(page.getByTestId('note-textarea')).toHaveCount(0, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);

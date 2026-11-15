@@ -4,10 +4,10 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
+import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
 import { buildMigrationPlan, lintMigrationFiles } from './plan.js';
 
-const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }).files[0].steps;
+const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }, 'dsql').files[0].steps;
 
 describe('migration plan (dsql): sequencing', () => {
 	test('DDL runs outside the transaction, DML inside', () => {
@@ -104,10 +104,13 @@ describe('migration plan (dsql): sequencing', () => {
 	});
 
 	test('files are planned in name order', () => {
-		const p = buildMigrationPlan({
-			'002_seed.sql': "INSERT INTO t VALUES ('a');",
-			'001_init.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);',
-		});
+		const p = buildMigrationPlan(
+			{
+				'002_seed.sql': "INSERT INTO t VALUES ('a');",
+				'001_init.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);',
+			},
+			'dsql',
+		);
 		assert.deepStrictEqual(
 			p.files.map((f) => f.file),
 			['001_init.sql', '002_seed.sql'],
@@ -121,12 +124,15 @@ describe('migration lint (dsql): what stops it', () => {
 	test('every finding across every file is listed, with its file, rule and doc page', () => {
 		assert.throws(
 			() =>
-				lintMigrationFiles({
-					'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nCREATE INDEX t_id ON t (id);',
-					'002.sql': 'TRUNCATE t;',
-				}),
+				lintMigrationFiles(
+					{
+						'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nCREATE INDEX t_id ON t (id);',
+						'002.sql': 'TRUNCATE t;',
+					},
+					'dsql',
+				),
 			(e: unknown) => {
-				assert.ok(isBlocksError(e, DSQL_MIGRATION_VALIDATION_ERROR_NAME));
+				assert.ok(isBlocksError(e, MIGRATION_VALIDATION_ERROR_NAME));
 				const lines = e.message.split('\n').slice(1);
 				assert.strictEqual(lines.length, 3, e.message);
 				assert.match(lines[0], /^ {2}001\.sql: serial_type: /);
@@ -139,9 +145,84 @@ describe('migration lint (dsql): what stops it', () => {
 	});
 
 	test('a clean file lints without error; the plan itself never lints', () => {
-		lintMigrationFiles({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
+		lintMigrationFiles({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' }, 'dsql');
 		// The migration Lambda plans files checked at synth, without the linter.
-		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' });
+		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' }, 'dsql');
 		assert.strictEqual(p.files[0].steps[0].sql, 'CREATE TABLE t (id SERIAL PRIMARY KEY)');
+	});
+});
+
+describe('migration plan (aurora): one transaction per file', () => {
+	test('every statement is transactional and no job wait is added', () => {
+		const plan = buildMigrationPlan(
+			{
+				'001.sql':
+					'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);\nINSERT INTO t (n) VALUES (1);',
+			},
+			'aurora',
+		);
+		const steps = plan.files[0].steps;
+		assert.strictEqual(steps.length, 3);
+		assert.ok(steps.every((s) => s.kind === 'statement' && s.transactional));
+	});
+
+	test('an aurora file is PostgreSQL: SERIAL passes, and only the DSQL-only forms are named', () => {
+		const files = { '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' };
+		lintMigrationFiles(files, 'aurora');
+		assert.throws(() => lintMigrationFiles(files, 'dsql'), { name: MIGRATION_VALIDATION_ERROR_NAME });
+		assert.throws(
+			() =>
+				lintMigrationFiles(
+					{
+						'002.sql':
+							"CREATE INDEX ASYNC t_n ON t (n);\nSELECT sys.wait_for_job('x');\nINSERT INTO t (n) VALUES ('ASYNC');",
+					},
+					'aurora',
+				),
+			{
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message:
+					/cluster kind 'aurora'[\s\S]*002\.sql: `ASYNC` is Aurora DSQL syntax[\s\S]*002\.sql: `sys\.wait_for_job\(\)` is Aurora DSQL syntax/,
+			},
+		);
+	});
+
+	test('a statement PostgreSQL refuses inside a transaction block is named, since each file is one', () => {
+		const stops = (sql: string) =>
+			assert.throws(() => lintMigrationFiles({ '003.sql': sql }, 'aurora'), {
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message: /003\.sql: .*cannot run inside a transaction block/,
+			});
+		stops('CREATE INDEX CONCURRENTLY t_n ON t (n);');
+		stops('CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS u ON t (a);');
+		stops('DROP INDEX CONCURRENTLY IF EXISTS t_n;');
+		stops('REINDEX INDEX CONCURRENTLY t_n;');
+		stops('REINDEX (VERBOSE) TABLE CONCURRENTLY t;');
+		stops('VACUUM ANALYZE t;');
+		stops("ALTER SYSTEM SET work_mem = '64MB';");
+		stops('CREATE DATABASE other;');
+		// Transaction control: an embedded COMMIT would end the runner's transaction.
+		for (const sql of ['BEGIN;', 'START TRANSACTION;', 'COMMIT;', 'END;', 'ROLLBACK;']) {
+			assert.throws(() => lintMigrationFiles({ '005.sql': `${sql}\nCREATE TABLE t (id INT);` }, 'aurora'), {
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message: /005\.sql: Transaction control is not allowed/,
+			});
+		}
+		// BEGIN and END inside a function body are not statements.
+		lintMigrationFiles(
+			{
+				'006.sql':
+					'CREATE FUNCTION touch() RETURNS trigger AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END $$ LANGUAGE plpgsql;\nDO $$ BEGIN PERFORM 1; END $$;',
+			},
+			'aurora',
+		);
+		// The words inside a literal or a comment are not statements.
+		lintMigrationFiles(
+			{
+				'004.sql':
+					"-- VACUUM later\nINSERT INTO t (name) VALUES ('CREATE INDEX CONCURRENTLY');\nCREATE INDEX t_n ON t (n);",
+			},
+			'aurora',
+		);
 	});
 });

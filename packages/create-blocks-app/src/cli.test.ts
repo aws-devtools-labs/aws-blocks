@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
+import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -57,7 +57,8 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, agent, cron, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -149,6 +150,29 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.doesNotMatch(result.stderr, /ENOENT/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('--template auth-cognito (the former name) scaffolds the auth template', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-alias-'));
+    const targetDir = join(tmpDir, 'my-app');
+    try {
+      const result = run([targetDir, '--template', 'auth-cognito', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /"auth-cognito" template is now called "auth"/);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.blocksTemplate, 'auth');
+      assert.match(readFileSync(join(targetDir, 'aws-blocks', 'index.ts'), 'utf-8'), /new Auth\(scope, 'auth'/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('every template alias points at a real template and shadows none', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    for (const [from, to] of Object.entries(TEMPLATE_ALIASES)) {
+      assert.ok(existsSync(join(templatesDir, to, 'package.json')), `alias ${from} → ${to}: no template "${to}"`);
+      assert.ok(!existsSync(join(templatesDir, from)), `alias ${from} would shadow the template folder "${from}"`);
     }
   });
 
@@ -244,8 +268,9 @@ describe('create-blocks-app template metadata', () => {
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
       cron: { port: 3001, frontend: false },
+      observability: { port: 3001, frontend: false },
       nextjs: frontend,
-      'auth-cognito': frontend,
+      auth: frontend,
       agent: frontend,
       bare: frontend,
       default: frontend,
@@ -270,7 +295,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, 'auth-cognito': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, auth: vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
@@ -493,6 +518,10 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+      // With `next` installed, the app's tsconfig.json checks aws-blocks/ (next build ignores
+      // project references), so the backend gets no project of its own and the steps say so.
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
       // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
       assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
       assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
@@ -832,6 +861,62 @@ describe('create-blocks-app auto-detection', () => {
     assert.ok(checked.includes('default'), `checked: ${checked.join(', ')}`);
   });
 
+  it('gives an existing project the backend\'s own tsconfig and prints the reference steps, leaving its tsconfig alone', () => {
+    const backendTsconfig = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+    // `default` ships aws-blocks/tsconfig.json; `backend` does not, so the default template's is copied.
+    for (const template of ['default', 'backend']) {
+      const tmpDir = join(__dirname, `../.test-existing-tsconfig-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+      const tsconfig = '{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }\n';
+      writeFileSync(join(tmpDir, 'tsconfig.json'), tsconfig);
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), backendTsconfig, template);
+        assert.strictEqual(readFileSync(join(tmpDir, 'tsconfig.json'), 'utf-8'), tsconfig, `${template}: the project's own tsconfig.json changed`);
+        assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/, template);
+        assert.match(result.stdout, /`tsc -b --force` instead of `tsc`/, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
+  it('gives an existing Next.js project no backend tsconfig, since next build ignores project references', () => {
+    const tmpDir = join(__dirname, '../.test-existing-tsconfig-nextjs');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0', dependencies: { next: '*' } }));
+    try {
+      // `default` ships aws-blocks/tsconfig.json; in a Next.js project nothing would build it, and
+      // esbuild and editors would read it instead of the app's tsconfig.json (and its "paths").
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'index.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
+      assert.doesNotMatch(result.stdout, /"references"/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
+    const tmpDir = join(__dirname, '../.test-amplify-tsconfig');
+    mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+    writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const expected = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+      assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), expected);
+      assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('defaults to the default template when no --template is given for an existing project', () => {
     const tmpDir = join(__dirname, '../.test-existing-default-template');
     mkdirSync(tmpDir, { recursive: true });
@@ -868,9 +953,9 @@ describe('create-blocks-app auto-detection', () => {
   });
 
   it('every deployable template ships the standard `vendorize` script', () => {
-    // Regression guard: the auth-cognito template was missing `vendorize`
-    // (all other deployable templates had it), so `npm run vendorize` didn't
-    // work in scaffolded auth-cognito apps. A template that can `sandbox`/`deploy`
+    // Regression guard: the auth template (then named auth-cognito) was missing
+    // `vendorize` (all other deployable templates had it), so `npm run vendorize`
+    // didn't work in apps scaffolded from it. A template that can `sandbox`/`deploy`
     // (i.e. has those lifecycle scripts) must also expose `vendorize` so users
     // can inline a Block's source for customization.
     const templatesDir = join(__dirname, '..', 'templates');
@@ -891,6 +976,35 @@ describe('create-blocks-app auto-detection', () => {
     assert.deepStrictEqual(missing, [], `Deployable templates missing "vendorize": ${missing.join(', ')}`);
   });
 
+  it('every template that constructs Auth creates an email, case-insensitive pool', () => {
+    // `signInWith` and `caseSensitive` are fixed once a Cognito user pool exists,
+    // so the shape new apps start with is permanent. Email sign-in, matched
+    // ignoring case, is also the pool shape Amplify's client libraries expect —
+    // keeping the door open to a client-driven frontend on the same pool.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const offenders: string[] = [];
+    let checked = 0;
+    for (const name of readdirSync(templatesDir)) {
+      const backend = join(templatesDir, name, 'aws-blocks', 'index.ts');
+      if (!existsSync(backend)) continue;
+      const source = readFileSync(backend, 'utf-8');
+      // Live code, and the commented-out example in `bare` (`// const auth = …`).
+      const construct =
+        /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
+      if (!construct) continue;
+      checked++;
+      if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
+        offenders.push(name);
+      }
+    }
+    assert.ok(checked >= 6, `expected the auth-using templates to be found, checked ${checked}`);
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      `templates without signInWith ['email'] + caseSensitive false: ${offenders.join(', ')}`,
+    );
+  });
+
   it('skips npm install when creating a fresh project with --skip-install', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-fresh-skip-install-'));
     const targetDir = join(tmpDir, 'fresh-app');
@@ -903,6 +1017,22 @@ describe('create-blocks-app auto-detection', () => {
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('rewrites @aws-blocks/* placeholders to file: paths when run from the monorepo', () => {
+    // The published-registry path (caret ranges) is covered by published-layout.test.ts.
+    const packagesDir = join(__dirname, '../..');
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-file-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.dependencies['@aws-blocks/blocks'], `file:${packagesDir}/blocks`);
+      assert.strictEqual(pkg.dependencies['@aws-blocks/hosting'], `file:${packagesDir}/hosting`);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

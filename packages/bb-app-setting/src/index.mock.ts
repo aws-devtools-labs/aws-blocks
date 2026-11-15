@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
-import { validateAppSettingOptions } from './validation.js';
+import { assertValueWithinSizeLimit, validateAppSettingOptions } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -24,8 +24,6 @@ export type { AppSettingOptions } from './types.js';
 export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-const MAX_VALUE_BYTES = 4096; // SSM standard-tier 4 KB limit
 
 function readSettings(scope: Scope): Record<string, unknown> {
 	const fp = join(getMockDataDir(scope, { root: true }), 'settings.json');
@@ -179,12 +177,7 @@ export class AppSetting<T = string> extends Scope {
 		await validateSchema(this.schema, value);
 
 		const serialized = JSON.stringify(value);
-		if (!this.isSecret && Buffer.byteLength(serialized, 'utf8') > MAX_VALUE_BYTES) {
-			throw blocksError(
-				AppSettingErrors.ValidationFailed,
-				`Value size ${Buffer.byteLength(serialized, 'utf8')} bytes exceeds the 4 KB (${MAX_VALUE_BYTES} bytes) limit`,
-			);
-		}
+		assertValueWithinSizeLimit(serialized, this.isSecret);
 
 		const settings = readSettings(this);
 		settings[this.fullId] = value;

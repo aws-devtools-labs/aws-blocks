@@ -298,6 +298,12 @@ export interface CdkOutput {
   run(command: string, args: string[], options?: CdkRunOptions): void | Promise<void>;
   /** Print the retained raw output to stderr (curated levels only; no-op when empty). */
   printRetained(): void;
+  /**
+   * The retained raw lines the most recent {@link run} printed, oldest first:
+   * at most what the ring still holds, and none once {@link printRetained}
+   * cleared it. Always empty when output is not curated (it is not captured).
+   */
+  lastRunOutput(): string[];
 }
 
 /** Build the {@link CdkOutput} for one operation at the current log level. */
@@ -312,6 +318,8 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
     options.isTty ??
     ((stdout === process.stdout || stdout === process.stderr) && (stdout as NodeJS.WriteStream).isTTY === true);
   const ring = createOutputRing(options.retainLines);
+  /** `ring.total()` when the most recent `run` started. */
+  let runStart = 0;
   const reporter =
     level === 'normal'
       ? createCdkProgressReporter(stdout, stderr, { isTty, now: options.now, verb: options.verb })
@@ -349,6 +357,7 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
     curated,
     streams,
     run(command: string, args: string[], runOptions: CdkRunOptions = {}): void | Promise<void> {
+      runStart = ring.total();
       if (!streams) {
         return runSync(command, args, { stdio: toStderr ? ['inherit', 2, 'inherit'] : 'inherit', ...runOptions });
       }
@@ -359,6 +368,13 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
       const dump = formatRetainedOutput(ring, options.label, level);
       if (dump) stderr.write(dump);
       ring.clear();
+      runStart = 0;
+    },
+    lastRunOutput(): string[] {
+      const count = ring.total() - runStart;
+      if (count <= 0) return [];
+      const lines = ring.lines();
+      return lines.slice(Math.max(0, lines.length - count));
     },
   };
 }

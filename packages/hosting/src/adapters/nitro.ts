@@ -1507,6 +1507,13 @@ const presetToCompute = (
   };
 };
 
+/** `url` without its trailing slashes: a linear scan, so a long run of `/` costs no regex backtracking. */
+const withoutTrailingSlashes = (url: string): string => {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+};
+
 /**
  * Walk `.output/public/` and emit static routes for prerendered output,
  * then append a catch-all `/* → default` for SSR.
@@ -1539,7 +1546,7 @@ const buildRoutes = (
   // compute resource (it's a reserved target).
   if (hasImageOptimization) {
     addRoute({
-      pattern: `${ipxBaseURL.replace(/\/+$/, '')}/*`,
+      pattern: `${withoutTrailingSlashes(ipxBaseURL)}/*`,
       target: 'image-optimization',
     });
   }

@@ -1305,3 +1305,68 @@ describe('waitUntilSynced', () => {
 		}
 	});
 });
+
+// ── asAgentTool() ──────────────────────────────────────────────────────────
+
+describe('asAgentTool()', () => {
+	test('sends the filter derived from the tool context to Bedrock, never one from the tool input', async () => {
+		const cleanup = setKbEnv('TEST', 'TOOL1');
+		const sent: any[] = [];
+		mockRuntimeSend((cmd) => {
+			sent.push((cmd as { input: unknown }).input);
+			return {
+				retrievalResults: [{ content: { text: 'tenant a doc' }, score: 0.9, location: { s3Location: { uri: 's3://b/a.md' } }, metadata: { tenant: 'a' } }],
+			};
+		});
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'tool1', { source: './knowledge' });
+			const tool = kb.asAgentTool<{ tenantId: string }>({ filter: (context) => ({ tenant: { equals: context.tenantId } }), maxResults: 3 });
+			const input = { query: 'docs', filter: { tenant: { equals: 'b' } } };
+			const results = await tool.handler({ input, context: { tenantId: 'a' } });
+			assert.strictEqual(tool.untrustedOutput, true);
+			assert.strictEqual(results.length, 1);
+			assert.strictEqual(results[0].text, 'tenant a doc');
+			assert.strictEqual(sent.length, 1);
+			const config = sent[0].retrievalConfiguration.vectorSearchConfiguration;
+			assert.strictEqual(config.numberOfResults, 3);
+			assert.deepStrictEqual(JSON.parse(JSON.stringify(config.filter)), { equals: { key: 'tenant', value: 'a' } });
+			assert.deepStrictEqual(sent[0].retrievalQuery, { text: 'docs' });
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('does not call Bedrock when the filter callback throws', async () => {
+		const cleanup = setKbEnv('TEST', 'TOOL2');
+		let calls = 0;
+		mockRuntimeSend(() => { calls++; return { retrievalResults: [] }; });
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'tool2', { source: './knowledge' });
+			const tool = kb.asAgentTool({ filter: () => { throw new Error('no tenant'); } });
+			await assert.rejects(tool.handler({ input: { query: 'docs' }, context: {} }), /no tenant/);
+			assert.strictEqual(calls, 0);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('does not call Bedrock when the filter callback returns null, {} or a missing equals', async () => {
+		const cleanup = setKbEnv('TEST', 'TOOL3');
+		let calls = 0;
+		mockRuntimeSend(() => { calls++; return { retrievalResults: [] }; });
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'tool3', { source: './knowledge' });
+			for (const value of [null, {}, { tenant: { equals: undefined } }]) {
+				const tool = kb.asAgentTool({ filter: () => value as never });
+				await assert.rejects(
+					tool.handler({ input: { query: 'docs' }, context: {} }),
+					(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+					`expected a ValidationError for ${JSON.stringify(value)}`,
+				);
+			}
+			assert.strictEqual(calls, 0);
+		} finally {
+			cleanup();
+		}
+	});
+});
