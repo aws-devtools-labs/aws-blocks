@@ -35,8 +35,11 @@ const UNDELIVERABLE_REPLY_TO_WARNING_ID = '@aws-blocks/bb-email-client:Undeliver
  * error, on every stage: the app still synthesizes and the local mock still
  * works, but the message says that sends will fail once deployed. The text is
  * the same on every stage, because the domain is reserved everywhere.
+ *
+ * @returns `true` when the sender itself is on a reserved domain, so the caller
+ *   can skip the generic verification notice (the warning already links the guide).
  */
-function warnOnReservedDomains(scope: IConstruct, options: EmailOptions): void {
+function warnOnReservedDomains(scope: IConstruct, options: EmailOptions): boolean {
 	const senderDomain = reservedDomainOf(options.fromAddress);
 	if (senderDomain) {
 		Annotations.of(scope).addWarningV2(
@@ -57,6 +60,7 @@ function warnOnReservedDomains(scope: IConstruct, options: EmailOptions): void {
 				'acknowledge this warning if that is intended.',
 		);
 	}
+	return senderDomain !== undefined;
 }
 
 export class EmailClient extends BuildingBlockScope {
@@ -65,12 +69,14 @@ export class EmailClient extends BuildingBlockScope {
 		// Fail at synth on a bad maxBatchSize rather than at the first sendBatch() call.
 		resolveMaxBatchSize(options.maxBatchSize);
 
-		warnOnReservedDomains(this, options);
-
-		console.warn(
-			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
-			`   Guide: https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html\n`
-		);
+		// A reserved sender already gets an actionable (and acknowledgeable) synth warning that
+		// links the same guide, so print the generic prerequisite notice only for other senders.
+		if (!warnOnReservedDomains(this, options)) {
+			console.warn(
+				`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
+				`   Guide: https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html\n`
+			);
+		}
 
 		// TODO: Add a CDK custom resource that validates the SES email identity at deploy time.
 		// Deploy time is the earliest point where AWS credentials are available to check SES state.

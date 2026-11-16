@@ -178,3 +178,26 @@ test('CDK: the reserved-sender warning can be acknowledged', () => {
 		.map((entry) => String(entry.entry.data));
 	assert.ok(!messages.some((m) => m.includes(SENDER_WARNING)), 'acknowledged warning is not reported');
 });
+
+function prerequisiteNotices(fromAddress: string): string[] {
+	new StubBlocksStack(new cdk.App(), 'TestStack');
+	const printed: string[] = [];
+	const originalWarn = console.warn;
+	console.warn = (...args: unknown[]) => {
+		printed.push(args.map(String).join(' '));
+	};
+	try {
+		new EmailClient(new Scope('app'), 'mail', { fromAddress });
+	} finally {
+		console.warn = originalWarn;
+	}
+	return printed.filter((line) => line.includes('Prerequisite'));
+}
+
+test('CDK: a normal sender prints the SES verification prerequisite notice', () => {
+	assert.strictEqual(prerequisiteNotices('noreply@acme.com').length, 1);
+});
+
+test('CDK: a reserved sender gets only the reserved-domain warning, not the generic prerequisite notice too', () => {
+	assert.deepStrictEqual(prerequisiteNotices('noreply@example.com'), []);
+});
