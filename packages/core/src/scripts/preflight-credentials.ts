@@ -156,6 +156,11 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	 * The check runs only when the probe returns the account it verified.
 	 */
 	checkBootstrap?: boolean;
+	/**
+	 * Print the `cdk bootstrap` command with `--express` and a recovery line (see
+	 * {@link cdkBootstrapFailure}). Default `false`; the sandbox commands turn it on.
+	 */
+	expressBootstrap?: boolean;
 	/** Reads the CDK bootstrap version parameter. Override in tests. */
 	readBootstrapVersion?: BootstrapVersionReader;
 }
@@ -282,6 +287,7 @@ export async function assertAwsCredentials({
 	metadataTimeoutMs,
 	accountDetails = true,
 	checkBootstrap = false,
+	expressBootstrap = false,
 	readBootstrapVersion,
 	...options
 }: AssertAwsCredentialsOptions): Promise<void> {
@@ -369,6 +375,7 @@ export async function assertAwsCredentials({
 					profile,
 					credentials: verified.credentials,
 					qualifier: bootstrapQualifier,
+					express: expressBootstrap,
 					read: readBootstrapVersion,
 				})
 			: undefined;
