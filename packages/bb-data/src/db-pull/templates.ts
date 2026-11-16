@@ -312,8 +312,7 @@ cp .env.production.example .env.production
 
 Set \`SUPABASE_DB_URL\` to your **production** database's connection string. The port is
 normalized automatically at runtime (transaction pooler in Lambda), so you don't need to
-pick it manually. **Use a separate Supabase project or branch — never your dev database**;
-a handler with \`rlsPolicy: 'bypass'\` has full access.
+pick it manually. **Use a separate Supabase project or branch — never your dev database**.
 
 ### 3. Set your other production secrets
 

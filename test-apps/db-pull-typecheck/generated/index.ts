@@ -94,7 +94,6 @@ function resolveDbSsl(): { rejectUnauthorized?: true; ca?: string } | { rejectUn
  */
 export const db = new Database(scope, 'db', {
   connection: fromExisting({ connectionString: { get: resolveConnString }, ssl: resolveDbSsl() }),
-  rlsPolicy: 'enforce',
   schema: tableMeta,
 });
 

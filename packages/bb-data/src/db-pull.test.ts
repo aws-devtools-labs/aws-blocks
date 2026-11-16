@@ -260,8 +260,8 @@ describe('generateIndexFile', () => {
 		assert.ok(output.includes('return raw;'));
 	});
 
-	test('emits rlsPolicy when tables have RLS', () => {
-		assert.ok(output.includes("rlsPolicy: 'enforce'"));
+	test('does not emit the removed rlsPolicy option', () => {
+		assert.ok(!output.includes('rlsPolicy'));
 	});
 
 	test('generated wiring verifies TLS by default via CA pinning (visible, editable)', () => {

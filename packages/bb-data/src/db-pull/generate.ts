@@ -163,9 +163,6 @@ export function resolveCaFileWrite(providedCa: string | undefined, fileExists: b
 }
 
 export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: string; runtimeConnString: string }): string {
-  const hasRls = tables.some(t => t.hasRls);
-  const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';
-
   // Parameter name resolution differs by phase:
   //  - At deploy/synth, BLOCKS_STAGE is set and process.cwd() is the project root
   //    (cdk runs there), so compute the stack-scoped name
@@ -206,7 +203,6 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
     ` */\n` +
     `export const db = new Database(scope, 'db', {\n` +
     `  connection: fromExisting({ connectionString: { get: resolveConnString }, ssl: resolveDbSsl() }),\n` +
-    rlsLine +
     `  schema: tableMeta,\n` +
     `});\n\n`;
 

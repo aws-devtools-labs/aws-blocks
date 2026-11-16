@@ -104,7 +104,6 @@ export interface DatabaseOptions {
     };
     postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
-    rlsPolicy?: 'enforce';
     schema?: TableSchema;
     secretRotation?: boolean | {
         intervalDays: number;
