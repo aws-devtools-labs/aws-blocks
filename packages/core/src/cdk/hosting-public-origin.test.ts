@@ -115,6 +115,7 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor'], sandbox =
 	return {
 		apiFrontDoorBuilt: apiDistributions.length === 1,
 		publicOrigin: entries?.has('BLOCKS_PUBLIC_ORIGIN') ? resolve(entries.get('BLOCKS_PUBLIC_ORIGIN')) : undefined,
+		allowPlainHttp: entries?.get('BLOCKS_ALLOW_PLAIN_HTTP'),
 		apiUrlOutput: resolve(template.findOutputs('ApiUrl').ApiUrl?.Value),
 		browserApiUrl: resolve(buildConfigJson(hostingProps, 'b1').apiUrl),
 	};
@@ -126,6 +127,16 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		assert.ok(r.apiFrontDoorBuilt, 'an http:// door does not claim, so native clients keep an HTTPS ApiUrl');
 		assert.match(r.publicOrigin ?? '', /"http:\/\/",\{"Fn::GetAtt":\["HostingAlb[0-9A-F]+","DNSName"\]\}/);
 		assert.match(r.apiUrlOutput, /ApiFrontDoor/);
+	});
+
+	test('`allowPlainHttp: true` on a plain-HTTP door registers BLOCKS_ALLOW_PLAIN_HTTP, so `Auth` issues its cookie without `Secure`', async () => {
+		const r = await synth('apigateway', { kind: 'alb', allowPlainHttp: true });
+		assert.match(r.publicOrigin ?? '', /"http:\/\/"/);
+		assert.strictEqual(r.allowPlainHttp, 'true');
+		// Without the opt-out (a sandbox deploy), or over HTTPS, nothing is registered: `Auth` fails closed.
+		assert.strictEqual((await synth('apigateway', { kind: 'alb' }, true)).allowPlainHttp, undefined);
+		assert.strictEqual((await synth('apigateway', { kind: 'alb', allowPlainHttp: true }, true)).allowPlainHttp, undefined);
+		assert.strictEqual((await synth('apigateway', { kind: 'apiGateway' })).allowPlainHttp, undefined);
 	});
 
 	test("ALB without a certificate under 'apigateway': the ALB is the public origin", async () => {
