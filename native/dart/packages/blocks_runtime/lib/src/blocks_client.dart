@@ -13,6 +13,7 @@ import 'token_store.dart';
 class BlocksClient {
   final String baseUrl;
   final http.Client _httpClient;
+
   final SessionStore sessionStore;
   final TokenStore tokenStore;
 
@@ -88,7 +89,7 @@ class BlocksClient {
     // The session cookie goes on every call that has one, and a bearer token
     // as well when the auth provider has one: the server prefers the cookie,
     // and some auth methods accept only the cookie.
-    final cookie = sessionStore.cookieHeaderFor(requestUri);
+    final cookie = await sessionStore.cookieHeaderFor(requestUri);
     if (cookie != null) {
       headers['cookie'] = cookie;
     }

@@ -93,7 +93,12 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(t.states, [isA<OidcSignedIn>(), isA<OidcSignedOut>()]);
       expect(t.client.authState, isA<OidcSignedOut>());
-      expect(t.client.sessionStore.cookies, isEmpty);
+      expect(
+        await t.client.sessionStore.cookieHeaderFor(
+          Uri.parse('http://localhost:3000/aws-blocks/auth/session'),
+        ),
+        isNull,
+      );
     });
   });
 
