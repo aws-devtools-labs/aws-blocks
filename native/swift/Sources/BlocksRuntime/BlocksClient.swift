@@ -355,11 +355,10 @@ public struct RPCError: BlocksError {
     public let message: String
     public let underlyingError: Error?
 
-    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
-    /// HTTP status (e.g. `401`). For a non-2xx response that carries no JSON-RPC error
-    /// (a gateway or route error), the HTTP status. `nil` for other transport and decoding failures.
-    /// A transport-origin status always comes with `name == nil`, `retriable == false` and
-    /// `data == nil`; a nameless server error can look the same, so only `message` is sure to differ.
+    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
+    /// status (e.g. `401`); `-1` when the error carries no `code`. For a non-2xx response with no
+    /// JSON-RPC error (a gateway or route error), the HTTP status, with `name`, `data` nil and
+    /// `retriable` false. `nil` for other transport and decoding failures.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
@@ -368,15 +367,12 @@ public struct RPCError: BlocksError {
     public let name: String?
 
     /// Whether the caller can retry the same action without restarting the broader flow
-    /// (`error.data.retriable`, e.g. a wrong MFA code on a sign-in challenge). `true` only when
-    /// the server sent the JSON boolean `true`; `false` when it sent none, and for transport and
-    /// decoding failures. Marks whether the kind of failure is retriable in principle, not a
-    /// guarantee that a given retry will succeed.
+    /// (`error.data.retriable`, e.g. a wrong MFA code). `true` only for the JSON boolean `true`;
+    /// it marks the kind of failure as retriable, not that a given retry will succeed.
     public let retriable: Bool
 
-    /// The server's `error.data` object as `JSONValue` holds it (an integer beyond `Int` arrives as
-    /// `.double`). `nil` when the server sent none or sent `error.data` that is not a JSON object,
-    /// and for transport and decoding failures.
+    /// The server's `error.data` object as `JSONValue` holds it. `nil` when the server sent none
+    /// or sent `error.data` that is not a JSON object, and for transport and decoding failures.
     public let data: [String: JSONValue]?
 
     public init(

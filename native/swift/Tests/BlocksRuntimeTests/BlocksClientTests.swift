@@ -391,6 +391,33 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
+    func testExecuteReportsMinusOneWhenTheErrorHasNoCode() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"message":"No code"},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.code, -1)
+            XCTAssertEqual(error.message, "Error occured with code: -1 message: No code")
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
     func testIsBlocksErrorIsFalseForOtherErrors() {
         XCTAssertFalse(RPCError(message: "Invalid JSON response").isBlocksError(name: "NotAuthenticatedException"))
         XCTAssertFalse(ClientClosedError().isBlocksError(name: "NotAuthenticatedException"))
@@ -427,7 +454,7 @@ final class BlocksClientTests: XCTestCase {
                 XCTAssertNil(error.name, body)
                 XCTAssertFalse(error.retriable, body)
                 XCTAssertNil(error.data, body)
-                XCTAssertEqual(error.message, message)
+                XCTAssertEqual(error.message, message, body)
             } catch {
                 XCTFail("\(body): expected RPCError, got \(error)")
             }
