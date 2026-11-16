@@ -185,6 +185,7 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 - A retriable failure comes back as `{state: signedOut, actions: [], retriable: true, error, errorName}`. It doesn't mean the user was signed out: keep the current form and show `error`. A wrong confirmation or MFA code, a password that fails the policy, an invalid field and a server fault are retriable. A wrong password is not: it comes back as a signed-out state with the sign-in actions and an `error` to show.
 - A confirmation step lives only in the app: `getAuthState()` can't bring it back after the app is killed. To let the user finish confirming a sign-up, save the username when you get `confirmingSignUp`, and after a restart show the code form and submit `ConfirmSignUpInput` with it, or `ResendSignUpCodeInput` for a new code. An interrupted MFA or new-password challenge can't be resumed: sign in again.
 - On launch, call `getAuthState()`. It works for every `Auth` block. `oidc.restore()` returns the same user, but only a block with sign-in providers serves its session route; any other answers 404.
+- The session survives a restart only with a persistent session store, loaded before the first call. `Blocks(baseUrl: ...)` on its own keeps cookies in memory. [`example/bin/auth_cold_start.dart`](example/README.md#sample-app-signed-in-across-launches) is a runnable command-line app that stays signed in across launches.
 - Disable an action that carries `unavailable`, and show its text.
 - Never submit a `signOut` action that has a `url` through `setAuthState`: that drops the identity provider's logout URL. Call `oidc.signOut()` instead.
 - `signOut()` returns the identity provider's logout URL, or null. The SDK doesn't open it. A 503 `SignOutIncompleteException` still signs out locally, then throws an `OidcRequestException` with that `errorName`.
@@ -232,7 +233,7 @@ native/dart/
 │   ├── blocks_runtime/          # Runtime library (ships with your app)
 │   ├── blocks_codegen/          # Code generator (build-time only)
 │   └── blocks_runtime_flutter/  # Flutter integration (secure storage, browser launcher)
-├── example/                     # Demo Flutter app with auth, todos, realtime cursors
+├── example/                     # Sample app (signed in across launches) and E2E suites
 └── README.md
 ```
 
