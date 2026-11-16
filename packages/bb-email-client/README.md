@@ -90,6 +90,11 @@ not rate-limit callers, so if a gated method still sends on the caller's behalf,
 per-user limit. `sendBatch()` takes at most `maxBatchSize` messages per call (default 100), which
 bounds what a single request can send but not how many requests a caller makes.
 
+Rate limiting is your app's job, by design: only your method knows who the caller is. If you skip
+it, the cost lands on your AWS account. Mail goes out under your own verified SES identity, so the
+resulting bounces and complaints count against your domain's reputation, and SES can put your
+account under review, pause its sending, or suspend it.
+
 ## API
 
 ### `new EmailClient(scope, id, options)`
