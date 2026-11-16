@@ -62,9 +62,18 @@ export interface CookieSecurityInput {
 	 * processes). Outside a sandbox ({@link getDeploymentType} is
 	 * `'production'`, which includes deployed compute whose config does not say
 	 * otherwise), {@link resolveCookieSecurity} refuses to issue the same-origin
-	 * cookie and throws `AuthErrors.InsecureTransport` instead.
+	 * cookie and throws `AuthErrors.InsecureTransport` instead (unless
+	 * {@link CookieSecurityInput.clearing}).
 	 */
 	plainHttpOrigin?: boolean;
+	/**
+	 * Whether the cookie being built clears an existing one (`Max-Age=0`, an
+	 * empty value). A clearing cookie carries nothing worth protecting, so it is
+	 * never refused over a plain-HTTP front door: sign-out and account deletion
+	 * still drop the cookie outside a sandbox. Its attributes are resolved as for
+	 * any other cookie. Defaults to `false`.
+	 */
+	clearing?: boolean;
 }
 
 /**
@@ -84,7 +93,7 @@ export interface CookieSecurityAttributes {
  * | crossDomain | isLocalhost | plainHttpOrigin | result                                 |
  * |-------------|-------------|-----------------|----------------------------------------|
  * | `false`     | `false`     | `false`         | `SameSite=Lax; Secure`                 |
- * | `false`     | `false`     | `true`          | `SameSite=Lax` (sandbox); throws (production) |
+ * | `false`     | `false`     | `true`          | `SameSite=Lax` (sandbox, or a clearing cookie); throws (production) |
  * | `false`     | `true`      | any             | `SameSite=Lax`                         |
  * | `true`      | `false`     | any             | `SameSite=None; Secure; Partitioned`   |
  * | `true`      | `true`      | any             | `SameSite=None; Secure`                |
@@ -95,7 +104,8 @@ export interface CookieSecurityAttributes {
  * @throws `AuthErrors.InsecureTransport` (`InsecureTransportException`, a
  *   branded Blocks error) for a same-origin cookie over a plain-HTTP front door
  *   (`plainHttpOrigin`, not localhost) outside a sandbox deploy: a session is
- *   never issued without `Secure` in production.
+ *   never issued without `Secure` in production. A clearing cookie
+ *   (`clearing`) is never refused.
  */
 export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurityAttributes {
 	// Plain-HTTP transport — localhost OR a deployed HTTP-only front door — cannot
@@ -121,7 +131,13 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
 	// already fails for that door; this is the runtime backstop). Deployed
 	// compute with no deployment type in its config reports `'production'`, so
 	// this fails closed.
-	if (!input.isLocalhost && input.plainHttpOrigin === true && getDeploymentType() === 'production') {
+	// A clearing cookie (`clearing`) carries no value, so it is let through.
+	if (
+		!input.isLocalhost &&
+		input.plainHttpOrigin === true &&
+		input.clearing !== true &&
+		getDeploymentType() === 'production'
+	) {
 		throw blocksError(
 			AuthErrors.InsecureTransport,
 			'The auth block refuses to issue a session cookie over a plain-HTTP front door outside a sandbox deploy: ' +

@@ -716,8 +716,9 @@ discards a `Secure` cookie set by a plain-HTTP origin. In a sandbox deploy
 standalone `{ kind: 'alb' }` door with no certificate, so the cookie and the
 session it carries cross the network in clear text. Outside a sandbox `Auth`
 refuses to issue the session instead: sign-in fails with
-`InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500), and no
-`Set-Cookie` line is written.
+`InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500) before
+any session is stored, and no `Set-Cookie` line is written. Sign-out and account
+deletion still clear the cookie (a `Max-Age=0` cookie carries no value).
 Use a plain-HTTP door in a sandbox only: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep

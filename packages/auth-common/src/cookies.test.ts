@@ -113,6 +113,16 @@ describe('resolveCookieSecurity', () => {
 		withDeploymentType(undefined, () => withDeployedEnv(() => assert.throws(() => resolveCookieSecurity(plain), refused)));
 	});
 
+	test('a clearing cookie (Max-Age=0) over a plain-HTTP front door outside a sandbox → Lax; no Secure, never refused', () => {
+		// A clearing cookie carries no value, so it is let through: sign-out and
+		// account deletion still drop the cookie instead of answering 500.
+		const clearing: CookieSecurityInput = { crossDomain: false, isLocalhost: false, plainHttpOrigin: true, clearing: true };
+		withDeploymentType('production', () => {
+			assert.deepStrictEqual(resolveCookieSecurity(clearing), { sameSite: 'Lax', secure: false, partitioned: false });
+			assert.strictEqual(buildCookieSecurityAttrs(clearing), 'SameSite=Lax');
+		});
+	});
+
 	test('same-origin HTTP front door in a sandbox → Lax; no Secure (unchanged)', () => {
 		withDeploymentType('sandbox', () => {
 			assert.deepStrictEqual(

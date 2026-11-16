@@ -7,6 +7,7 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
 import {
+	assertSessionCookieTransport,
 	clearAutoSignInCookie,
 	clearPendingAuthCookie,
 	clearSessionCookie,
@@ -192,6 +193,16 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 				assert.throws(() => setAutoSignInCookie(ctx, 'app-auth', 'bridge', 60), refused);
 				assert.throws(() => setPendingAuthCookie(ctx, 'app-auth', 'pending', 60), refused);
 				assert.deepStrictEqual(ctx.response.headers.getSetCookie(), [], 'no Set-Cookie line was written');
+				assert.throws(() => assertSessionCookieTransport(ctx, false), refused, 'the pre-check refuses too');
+				// A clearing cookie (Max-Age=0) carries no value, so it is still written, without Secure.
+				clearSessionCookie(ctx, 'app-auth');
+				clearAutoSignInCookie(ctx, 'app-auth');
+				clearPendingAuthCookie(ctx, 'app-auth');
+				const cleared = ctx.response.headers.getSetCookie();
+				assert.strictEqual(cleared.length, 3);
+				for (const line of cleared) {
+					assert.match(line, /=; HttpOnly; SameSite=Lax; Path=\/; Max-Age=0$/, line);
+				}
 				// A cross-domain cookie is set by the API's own (HTTPS) response: still issued, Secure.
 				const cross = makeContext(undefined, 'api.example.com');
 				setSessionCookie(cross, 'a', 'v.s', 1, true);
