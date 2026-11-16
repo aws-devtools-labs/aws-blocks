@@ -285,7 +285,16 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         ]
         if let iss { body["iss"] = iss }
 
-        let json = try await client.postRawRoute(path: exchangePath, body: body)
+        let json: [String: Any]
+        do {
+            json = try await client.postRawRoute(path: exchangePath, body: body)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.exchangeFailed((error as? BlocksError)?.message ?? error.localizedDescription, error)
+        }
 
         guard let userJSON = json["user"] as? [String: Any] else {
             throw OIDCError.malformedExchangeResponse
@@ -453,10 +462,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         client: BlocksClient
     ) throws -> OIDCClient {
         guard let exchangePath = descriptor["exchangePath"] as? String else {
-            throw OIDCError.malformedDescriptor("exchangePath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "exchangePath")
         }
         guard let signOutPath = descriptor["signOutPath"] as? String else {
-            throw OIDCError.malformedDescriptor("signOutPath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "signOutPath")
         }
         let refreshPath = (descriptor["refreshPath"] as? String) ?? "\(exchangePath)/refresh"
         let providers = (descriptor["providers"] as? [String]) ?? []
@@ -620,18 +629,17 @@ extension OIDCClient: Codable {
 
 // MARK: - Errors
 
-public enum OIDCError: BlocksError, Equatable {
+public enum OIDCError: BlocksError {
     case unknownProvider(String)
     case invalidAuthorizeURL(String)
-    case invalidURL(String)
     case stateMismatch
     case missingAuthorizationCode
-    case missingPKCEState
     case malformedExchangeResponse
-    case malformedRefreshResponse
-    case malformedDescriptor(String)
-    case invalidResponse
     case callbackError(String)
+    /// The exchange or sign-out call was rejected. The server's error is the cause.
+    case exchangeFailed(String, Error?)
+    /// The user dismissed the sign-in flow. A `BrowserLauncher` throws this.
+    case cancelled
 
     public var message: String {
         switch self {
@@ -639,24 +647,25 @@ public enum OIDCError: BlocksError, Equatable {
             return "Unknown OIDC provider: \(name)"
         case .invalidAuthorizeURL(let url):
             return "Invalid authorize URL: \(url)"
-        case .invalidURL(let url):
-            return "Invalid URL: \(url)"
         case .stateMismatch:
             return "OIDC state mismatch — possible CSRF attack"
         case .missingAuthorizationCode:
             return "Missing authorization code in callback URL"
-        case .missingPKCEState:
-            return "Missing PKCE state in token store"
         case .malformedExchangeResponse:
             return "Malformed exchange response — missing accessToken or refreshToken"
-        case .malformedRefreshResponse:
-            return "Malformed refresh response — missing accessToken"
-        case .malformedDescriptor(let field):
-            return "Malformed OIDC descriptor — missing or invalid field: \(field)"
-        case .invalidResponse:
-            return "Invalid JSON response"
         case .callbackError(let detail):
             return "OIDC callback error: \(detail)"
+        case .exchangeFailed(let detail, _):
+            return "OIDC exchange failed: \(detail)"
+        case .cancelled:
+            return "Sign-in cancelled"
+        }
+    }
+
+    public var underlyingError: Error? {
+        switch self {
+        case .exchangeFailed(_, let error): return error
+        default: return nil
         }
     }
 }

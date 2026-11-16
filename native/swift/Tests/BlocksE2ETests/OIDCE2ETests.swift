@@ -32,7 +32,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
 
             let (_, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw OIDCError.invalidResponse
+                throw TransportError(message: "Non-HTTP response following authorize redirect")
             }
 
             if (300 ..< 400).contains(httpResponse.statusCode) {
