@@ -387,6 +387,10 @@ class OidcClient<P : OidcProvider> internal constructor(
      *   A 404 means it serves no session route, which an `Auth` block with no federated providers
      *   does not. A 200 whose body holds no user is reported with status 200. [authState] is left
      *   as it was, as it is for a request that fails to reach the backend.
+     * @throws kotlinx.serialization.SerializationException if the backend answers 200 with a
+     *   body that is not JSON. [authState] is left as it was.
+     * @throws IllegalArgumentException if the backend answers 200 with JSON that is not an object
+     *   (`[]` or `null`, say). [authState] is left as it was.
      * @throws BlocksException if the Blocks instance this client came from has been closed.
      */
     suspend fun restore(): OidcUser? {
