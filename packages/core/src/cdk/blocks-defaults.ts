@@ -394,7 +394,7 @@ export interface BlocksDefaults {
 	 *
 	 * The report and the synth failure are fast feedback, not the security boundary: the
 	 * app's own code runs at synth. The boundary is IAM, enforced by AWS — a
-	 * permissions boundary keyed on the `app` tag ({@link permissionsBoundary})
+	 * permissions boundary keyed on the `app` tag ({@link permissionsBoundary}),
 	 * a per-app CloudFormation execution role that only creates bounded roles
 	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
 	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
