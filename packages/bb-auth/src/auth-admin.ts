@@ -32,6 +32,7 @@ import type {
 	AdminSurface,
 	AdminUser,
 	AdminUserFilter,
+	AttrOf,
 	AuthOptions,
 	GroupOf,
 	ReadAttrOf,
@@ -142,6 +143,18 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 						...(clientMetadata ? { clientMetadata } : {}),
 					}),
 				);
+			});
+		},
+		updateUserAttributes: (
+			username: string,
+			attributes: Partial<Record<AttrOf<O>, string>>,
+			...gate: AdminActionGate<O, 'lifecycle'>
+		): Promise<void> => {
+			void gate;
+			return run('lifecycle', async (n) => {
+				const prefixed = deps.prefixAttributes(attributes);
+				// Nothing to write: no call on either runtime.
+				if (Object.keys(prefixed).length > 0) await n.admin.updateUserAttributes(username, prefixed);
 			});
 		},
 		deleteUser: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {

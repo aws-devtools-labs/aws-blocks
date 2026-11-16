@@ -130,6 +130,60 @@ function withoutResetGrant(template: CfnTemplateJson): void {
 	}
 }
 
+/**
+ * THE ADMIN UPDATE GRANT ALLOWLIST — `cognito-idp:AdminUpdateUserAttributes`
+ * in the `admin` lifecycle statement, for `auth.admin.updateUserAttributes`,
+ * which `AuthCognito` did not have. Only that one action is removed from
+ * `Auth`'s side; the rest of the statement must still match.
+ */
+function withoutAdminUpdateGrant(template: CfnTemplateJson): void {
+	const action = 'cognito-idp:AdminUpdateUserAttributes';
+	for (const resource of Object.values(template.Resources)) {
+		if (resource.Type !== 'AWS::IAM::Policy') continue;
+		const doc = resource.Properties?.PolicyDocument as { Statement: { Action: unknown }[] } | undefined;
+		for (const s of doc?.Statement ?? []) {
+			if (Array.isArray(s.Action)) s.Action = s.Action.filter((a) => a !== action);
+		}
+	}
+}
+
+/**
+ * THE CLIENT ALLOWLIST — `WriteAttributes` on the native `client`, which
+ * `AuthCognito` (frozen before it set one) leaves to Cognito's default of every
+ * attribute. `Auth` sets exactly the standard attributes except the
+ * `*_verified` flags, plus `custom:<name>` for each custom attribute in its
+ * own pool's schema (no pair declares `userWritable: false`). It updates the
+ * client in place (CloudFormation: "Update requires: No interruption"). Any
+ * other value fails.
+ */
+const CLIENT_STANDARD_WRITE_ATTRIBUTES = [
+	...['address', 'birthdate', 'email', 'family_name', 'gender', 'given_name', 'locale', 'middle_name'],
+	...['name', 'nickname', 'phone_number', 'picture', 'preferred_username', 'profile', 'updated_at'],
+	...['website', 'zoneinfo'],
+] as const;
+
+/** `Auth`'s client `Properties` with an allowlisted `WriteAttributes` removed (see the client allowlist). */
+function stripAllowlistedClientProperties(
+	authTemplate: CfnTemplateJson,
+	cognitoProps: Record<string, unknown> | undefined,
+	authProps: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+	const copy = { ...authProps };
+	const schema = resourceOfType(authTemplate, 'AWS::Cognito::UserPool')?.[1].Properties?.Schema;
+	const custom = (Array.isArray(schema) ? schema : [])
+		.map((a: { Name?: unknown }) => String(a.Name))
+		.filter((n) => !(CLIENT_STANDARD_WRITE_ATTRIBUTES as readonly string[]).includes(n))
+		.map((n) => `custom:${n}`);
+	const expected = [...CLIENT_STANDARD_WRITE_ATTRIBUTES, ...custom].sort();
+	if (
+		cognitoProps?.WriteAttributes === undefined &&
+		JSON.stringify(copy.WriteAttributes) === JSON.stringify(expected)
+	) {
+		delete copy.WriteAttributes;
+	}
+	return copy;
+}
+
 function isGuardResource(resource: CfnResourceJson): boolean {
 	return String(resource.Metadata?.['aws:cdk:path'] ?? '').startsWith(GUARD_ALLOWLIST.pathPrefix);
 }
@@ -197,6 +251,15 @@ function withoutAllowlisted(
 	const cognito = structuredClone(cognitoTemplate);
 	const auth = structuredClone(authTemplate);
 	withoutResetGrant(auth);
+	withoutAdminUpdateGrant(auth);
+	const authClient = resourceOfType(auth, 'AWS::Cognito::UserPoolClient');
+	if (authClient?.[1].Properties) {
+		authClient[1].Properties = stripAllowlistedClientProperties(
+			auth,
+			resourceOfType(cognito, 'AWS::Cognito::UserPoolClient')?.[1].Properties,
+			authClient[1].Properties,
+		);
+	}
 	const cognitoPool = resourceOfType(cognito, 'AWS::Cognito::UserPool');
 	const authPool = resourceOfType(auth, 'AWS::Cognito::UserPool');
 	if (authPool?.[1].Properties) {
@@ -281,7 +344,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					},
 				);
 
-				test('client Properties are identical', () => {
+				test('client Properties are identical except the allowlisted WriteAttributes', () => {
 					const cognitoClient = resourceOfType(
 						authCognito(name, preset).template,
 						'AWS::Cognito::UserPoolClient',
@@ -292,7 +355,15 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					);
 					assert.ok(cognitoClient && authClient, 'both sides synthesize the `client`');
 					assert.strictEqual(authClient[0], cognitoClient[0], 'client logical id');
-					assertSame(cognitoClient[1].Properties, authClient[1].Properties, 'client Properties');
+					assertSame(
+						cognitoClient[1].Properties,
+						stripAllowlistedClientProperties(
+							synth(pair.auth, preset).template,
+							cognitoClient[1].Properties,
+							authClient[1].Properties,
+						),
+						'client Properties',
+					);
 				});
 
 				test('the whole template is identical (except the allowlist)', () => {

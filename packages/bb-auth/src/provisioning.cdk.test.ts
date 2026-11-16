@@ -325,3 +325,41 @@ describe('Auth — pool durability follows the stack defaults', () => {
 		}
 	});
 });
+
+describe('the native app client writes only what end users may set', () => {
+	const STANDARD = [
+		...['address', 'birthdate', 'email', 'family_name', 'gender', 'given_name', 'locale', 'middle_name'],
+		...['name', 'nickname', 'phone_number', 'picture', 'preferred_username', 'profile', 'updated_at'],
+		...['website', 'zoneinfo'],
+	];
+	const clientOf = (template: CfnTemplateJson) => only(template, 'AWS::Cognito::UserPoolClient');
+
+	test('default: every standard attribute except the `*_verified` flags', () => {
+		assert.deepStrictEqual(clientOf(synth(CONFIGS.default).template).Properties?.WriteAttributes, STANDARD);
+	});
+
+	test('declared custom attributes are writable unless `userWritable: false`', () => {
+		const s = synth(
+			"new Auth(stack, 'auth', { users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] } })",
+		);
+		assert.deepStrictEqual(clientOf(s.template).Properties?.WriteAttributes, [...STANDARD, 'custom:team'].sort());
+	});
+
+	// The block's client in an existing pool lists the declared custom attributes too, so each
+	// must exist in that pool: Cognito refuses a client whose write attributes name one it lacks.
+	test('`Auth.fromExisting`: the client in the existing pool lists the declared, user-writable attributes', () => {
+		const s = synth(
+			"new Auth(stack, 'auth', { userPool: Auth.fromExisting('us-east-1_existing'), users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] } })",
+		);
+		// No pool is created; the one Cognito resource is the block's client in the existing pool.
+		assert.deepStrictEqual(
+			Object.values(s.template.Resources)
+				.filter((r) => r.Type.startsWith('AWS::Cognito::'))
+				.map((r) => r.Type),
+			['AWS::Cognito::UserPoolClient'],
+		);
+		const client = clientOf(s.template);
+		assert.strictEqual(client.Properties?.UserPoolId, 'us-east-1_existing');
+		assert.deepStrictEqual(client.Properties?.WriteAttributes, [...STANDARD, 'custom:team'].sort());
+	});
+});

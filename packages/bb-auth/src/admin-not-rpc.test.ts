@@ -97,4 +97,14 @@ describe('auth.admin is never served over RPC (AWS runtime)', () => {
 		assert.ok(methodNotFound(res), JSON.stringify(body(res)));
 		assert.deepStrictEqual(h.sent, []);
 	});
+
+	test('admin.updateUserAttributes is server-only too: method-not-found, no Cognito call', async () => {
+		const h = makeAwsAuth({ admin: {} });
+		h.on('AdminUpdateUserAttributesCommand', () => ({}));
+		const handler = createLambdaHandler(async () => ({ adminApi: h.auth.admin }));
+
+		const res = await handler(rpc('adminApi.updateUserAttributes', ['alice', { name: 'X' }]));
+		assert.ok(methodNotFound(res), JSON.stringify(body(res)));
+		assert.deepStrictEqual(h.sent, []);
+	});
 });
