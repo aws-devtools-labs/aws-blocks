@@ -186,6 +186,9 @@ const DATA_SERVICES = new Set([
 	's3vectors',
 	'ecs',
 	'cloudfront-keyvaluestore',
+	// Not data, but a way into another app's: passing or assuming another app's role.
+	'iam',
+	'sts',
 ]);
 
 /**
@@ -319,6 +322,15 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			// Only KeyValueStores hold data (`key-value-store/<id>`, named by id): a wildcard is checked.
 			name = /^key-value-store\/\*/.test(rest) ? '*' : undefined;
 			break;
+		case 'iam':
+			// A role (`role/<path>/<name>`) is named after the stack that creates it, so its name
+			// is checked. Other IAM resources aren't an app's: only a wildcard is checked.
+			name = rest.startsWith('role/')
+				? rest.slice('role/'.length).split('/').pop()
+				: /^[a-z-]+\/\*/.test(rest)
+					? '*'
+					: undefined;
+			break;
 		case 'execute-api':
 			// `<api id>/<stage>/<method>/<path>`: an API id is never a name under the app's
 			// prefix, so a literal one is always outside the app — reference the API instead.
@@ -352,6 +364,8 @@ const ARN_SERVICE_OF: Readonly<Record<string, string>> = {
 	'rds-data': 'rds',
 	// KeyValueStore data-plane actions name the store's CloudFront ARN (`arn:aws:cloudfront::…:key-value-store/<id>`).
 	'cloudfront-keyvaluestore': 'cloudfront',
+	// `sts:AssumeRole` names the role it assumes (`arn:aws:iam::…:role/<name>`).
+	sts: 'iam',
 };
 
 /** The services of `actions`, plus the ARN services their resources live under ({@link ARN_SERVICE_OF}). */

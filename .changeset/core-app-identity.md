@@ -38,7 +38,8 @@ from the platform; to AWS Blocks it is just a string.
   permissions boundary or the app tag, a grant on a name outside the app's
   prefix, a wildcard or "everything except" grant on a data service (among
   them SNS, SES, RDS and the RDS Data API, Aurora DSQL, Bedrock, Bedrock
-  AgentCore, S3 Vectors, ECS and CloudFront KeyValueStores, on `*` or on a
+  AgentCore, S3 Vectors, ECS, CloudFront KeyValueStores, and IAM and STS role passing
+  or assuming, on `*` or on a
   resource name that starts with `*`; AWS-owned Bedrock models, an Agent
   invoking its AgentCore runtimes, and SES sending aren't flagged), a resource
   the check can't resolve, a resource policy that opens up another app's

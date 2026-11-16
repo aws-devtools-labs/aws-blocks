@@ -141,6 +141,19 @@ describe('app-isolation rules — statements fail closed', () => {
 		assert.deepStrictEqual(rules(checkStackName('appa/x', 'appa')), ['stack-name-outside-app']);
 	});
 
+	test('iam and sts: PassRole or AssumeRole on *, or on another app\'s role, is flagged; on the app\'s own role it is not', () => {
+		const grant = (action: string, resource: unknown) => rules(checkStatement({ Effect: 'Allow', Action: action, Resource: resource }, 'appa', 'p'));
+		const role = (name: string) => `arn:aws:iam::111111111111:role/${name}`;
+		for (const action of ['iam:PassRole', 'sts:AssumeRole']) {
+			assert.deepStrictEqual(grant(action, '*'), ['wildcard-data-grant'], `${action} on *`);
+			assert.deepStrictEqual(grant(action, role('*')), ['wildcard-data-grant'], `${action} on role/*`);
+			assert.deepStrictEqual(grant(action, role('service-role/*')), ['wildcard-data-grant'], `${action} on role/service-role/*`);
+			assert.deepStrictEqual(grant(action, role('appb-Handler')), ['grant-outside-app'], `${action} on appb-…`);
+			assert.deepStrictEqual(grant(action, role('appa-Handler')), [], `${action} on appa-…`);
+			assert.deepStrictEqual(grant(action, { 'Fn::GetAtt': ['HandlerRole', 'Arn'] }), [], `${action} on its own role`);
+		}
+	});
+
 	test("another app's CDK asset bucket is outside; the app's own is inside", () => {
 		const read = (bucket: string) => ({ Effect: 'Allow', Action: 's3:GetObject', Resource: `arn:aws:s3:::${bucket}/*` });
 		assert.deepStrictEqual(checkStatement(read('cdk-appa-assets-111111111111-us-east-1'), 'appa', 'p'), []);
