@@ -58,6 +58,8 @@ class OidcClientAuthDescriptorTest {
         put("signOutPath", "$base/signout")
         put("signInBasePath", "$base/signin")
         put("authorizeParamsBasePath", "$base/authorize-params")
+        put("sessionPath", "$base/session")
+        put("refreshPath", "$base/exchange/refresh")
     }
 
     private fun authClient(
