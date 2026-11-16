@@ -552,8 +552,8 @@ the CloudFront origins update in the same deploy. Expect the same short window
 of 403s while the distribution propagates; rotate in a quiet window.
 
 The stacked door's CloudFront edge sends its own origin-verify header to the
-ALB router; without a router certificate it travels over plain HTTP, which core
-warns about at synth (`@aws-blocks/hosting:StackedRouterPlainHttp`).
+ALB router. It never sends it over plain HTTP to an internet-facing router in
+a production deploy: see [the edge → router hop](#the-stacked-door).
 
 ## Front doors
 
@@ -570,6 +570,21 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
 | `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see below). |
+
+**Where TLS ends on each door.** The viewer hop is the browser → the door; the
+origin hop is the door → what serves the request. The secret header is what a
+locked origin requires on every request, so it only answers its own door.
+
+| Door | Viewer TLS | Origin-hop TLS | Secret header |
+|---|---|---|---|
+| CloudFront (default) | HTTPS (HTTP redirects to HTTPS; TLS 1.2+ with a custom `domain`) | HTTPS: S3 through origin access control, Lambda function URLs through origin access control, and the API Gateway REST APIs in front of the server and the image optimizer | `Referer` carrying a Secrets Manager secret, which each server-origin REST API's resource policy requires (plus the `x-blocks-front-door` marker); over HTTPS only |
+| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`) |
+| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80 | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
+| `apiGateway`, `api: 'http'` | HTTPS only (the `execute-api` endpoint, or a custom `domain`) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
+| `apiGateway`, `api: 'rest'` | HTTPS only, at the required custom `domain` (TLS 1.2) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
+| `'none'` | None: S3 website endpoints are HTTP only | None: the website bucket serves the files itself | None: the bucket is public read |
+
+A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself.
 
 `frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
 `{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
@@ -933,8 +948,14 @@ else is a 404. The proxy never fetches a remote URL.
   port 443. A domain with a hosted zone and no certificate gets a DNS-validated
   one. Without either, the hop is plain HTTP on port 80 and unencrypted:
   through a VPC origin (`internal: true`) it stays on the AWS network; to an
-  internet-facing ALB it reaches the ALB's public addresses, and synth warns
-  (`@aws-blocks/hosting:StackedRouterPlainHttp`). The router's `x-forwarded-proto`
+  internet-facing ALB it reaches the ALB's public addresses. That last hop
+  would carry the origin-verify secret in cleartext, so a production deploy
+  fails synth (`OriginSecretOverPlainHttpError`) and the secret is never sent;
+  give the router a `certificate` and `features.router.domain`, or set
+  `internal: true`. A sandbox deploy (the `sandboxMode` context the sandbox
+  scripts pass) still synthesizes, and warns
+  (`@aws-blocks/hosting:StackedRouterPlainHttp` and
+  `@aws-blocks/hosting:OriginSecretOverPlainHttp`). The router's `x-forwarded-proto`
   is `http` on a plain-HTTP hop. A certificate without a router domain fails
   synth (`StackedRouterCertificateNeedsDomainError`).
 - There is no custom domain or skew protection on the edge yet.
