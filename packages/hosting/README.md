@@ -579,12 +579,27 @@ locked origin requires on every request, so it only answers its own door.
 |---|---|---|---|
 | CloudFront (default) | HTTPS (HTTP redirects to HTTPS; TLS 1.2+ with a custom `domain`) | HTTPS: S3 through origin access control, Lambda function URLs through origin access control, and the API Gateway REST APIs in front of the server and the image optimizer | `Referer` carrying a Secrets Manager secret, which each server-origin REST API's resource policy requires (plus the `x-blocks-front-door` marker); over HTTPS only |
 | `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`) |
-| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80 | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
+| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80, which with an API is sandbox-only (`PlainHttpFrontDoorError` outside a sandbox) | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
 | `apiGateway`, `api: 'http'` | HTTPS only (the `execute-api` endpoint, or a custom `domain`) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `apiGateway`, `api: 'rest'` | HTTPS only, at the required custom `domain` (TLS 1.2) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `'none'` | None: S3 website endpoints are HTTP only | None: the website bucket serves the files itself | None: the bucket is public read |
 
 A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself.
+
+**Sandbox-only options.** Some plain-HTTP shapes synthesize only in a sandbox
+deploy (the `sandboxMode` context the sandbox scripts pass); a production
+deploy fails synth, and a sandbox deploy warns:
+
+| Shape | Production synth | Sandbox synth |
+|---|---|---|
+| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-blocks/hosting:StackedRouterPlainHttp` |
+
+`'none'` is not sandbox-only: it serves static sites with no same-origin API,
+and warns in every stage (`@aws-blocks/hosting:PlainHttpFrontDoor`, see
+[the `'none'` door](#the-none-door)). An ALB door without a certificate and
+without an API synthesizes in every stage.
 
 `frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
 `{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
@@ -688,18 +703,22 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 (RPC and sign-in) and each of the backend's raw routes registered before
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
-certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted. `'none'` warns with the same id
+certificate) would send sign-in, cookies and every RPC unencrypted, so a
+production deploy fails synth (`PlainHttpFrontDoorError`), and a sandbox deploy
+warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). `'none'` warns with the same id
 whether or not the app has an API: the S3 website can't serve over TLS, so the
 pages and scripts themselves can be read or altered in transit (see
 [the `'none'` door](#the-none-door)).
 
 The session cookie can't be `Secure` behind such a door either: a browser
-discards a `Secure` cookie set by a plain-HTTP origin. `Auth` therefore
-omits `Secure` from its same-origin session cookie behind a standalone
-`{ kind: 'alb' }` door with no certificate, so the cookie and the session it
-carries cross the network in clear text.
-Use a plain-HTTP door for testing only: for anything else, give the ALB door a
+discards a `Secure` cookie set by a plain-HTTP origin. In a sandbox deploy
+`Auth` therefore omits `Secure` from its same-origin session cookie behind a
+standalone `{ kind: 'alb' }` door with no certificate, so the cookie and the
+session it carries cross the network in clear text. Outside a sandbox `Auth`
+refuses to issue the session instead: sign-in fails with
+`InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500), and no
+`Set-Cookie` line is written.
+Use a plain-HTTP door in a sandbox only: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
 `Secure`. Its edge → router hop is plain HTTP unless the router has a

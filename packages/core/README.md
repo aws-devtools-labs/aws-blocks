@@ -501,7 +501,7 @@ A `config()` domain works in `frontDoor.features.domain` too, through the async 
 | `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
 | `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
 
-The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which synth warns about). The router admits only the edge through a header whose value Secrets Manager generates once per stack.
+The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox deploy with `OriginSecretOverPlainHttpError` and warns in one). The standalone `{ kind: 'alb' }` door without a `certificate` and `features.domain` serves plain HTTP too: with an API, a production deploy fails synth (`PlainHttpFrontDoorError`) and a sandbox deploy warns. The router admits only the edge through a header whose value Secrets Manager generates once per stack.
 
 Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
 
