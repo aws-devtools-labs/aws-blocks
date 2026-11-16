@@ -284,6 +284,28 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(events, [.signedIn(user)])
     }
 
+    /// An authorize-params response missing a field names that field, and never echoes the response,
+    /// which carries the signed state and the nonce.
+    func testSignInNamesTheMissingAuthorizeParamsField() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = [
+                "authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid", "scopes": ["openid"],
+                "nonce": "secret-nonce"
+            ]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = try Self.authClient(on: blocksClient)
+
+        do {
+            _ = try await client.signIn(provider: "google", relayTo: "myapp://auth", launcher: EchoStateRelayLauncher(relay: "myapp://auth"))
+            XCTFail("Expected callbackError")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .callbackError("authorize-params response has no state"))
+            XCTAssertFalse(error.message.contains("secret-nonce"), error.message)
+        }
+    }
+
     func testExchangeThrowsOnMalformedResponse() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["nope": "missing tokens"]

@@ -206,11 +206,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
         let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
 
-        guard let authorizeUrl = paramsJSON["authorizeUrl"] as? String,
-              let clientId = paramsJSON["clientId"] as? String,
-              let scopes = paramsJSON["scopes"] as? [String],
-              let signedState = paramsJSON["state"] as? String else {
-            throw OIDCError.callbackError("authorize-params response: \(paramsJSON)")
+        // A missing field is named, never the response itself: it carries the signed state and the nonce.
+        guard let authorizeUrl = paramsJSON["authorizeUrl"] as? String else {
+            throw OIDCError.callbackError("authorize-params response has no authorizeUrl")
+        }
+        guard let clientId = paramsJSON["clientId"] as? String else {
+            throw OIDCError.callbackError("authorize-params response has no clientId")
+        }
+        guard let scopes = paramsJSON["scopes"] as? [String] else {
+            throw OIDCError.callbackError("authorize-params response has no scopes")
+        }
+        guard let signedState = paramsJSON["state"] as? String else {
+            throw OIDCError.callbackError("authorize-params response has no state")
         }
         let nonce = paramsJSON["nonce"] as? String
 
