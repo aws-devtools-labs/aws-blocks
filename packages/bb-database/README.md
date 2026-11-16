@@ -124,7 +124,7 @@ Cluster options:
 | `type` | `'dsql' \| 'aurora'` | Required. `dsql` is Aurora DSQL. `aurora` is Aurora PostgreSQL Serverless v2 created with the express configuration: all of PostgreSQL, no VPC, IAM authentication, scales to zero. |
 | `removalPolicy` | `'retain' \| 'destroy' \| 'snapshot'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. `snapshot` (an `aurora` cluster only) takes a final snapshot before deleting it. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
 | `minCapacity` | `number` | `aurora` only. The floor in Aurora Capacity Units, in 0.5 steps. Default `0`: the cluster pauses after five idle minutes and costs nothing while paused; the first connection afterwards takes about 20 seconds. `0.5` keeps it warm. |
-| `maxCapacity` | `number` | `aurora` only. The ceiling in ACUs, 1 to 256 in 0.5 steps. Default `2`. Raised in place, without replacing the cluster. |
+| `maxCapacity` | `number` | `aurora` only. The ceiling in ACUs, 1 to 256 in 0.5 steps. Default `2`. Raised in place, without replacing the cluster. The ceiling bounds throughput: a cluster under sustained load stays at the ceiling and does not go faster, so raise `maxCapacity` when the load needs more than the default. |
 | `pointInTimeRecovery` | `boolean \| { retentionDays }` | `aurora` only. Automated backups, which are Aurora's point-in-time recovery window: `true` keeps 15 days, `{ retentionDays: n }` pins the window (1 to 35), `false` keeps the one day the service always keeps. Defaults to the stack-wide `defaults.pointInTimeRecovery`: on in production, off in a sandbox. |
 
 Block options:
