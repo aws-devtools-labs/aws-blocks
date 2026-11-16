@@ -30,11 +30,20 @@ runs:
       # The session policy keeps everything the E2E jobs do (CDK deploys through
       # the bootstrap roles, the tests' and sweeps' direct calls to many services,
       # and CloudFormation deletes that run with the caller's credentials) but
-      # takes out of the session: role assumption other than into the CDK
-      # bootstrap roles, IAM users, groups, access keys and other long-lived
-      # credentials, identity providers, account, billing and Organizations
-      # changes, turning off CloudTrail, and changes to the bootstrap roles or to
-      # the E2E role itself. The E2E role ARN is added to that last Deny here.
+      # takes out of the session's own calls: role assumption other than into the
+      # CDK bootstrap roles of this account, IAM users, groups, access keys and
+      # other long-lived credentials, identity providers, account, billing and
+      # Organizations changes, turning off CloudTrail or AWS Config recording,
+      # and changes to the bootstrap roles or to the E2E role itself. This step
+      # pins the bootstrap roles to the selected role's account and adds the E2E
+      # role ARN to that last Deny.
+      #
+      # It limits only what the session does with its own credentials; it is not
+      # the account's boundary. A session policy doesn't carry over to a role the
+      # session assumes or passes: the bootstrap roles (and the CloudFormation
+      # execution role they deploy through) and any role the session can pass to
+      # a service, such as a Lambda function or a stack, keep their full
+      # permissions, including the IAM calls left out here.
       # Tests: scripts/ci/workflow-secrets.test.mjs.
       run: |
         if ! jq -e 'type == "array"' > /dev/null 2>&1 <<< "$ROLE_ARNS"; then
