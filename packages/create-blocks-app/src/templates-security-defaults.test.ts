@@ -190,7 +190,7 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       '.gitignore': 'node_modules\n.env\n',
     });
     try {
-      assert.match(stdout, /MODIFY {2}\.gitignore .*secret and key-material patterns/);
+      assert.match(stdout, /MODIFY {2}\.gitignore .*node_modules if missing, and secret and key-material patterns/);
       const modified = stdout.split('\n').find((line) => line.includes('Modified .gitignore'));
       assert.ok(modified, `no "Modified .gitignore" line in:\n${stdout}`);
       for (const entry of ['.blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
@@ -253,10 +253,19 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
       '.gitignore': 'packages/site/node_modules\ndist/*\n',
     },
-    // Git applies the last matching line.
-    'a project whose .gitignore un-ignores node_modules after ignoring it': {
+    // Only literal lines count as covering it. Git reads `[!n]` as "not n", `n*x*s`
+    // does not match, and leading spaces are part of the pattern.
+    'a project whose .gitignore has [!n]ode_modules': {
       'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
-      '.gitignore': 'node_modules\n!node_modules\n',
+      '.gitignore': '[!n]ode_modules\n',
+    },
+    'a project whose .gitignore has n*x*s': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'n*x*s\n',
+    },
+    'a project whose .gitignore has node_modules after leading spaces': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '  node_modules\n',
     },
   };
   for (const [label, files] of Object.entries(withoutNodeModules)) {
@@ -270,7 +279,23 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
     });
   }
 
-  for (const line of ['node_modules', 'node_modules/', '/node_modules', '/node_modules/', '**/node_modules']) {
+  // An explicit `!node_modules` (vendored dependencies) is the project's choice: git
+  // applies the last matching line, so appending `node_modules` would reverse it.
+  for (const gitignore of ['node_modules\n!node_modules\n', '!node_modules\n']) {
+    it(`adds no node_modules line when the existing .gitignore is ${JSON.stringify(gitignore)}`, () => {
+      const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+        assert.match(stdout, /Left node_modules as your \.gitignore configures it/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  const covering = ['node_modules', 'node_modules/', '/node_modules', '/node_modules/', 'node_modules/*', 'node_modules/**', '**/node_modules'];
+  for (const line of covering) {
     it(`adds no node_modules line when the existing .gitignore has ${line}`, () => {
       const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
       try {
@@ -281,6 +306,17 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       }
     });
   }
+
+  it('adds no node_modules line to a CRLF .gitignore that has one', () => {
+    const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': 'node_modules\r\n' });
+    try {
+      const gitignore = readFileSync(join(dir, '.gitignore'), 'utf-8');
+      assert.deepStrictEqual(gitignore.split('\r\n').filter((l) => l.includes('node_modules')), ['node_modules']);
+      assert.ok(!/(^|[^\r])\n/.test(gitignore), 'the .gitignore has a bare \\n line ending');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 /** `source` with `/* … *\/` and `// …` comments removed, so a doc comment can't satisfy a check on the code. */
