@@ -579,6 +579,8 @@ void describe('nitroAdapter — preset + feature validation', () => {
     assert.strictEqual(streaming({ preset: 'aws-lambda' }), false);
     assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: false } } }), false);
     assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: true } } }), true);
+    // Nitro has no `aws-lambda-streaming` preset (streaming is `awsLambda.streaming`);
+    // the adapter accepts the name, so a manifest that reports it must not say buffered.
     assert.strictEqual(streaming({ preset: 'aws-lambda-streaming' }), true);
   });
 
