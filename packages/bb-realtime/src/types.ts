@@ -46,7 +46,7 @@ export interface SubscribeOptions<T = unknown> {
 	onDisconnect?: (reason: DisconnectReason) => void;
 	/** Called after the transport transparently reconnects and THIS channel's resubscribe has been re-confirmed by the server (with its stored token replayed). Fires once per successful reconnect for this channel, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. Routed per-channel: if this channel's resubscribe is rejected (e.g. its replayed token expired), `onReconnect` does NOT fire for it — it receives `onDisconnect('error')` instead; and a sibling channel's rejection never reaches this channel. Applies to client-side (hydrated) subscriptions only — a server-side `subscribe()` has no transport reconnect, so an `onReconnect` passed to a server-obtained handle is never fired. */
 	onReconnect?: () => void;
-	/** Called before each reconnect to obtain a freshly-minted channel descriptor (new connect + channel token) so the subscription can outlive the token TTLs (channel ~1h / connect ~2h). Without it, a reconnect replays the original tokens and will fail once they expire. Not called on the initial subscribe. Note: `refresh` is registered per-channel — a connection multiplexing several channels keeps each channel's own refresher and re-mints every live channel's token on reconnect (the instance-scoped connect token is taken from any one of them). A channel whose refresh fails falls back to its stored token. */
+	/** Called before each reconnect to obtain a freshly-minted channel descriptor (new connect + channel token) so the subscription can outlive the token TTLs (channel ~1h / connect ~2h). Without it, a reconnect replays the original tokens and will fail once they expire. Not called on the initial subscribe. Note: `refresh` is registered per-channel — a connection multiplexing several channels keeps each channel's own refresher and re-mints every live channel's token on reconnect (the instance-scoped connect token is taken from any one of them). A channel whose refresh fails falls back to its stored token. It is also called, outside a reconnect, when the server ends a live subscription because its channel token expired (the server re-checks on every keep-alive ping): the channel then subscribes again on the same socket with the fresh token, without `onDisconnect` or `onReconnect`. */
 	refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
@@ -148,6 +148,24 @@ export interface RealtimeServer<T extends NamespaceDefs> {
 	 * ```
 	 */
 	getChannel<K extends string & keyof T>(namespace: K, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<InferMessage<T[K]>>>;
+
+	/**
+	 * End a user's access to channels: every handle minted for `principal` (see
+	 * {@link GetChannelOptions.principal}) before this call stops working.
+	 * Subscriptions that are already open are closed on the connection's next
+	 * keep-alive ping (within about 9 minutes), and the client is told through
+	 * `onDisconnect('error')`. New subscribes and connections made with an older
+	 * handle are refused straight away. Handles minted after this call work.
+	 * A handle minted in the same second as the call counts as older.
+	 *
+	 * The record is kept for as long as the longest token lives (about 2 hours).
+	 * Handles minted without a `principal` can't be revoked; they expire after
+	 * about an hour.
+	 *
+	 * @param principal - The user id passed to `getChannel()`.
+	 * @throws {RealtimeErrors.ValidationFailed} If `principal` is not a non-empty string of at most 256 characters.
+	 */
+	revokeAccess(principal: string): Promise<void>;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────────
@@ -167,6 +185,19 @@ export interface GetChannelOptions {
 	 * @defaultValue 'subtree'
 	 */
 	scope?: 'exact' | 'subtree';
+
+	/**
+	 * The signed-in user (an id such as the session's `userSub`) this handle is
+	 * for. The id is signed into the handle's connect and channel tokens, and the
+	 * server accepts a channel token only on a connection opened with a connect
+	 * token for the same user. A token handed to a different user, or to a
+	 * connection opened as a different user or as no one, is refused. Pass it
+	 * whenever the channel belongs to a user, and use the same id with
+	 * `revokeAccess()`. At most 256 characters.
+	 *
+	 * Leave it out only for channels any holder of the handle may read.
+	 */
+	principal?: string;
 }
 
 export interface RealtimeOptions<T extends NamespaceDefs> {

@@ -1961,6 +1961,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return descriptor as unknown as typeof ch;
   },
 
+  async realtimeGetPrincipalChannel(subChannel: string, principal: string) {
+    return realtime.getChannel('cursors', subChannel, { principal });
+  },
+
+  async realtimeGetMismatchedPrincipalChannel(subChannel: string, channelPrincipal: string, connectionPrincipal: string) {
+    // A handle whose channel token is bound to `channelPrincipal` but whose connect token is
+    // bound to `connectionPrincipal`: what a client holding someone else's channel token sends.
+    const channelHandle = await realtime.getChannel('cursors', subChannel, { principal: channelPrincipal });
+    const connectionHandle = await realtime.getChannel('cursors', subChannel, { principal: connectionPrincipal });
+    const descriptor = channelHandle.toJSON();
+    descriptor.connectToken = connectionHandle.toJSON().connectToken;
+    return descriptor as unknown as typeof channelHandle;
+  },
+
+  async realtimeRevokeBetweenHandles(subChannel: string, principal: string) {
+    // `stale` carries a channel token minted before revokeAccess() on a connect token minted
+    // after it, so the subscribe-time check (not the connect-time one) is what refuses it.
+    const before = await realtime.getChannel('cursors', subChannel, { principal });
+    await realtime.revokeAccess(principal);
+    // Revocation compares whole seconds; wait one out before minting the new handle.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const fresh = await realtime.getChannel('cursors', subChannel, { principal });
+    const stale = before.toJSON();
+    stale.connectToken = fresh.toJSON().connectToken;
+    return { stale: stale as unknown as typeof fresh, fresh };
+  },
+
   async realtimeGetPoisonedChannel(subChannel: string) {
     // Return a channel descriptor with a bad token — middleware hydrates it normally,
     // but the WS server / AppSync will reject the invalid token on subscribe.

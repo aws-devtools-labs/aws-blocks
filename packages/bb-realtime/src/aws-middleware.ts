@@ -16,6 +16,7 @@
 import { registerMiddleware } from '@aws-blocks/core/client';
 import { blocksError, brandBlocksError } from '@aws-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
+import { poolKey } from './pool-key.js';
 
 /** Callback for receiving realtime messages. */
 export type MessageHandler<T = unknown> = (message: T) => void;
@@ -70,6 +71,8 @@ interface Connection {
 	connected: boolean;
 	/** API Gateway endpoint, retained so a reconnect can rebuild the socket URL. */
 	wsUrl: string;
+	/** Key of this connection in the pool (see {@link poolKey}). */
+	key: string;
 	/** Connection-level auth token, replayed in the URL on every (re)connect. */
 	connectToken: string;
 	/** Per-channel message handlers. */
@@ -129,8 +132,10 @@ interface Connection {
 
 const connections = new Map<string, Connection>();
 
+
 function getOrCreateConnection(wsUrl: string, connectToken: string): Connection {
-	let conn = connections.get(wsUrl);
+	const key = poolKey(wsUrl, connectToken);
+	let conn = connections.get(key);
 	if (conn) {
 		return conn;
 	}
@@ -140,6 +145,7 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		ws: undefined,
 		connected: false,
 		wsUrl,
+		key,
 		connectToken,
 		subscriptions: new Map(),
 		channelTokens: new Map(),
@@ -154,7 +160,7 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		intentionalClose: false,
 		tornDown: false,
 	};
-	connections.set(wsUrl, conn);
+	connections.set(key, conn);
 
 	openSocket(conn, false);
 	return conn;
@@ -194,11 +200,13 @@ function applyFreshDescriptor(conn: Connection, expectedChannel: string, fresh: 
 		// still refresh the tokens below. (Rare in practice; the API Gateway
 		// endpoint is stable across refreshes, so fresh.wsUrl normally equals the
 		// current one and this branch is not taken at all.)
-		const existing = connections.get(fresh.wsUrl);
+		const newKey = poolKey(fresh.wsUrl, conn.connectToken);
+		const existing = connections.get(newKey);
 		if (!existing || existing === conn) {
-			connections.delete(conn.wsUrl);
+			connections.delete(conn.key);
 			conn.wsUrl = fresh.wsUrl;
-			connections.set(conn.wsUrl, conn);
+			conn.key = newKey;
+			connections.set(newKey, conn);
 		}
 	}
 	conn.connectToken = fresh.connectToken;
@@ -273,7 +281,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// reset connection under a fresh key). This single guard also protects
 				// the refresh-FAILURE scheduleReconnect below, so a torn-down conn can
 				// never schedule a reconnect that evicts whatever now owns its wsUrl key.
-				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
+				if (conn.tornDown || connections.get(conn.key) !== conn || conn.subscriptions.size === 0) { return; }
 				// Apply every FULFILLED, well-formed descriptor. applyFreshDescriptor
 				// updates the instance-scoped connect token (same value from any
 				// channel — mintConnectToken(this.fullId)) plus that channel's own
@@ -306,7 +314,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// Re-check AFTER applyFreshDescriptor: it may have re-keyed the pool,
 				// and (defensively) a synchronous handler could have torn the
 				// connection down. Only construct the socket if still live + pooled.
-				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
+				if (conn.tornDown || connections.get(conn.key) !== conn || conn.subscriptions.size === 0) { return; }
 				constructSocket(conn, true);
 			});
 		return;
@@ -402,7 +410,7 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				// still owns its wsUrl key, so a stale conn never evicts whatever live
 				// connection has since taken over the same key. Mirrors unsubscribe (which
 				// deletes by identity) and both scheduleReconnect teardown branches.
-				if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
+				if (connections.get(conn.key) === conn) { connections.delete(conn.key); }
 			}
 		}
 	};
@@ -433,6 +441,9 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 		}, KEEP_ALIVE_MS);
 	};
 
+	// Channels whose expired token is being renewed in place (see the `token_expired` branch below).
+	const renewing = new Set<string>();
+
 	ws.onmessage = (event) => {
 		try {
 			const msg = JSON.parse(event.data as string);
@@ -445,6 +456,24 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				// After a reconnect, fire onReconnect once every resubscribed
 				// channel has been re-confirmed by the server.
 				settleResubscribe(msg.channel, true);
+			} else if (msg.type === 'error' && msg.channel && msg.code === 'token_expired' && !conn.pendingEstablished.has(msg.channel) && conn.refreshers.has(msg.channel) && !renewing.has(msg.channel)) {
+				// The server ends a live subscription once its channel token has expired
+				// (it re-checks on every keep-alive ping). A channel with a `refresh`
+				// function renews in place: fetch a fresh descriptor and subscribe again
+				// with the new token, with no disconnect and no `onReconnect`. If the
+				// renewal fails, the channel is dropped like any other rejected one.
+				const channel: string = msg.channel;
+				renewing.add(channel);
+				const refresher = conn.refreshers.get(channel)!;
+				void withRefreshTimeout(refresher()).then((fresh) => {
+					if (conn.tornDown || conn.ws !== ws || ws.readyState !== WebSocket.OPEN || !conn.subscriptions.has(channel)) { return; }
+					if (!applyFreshDescriptor(conn, channel, fresh)) { throw new Error('malformed descriptor'); }
+					ws.send(JSON.stringify({ action: 'subscribe', channel, token: conn.channelTokens.get(channel) }));
+				}).catch(() => {
+					// Re-enter the normal rejection path below, without the renewal code.
+					if (conn.tornDown || conn.ws !== ws) { return; }
+					ws.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'error', channel, message: msg.message }) }));
+				}).finally(() => { renewing.delete(channel); });
 			} else if (msg.type === 'error' && msg.channel) {
 				const pending = conn.pendingEstablished.get(msg.channel);
 				if (pending) {
@@ -550,7 +579,7 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 			// Terminal close: mark torn down so a refresh() continuation in flight
 			// (from a prior reconnect attempt) cannot reopen this dead connection.
 			conn.tornDown = true;
-			connections.delete(wsUrl);
+			if (connections.get(conn.key) === conn) { connections.delete(conn.key); }
 		} else {
 			scheduleReconnect(conn);
 		}
@@ -583,7 +612,7 @@ function scheduleReconnect(conn: Connection): void {
 		// owns its wsUrl key. A torn-down/stale conn reaching here (e.g. a late
 		// refresh-failure continuation) must never evict whatever live connection has
 		// since taken over the same wsUrl key.
-		if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
+		if (connections.get(conn.key) === conn) { connections.delete(conn.key); }
 		return;
 	}
 	if (conn.reconnectAttempts >= MAX_RECONNECT) {
@@ -617,7 +646,7 @@ function scheduleReconnect(conn: Connection): void {
 		conn.tornDown = true;
 		// Delete-by-identity (BLOCKING): same rationale as the subscriber-less branch
 		// above — a stale conn must never evict a live owner of its wsUrl key.
-		if (connections.get(conn.wsUrl) === conn) { connections.delete(conn.wsUrl); }
+		if (connections.get(conn.key) === conn) { connections.delete(conn.key); }
 		return;
 	}
 	conn.reconnectAttempts++;

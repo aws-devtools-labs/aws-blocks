@@ -11,6 +11,7 @@
 
 import { registerMiddleware } from '@aws-blocks/core/client';
 import { blocksError, brandBlocksError } from '@aws-blocks/core';
+import { poolKey } from './pool-key.js';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 
 /** Callback for receiving realtime messages. */
@@ -67,6 +68,13 @@ const connections = new Map<string, {
 	 * subscriptions remain — reconnects.
 	 */
 	tornDown?: boolean;
+	/**
+	 * Connect token, sent in the socket URL so the dev server learns which principal
+	 * (if any) the connection belongs to, as `$connect` does on AWS. Refreshed on reconnect.
+	 */
+	connectToken?: string;
+	/** The endpoint to open; the pool is keyed by `poolKey(url, connectToken)`, which is what the functions below call `wsUrl`. */
+	url?: string;
 }>();
 
 const MAX_RECONNECT = 5;
@@ -98,10 +106,12 @@ function withRefreshTimeout(refreshing: Promise<RealtimeChannelDescriptor>): Pro
 	return Promise.race([refreshing, timeout]).finally(() => { if (timer) { clearTimeout(timer); } });
 }
 
-function getOrCreateConnection(wsUrl: string) {
+function getOrCreateConnection(wsUrl: string, url?: string, connectToken?: string) {
 	let conn = connections.get(wsUrl);
 	if (!conn) {
 		conn = {
+			url,
+			connectToken,
 			ws: undefined,
 			isConnected: false,
 			reconnectAttempts: 0,
@@ -174,6 +184,7 @@ function doConnect(wsUrl: string, isReconnect = false) {
 						&& c.subscriptions.has(result.value.channel)
 					) {
 						c.channelTokens.set(result.value.channel, result.value.token);
+						if (typeof result.value.connectToken === 'string') c.connectToken = result.value.connectToken;
 						anyApplied = true;
 					}
 				}
@@ -195,7 +206,8 @@ function doConnect(wsUrl: string, isReconnect = false) {
 function openMockSocket(wsUrl: string, isReconnect = false) {
 	const conn = getOrCreateConnection(wsUrl);
 	try {
-		conn.ws = new WebSocket(wsUrl);
+		const endpoint = conn.url ?? wsUrl;
+		conn.ws = new WebSocket(conn.connectToken ? `${endpoint}?token=${encodeURIComponent(conn.connectToken)}` : endpoint);
 		// Per-socket guard so a single drop notifies onDisconnect exactly ONCE even when
 		// the runtime fires onerror immediately followed by onclose (abnormal closure) —
 		// matching aws-middleware.ts's disconnectNotified dedupe. A fresh socket gets a
@@ -229,6 +241,8 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 				conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
 			}
 		};
+		// Channels whose expired token is being renewed in place (see the `token_expired` branch below).
+		const renewing = new Set<string>();
 		conn.ws.onmessage = (event) => {
 			try {
 				const data = JSON.parse(event.data as string);
@@ -238,6 +252,23 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 						pending.forEach(p => { p.resolve(); });
 						conn.pendingEstablished.delete(data.channel);
 					}
+				} else if (data.type === 'error' && data.channel && data.code === 'token_expired' && !conn.pendingEstablished.has(data.channel) && conn.refreshers.has(data.channel) && !renewing.has(data.channel)) {
+					// Parity with aws-middleware: a live subscription whose channel token expired
+					// renews in place when the channel has a `refresh` function (no disconnect,
+					// no `onReconnect`); if the renewal fails the channel is dropped as rejected.
+					const channel: string = data.channel;
+					const ws = conn.ws;
+					renewing.add(channel);
+					void withRefreshTimeout(conn.refreshers.get(channel)!()).then((fresh) => {
+						if (conn.tornDown || conn.ws !== ws || ws?.readyState !== WebSocket.OPEN || !conn.subscriptions.has(channel)) { return; }
+						if (!isRealtimeDescriptor(fresh) || typeof fresh.token !== 'string' || fresh.channel !== channel) { throw new Error('malformed descriptor'); }
+						conn.channelTokens.set(channel, fresh.token);
+						if (typeof fresh.connectToken === 'string') conn.connectToken = fresh.connectToken;
+						ws.send(JSON.stringify({ action: 'subscribe', channel, token: fresh.token }));
+					}).catch(() => {
+						if (conn.tornDown || conn.ws !== ws) { return; }
+						ws?.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'error', channel, code: 'renewal_failed', message: data.message }) }));
+					}).finally(() => { renewing.delete(channel); });
 				} else if (data.type === 'error' && data.channel) {
 					const pending = conn.pendingEstablished.get(data.channel);
 					if (pending) {
@@ -256,6 +287,8 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 					conn.channelTokens.delete(data.channel);
 					// A rejected channel is gone — drop its refresher too.
 					conn.refreshers.delete(data.channel);
+					// The server ended a LIVE subscription (token expired or access revoked): surface it, as aws-middleware does.
+					if (!pending && typeof data.code === 'string') { conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} }); }
 				} else if (data.type === 'message' && data.channel) {
 					const handlers = conn.subscriptions.get(data.channel);
 					if (handlers) {
@@ -358,9 +391,11 @@ function ensureConnected(wsUrl: string) {
 	doConnect(wsUrl);
 }
 
-function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void, refresh?: () => Promise<RealtimeChannelDescriptor>): RealtimeSubscription {
-	const conn = getOrCreateConnection(wsUrl);
-	ensureConnected(wsUrl);
+function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void, refresh?: () => Promise<RealtimeChannelDescriptor>, connectToken?: string): RealtimeSubscription {
+	// One socket per endpoint and principal (see poolKey); `key` is what the pool functions call `wsUrl`.
+	const key = poolKey(wsUrl, connectToken ?? '');
+	const conn = getOrCreateConnection(key, wsUrl, connectToken);
+	ensureConnected(key);
 	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
 	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
 	// Store the token-refresh fn PER-CHANNEL so a reconnect can re-mint a fresh
@@ -450,7 +485,7 @@ export function hydrate(data: unknown): unknown {
 				const onDisconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onDisconnect;
 				const onReconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onReconnect;
 				const refresh = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.refresh;
-				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect, refresh);
+				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect, refresh, typeof data.connectToken === 'string' ? data.connectToken : undefined);
 			},
 		} satisfies RealtimeChannelClient;
 	}

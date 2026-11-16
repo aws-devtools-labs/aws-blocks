@@ -26,8 +26,8 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize } from './utils.js';
-import { getBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal } from './utils.js';
+import { getBroadcastBus, LOCAL_TOKEN_SECRET, revokePrincipal } from './local-dev.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -156,11 +156,13 @@ export const Realtime: {
 	async getChannel(namespace: string, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<unknown>> {
 		const ns = this._ns(namespace);
 		const tokenScope = resolveChannelTokenScope(options);
+		const principal = options?.principal;
+		validatePrincipal(principal);
 		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
-		const token = mintChannelToken(fullChannel, LOCAL_TOKEN_SECRET, undefined, tokenScope);
-		const connectToken = mintConnectToken(this.fullId, LOCAL_TOKEN_SECRET);
+		const token = mintChannelToken(fullChannel, LOCAL_TOKEN_SECRET, undefined, tokenScope, principal);
+		const connectToken = mintConnectToken(this.fullId, LOCAL_TOKEN_SECRET, undefined, principal);
 		return {
 			subscribe(handlerOrOptions: ((message: unknown) => void) | SubscribeOptions, _options?: never): RealtimeSubscription {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
@@ -180,6 +182,11 @@ export const Realtime: {
 				};
 			},
 		};
+	}
+
+	async revokeAccess(principal: string): Promise<void> {
+		validatePrincipal(principal);
+		revokePrincipal(principal);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

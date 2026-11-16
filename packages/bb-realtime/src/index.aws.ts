@@ -40,7 +40,9 @@ import type {
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
 import { localListener, serverSubscribe, type ServerSubscription } from './server-subscribe.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, isClientChannelPath } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal, isClientChannelPath } from './utils.js';
+import { checkSubscriptionAuth, subscriptionEndedMessage, REVOCATION_RETENTION_SECONDS } from './subscription-auth.js';
+import type { SubscriptionAuthFailure } from './subscription-auth.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -64,6 +66,16 @@ interface ConnectionRecord {
 	expiresAt: number;
 	connectedAt?: number;
 	lastTtlSweep?: number;
+	/** Connection record: the principal its connect token is bound to. Subscription record: the principal its channel token is bound to. */
+	principal?: string;
+	/** Subscription record: expiry (unix seconds) of the channel token it was authorized with. */
+	tokenExp?: number;
+	/** Subscription record: issue time (unix seconds) of that channel token. */
+	tokenIat?: number;
+	/** Subscription record: unique id (`jti`) of that channel token. */
+	tokenId?: string;
+	/** Revocation record: when access for the principal was revoked (unix seconds). */
+	revokedAt?: number;
 }
 
 // ── Connections table schema (runtime validation — accepts anything) ────────
@@ -82,6 +94,13 @@ const SENTINEL_SK = '__connection__';
 const SENTINEL_TTL = 9000;   // 2.5 hours
 const CHANNEL_TTL = 3600;    // 1 hour
 const SWEEP_INTERVAL = 1800; // 30 minutes
+
+// Revocation records live in the same table as connections. Their partition key
+// is `revoked#<principal>`, which no API Gateway connection id can equal, and
+// their sort key is not a channel path a client may name (see isClientChannelPath),
+// so they never mix with connection or subscription records.
+const REVOKED_SK = '__revoked__';
+const revocationKey = (principal: string) => ({ connectionId: `revoked#${principal}`, channel: REVOKED_SK });
 
 // ── WebSocket event types ───────────────────────────────────────────────────
 
@@ -208,6 +227,27 @@ async function deleteConnectionRecords(connectionId: string): Promise<void> {
 	}
 }
 
+/** When access for `principal` was last revoked (unix seconds), or `undefined` if it never was (or the record has aged out). */
+async function getRevokedAt(principal: string | undefined): Promise<number | undefined> {
+	if (principal === undefined) return undefined;
+	const record = await connectionsTable().get(revocationKey(principal));
+	return record?.revokedAt;
+}
+
+/** Tell a client its subscription ended and why. A connection that is already gone is ignored. */
+async function notifySubscriptionEnded(callbackUrl: string, connectionId: string, channel: string, failure: SubscriptionAuthFailure): Promise<void> {
+	try {
+		await getApigw(callbackUrl).send(new PostToConnectionCommand({
+			ConnectionId: connectionId,
+			Data: JSON.stringify({ type: 'error', channel, code: failure, message: subscriptionEndedMessage(failure) }),
+		}));
+	} catch (err: any) {
+		if (!(err instanceof GoneException || err?.statusCode === 410)) {
+			console.warn(`[Realtime] could not notify connection ${connectionId}: ${err?.message ?? err}`);
+		}
+	}
+}
+
 // ── WebSocket event handler (runs inside Blocks handler Lambda) ────────────────
 
 async function handleWebSocketEvent(event: any): Promise<any> {
@@ -223,7 +263,13 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		const secret = await getTokenSecret();
 		const valid = validateChannelToken(token, secret);
 		if (!valid) return { statusCode: 403 };
-		await table.put({ connectionId, channel: SENTINEL_SK, connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
+		// A connect token minted before the principal's access was revoked is refused.
+		const revokedAt = await getRevokedAt(valid.sub);
+		if (revokedAt !== undefined && valid.iat <= revokedAt) return { statusCode: 403 };
+		await table.put({
+			connectionId, channel: SENTINEL_SK, connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now,
+			...(valid.sub === undefined ? {} : { principal: valid.sub }),
+		});
 		return { statusCode: 200 };
 	}
 
@@ -260,7 +306,10 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			return { statusCode: 200 };
 		}
 		const secret = await getTokenSecret();
-		const valid = validateChannelToken(msg.token, secret, msg.channel);
+		// The connection's principal comes from its connect token (stored at $connect).
+		// A connection with no record (never connected, or aged out) authorizes nothing.
+		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK });
+		const valid = sentinel ? validateChannelToken(msg.token, secret, msg.channel, { principal: sentinel.principal }) : null;
 		if (!valid) {
 			await getApigw(callbackUrl).send(new PostToConnectionCommand({
 				ConnectionId: connectionId,
@@ -268,7 +317,17 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			}));
 			return { statusCode: 200 };
 		}
-		await table.put({ connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL });
+		const revokedAt = await getRevokedAt(valid.sub);
+		if (revokedAt !== undefined && valid.iat <= revokedAt) {
+			await notifySubscriptionEnded(callbackUrl, connectionId, msg.channel, 'access_revoked');
+			return { statusCode: 200 };
+		}
+		// Keep what a ping needs to re-check this subscription later (see `checkSubscriptionAuth`).
+		await table.put({
+			connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL,
+			tokenExp: valid.exp, tokenIat: valid.iat, tokenId: valid.jti,
+			...(valid.sub === undefined ? {} : { principal: valid.sub }),
+		});
 		await getApigw(callbackUrl).send(new PostToConnectionCommand({
 			ConnectionId: connectionId,
 			Data: JSON.stringify({ type: 'subscribe_success', channel: msg.channel }),
@@ -276,21 +335,35 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 	} else if (msg.action === 'unsubscribe' && isClientChannelPath(msg.channel)) {
 		await table.delete({ connectionId, channel: msg.channel });
 	} else if (msg.action === 'ping') {
-		// Get sentinel to read lastTtlSweep, then update TTL
 		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK });
 		if (sentinel) {
 			await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL });
+			// Re-check every subscription against its token: a subscription ends when
+			// the token expired, the principal no longer matches the connection's, or
+			// access for the principal was revoked.
+			const revokedAt = await getRevokedAt(sentinel.principal);
+			const records = (await Array.fromAsync(table.query({
+				where: { connectionId: { equals: connectionId } },
+			}))).filter(r => r.channel !== SENTINEL_SK);
+			const ended: { record: ConnectionRecord; failure: SubscriptionAuthFailure }[] = [];
+			const live: ConnectionRecord[] = [];
+			for (const record of records) {
+				// A record without token details predates them; it can't be re-checked, so it ends.
+				const failure = record.tokenExp === undefined || record.tokenIat === undefined
+					? 'token_expired'
+					: checkSubscriptionAuth({ tokenExp: record.tokenExp, tokenIat: record.tokenIat, principal: record.principal }, sentinel.principal, revokedAt, now);
+				if (failure) ended.push({ record, failure });
+				else live.push(record);
+			}
+			if (ended.length > 0) {
+				await table.deleteBatch(ended.map(({ record }) => ({ connectionId: record.connectionId, channel: record.channel })));
+				await Promise.all(ended.map(({ record, failure }) => notifySubscriptionEnded(callbackUrl, connectionId, record.channel, failure)));
+			}
 			const lastSweep = sentinel.lastTtlSweep ?? 0;
 			if (now - lastSweep > SWEEP_INTERVAL) {
-				// Sweep: refresh TTLs on all channel subscriptions
-				const allRecords = await Array.fromAsync(table.query({
-					where: { connectionId: { equals: connectionId } },
-				}));
-				const items = allRecords
-					.filter(r => r.channel !== SENTINEL_SK)
-					.map(r => ({ ...r, expiresAt: now + CHANNEL_TTL }));
-				if (items.length > 0) {
-					await table.putBatch(items);
+				// Sweep: refresh TTLs on all channel subscriptions that remain
+				if (live.length > 0) {
+					await table.putBatch(live.map(r => ({ ...r, expiresAt: now + CHANNEL_TTL })));
 				}
 				await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
 			}
@@ -443,6 +516,8 @@ export const Realtime: {
 	async getChannel(namespace: string, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<unknown>> {
 		const ns = this._ns(namespace);
 		const tokenScope = resolveChannelTokenScope(options);
+		const principal = options?.principal;
+		validatePrincipal(principal);
 		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
@@ -450,8 +525,8 @@ export const Realtime: {
 		if (!secret) {
 			throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret unavailable — cannot issue channel credentials');
 		}
-		const channelToken = mintChannelToken(fullChannel, secret, undefined, tokenScope);
-		const connectToken = mintConnectToken(this.fullId, secret);
+		const channelToken = mintChannelToken(fullChannel, secret, undefined, tokenScope, principal);
+		const connectToken = mintConnectToken(this.fullId, secret, undefined, principal);
 		const wsUrl = getSdkIdentifiers(this).wsUrl;
 		const localEmitter = this._localEmitter;
 
@@ -484,6 +559,13 @@ export const Realtime: {
 				};
 			},
 		};
+	}
+
+	async revokeAccess(principal: string): Promise<void> {
+		validatePrincipal(principal);
+		if (principal === undefined) throw blocksError(RealtimeErrors.ValidationFailed, 'revokeAccess() requires a principal');
+		const now = Math.floor(Date.now() / 1000);
+		await connectionsTable().put({ ...revocationKey(principal), revokedAt: now, expiresAt: now + REVOCATION_RETENTION_SECONDS });
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {
