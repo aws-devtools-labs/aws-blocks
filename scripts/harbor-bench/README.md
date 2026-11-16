@@ -94,7 +94,12 @@ three phases); this bounds a runaway session, not what the credentials allow.
 In CI the Bedrock session lasts `HARBOR_SESSION_SECONDS` (2,700 s, in the workflow; the run step
 took at most 1,125 s, p95 882 s, over 284 trials). `run.py --credentials-expire-at` stops Harbor at
 that deadline and records the trial as an infrastructure error (`outlived_credentials`), since its
-late phases could fail on expired credentials alone.
+late phases could fail on expired credentials alone. The session is tied to the run step: it is
+assumed directly before that step, it is no longer than `run.py`'s own 6,000 s Harbor timeout, and
+the step's `timeout-minutes` (47) stops it about 2 minutes after the session ends (the test
+allows at most 180 s).
+`scripts/ci/harbor-credentials.test.mjs` checks all three. A run that finishes early does not
+revoke the session: it stays valid until it expires.
 
 ## Trials and statistics
 
@@ -205,9 +210,10 @@ machine: `calibrate.py` never uploads.
   that only allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the
   pinned inference profile and its foundation models.
 - Optional environment secret **`AWS_TRACES_ROLE_ARN`** and variable **`HARBOR_TRACES_BUCKET`**:
-  a role trusted for the same subject (max session 3600 s) that may only `s3:PutObject` under
-  `harbor/v1/*` in a private bucket (Block Public Access, owner-enforced, encrypted, TLS-only,
-  expiring objects). Unset means traces stay on the runner and are discarded.
+  a role trusted for the same subject (max session 3600 s; the workflow asks for 900 s) that may
+  only `s3:PutObject` under `harbor/v1/*` in a private bucket (Block Public Access,
+  owner-enforced, encrypted, TLS-only, expiring objects). Unset means traces stay on the runner
+  and are discarded.
 
 ```sh
 gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref main -f pr_number=123 -f trials=5
@@ -234,9 +240,29 @@ IDs, never prompts, commands, output, app files or exception text. Raw traces go
 private bucket, with the model credentials redacted, and the trace role is assumed only after
 the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
 model credentials and use the network until the session expires, at most `HARBOR_SESSION_SECONDS`
-after it starts. The inline session policy limits it to invoking the pinned model. The CLI budget
-cap does not apply to calls the agent makes with the credentials directly, so an account-level
-Bedrock spend limit belongs on the account that hosts the role.
+after it starts, and it stays valid for that long even if the run ends early. The inline session
+policy limits it to invoking the pinned model. Each benchmark job has its own session; the matrix
+has no `max-parallel`, so one run with `trials=N` holds up to 2N sessions at once (100 at the
+50-trial maximum), and runs for different PRs can overlap.
+
+The task runs with `network_mode = "public"`. At run time the container needs Bedrock Runtime in
+`us-east-1` for the agent's model calls and `registry.npmjs.org` for the generated app's
+third-party dependencies (`@aws-blocks` packages come from the local registry inside the
+container), and the app's own install scripts may download more (for example, Playwright browsers
+when the agent runs `playwright install` in its project). The pinned Harbor revision also has an
+`allowlist` mode for Docker, enforced by a sidecar transparent proxy and nftables rules. It is not
+used yet: it adds a third-party proxy image pulled at run time, depends on the runner kernel's
+nftables support, fails the trial when that is missing, and changes what the agent can install
+mid-measurement. Moving to it needs a dispatched run that shows unchanged pass rates.
+
+The CLI budget cap (`--max-budget-usd 10`) is Claude Code's own list-price estimate for one
+session. It does not apply to calls the agent or PR code makes with the credentials directly, and
+nothing in this repository limits Bedrock spend. The AWS account that hosts `AWS_ROLE_ARN` must
+have its own control, configured outside this repository: an AWS Budgets budget on Bedrock cost
+for that account with a budget action that applies a deny policy for `bedrock:InvokeModel*` to the
+role (or a service control policy that does the same) when the limit is reached. A budget that only
+sends alerts does not stop spend, Budgets cost data arrives hours late (so the limit needs
+headroom), and Bedrock's tokens-per-minute quotas bound the rate, not the total.
 
 The human approval is enforced by the workflow, not by IAM. Both roles trust the
 `:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
@@ -246,6 +272,9 @@ checks both on every PR: it fails if any other workflow file mentions `harbor-be
 the name is assembled at runtime from parts. Changes to `main` go through reviewed pull requests
 (repository admins can bypass that review), so a new `harbor-bench` reference needs that review
 instead of a per-run approval.
+
+D-029 in [`docs/DECISIONS.md`](../../docs/DECISIONS.md) records this trade-off and what would
+change it.
 
 ## Local verification
 

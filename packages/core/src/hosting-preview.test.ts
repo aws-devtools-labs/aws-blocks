@@ -92,6 +92,9 @@ function deployResourcesTheProxyWaitsOn(resources: Record<string, CfnResourceJso
 
 const newStack = (name: string) =>
   new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
+/** A sandbox deploy's stack: the plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError). */
+const newSandboxStack = (name: string) =>
+  new Stack(new App({ context: { sandboxMode: 'true' } }), name, { env: { account: '111111111111', region: 'us-east-1' } });
 
 describe('HostingPresets', () => {
   it('production sets nothing: the full shape is the default', () => {
@@ -147,7 +150,7 @@ describe('Hosting with HostingPresets.preview', () => {
   it('keys the fixed build id on the content: unchanged keeps it, an edit or a deleted file changes it', () => {
     createSpaBuildOutput(tmpDir);
     const prefixOf = (name: string) => {
-      const stack = newStack(name);
+      const stack = newSandboxStack(name);
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
       const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function', {
         Properties: { Environment: { Variables: { ASSET_KEY_PREFIX: Match.anyValue() } } },
@@ -172,7 +175,7 @@ describe('Hosting with HostingPresets.preview', () => {
     const notFound = path.join(tmpDir, 'my-404.html');
     fs.writeFileSync(notFound, '<!DOCTYPE html><html><body>Not here</body></html>');
     const prefixOf = (name: string) => {
-      const stack = newStack(name);
+      const stack = newSandboxStack(name);
       new Hosting(stack, 'Hosting', {
         root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed', errorPages: { notFound },
       });
@@ -202,7 +205,7 @@ describe('Hosting with HostingPresets.preview', () => {
         createSpaBuildOutput(root);
         const notFound = path.join(root, '404.html');
         fs.writeFileSync(notFound, '<!DOCTYPE html><html><body>Not here</body></html>');
-        const stack = newStack(name);
+        const stack = newSandboxStack(name);
         new Hosting(stack, 'Hosting', {
           root, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed', errorPages: { notFound },
         });
@@ -484,7 +487,7 @@ describe('AWS CLI layers: only an in-place (preview) build drops the unused ones
 
   it("buildId: 'fixed' behind the ALB (no preset) also drops them", () => {
     createSpaBuildOutput(tmpDir);
-    const stack = newStack('LayersFixedAlb');
+    const stack = newSandboxStack('LayersFixedAlb');
     new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
     const t = Template.fromStack(stack);
     assert.deepStrictEqual(awsCliLayers(t).unused, []);
@@ -625,7 +628,7 @@ describe('the trim settings on their own', () => {
 
   it("`buildId: 'fixed'` works behind the ALB (no edge cache)", () => {
     createSpaBuildOutput(tmpDir);
-    const stack = newStack('FixedAlb');
+    const stack = newSandboxStack('FixedAlb');
     new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
     Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/fixed-[0-9a-f]{16}$') } },

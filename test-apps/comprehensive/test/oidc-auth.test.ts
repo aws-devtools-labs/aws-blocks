@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 import { createHmac } from 'node:crypto';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import { isBlocksError } from '@aws-blocks/core';
@@ -34,11 +34,7 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
  */
 const stubSkip = ENV === 'production' && 'stub IdP is sandbox-only';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /**
  * Call an API method over the JSON-RPC wire protocol. We bypass the

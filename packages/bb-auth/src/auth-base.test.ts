@@ -754,6 +754,43 @@ describe('email + password flows through AuthBase', () => {
 		assert.ok(!b.jar.has(h.cookieName));
 	});
 
+	test('outside a sandbox over a plain-HTTP front door: sign-in is refused before anything is written; sign-out still clears', async () => {
+		const keys = ['BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_PUBLIC_ORIGIN'] as const;
+		const before = keys.map((k) => process.env[k]);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'production';
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'http://my-alb-123.us-east-1.elb.amazonaws.com';
+		try {
+			let validated = false;
+			const h = makeAuth({
+				validateUser: async () => {
+					validated = true;
+				},
+			});
+			h.native.addUser('alice');
+			const b = new Browser();
+			await assert.rejects(
+				b.request((ctx) => h.auth.signIn('alice', 'Passw0rd!', ctx)),
+				(e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport),
+			);
+			assert.ok(!b.jar.has(h.cookieName));
+			assert.strictEqual(validated, false, 'validateUser does not run for a refused sign-in');
+			assert.ok(h.native.calls.includes('signOut:false'), "the engine's upstream tokens are revoked");
+			const { KVStore } = await import('@aws-blocks/bb-kv-store');
+			const rows = await Array.fromAsync(new KVStore<unknown>(h.auth, 'sessions').scan());
+			assert.deepStrictEqual(rows, [], 'no session row is stored');
+
+			const ctx = makeContext();
+			await h.auth.signOut(ctx);
+			assert.ok(isCleared(ctx.response.headers.getSetCookie(), h.cookieName), 'sign-out clears the cookie, no 500');
+		} finally {
+			keys.forEach((k, i) => {
+				const v = before[i];
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			});
+		}
+	});
+
 	test('signOut: clears the cookie even when signed out; global revokes upstream; onSignOut errors never block', async () => {
 		const h = makeAuth({
 			onSignOut: async () => {

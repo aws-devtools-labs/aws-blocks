@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - `FlutterSecureStore()` now stores iOS and macOS Keychain items with
   `KeychainAccessibility.unlocked_this_device`

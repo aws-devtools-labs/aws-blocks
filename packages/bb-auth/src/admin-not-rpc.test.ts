@@ -3,22 +3,27 @@
 
 /**
  * `auth.admin` is a server-side API, never an RPC surface: exporting it from the
- * backend module, or returning it from a namespace handler, answers JSON-RPC
- * "method not found" (-32601) in both runtimes, while a route the application
- * writes that calls an admin method keeps working.
+ * backend module, returning it from a namespace handler, or copying its methods
+ * into another object answers JSON-RPC "method not found" (-32601) in both
+ * runtimes, while a route the application writes that calls an admin method
+ * keeps working.
  */
 
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+import type { NativeEngine } from './engines/types.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import { makeAwsAuth } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => {
+	mock.restoreAll();
+	rmSync('.bb-data', { recursive: true, force: true });
+});
 
 const PASSWORD = 'Passw0rd!';
 let counter = 0;
@@ -85,6 +90,88 @@ describe('auth.admin is never served over RPC (mock runtime)', () => {
 
 		assert.strictEqual(body(await handler(rpc('api.exists', ['carol']))).result, true);
 	});
+});
+
+/**
+ * Ways an application might put `auth.admin`, or a copy of its methods, on its
+ * exports. Each must answer method-not-found for the `rpc` call it names.
+ */
+type Admin = { readonly addUserToGroup: unknown };
+const copyShapes: { name: string; method: string; exports: (admin: Admin) => Record<string, unknown> }[] = [
+	{ name: 'nested in an object', method: 'api.admin.addUserToGroup', exports: (admin) => ({ api: { admin } }) },
+	{
+		name: 'nested in a handler result',
+		method: 'api.admin.addUserToGroup',
+		exports: (admin) => ({ api: () => ({ admin }) }),
+	},
+	{ name: 'spread into an object', method: 'api.addUserToGroup', exports: (admin) => ({ api: { ...admin } }) },
+	{
+		name: 'spread into a handler result',
+		method: 'api.addUserToGroup',
+		exports: (admin) => ({ api: () => ({ ...admin }) }),
+	},
+	{
+		name: 'copied with Object.assign',
+		method: 'api.addUserToGroup',
+		exports: (admin) => ({ api: Object.assign({}, admin) }),
+	},
+	{
+		name: 'destructured, then exported under a new name',
+		method: 'api.promote',
+		exports: (admin) => {
+			const { addUserToGroup } = admin;
+			return { api: { promote: addUserToGroup } };
+		},
+	},
+	{
+		name: 'destructured, then exported on its own',
+		method: 'addUserToGroup.any',
+		exports: (admin) => {
+			const { addUserToGroup } = admin;
+			return { addUserToGroup };
+		},
+	},
+];
+
+describe('copies of auth.admin methods are never served over RPC (mock runtime)', () => {
+	for (const shape of copyShapes) {
+		test(shape.name, async () => {
+			const auth = await mockAuthWithUser('dave');
+			// Watch the engine call itself, not the user's groups: a dispatch that
+			// reaches the admin method with other arguments (the export treated as a
+			// handler factory, called with the request context) still shows up here.
+			const engine = (auth as unknown as { native: NativeEngine }).native;
+			const engineCall = mock.method(engine.admin, 'addUserToGroup');
+			const handler = createLambdaHandler(async () => shape.exports(auth.admin));
+
+			const res = await handler(rpc(shape.method, ['dave', 'admins']));
+			assert.ok(methodNotFound(res), JSON.stringify(body(res)));
+			assert.strictEqual(engineCall.mock.callCount(), 0, 'no admin method ran');
+			assert.deepStrictEqual(await auth.admin.listGroupsForUser('dave'), []);
+		});
+	}
+
+	test('a copied method still works when server code calls it', async () => {
+		const auth = await mockAuthWithUser('erin');
+		const { addUserToGroup } = { ...auth.admin };
+		await addUserToGroup('erin', 'admins');
+		assert.deepStrictEqual(await auth.admin.listGroupsForUser('erin'), ['admins']);
+		assert.ok(Object.keys(auth.admin).includes('addUserToGroup'), 'methods stay enumerable');
+	});
+});
+
+describe('copies of auth.admin methods are never served over RPC (AWS runtime)', () => {
+	for (const shape of copyShapes) {
+		test(`${shape.name}: method-not-found, before any Cognito call`, async () => {
+			const h = makeAwsAuth({ admin: {} });
+			h.on('AdminAddUserToGroupCommand', () => ({}));
+			const handler = createLambdaHandler(async () => shape.exports(h.auth.admin));
+
+			const res = await handler(rpc(shape.method, ['alice', 'admins']));
+			assert.ok(methodNotFound(res), JSON.stringify(body(res)));
+			assert.deepStrictEqual(h.sent, []);
+		});
+	}
 });
 
 describe('auth.admin is never served over RPC (AWS runtime)', () => {

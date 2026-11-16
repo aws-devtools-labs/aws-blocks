@@ -12,15 +12,11 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import type { authSocialApi as authSocialApiType } from 'aws-blocks';
+import { testBaseUrl } from './api-url.js';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 const HINT = "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
 

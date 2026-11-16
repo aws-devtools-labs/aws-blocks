@@ -515,7 +515,7 @@ describe('Realtime', () => {
 
 	it('validateChannelToken rejects token with missing channel field when requestedChannel is provided', () => {
 		// Craft a validly-signed token that has no channel field
-		const payload = { exp: Math.floor(Date.now() / 1000) + 3600 };
+		const payload = { exp: Math.floor(Date.now() / 1000) + 3600, iat: Math.floor(Date.now() / 1000), jti: 'no-channel' };
 		const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
 		const sig = createHmac('sha256', 'secret123').update(JSON.stringify(payload)).digest('base64url');
 		const token = `${payloadB64}.${sig}`;

@@ -35,7 +35,8 @@ The `Realtime` instance exposes three methods, all keyed by namespace name (type
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `rt.publish(namespace, channel, data)` | `Promise<void>` | Broadcast data to all subscribers (best-effort). Validates against schema. |
-| `rt.getChannel(namespace, channel, { scope? })` | `Promise<RealtimeChannel<T>>` | Get a channel handle (async — `await` it). Return from API methods for client hydration. By default the handle also opens every `/`-separated sub-channel of `channel`; pass `{ scope: 'exact' }` to limit it to `channel` (see [Sub-channels and access](#sub-channels-and-access)). |
+| `rt.getChannel(namespace, channel, { scope?, principal? })` | `Promise<RealtimeChannel<T>>` | Get a channel handle (async — `await` it). Return from API methods for client hydration. By default the handle also opens every `/`-separated sub-channel of `channel`; pass `{ scope: 'exact' }` to limit it to `channel` (see [Sub-channels and access](#sub-channels-and-access)). Pass `{ principal: user.userSub }` for a channel that belongs to a user (see [Binding a handle to a user](#binding-a-handle-to-a-user)). |
+| `rt.revokeAccess(principal)` | `Promise<void>` | End a user's access: handles minted for `principal` before this call stop working, and open subscriptions end on the connection's next keep-alive ping. See [Binding a handle to a user](#binding-a-handle-to-a-user). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
 **Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
@@ -87,7 +88,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async joinRoom(roomId: string) {
     const user = await auth.requireAuth(context);
     if (!canAccessRoom(user, roomId)) throw new Error('Forbidden');
-    return rt.getChannel('chat', roomId);
+    return rt.getChannel('chat', roomId, { principal: user.userSub });
   },
 }));
 ```
@@ -143,7 +144,7 @@ Messages are routed to the correct handler — room-1 messages only go to `handl
 
 ### Handling Auth Failures
 
-If a channel's token is invalid or expired, `established` rejects:
+If a channel's token is invalid, expired, bound to a different user, or revoked, `established` rejects:
 
 ```typescript
 const sub = channel.subscribe(handler);
@@ -218,6 +219,8 @@ of giving up. Each channel multiplexed on the connection re-mints its own token 
 an all-channels-failed outcome surfaces `onDisconnect('error')`. The server method behind
 `refresh` re-issues a channel token, so it must apply the same authorization as the method that
 issued the original channel.
+
+`refresh` also renews a live subscription in place. The server re-checks open subscriptions on every keep-alive ping and ends one whose channel token has expired; a channel with `refresh` then calls it and subscribes again on the same socket, with no `onDisconnect` and no `onReconnect`. A channel without `refresh`, or whose `refresh` fails, gets `onDisconnect('error')`. A subscription ended because access was revoked is not renewed.
 
 > **Reconnect without `refresh` spans only the connect token's ~2h life.** With no `refresh`,
 > the reconnect replays the *stored* connect token (~2h TTL, matching API Gateway's 2h max
@@ -383,6 +386,28 @@ async getTenantFeed(tenantId: string) {
 Use the default `'subtree'` only when a client that may read a channel may read everything under it.
 
 
+
+### Binding a handle to a user
+
+A handle's tokens are bearer credentials: whoever holds them can subscribe until they expire. Pass `principal` (the signed-in user's id, at most 256 characters) so the tokens are tied to that user:
+
+```typescript
+async joinRoom(roomId: string) {
+  const user = await auth.requireAuth(context);
+  if (!canAccessRoom(user, roomId)) throw new Error('Forbidden');
+  return rt.getChannel('chat', roomId, { principal: user.userSub });
+},
+```
+
+- The id is signed into the handle's connect token and channel token. The server accepts a channel token only on a connection opened with a connect token for the same user, so binding keeps a channel token from being used on a connection opened for another user or for no user. The handle as a whole is still a bearer credential until it expires or `revokeAccess()` is called, so treat it like a session token: whoever holds the whole handle (both tokens) can open a connection and subscribe, and the same handle can be used on several sockets until it expires. Handles without a `principal` keep working for any holder.
+- A connection belongs to one user. The client keeps one socket per Realtime endpoint and user, so handles for different users (or a user's handle and an unbound one) on one page each use their own socket, and signing in as someone else on the same page needs no reload.
+- Expiry and revocation are enforced when a message is published: a subscription whose channel token has expired, or whose access was revoked, receives nothing more, whether or not the client keeps sending pings. Open subscriptions are also re-checked on every keep-alive ping (about every 9 minutes), and the client is told why a subscription ended. A channel subscribed with `refresh` renews an expired token in place, with no `onDisconnect`; messages published between the server ending the subscription and the renewal completing (one API round trip, about once an hour per channel) are not delivered to that channel. Any other ended subscription, including a revoked one, reports `onDisconnect('error')`. Pass `refresh` for subscriptions that should outlive the 1-hour channel token.
+- `await rt.revokeAccess(user.userSub)` ends a user's access, for example on sign-out, a role change or a removed account. Handles minted for that user before the call are refused on connect and subscribe right away, and messages published after the call no longer reach subscriptions that are already open (the client learns the subscription ended on the connection's next ping, within about 9 minutes). A handle minted after the call works, so also make your `refresh` endpoint refuse that user, and a handle minted in the same second as the call counts as older. Revocation is stored in the existing connections table for 2 hours 5 minutes, the longest a token lives, and can't revoke a handle that was minted without a `principal`.
+- Tokens from a version without this format are refused. Clients that pass `refresh` recover on their next reconnect; others must call your API method again.
+
+### Rate limits
+
+API Gateway throttles the WebSocket stage in messages per second (the stack-wide `throttling` default), shared by all connections on the stage. It has no per-connection limit, and Realtime does not add one, so a single connection can use up to the stage rate. Keep client-sent frames to what the client library sends (subscribe, unsubscribe, ping). Per-connection limiting is a known gap.
 
 ## See Also
 

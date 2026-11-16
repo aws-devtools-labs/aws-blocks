@@ -7,10 +7,18 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
-import { log } from './log.js';
+import { migrateLegacyDeployedConfig } from './deployed-config.js';
+import { join } from 'node:path';
+import { ignoreClosedOutput, log } from './log.js';
 import { runCapture } from './run-command.js';
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
-import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import {
+  type DestroyRetryDeps,
+  destroyWasThrottled,
+  deterministicDestroyFailure,
+  emptySandboxBuckets,
+  runDestroyWithRetries,
+} from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -162,8 +170,10 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
 }
 
 export async function destroy(options: DestroyOptions) {
+  ignoreClosedOutput();
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
+    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
 
     // The same environment as the production deploy: `.env.production` can set
     // AWS_PROFILE and AWS_REGION (an exported variable wins), so without it the
@@ -175,12 +185,15 @@ export async function destroy(options: DestroyOptions) {
     // a credential error is deterministic, so retrying it only burns the full
     // [60s, 120s] backoff (the Telemetry E2E timeout this guards against). The
     // retry loop is for transient teardown blockers (bucket-blocked delete,
-    // DeleteRestApi 429 throttle, ENI detach), never auth.
+    // DeleteRestApi 429 throttle, ENI detach), never auth. A missing Region
+    // stops it too: the check would otherwise be skipped, and CDK's failure
+    // (`UnresolvedAccount`) retried.
     await assertAwsCredentials({
       command: 'destroy',
       invocation: options.invocation,
       projectRoot: options.projectRoot,
       accountDetails: false,
+      requireRegion: true,
     });
 
     const cdkEnv = {
@@ -225,12 +238,13 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
   // the retry loop prints it once the destroy finally fails.
   const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv, deferSignals: true }),
     printRetainedOutput: () => cdkOutput.printRetained(),
     attemptOutput: () => cdkOutput.lastRunOutput(),
     listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
     emptyBuckets: emptySandboxBuckets,
     isThrottled: destroyWasThrottled,
+    deterministicFailure: () => deterministicDestroyFailure(cdkOutput.lastRunOutput()),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     successLabel: 'Production stack',
   };

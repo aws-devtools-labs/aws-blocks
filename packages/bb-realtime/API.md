@@ -14,6 +14,7 @@ export type DisconnectReason = 'client' | 'timeout' | 'error' | 'unknown';
 
 // @public
 export interface GetChannelOptions {
+    principal?: string;
     scope?: 'exact' | 'subtree';
 }
 
@@ -70,6 +71,7 @@ export interface RealtimeServer<T extends NamespaceDefs> {
     getChannel<K extends string & keyof T>(namespace: K, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<InferMessage<T[K]>>>;
     // Warning: (ae-forgotten-export) The symbol "InferMessage" needs to be exported by the entry point index.aws.d.ts
     publish<K extends string & keyof T>(namespace: K, channel: string, data: InferMessage<T[K]>): Promise<void>;
+    revokeAccess(principal: string): Promise<void>;
     subscribe<K extends string & keyof T>(namespace: K, channel: string, handler: (message: InferMessage<T[K]>) => void): () => void;
 }
 

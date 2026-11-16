@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testApiUrl } from './api-url.js';
 import type { api as apiType } from 'aws-blocks';
 import { provisionConfirmedUser } from './test-support.js';
 
@@ -21,10 +21,7 @@ import { provisionConfirmedUser } from './test-support.js';
  *
  * Uses raw `fetch` because the shared cookie jar consumes `Set-Cookie`.
  */
-function getApiUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  return config.apiUrl;
-}
+const getApiUrl = testApiUrl;
 
 /** A Set-Cookie value's attributes (everything after `name=value`), lower-cased and sorted. */
 function cookieAttributes(setCookie: string): string[] {
