@@ -1,0 +1,5 @@
+---
+"@aws-blocks/bb-distributed-table": patch
+---
+
+`DistributedTable` now rejects malformed input with `DistributedTableErrors.InvalidQuery`, the same way locally and on AWS, before calling DynamoDB. Previously a key passed as a string (`get('alice')` instead of `get({ userId: 'alice' })`) or a composite key without its sort key returned `null` locally and failed on AWS with a generic DynamoDB `ValidationException`. The same applies to `delete()`, `getBatch()`, `deleteBatch()`, and to `put()` / `putBatch()` items without their key fields. The error message names the key fields and shows the call to write. A `query()` `order` other than `'asc'` or `'desc'` now throws instead of sorting ascending. An `indexes` option given as an array now throws, including at synth, instead of declaring indexes named `'0'`, `'1'`, and so on. A query on an unknown index now lists the declared indexes. A batch call checks every key before processing any of them. A conditional-write conflict's message now starts with `ConditionalCheckFailedException:`; its name and 409 status are unchanged. Valid calls behave as before.

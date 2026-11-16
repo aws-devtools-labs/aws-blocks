@@ -7,6 +7,7 @@ import io.ktor.http.Cookie
 import io.ktor.http.Url
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlinx.coroutines.test.runTest
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -26,9 +27,14 @@ class JvmApplicationStorageTest {
         root.deleteRecursively()
     }
 
-    /** A jar as a freshly launched application would build one, so each call stands in for a launch. */
+    /**
+     * A jar as a freshly launched application would build one, so each call stands in for a launch.
+     *
+     * Pinned to a key beside the entries. What this test is about is which directory an id resolves
+     * to, and left on the default it would reach the machine's real secret store on every run.
+     */
     private fun jarFor(applicationId: String) =
-        cookieJarIn(applicationStorageDirectory(applicationId, root))
+        cookieJarIn(applicationStorageDirectory(applicationId, root)) { FileKeyCustody(it) }
 
     @Test
     fun `an application reads back the session it stored`() = runTest {
@@ -64,6 +70,76 @@ class JvmApplicationStorageTest {
         val jar = PersistentCookiesStorage(platformKeyValueStore("cookies", "   "))
         jar.addCookie(url, Cookie(name = "session", value = "a-session"))
         PersistentCookiesStorage(platformKeyValueStore("cookies", "   ")).get(url).shouldBeEmpty()
+    }
+
+    @Test
+    fun `two id spellings that share a directory share a key`() = runTest {
+        // `app`, ` app` and `.app` all reduce to the same directory, so one is standing in for a
+        // relaunched process that supplied a slightly-differently-whitespaced id. The alias must
+        // come from the already-normalized directory name, not the raw id: with the raw id, each
+        // spelling would mint its own key under any OS secret store, and only one could read what
+        // the directory holds. Pinned here against an alias-keyed custody that stands in for a
+        // real OS store.
+        val keyedByAlias = mutableMapOf<String, ByteArray>()
+        val custodyFor: (Path) -> KeyCustody = { AliasedCustody(keyedByAlias) }
+
+        forgetCookieJars()
+        cookieJarIn(applicationStorageDirectory("app", root), custodyFor)
+            .addCookie(url, Cookie(name = "session", value = "a-session"))
+
+        forgetCookieJars()
+        cookieJarIn(applicationStorageDirectory(" app", root), custodyFor)
+            .get(url).single().value shouldBe "a-session"
+
+        // Only one key minted — both spellings resolved to the same alias.
+        keyedByAlias.size shouldBe 1
+    }
+
+    /** Stands in for a real OS secret store: keys indexed by alias, state shared across instances. */
+    private class AliasedCustody(private val held: MutableMap<String, ByteArray>) : KeyCustody {
+        override val tier = KeyTier.OS
+        override fun load(alias: String): ByteArray? = held[alias]
+        override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray =
+            held.getOrPut(alias) { key }
+        override fun delete(alias: String) { held.remove(alias) }
+    }
+
+    @Test
+    fun `a session keeps persisting when the key tier goes away and comes back`() = runTest {
+        // The jar is where losing this hurts. It treats a failed read as temporary: it stays
+        // unloaded, and addCookie deliberately declines to write, because overwriting storage with
+        // one cookie would discard whatever else is in there. So a store that throws on read never
+        // receives the write that would heal it, and the session stops persisting for good.
+        //
+        // The sequence is a tier that goes away and returns with its key intact — a keyring, then
+        // a session with none, then the keyring again; or a declined Keychain prompt later allowed.
+        val keyring = mutableMapOf<String, ByteArray>()
+        val onTheKeyring: (Path) -> KeyCustody = { AliasedCustody(keyring) }
+        val besideTheEntries: (Path) -> KeyCustody = { FileKeyCustody(it) }
+        val directory = applicationStorageDirectory("com.example.one", root)
+
+        // Each launch gets its own jar, because a jar held in memory would hide what reached disk.
+        suspend fun launch(custodyFor: (Path) -> KeyCustody, signInAs: String?): String? {
+            forgetCookieJars()
+            val jar = cookieJarIn(directory, custodyFor)
+            val restored = jar.get(url).singleOrNull()?.value
+            if (signInAs != null) jar.addCookie(url, Cookie(name = "session", value = signInAs))
+            return restored
+        }
+
+        launch(onTheKeyring, signInAs = "first").shouldBeNull()
+        launch(onTheKeyring, signInAs = null) shouldBe "first"
+
+        // The keyring is unreachable. The file tier mints, and this launch signs in again.
+        launch(besideTheEntries, signInAs = "second").shouldBeNull()
+        launch(besideTheEntries, signInAs = null) shouldBe "second"
+
+        // The keyring returns, holding the key from the first launch. The entries on disk were
+        // written under the file key, so there is nothing here for it to restore — but it has to
+        // persist the sign-in that follows rather than failing every read from now on.
+        launch(onTheKeyring, signInAs = "third").shouldBeNull()
+        launch(onTheKeyring, signInAs = null) shouldBe "third"
+        launch(onTheKeyring, signInAs = null) shouldBe "third"
     }
 
     @Test

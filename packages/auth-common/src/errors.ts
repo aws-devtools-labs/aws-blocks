@@ -165,6 +165,15 @@ export const AuthErrors = {
 	UserLambdaValidation: 'UserLambdaValidationException',
 	/** Rare service-side failure. Safe to retry with backoff. */
 	InternalError: 'InternalErrorException',
+
+	// ── transport ─────────────────────────────────────────────────────────────
+	/**
+	 * The auth block refused to issue a session cookie: the app is served over a
+	 * plain-HTTP front door (an ALB without a certificate) outside a sandbox
+	 * deploy, where the cookie could not carry `Secure` (HTTP 500). Give the
+	 * door a certificate and a domain, or use the CloudFront door.
+	 */
+	InsecureTransport: 'InsecureTransportException',
 } as const;
 
 /**

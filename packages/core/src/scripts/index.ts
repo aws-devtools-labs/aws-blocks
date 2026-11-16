@@ -35,6 +35,7 @@ export { type DeploymentTarget, resolveDeploymentTarget } from './deployment-tar
 export { type DeployedStackOptions, type DestroyOptions, deployedStackExists, destroy } from './destroy.js';
 export {
 	type DevServerOptions,
+	isStopWarning,
 	runStopCli,
 	type StopResult,
 	startDevServer,
@@ -44,7 +45,7 @@ export {
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
-export { log } from './log.js';
+export { CLOSED_OUTPUT_CODES, ignoreClosedOutput, log } from './log.js';
 export {
 	NativeCatalogError,
 	type NativeDeclarationInput,

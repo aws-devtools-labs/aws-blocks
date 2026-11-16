@@ -26,13 +26,11 @@ import { AuthErrors } from '@aws-blocks/bb-auth';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 import { isDeployedE2e } from './test-support.js';
+import { testBaseUrl } from './api-url.js';
 
 const POLICY_MESSAGE = 'Only @allowed.example accounts may join';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  return String(config.apiUrl).replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** `name=value` pairs from a response's `Set-Cookie` headers (cleared cookies dropped). */
 function cookiesOf(resp: Response): string[] {

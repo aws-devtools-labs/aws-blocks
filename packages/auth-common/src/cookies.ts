@@ -21,7 +21,8 @@
  * @module
  */
 
-import { type BlocksContext, getDeploymentType } from '@aws-blocks/core';
+import { type BlocksContext, blocksError, getDeploymentType } from '@aws-blocks/core';
+import { AuthErrors } from './errors.js';
 
 /**
  * Inputs that determine the security attributes of a session cookie.
@@ -56,8 +57,23 @@ export interface CookieSecurityInput {
 	 * keeps `Secure` and `Partitioned`. Derived from the front door's own scheme
 	 * (`BLOCKS_PUBLIC_ORIGIN`), never from a forgeable request header. Defaults to
 	 * `false` (assume HTTPS) when unset.
+	 *
+	 * Dropping `Secure` is allowed only in a sandbox deploy (and local
+	 * processes). Outside a sandbox ({@link getDeploymentType} is
+	 * `'production'`, which includes deployed compute whose config does not say
+	 * otherwise), {@link resolveCookieSecurity} refuses to issue the same-origin
+	 * cookie and throws `AuthErrors.InsecureTransport` instead (unless
+	 * {@link CookieSecurityInput.clearing}).
 	 */
 	plainHttpOrigin?: boolean;
+	/**
+	 * Whether the cookie being built clears an existing one (`Max-Age=0`, an
+	 * empty value). A clearing cookie carries nothing worth protecting, so it is
+	 * never refused over a plain-HTTP front door: sign-out and account deletion
+	 * still drop the cookie outside a sandbox. Its attributes are resolved as for
+	 * any other cookie. Defaults to `false`.
+	 */
+	clearing?: boolean;
 }
 
 /**
@@ -77,7 +93,7 @@ export interface CookieSecurityAttributes {
  * | crossDomain | isLocalhost | plainHttpOrigin | result                                 |
  * |-------------|-------------|-----------------|----------------------------------------|
  * | `false`     | `false`     | `false`         | `SameSite=Lax; Secure`                 |
- * | `false`     | `false`     | `true`          | `SameSite=Lax`                         |
+ * | `false`     | `false`     | `true`          | `SameSite=Lax` (sandbox, or a clearing cookie); throws (production) |
  * | `false`     | `true`      | any             | `SameSite=Lax`                         |
  * | `true`      | `false`     | any             | `SameSite=None; Secure; Partitioned`   |
  * | `true`      | `true`      | any             | `SameSite=None; Secure`                |
@@ -85,6 +101,11 @@ export interface CookieSecurityAttributes {
  * @param input - Whether the deploy is cross-domain and whether the request
  *   is plain-HTTP localhost.
  * @returns The `sameSite` / `secure` / `partitioned` values to apply.
+ * @throws `AuthErrors.InsecureTransport` (`InsecureTransportException`, a
+ *   branded Blocks error) for a same-origin cookie over a plain-HTTP front door
+ *   (`plainHttpOrigin`, not localhost) outside a sandbox deploy: a session is
+ *   never issued without `Secure` in production. A clearing cookie
+ *   (`clearing`) is never refused.
  */
 export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurityAttributes {
 	// Plain-HTTP transport — localhost OR a deployed HTTP-only front door — cannot
@@ -106,6 +127,24 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
 	// like an ALB with no TLS listener). `Lax` does not require `Secure`, so we
 	// omit it over plain HTTP and keep it on HTTPS for defense-in-depth.
 	// `Partitioned` is unnecessary for a same-site cookie.
+	// Outside a sandbox a plain-HTTP front door gets no session at all (synth
+	// already fails for that door; this is the runtime backstop). Deployed
+	// compute with no deployment type in its config reports `'production'`, so
+	// this fails closed.
+	// A clearing cookie (`clearing`) carries no value, so it is let through.
+	if (
+		!input.isLocalhost &&
+		input.plainHttpOrigin === true &&
+		input.clearing !== true &&
+		getDeploymentType() === 'production'
+	) {
+		throw blocksError(
+			AuthErrors.InsecureTransport,
+			'The auth block refuses to issue a session cookie over a plain-HTTP front door outside a sandbox deploy: ' +
+				'the cookie could not carry `Secure`. Give the front door a certificate and a domain (an HTTPS listener), ' +
+				'or use the CloudFront door.',
+		);
+	}
 	return {
 		sameSite: 'Lax',
 		secure: !plainHttp,
@@ -126,6 +165,7 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
  *   is plain-HTTP localhost.
  * @returns e.g. `"SameSite=Lax"`, `"SameSite=Lax; Secure"`, or
  *   `"SameSite=None; Secure; Partitioned"`.
+ * @throws `AuthErrors.InsecureTransport` where {@link resolveCookieSecurity} does.
  */
 export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
 	const { sameSite, secure, partitioned } = resolveCookieSecurity(input);
@@ -191,6 +231,8 @@ export function isLocalDevRequest(ctx: BlocksContext): boolean {
  * same-origin `Lax` cookie. Config-derived and trustworthy — unlike sniffing
  * `X-Forwarded-Proto`, which a client can forge. Returns `false` (assume HTTPS)
  * when the origin is unset or not parseable, so HTTPS deploys keep `Secure`.
+ * Outside a sandbox deploy a `true` here makes {@link resolveCookieSecurity}
+ * refuse the same-origin cookie (`AuthErrors.InsecureTransport`).
  */
 export function isInsecurePublicOrigin(): boolean {
 	const origin = process.env.BLOCKS_PUBLIC_ORIGIN;
