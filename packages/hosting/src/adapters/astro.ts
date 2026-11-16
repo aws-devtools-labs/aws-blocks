@@ -27,6 +27,12 @@
  * output, because the Lambda zip ships `dist/` without `node_modules`.
  * Any other user-configured adapter is built from the user's config
  * as-is.
+ *
+ * Both bridges add a build-only Vite plugin that writes a sentinel file
+ * next to the bridge. A build that exits 0 without it ran without the
+ * bridge config (a build command that drops `--config`), and fails synth.
+ * A user `@astrojs/node` in `middleware` mode fails synth too: its server
+ * entry starts no server.
  */
 import { spawn } from './spawn.js';
 import { appBuildEnv } from './shared/app_build_env.js';
@@ -83,6 +89,20 @@ const ASTRO_SERVER_PORT = 3000;
 /** Bridge files live here, hidden from the user. */
 const BRIDGE_DIR_REL = path.posix.join('.hosting', 'astro');
 const BRIDGE_CONFIG_FILE = 'config-bridge.mjs';
+/**
+ * Written next to the bridge by its Vite plugin when a build loads the
+ * bridge config. A build command that drops `--config` leaves it missing.
+ */
+const BRIDGE_SENTINEL_FILE = 'bundled';
+/**
+ * Written by the bundling bridge's plugin with the `mode` the user's
+ * `@astrojs/node` (10 or later) is built with. Those versions pass their
+ * options through the virtual module {@link ASTRO_NODE_CONFIG_MODULE_ID}
+ * rather than writing them into `dist/server/entry.mjs`.
+ */
+const BRIDGE_NODE_MODE_FILE = 'node-mode';
+/** Resolved id of `@astrojs/node`'s options module (10 or later). */
+const ASTRO_NODE_CONFIG_MODULE_ID = '\0virtual:astro-node:config';
 
 /** Pinned to match astro@^5/^6 peer-dep. Bump in lockstep on Astro majors. */
 const ASTROJS_NODE_PIN = '@astrojs/node@^9';
@@ -157,6 +177,18 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     typeof config.base === 'string' ? config.base : undefined,
   );
 
+  // The user's own `@astrojs/node` stays, in any output mode (a `static`
+  // config with an adapter still emits a server for its on-demand
+  // pages). Its build must bundle the app's dependencies like the
+  // transparent build does: only `dist/` is uploaded, so an import the
+  // build leaves pointing at `node_modules` crashes the server at start.
+  // `@astrojs/node` is the name that adapter registers its integration under.
+  const userNodeAdapter = config.adapter?.name === '@astrojs/node';
+  // The `mode` the user's `@astrojs/node` (10 or later) was built with, as
+  // the bundling bridge recorded it. Older versions write it into
+  // `dist/server/entry.mjs`, which is read after the build instead.
+  let builtNodeMode: string | undefined;
+
   if (!skipBuild) {
     // Bridge-decision: only honor a user adapter when it's wired in
     // astro.config (`adapter:` field). Checking `node_modules` alone is
@@ -166,27 +198,29 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     // canonical `[NoAdapterInstalled]` build crash.
     const userConfiguredAdapter = config.adapter !== undefined;
     const useBridge = userOutput !== 'static' && !userConfiguredAdapter;
-    // The user's own `@astrojs/node` stays, in any output mode (a `static`
-    // config with an adapter still emits a server for its on-demand
-    // pages). Its build must bundle the app's dependencies like the
-    // transparent build does: only `dist/` is uploaded, so an import the
-    // build leaves pointing at `node_modules` crashes the server at start.
-    // `@astrojs/node` is the name that adapter registers its integration under.
-    const bundleForUserNodeAdapter = config.adapter?.name === '@astrojs/node';
-    let cleanupBridge: (() => void) | undefined;
+    let bridge: AstroBridge | undefined;
     if (useBridge) {
-      cleanupBridge = installAstroBridge(projectDir, { adapter: 'node', bodySizeLimit });
-    } else if (bundleForUserNodeAdapter) {
-      cleanupBridge = installAstroBridge(projectDir, { adapter: 'user' });
+      bridge = installAstroBridge(projectDir, { adapter: 'node', bodySizeLimit });
+    } else if (userNodeAdapter) {
+      bridge = installAstroBridge(projectDir, { adapter: 'user' });
     } else if (userOutput !== 'static') {
       process.stderr.write(
         '✨ Detected user-configured adapter in astro.config; using user config as-is.\n',
       );
     }
     try {
-      runAstroBuild(projectDir, buildCommand, cleanupBridge !== undefined);
+      const cmd = runAstroBuild(projectDir, buildCommand, bridge?.mode);
+      if (bridge) {
+        // A build command that drops `--config` builds the app's own config
+        // and exits 0, and its server would fail at start once deployed,
+        // unless that config already bundles the dependencies itself.
+        const outcome = bridge.outcome();
+        const appBundlesItself = bridge.mode === 'user' && config.vite?.ssr?.noExternal === true;
+        if (!outcome.applied && !appBundlesItself) throw bridgeNotAppliedError(cmd);
+        builtNodeMode = outcome.nodeMode;
+      }
     } finally {
-      cleanupBridge?.();
+      bridge?.cleanup();
     }
   }
 
@@ -212,6 +246,9 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     }
   } else {
     ensureSsrBuildOutput(clientDir, serverDir, serverEntry, output);
+    if (userNodeAdapter && (builtNodeMode ?? readAstroNodeEntryMode(serverEntry)) === 'middleware') {
+      throw nodeMiddlewareModeError();
+    }
   }
 
   const manifest: DeployManifest =
@@ -361,6 +398,8 @@ type AstroConfigShape = {
      */
     service?: { entrypoint?: string; config?: unknown };
   };
+  /** Read for `ssr.noExternal`: `true` means the app's own build bundles its dependencies. */
+  vite?: { ssr?: { noExternal?: unknown } };
 };
 
 /**
@@ -433,10 +472,25 @@ type AstroBridgeMode =
   | { adapter: 'node'; bodySizeLimit: number }
   | { adapter: 'user' };
 
+/** What the bridge's Vite plugin recorded during the build. */
+type AstroBridgeOutcome = {
+  /** A Vite build loaded the bridge config: its plugin wrote the sentinel. */
+  applied: boolean;
+  /** `mode` of the user's `@astrojs/node` 10 or later (`user` bridge only). */
+  nodeMode: string | undefined;
+};
+
+type AstroBridge = {
+  mode: AstroBridgeMode['adapter'];
+  /** Read before `cleanup`, which removes what the plugin wrote. */
+  outcome: () => AstroBridgeOutcome;
+  cleanup: () => void;
+};
+
 const installAstroBridge = (
   projectDir: string,
   mode: AstroBridgeMode,
-): (() => void) => {
+): AstroBridge => {
   const userConfigPath = findAstroConfigPath(projectDir);
   if (!userConfigPath) {
     throw new HostingError('AstroConfigNotFoundError', {
@@ -453,6 +507,12 @@ const installAstroBridge = (
   const createdBridgeDir = !fs.existsSync(bridgeDir);
 
   fs.mkdirSync(bridgeDir, { recursive: true });
+  const sentinelPath = path.join(bridgeDir, BRIDGE_SENTINEL_FILE);
+  const nodeModePath = path.join(bridgeDir, BRIDGE_NODE_MODE_FILE);
+  // Left behind by an earlier build whose cleanup failed, they would make
+  // this build look applied.
+  fs.rmSync(sentinelPath, { force: true });
+  fs.rmSync(nodeModePath, { force: true });
 
   // Forward-slash relative path from `<projectDir>/.hosting/astro/`
   // back to the user's config; works on both POSIX and Windows because
@@ -465,8 +525,8 @@ const installAstroBridge = (
   fs.writeFileSync(
     path.join(bridgeDir, BRIDGE_CONFIG_FILE),
     mode.adapter === 'node'
-      ? buildBridgeConfigSource(userConfigRelative, mode.bodySizeLimit)
-      : buildBundlingBridgeConfigSource(userConfigRelative),
+      ? buildBridgeConfigSource(userConfigRelative, mode.bodySizeLimit, sentinelPath)
+      : buildBundlingBridgeConfigSource(userConfigRelative, sentinelPath, nodeModePath),
     'utf-8',
   );
 
@@ -482,21 +542,28 @@ const installAstroBridge = (
     );
   }
 
-  return (): void => {
+  const outcome = (): AstroBridgeOutcome => ({
+    applied: fs.existsSync(sentinelPath),
+    nodeMode: fs.existsSync(nodeModePath) ? fs.readFileSync(nodeModePath, 'utf-8') : undefined,
+  });
+
+  const cleanup = (): void => {
     try {
-      const cfg = path.join(bridgeDir, BRIDGE_CONFIG_FILE);
-      if (fs.existsSync(cfg)) fs.rmSync(cfg);
+      for (const file of [BRIDGE_CONFIG_FILE, BRIDGE_SENTINEL_FILE, BRIDGE_NODE_MODE_FILE]) {
+        fs.rmSync(path.join(bridgeDir, file), { force: true });
+      }
       if (createdBridgeDir && fs.existsSync(bridgeDir)) {
         if (fs.readdirSync(bridgeDir).length === 0) fs.rmdirSync(bridgeDir);
       }
       if (createdParentDir && fs.existsSync(parentDir)) {
         if (fs.readdirSync(parentDir).length === 0) fs.rmdirSync(parentDir);
       }
-      
     } catch {
       // Best-effort cleanup; a leftover bridge directory shouldn't fail the deploy.
     }
   };
+
+  return { mode: mode.adapter, outcome, cleanup };
 };
 
 /**
@@ -607,10 +674,20 @@ const installAstroJsNode = (projectDir: string): void => {
   }
 };
 
+/**
+ * Source of the statement that writes the bridge sentinel. Both bridges
+ * run it from the `config` hook of a Vite plugin with `apply: 'build'`, so
+ * the file exists only when a Vite build loaded the bridge config.
+ */
+const writeSentinelSource = (sentinelPath: string): string =>
+  `writeFileSync(${JSON.stringify(sentinelPath)}, '')`;
+
 const buildBridgeConfigSource = (
   userConfigRelativePath: string,
   bodySizeLimit: number,
-): string => `import userConfig from '${userConfigRelativePath}';
+  sentinelPath: string,
+): string => `import { writeFileSync } from 'node:fs';
+import userConfig from '${userConfigRelativePath}';
 import node from '@astrojs/node';
 
 if (userConfig.adapter) {
@@ -636,6 +713,16 @@ export default {
       // \`vite.ssr.noExternal: ['my-pkg']\` in your astro.config.
       noExternal: true,
     },
+    plugins: [
+      ...((userConfig.vite ?? {}).plugins ?? []),
+      {
+        name: 'aws-blocks-hosting:config-bridge-applied',
+        apply: 'build',
+        config: () => {
+          ${writeSentinelSource(sentinelPath)};
+        },
+      },
+    ],
   },
 };
 `;
@@ -654,10 +741,18 @@ export default {
  *
  * A package the app lists in `vite.ssr.external` stays external: Vite gives
  * an explicit `external` list priority over `noExternal: true`.
+ *
+ * The plugin also writes the bridge sentinel, and records the `mode` that
+ * `@astrojs/node` 10 or later serializes into its options module
+ * (`export const mode = "standalone";`), so the adapter can reject
+ * `middleware` mode after the build.
  */
 const buildBundlingBridgeConfigSource = (
   userConfigRelativePath: string,
-): string => `import userConfig from '${userConfigRelativePath}';
+  sentinelPath: string,
+  nodeModePath: string,
+): string => `import { writeFileSync } from 'node:fs';
+import userConfig from '${userConfigRelativePath}';
 
 export default {
   ...userConfig,
@@ -668,25 +763,40 @@ export default {
       {
         name: 'aws-blocks-hosting:bundle-server-dependencies',
         apply: 'build',
-        config: () => ({ ssr: { noExternal: true } }),
+        config: () => {
+          ${writeSentinelSource(sentinelPath)};
+          return { ssr: { noExternal: true } };
+        },
+        transform: {
+          filter: { id: /^\\0virtual:astro-node:config$/ },
+          handler: (code, id) => {
+            if (id !== ${JSON.stringify(ASTRO_NODE_CONFIG_MODULE_ID)}) return;
+            const mode = /^export\\s+const\\s+mode\\s*=\\s*"([^"]*)"/m.exec(code);
+            if (mode) writeFileSync(${JSON.stringify(nodeModePath)}, mode[1]);
+          },
+        },
       },
     ],
   },
 };
 `;
 
+/**
+ * Run the Astro build, through the bridge config when `bridge` is set.
+ * @returns the command that ran
+ */
 const runAstroBuild = (
   projectDir: string,
   buildCommand: string[] | undefined,
-  useBridgeConfig: boolean,
-): void => {
+  bridge: AstroBridgeMode['adapter'] | undefined,
+): string[] => {
   const baseCmd =
     buildCommand && buildCommand.length > 0
       ? buildCommand
       : projectHasBuildScript(projectDir)
         ? ['npm', 'run', 'build']
         : ['npx', 'astro', 'build'];
-  const cmd = useBridgeConfig
+  const cmd = bridge
     ? [
         ...baseCmd,
         '--',
@@ -704,12 +814,26 @@ const runAstroBuild = (
       env: appBuildEnv(),
     });
   } catch (error) {
+    // The app's own `@astrojs/node` is built with its dependencies bundled,
+    // which the app's own `astro build` doesn't do: a package that can't be
+    // bundled fails only this build, often while prerendering.
+    const bundlingCause =
+      bridge === 'user'
+        ? 'This build bundles the server dependencies into dist/server, because the server ' +
+          'function is deployed without node_modules. A package that can\'t be bundled (for ' +
+          'example, one that reads files next to its own code through __dirname) fails this ' +
+          'build. If only prerendered pages use that package, list it in `vite.ssr.external` ' +
+          'in your astro.config: prerendering runs where node_modules is installed. Don\'t list ' +
+          'a package that on-demand pages use: it isn\'t deployed, and the server fails at start.\n'
+        : '';
     throw new HostingError(
       'AstroBuildError',
       {
         message: 'Astro build failed.',
         resolution:
-          'Check the build output above. Common causes:\n' +
+          'Check the build output above. ' +
+          bundlingCause +
+          'Common causes:\n' +
           '  - Missing dependencies (run: npm install)\n' +
           '  - Invalid astro.config.{ts,mjs}\n' +
           '  - TypeScript errors in your pages or components',
@@ -717,7 +841,45 @@ const runAstroBuild = (
       error as Error,
     );
   }
+  return cmd;
 };
+
+/** The build exited 0 without loading the bridge config passed with `--config`. */
+const bridgeNotAppliedError = (cmd: string[]): HostingError =>
+  new HostingError('AstroBuildConfigNotAppliedError', {
+    message:
+      `The Astro build (\`${cmd.join(' ')}\`) did not use the config passed with \`--config\`, ` +
+      'so its server output would import packages from node_modules, which is not deployed.',
+    resolution:
+      'The build command did not pass `--config` through to `astro build`. ' +
+      '`npm run build -- --config <file>` passes it when the `build` script in package.json ' +
+      'ends with `astro build`. `npx astro build -- --config <file>`, which runs when ' +
+      'package.json has no `build` script, does not: Astro ignores options after `--`. ' +
+      'Add `"build": "astro build"` to the scripts in package.json, or make your `build` ' +
+      'script end with `astro build`.',
+  });
+
+/**
+ * `mode` that `@astrojs/node` 9 or earlier wrote into the server entry:
+ * Astro inlines the adapter's options there as `const _args = {...}`
+ * (`JSON.stringify(args, null, 4)` on Astro 5). Later versions pass them
+ * through a virtual module instead, which the bundling bridge records.
+ */
+const readAstroNodeEntryMode = (serverEntry: string): string | undefined => {
+  const source = fs.readFileSync(serverEntry, 'utf-8');
+  return /\b_args\s*=\s*\{[^}]*"mode"\s*:\s*"([^"]*)"/.exec(source)?.[1];
+};
+
+const nodeMiddlewareModeError = (): HostingError =>
+  new HostingError('AstroNodeMiddlewareModeError', {
+    message:
+      "astro.config sets `adapter: node({ mode: 'middleware' })`. In that mode, " +
+      'dist/server/entry.mjs exports a request handler and starts no server, ' +
+      'so the server function would answer no request.',
+    resolution:
+      "Set `adapter: node({ mode: 'standalone' })` in your astro.config, or remove the " +
+      '`adapter` field to let Hosting set up @astrojs/node.',
+  });
 
 const projectHasBuildScript = (projectDir: string): boolean => {
   const pkgPath = path.join(projectDir, 'package.json');

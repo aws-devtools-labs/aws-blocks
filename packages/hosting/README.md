@@ -355,10 +355,24 @@ the app's dependencies into the server output. What it does depends on the
   without `output: 'server'` whose pages opt out of prerendering
   (`export const prerender = false`). A `dist/` you built yourself with
   `astro build` and deploy with `BLOCKS_SKIP_FRONTEND_BUILD=1` isn't bundled,
-  so let `Hosting` build before such a deploy.
+  so let `Hosting` build before such a deploy. `mode: 'middleware'` fails
+  synth with `AstroNodeMiddlewareModeError`: in that mode
+  `dist/server/entry.mjs` exports a request handler and starts no server, so
+  use `mode: 'standalone'`.
 - **Any other adapter**: the app is built from its config as written, and
   nothing is bundled for you. With `output: 'server'`, a build that doesn't
   emit `dist/server/entry.mjs` fails synth with `AstroBuildOutputMissingError`.
+
+In the first two cases, the build runs `npm run build -- --config <file>`, so
+the `build` script in your `package.json` must end with `astro build`. With no
+`build` script, the build runs `npx astro build -- --config <file>`, and Astro
+ignores options after `--`: add `"build": "astro build"` to your scripts. If
+the build doesn't use that config (for example, a `build` script that runs
+another command after `astro build`), synth fails with
+`AstroBuildConfigNotAppliedError` instead of deploying a server that can't
+start. An app that configures `@astrojs/node` and sets
+`vite.ssr.noExternal: true` itself is exempt, because its own build bundles
+the dependencies.
 
 Two kinds of packages stay out of the bundle:
 
@@ -368,6 +382,12 @@ Two kinds of packages stay out of the bundle:
   that list priority over `ssr.noExternal: true`. It isn't uploaded, so a
   server that imports it at start exits with `ERR_MODULE_NOT_FOUND` and every
   request fails. Don't list a package the server needs at runtime there.
+
+A package that can't be bundled, for example one that reads files next to its
+own code through `__dirname`, fails the build with `AstroBuildError`, often
+while Astro prerenders a page. If only prerendered pages use it, list it in
+`vite.ssr.external`: prerendering runs during the build, where `node_modules`
+is installed.
 
 ## Architecture
 
