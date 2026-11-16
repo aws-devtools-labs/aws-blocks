@@ -12,7 +12,7 @@
  * decides what the token is worth. `undefined` for a token with no principal
  * (or one that can't be read).
  */
-function principalOfToken(token: string): string | undefined {
+export function principalOfToken(token: string): string | undefined {
 	try {
 		// Browser-safe decode (this module also runs in the browser, where `Buffer` is absent).
 		const base64 = (token.split('.')[0] ?? '').replace(/-/g, '+').replace(/_/g, '/');

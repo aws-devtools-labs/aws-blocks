@@ -450,3 +450,51 @@ describe('WebSocket handler: revokeAccess()', () => {
 		await assert.rejects(() => rt.revokeAccess(undefined as unknown as string), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed));
 	});
 });
+
+describe('WebSocket handler: publish enforces expiry and revocation without a ping', () => {
+	const messagesTo = (connectionId: string) => repliesTo(connectionId).filter(r => r.type === 'message');
+
+	it('delivers to a live subscription', async () => {
+		const { connectionId, descriptor } = await connected('fan-live', { principal: 'fan-user-0' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		await rt.publish('chat', 'fan-live', { n: 1 });
+		assert.strictEqual(messagesTo(connectionId).length, 1);
+	});
+
+	it('does not deliver to a subscription revoked since it was made, and removes its record', async () => {
+		const { connectionId, descriptor } = await connected('fan-revoked', { principal: 'fan-user-1' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		await rt.revokeAccess('fan-user-1');
+		posted.length = 0;
+		await rt.publish('chat', 'fan-revoked', { n: 1 });
+		assert.deepStrictEqual(messagesTo(connectionId), []);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+	});
+
+	it('does not deliver to a subscription whose token has expired, and removes its record', async () => {
+		const { connectionId, descriptor } = await connected('fan-expired', { principal: 'fan-user-2' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		posted.length = 0;
+		await withClockAdvanced(3700, () => rt.publish('chat', 'fan-expired', { n: 1 }));
+		assert.deepStrictEqual(messagesTo(connectionId), []);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+	});
+
+	it('does not deliver to a subscription record without token details', async () => {
+		const { connectionId, descriptor } = await connected('fan-legacy');
+		await connectionsOnDisk().put({ connectionId, channel: descriptor.channel, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
+		await rt.publish('chat', 'fan-legacy', { n: 1 });
+		assert.deepStrictEqual(messagesTo(connectionId), []);
+	});
+
+	it('still delivers to other users on the same channel', async () => {
+		const a = await connected('fan-shared', { principal: 'fan-user-3' });
+		const b = await connected('fan-shared', { principal: 'fan-user-4' });
+		for (const c of [a, b]) await wsHandler()(messageEvent(c.connectionId, { action: 'subscribe', channel: c.descriptor.channel, token: c.descriptor.token }));
+		await rt.revokeAccess('fan-user-3');
+		posted.length = 0;
+		await rt.publish('chat', 'fan-shared', { n: 1 });
+		assert.deepStrictEqual(messagesTo(a.connectionId), []);
+		assert.strictEqual(messagesTo(b.connectionId).length, 1);
+	});
+});

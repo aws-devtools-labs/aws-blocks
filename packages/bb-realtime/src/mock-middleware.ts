@@ -11,7 +11,7 @@
 
 import { registerMiddleware } from '@aws-blocks/core/client';
 import { blocksError, brandBlocksError } from '@aws-blocks/core';
-import { poolKey } from './pool-key.js';
+import { poolKey, principalOfToken } from './pool-key.js';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 
 /** Callback for receiving realtime messages. */
@@ -43,7 +43,8 @@ const connections = new Map<string, {
 	pendingSubs: { channel: string; token?: string }[];
 	pendingMessages: string[];
 	pendingEstablished: Map<string, PendingSubscribe[]>;
-	disconnectHandlers: Set<(reason: DisconnectReason) => void>;
+	/** onDisconnect handlers per channel, as in aws-middleware, so one channel ending notifies only its own handlers. */
+	disconnectHandlers: Map<string, Set<(reason: DisconnectReason) => void>>;
 	/** Registered onReconnect callbacks (called after a reconnect resubscribes). */
 	reconnectHandlers: Set<() => void>;
 	/**
@@ -120,7 +121,7 @@ function getOrCreateConnection(wsUrl: string, url?: string, connectToken?: strin
 			pendingSubs: [],
 			pendingMessages: [],
 			pendingEstablished: new Map(),
-			disconnectHandlers: new Set(),
+			disconnectHandlers: new Map(),
 			reconnectHandlers: new Set(),
 			refreshers: new Map(),
 			tornDown: false,
@@ -182,6 +183,7 @@ function doConnect(wsUrl: string, isReconnect = false) {
 						&& typeof result.value.token === 'string'
 						&& result.value.channel === channelsToRefresh[i]
 						&& c.subscriptions.has(result.value.channel)
+						&& (typeof result.value.connectToken !== 'string' || principalOfToken(result.value.connectToken) === principalOfToken(c.connectToken ?? ''))
 					) {
 						c.channelTokens.set(result.value.channel, result.value.token);
 						if (typeof result.value.connectToken === 'string') c.connectToken = result.value.connectToken;
@@ -192,7 +194,7 @@ function doConnect(wsUrl: string, isReconnect = false) {
 					// EVERY channel's refresh failed — mirror aws-middleware's all-failed path:
 					// surface the drop and back off rather than reopening + resubscribing with the
 					// STALE tokens (which would mask the production error path — T4).
-					c.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+					for (const hs of c.disconnectHandlers.values()) { hs.forEach(h => { try { h('error'); } catch {} }); }
 					scheduleReconnect(wsUrl);
 					return;
 				}
@@ -216,7 +218,7 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 		const notifyDisconnect = (reason: DisconnectReason): void => {
 			if (disconnectNotified) { return; }
 			disconnectNotified = true;
-			conn.disconnectHandlers.forEach(h => { try { h(reason); } catch {} });
+			for (const hs of conn.disconnectHandlers.values()) { hs.forEach(h => { try { h(reason); } catch {} }); }
 		};
 		conn.ws.onopen = () => {
 			conn.isConnected = true;
@@ -262,6 +264,8 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 					void withRefreshTimeout(conn.refreshers.get(channel)!()).then((fresh) => {
 						if (conn.tornDown || conn.ws !== ws || ws?.readyState !== WebSocket.OPEN || !conn.subscriptions.has(channel)) { return; }
 						if (!isRealtimeDescriptor(fresh) || typeof fresh.token !== 'string' || fresh.channel !== channel) { throw new Error('malformed descriptor'); }
+						// A descriptor for a different user cannot be applied to this socket (as in aws-middleware).
+						if (typeof fresh.connectToken === 'string' && principalOfToken(fresh.connectToken) !== principalOfToken(conn.connectToken ?? '')) { throw new Error('principal mismatch'); }
 						conn.channelTokens.set(channel, fresh.token);
 						if (typeof fresh.connectToken === 'string') conn.connectToken = fresh.connectToken;
 						ws.send(JSON.stringify({ action: 'subscribe', channel, token: fresh.token }));
@@ -288,7 +292,9 @@ function openMockSocket(wsUrl: string, isReconnect = false) {
 					// A rejected channel is gone — drop its refresher too.
 					conn.refreshers.delete(data.channel);
 					// The server ended a LIVE subscription (token expired or access revoked): surface it, as aws-middleware does.
-					if (!pending && typeof data.code === 'string') { conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} }); }
+					if (!pending && typeof data.code === 'string') { conn.disconnectHandlers.get(data.channel)?.forEach(h => { try { h('error'); } catch {} }); }
+					// The channel is gone, so its handlers must not fire again on a later drop.
+					conn.disconnectHandlers.delete(data.channel);
 				} else if (data.type === 'message' && data.channel) {
 					const handlers = conn.subscriptions.get(data.channel);
 					if (handlers) {
@@ -396,7 +402,10 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 	const key = poolKey(wsUrl, connectToken ?? '');
 	const conn = getOrCreateConnection(key, wsUrl, connectToken);
 	ensureConnected(key);
-	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
+	if (onDisconnect) {
+		if (!conn.disconnectHandlers.has(channel)) conn.disconnectHandlers.set(channel, new Set());
+		conn.disconnectHandlers.get(channel)!.add(onDisconnect);
+	}
 	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
 	// Store the token-refresh fn PER-CHANNEL so a reconnect can re-mint a fresh
 	// channel token for every live channel before reopening (not just the last
@@ -438,7 +447,8 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 		unsubscribe() {
 			if (onDisconnect) {
 				try { onDisconnect('client'); } catch {}
-				conn.disconnectHandlers.delete(onDisconnect);
+				const ds = conn.disconnectHandlers.get(channel);
+				if (ds) { ds.delete(onDisconnect); if (ds.size === 0) conn.disconnectHandlers.delete(channel); }
 			}
 			if (onReconnect) conn.reconnectHandlers.delete(onReconnect);
 			const handlers = conn.subscriptions.get(channel);

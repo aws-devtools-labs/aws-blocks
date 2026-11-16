@@ -16,7 +16,7 @@
  * inline — no separate Lambdas needed.
  */
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, isBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
@@ -26,7 +26,7 @@ import {
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
 	GetChannelOptions,
@@ -207,13 +207,54 @@ function getTokenSecretOrNull(): Promise<string | null> {
 
 // ── DistributedTable helpers ────────────────────────────────────────────────
 
-async function queryConnectionsByChannel(channel: string): Promise<string[]> {
+/** The subscription records for `channel` (the `channel-index` projection carries whole records). */
+async function queryConnectionsByChannel(channel: string): Promise<ConnectionRecord[]> {
 	const table = connectionsTable();
-	const records = await Array.fromAsync(table.query({
+	return Array.fromAsync(table.query({
 		index: 'channel-index',
 		where: { channel: { equals: channel } },
 	}));
-	return records.map(r => r.connectionId);
+}
+
+/**
+ * Delete a subscription record that has ended. The delete is conditional on the record still carrying the
+ * `tokenId` it was read with, so a subscription renewed in the meantime (same channel, new token) is kept.
+ * A failed condition is ignored.
+ */
+async function deleteEndedSubscription(record: ConnectionRecord): Promise<void> {
+	const key = { connectionId: record.connectionId, channel: record.channel };
+	try {
+		await connectionsTable().delete(key, record.tokenId === undefined ? undefined : { ifFieldEquals: { tokenId: record.tokenId } });
+	} catch (err: unknown) {
+		if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+	}
+}
+
+/**
+ * The subscription records that may still receive a message: those whose channel token has not expired and
+ * whose principal's access has not been revoked since the token was issued. Ended records are deleted lazily.
+ * This enforces expiry and revocation at fan-out, so a client that never pings is cut off as well
+ * (DynamoDB TTL deletion is lazy and queries still return expired items).
+ */
+async function liveSubscriptions(records: ConnectionRecord[], now: number): Promise<ConnectionRecord[]> {
+	// A record without token details predates them; it can't be checked, so it ends.
+	const checkable = records.filter(r => r.tokenExp !== undefined && r.tokenIat !== undefined);
+	const principals = [...new Set(checkable.flatMap(r => (r.principal === undefined ? [] : [r.principal])))];
+	const revokedAtByPrincipal = new Map<string, number>();
+	if (principals.length > 0) {
+		const found = await connectionsTable().getBatch(principals.map(revocationKey));
+		found.forEach((record, i) => { if (record?.revokedAt !== undefined) revokedAtByPrincipal.set(principals[i], record.revokedAt); });
+	}
+	const live: ConnectionRecord[] = [];
+	const ended: ConnectionRecord[] = [];
+	for (const record of records) {
+		const ok = record.tokenExp !== undefined && record.tokenIat !== undefined
+			&& record.tokenExp >= now
+			&& !(record.principal !== undefined && revokedAtByPrincipal.has(record.principal) && record.tokenIat <= revokedAtByPrincipal.get(record.principal)!);
+		(ok ? live : ended).push(record);
+	}
+	await Promise.all(ended.map(r => deleteEndedSubscription(r).catch(() => {})));
+	return live;
 }
 
 async function deleteConnectionRecords(connectionId: string): Promise<void> {
@@ -228,9 +269,9 @@ async function deleteConnectionRecords(connectionId: string): Promise<void> {
 }
 
 /** When access for `principal` was last revoked (unix seconds), or `undefined` if it never was (or the record has aged out). */
-async function getRevokedAt(principal: string | undefined): Promise<number | undefined> {
+async function getRevokedAt(principal: string | undefined, options?: { consistentRead?: boolean }): Promise<number | undefined> {
 	if (principal === undefined) return undefined;
-	const record = await connectionsTable().get(revocationKey(principal));
+	const record = await connectionsTable().get(revocationKey(principal), options);
 	return record?.revokedAt;
 }
 
@@ -264,7 +305,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		const valid = validateChannelToken(token, secret);
 		if (!valid) return { statusCode: 403 };
 		// A connect token minted before the principal's access was revoked is refused.
-		const revokedAt = await getRevokedAt(valid.sub);
+		// Consistent read: a handle used right after `revokeAccess()` must see the revocation.
+		const revokedAt = await getRevokedAt(valid.sub, { consistentRead: true });
 		if (revokedAt !== undefined && valid.iat <= revokedAt) return { statusCode: 403 };
 		await table.put({
 			connectionId, channel: SENTINEL_SK, connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now,
@@ -308,7 +350,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		const secret = await getTokenSecret();
 		// The connection's principal comes from its connect token (stored at $connect).
 		// A connection with no record (never connected, or aged out) authorizes nothing.
-		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK });
+		// Consistent read: the client subscribes as soon as the socket opens, right after `$connect` wrote the sentinel.
+		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK }, { consistentRead: true });
 		const valid = sentinel ? validateChannelToken(msg.token, secret, msg.channel, { principal: sentinel.principal }) : null;
 		if (!valid) {
 			await getApigw(callbackUrl).send(new PostToConnectionCommand({
@@ -317,7 +360,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			}));
 			return { statusCode: 200 };
 		}
-		const revokedAt = await getRevokedAt(valid.sub);
+		const revokedAt = await getRevokedAt(valid.sub, { consistentRead: true });
 		if (revokedAt !== undefined && valid.iat <= revokedAt) {
 			await notifySubscriptionEnded(callbackUrl, connectionId, msg.channel, 'access_revoked');
 			return { statusCode: 200 };
@@ -356,7 +399,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 				else live.push(record);
 			}
 			if (ended.length > 0) {
-				await table.deleteBatch(ended.map(({ record }) => ({ connectionId: record.connectionId, channel: record.channel })));
+				await Promise.all(ended.map(({ record }) => deleteEndedSubscription(record)));
 				await Promise.all(ended.map(({ record, failure }) => notifySubscriptionEnded(callbackUrl, connectionId, record.channel, failure)));
 			}
 			const lastSweep = sentinel.lastTtlSweep ?? 0;
@@ -464,7 +507,8 @@ export const Realtime: {
 		validatePublishSize(fullChannel, data);
 		const message = JSON.stringify({ type: 'message', channel: fullChannel, data });
 
-		const connectionIds = await queryConnectionsByChannel(fullChannel);
+		const connectionIds = (await liveSubscriptions(await queryConnectionsByChannel(fullChannel), Math.floor(Date.now() / 1000)))
+			.map(r => r.connectionId);
 		const client = getApigw(undefined, this._customUserAgent);
 
 		await Promise.all(connectionIds.map(async (connectionId) => {

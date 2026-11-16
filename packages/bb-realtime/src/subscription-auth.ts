@@ -13,6 +13,8 @@
  * check keeps the two layers from drifting apart.
  */
 
+import { CONNECT_TOKEN_TTL_SECONDS } from './utils.js';
+
 /** What is kept of a channel token while its subscription is live. */
 export interface SubscriptionAuth {
 	/** Token expiry, unix seconds. */
@@ -41,16 +43,16 @@ export function checkSubscriptionAuth(
 	revokedAt: number | undefined,
 	now: number,
 ): SubscriptionAuthFailure | null {
-	// token_expired is reported first by design, so a refresh-capable client can renew. Revocation is still
-	// enforced when it re-subscribes, via the `tokenIat <= revokedAt` check below.
-	if (sub.tokenExp < now) return 'token_expired';
+	// Terminal failures first: a revoked subscription must not be reported as `token_expired`, or a
+	// refresh-capable client renews it with a token minted after the revocation.
 	if (sub.principal !== connectionPrincipal) return 'principal_mismatch';
 	if (revokedAt !== undefined && sub.tokenIat <= revokedAt) return 'access_revoked';
+	if (sub.tokenExp < now) return 'token_expired';
 	return null;
 }
 
-/** The longest a token can stay valid (connect tokens, 2 hours), plus slack: how long a revocation record must be kept. */
-export const REVOCATION_RETENTION_SECONDS = 7200 + 300;
+/** The longest a token can stay valid (connect tokens), plus slack: how long a revocation record must be kept. */
+export const REVOCATION_RETENTION_SECONDS = CONNECT_TOKEN_TTL_SECONDS + 300;
 
 /** Message sent to a client whose subscription ended, per failure. */
 export function subscriptionEndedMessage(failure: SubscriptionAuthFailure): string {

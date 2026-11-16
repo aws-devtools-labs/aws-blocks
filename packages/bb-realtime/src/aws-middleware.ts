@@ -16,7 +16,7 @@
 import { registerMiddleware } from '@aws-blocks/core/client';
 import { blocksError, brandBlocksError } from '@aws-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
-import { poolKey } from './pool-key.js';
+import { poolKey, principalOfToken } from './pool-key.js';
 
 /** Callback for receiving realtime messages. */
 export type MessageHandler<T = unknown> = (message: T) => void;
@@ -193,6 +193,10 @@ function applyFreshDescriptor(conn: Connection, expectedChannel: string, fresh: 
 	// THIS channel's refresh failure (stored-token fallback / counts toward all-failed)
 	// rather than storing a dead-key token.
 	if (fresh.channel !== expectedChannel || !conn.subscriptions.has(fresh.channel)) { return false; }
+	// A descriptor for a different user cannot be applied to this socket, which is tied to the principal of its
+	// connect token. Treat it as a refresh failure so the channel drops and the app's next subscribe opens
+	// the right socket.
+	if (principalOfToken(fresh.connectToken) !== principalOfToken(conn.connectToken)) { return false; }
 	if (fresh.wsUrl !== conn.wsUrl) {
 		// Pool re-key collision guard: if another live connection already owns the
 		// fresh endpoint key, do NOT blind-overwrite it — that would evict a

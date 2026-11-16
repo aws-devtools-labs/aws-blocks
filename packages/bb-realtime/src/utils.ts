@@ -212,6 +212,9 @@ export interface ChannelTokenClaims {
  * for a connection opened with a connect token bound to the same principal.
  * Tokens minted before `iat` and `jti` existed are refused by the validator.
  */
+/** Default lifetime of a connect token: the API Gateway maximum connection duration (2 hours). */
+export const CONNECT_TOKEN_TTL_SECONDS = 7200;
+
 export function mintChannelToken(
 	channel: string,
 	secret: string,
@@ -244,7 +247,7 @@ export function mintChannelToken(
  *
  * Default TTL is 2 hours (matching API Gateway max connection duration).
  */
-export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds = 7200, principal?: string): string {
+export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds = CONNECT_TOKEN_TTL_SECONDS, principal?: string): string {
 	if (!secret) {
 		throw blocksError(RealtimeErrors.ConnectionFailed, 'Refusing to mint token: signing secret is empty or missing');
 	}

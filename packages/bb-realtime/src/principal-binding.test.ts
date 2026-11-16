@@ -18,7 +18,7 @@ import { attach, closeWebSocketServer } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { Realtime, RealtimeErrors } from './index.js';
 import { mintChannelToken, mintConnectToken, validateChannelToken, validatePrincipal } from './utils.js';
-import { checkSubscriptionAuth, subscriptionEndedMessage } from './subscription-auth.js';
+import { checkSubscriptionAuth, subscriptionEndedMessage, REVOCATION_RETENTION_SECONDS } from './subscription-auth.js';
 
 const SECRET = 'principal-test-secret';
 const CHANNEL = 'my-app-rt/chat/room-1';
@@ -143,6 +143,17 @@ describe('checkSubscriptionAuth', () => {
 		assert.strictEqual(checkSubscriptionAuth(sub, 'user-a', sub.tokenIat, now()), 'access_revoked');
 		assert.strictEqual(checkSubscriptionAuth(sub, 'user-a', sub.tokenIat + 5, now()), 'access_revoked');
 		assert.strictEqual(checkSubscriptionAuth(sub, 'user-a', sub.tokenIat - 1, now()), null);
+	});
+
+	it('reports a revoked subscription as revoked even when its token has also expired', () => {
+		const expired = { tokenExp: 100, tokenIat: 100, principal: 'u' };
+		assert.strictEqual(checkSubscriptionAuth({ ...expired, tokenExp: 199 }, 'u', 200, 200), 'access_revoked');
+		assert.strictEqual(checkSubscriptionAuth({ ...expired, tokenExp: 199 }, 'other', 200, 200), 'principal_mismatch');
+		assert.strictEqual(checkSubscriptionAuth({ ...expired, tokenExp: 199, tokenIat: 250 }, 'u', 200, 200), 'token_expired');
+	});
+
+	it('keeps revocation records longer than any token can live', () => {
+		assert.ok(REVOCATION_RETENTION_SECONDS > CONNECT_TOKEN_TTL_SECONDS);
 	});
 
 	it('words each failure for the client', () => {

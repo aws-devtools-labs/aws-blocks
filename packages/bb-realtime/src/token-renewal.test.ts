@@ -144,6 +144,41 @@ for (const [label, hydrateFn, resetFn] of [
 	});
 });
 
+for (const [label, hydrateFn, resetFn] of [
+	['AWS middleware', hydrate, __resetConnectionsForTest],
+	['mock middleware', mockHydrate, mockReset],
+] as const) describe(`${label}: one channel ending does not disturb its siblings`, () => {
+	beforeEach(() => {
+		FakeWebSocket.instances = [];
+		Object.defineProperty(globalThis, 'WebSocket', { value: FakeWebSocket, configurable: true, writable: true });
+	});
+	afterEach(() => { resetFn(); });
+
+	it('notifies only the ended channel, and not again on a later drop', async () => {
+		const other = 'my-app-rt/chat/room-2';
+		const open = (channel: string, reasons: DisconnectReason[]) => {
+			const client = hydrateFn({ ...descriptor('token-1'), channel });
+			assert.ok(isChannelClient(client));
+			client.subscribe({ onMessage: () => {}, onDisconnect: (r) => reasons.push(r) });
+		};
+		const endedReasons: DisconnectReason[] = [];
+		const siblingReasons: DisconnectReason[] = [];
+		open(CHANNEL, endedReasons);
+		open(other, siblingReasons);
+		const socket = FakeWebSocket.instances[0];
+		socket.emitOpen();
+		socket.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		socket.emitMessage({ type: 'subscribe_success', channel: other });
+		socket.emitMessage({ type: 'error', channel: CHANNEL, code: 'access_revoked', message: 'Unauthorized: access revoked' });
+		await tick();
+		assert.deepStrictEqual(endedReasons, ['error']);
+		assert.deepStrictEqual(siblingReasons, []);
+		socket.close();
+		await tick();
+		assert.deepStrictEqual(endedReasons, ['error'], 'the ended channel is not notified of a later drop');
+	});
+});
+
 describe('client pool: one socket per endpoint and principal', () => {
 	/** A connect token whose payload names `sub`, as the server mints it (the signature is irrelevant to pooling). */
 	const connectTokenFor = (sub?: string) =>
@@ -180,6 +215,25 @@ describe('client pool: one socket per endpoint and principal', () => {
 				subscribeWith('my-app-rt/chat/a', connectTokenFor());
 				subscribeWith('my-app-rt/chat/b', connectTokenFor('user-a'));
 				assert.strictEqual(FakeWebSocket.instances.length, 2);
+			});
+
+			it('drops a channel whose refresh returns a handle for a different user', async () => {
+				const reasons: DisconnectReason[] = [];
+				const client = hydrateFn({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, connectToken: connectTokenFor('user-a'), token: 't1' });
+				assert.ok(isChannelClient(client));
+				client.subscribe({
+					onMessage: () => {},
+					onDisconnect: (r) => reasons.push(r),
+					refresh: async () => ({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, connectToken: connectTokenFor('user-b'), token: 't2' }),
+				});
+				const socket = FakeWebSocket.instances[0];
+				socket.emitOpen();
+				socket.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+				socket.emitMessage({ type: 'error', channel: CHANNEL, code: 'token_expired', message: 'Unauthorized: token expired' });
+				await tick();
+				await tick();
+				assert.deepStrictEqual(reasons, ['error']);
+				assert.deepStrictEqual(socket.subscribes().map(f => f.token), ['t1'], 'no resubscribe with the other user\'s token');
 			});
 
 			it('shares one socket between handles for the same principal', () => {
