@@ -141,6 +141,11 @@ class BlocksClient {
   }
 
   /// Closes the underlying HTTP client and frees resources.
+  ///
+  /// This closes a client passed to the constructor too. A call made after
+  /// [close], or still waiting for its response when [close] runs, fails with
+  /// the `http.ClientException` the closed client throws; a later call sends
+  /// nothing. Closing more than once does nothing.
   void close() {
     _httpClient.close();
   }
