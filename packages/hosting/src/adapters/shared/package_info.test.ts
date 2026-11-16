@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -49,5 +49,16 @@ void describe('getProjectPackageInfo', () => {
     writePkg(app, '@nuxt/image', '1.0.0');
     assert.strictEqual(projectHasPackage('@nuxt/image', app), true);
     assert.strictEqual(projectHasPackage('@nuxt/not-installed', app), false);
+  });
+
+  void it('prints nothing when the package is not installed', () => {
+    const stderr = mock.method(process.stderr, 'write', () => true);
+    try {
+      assert.strictEqual(getProjectPackageInfo('@opennextjs/aws', app), undefined);
+      assert.strictEqual(projectHasPackage('@opennextjs/aws', app), false);
+    } finally {
+      stderr.mock.restore();
+    }
+    assert.deepStrictEqual(stderr.mock.calls.map((c) => String(c.arguments[0])), []);
   });
 });
