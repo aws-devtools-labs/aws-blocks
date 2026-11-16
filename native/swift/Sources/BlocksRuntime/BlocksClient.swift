@@ -324,8 +324,11 @@ public final class BlocksClient: Sendable {
             }
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw TransportError(message: "Invalid JSON response from \(path)")
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw TransportError(
+                message: "Response from \(path) was not a JSON object",
+                statusCode: (response as? HTTPURLResponse)?.statusCode
+            )
         }
         return json
     }

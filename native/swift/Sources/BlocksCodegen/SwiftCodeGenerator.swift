@@ -1381,7 +1381,7 @@ public struct SwiftCodeGenerator {
             if let transferable {
                 lines.append(contentsOf: transferableResultLines(
                     transferable.type, operation: operation, names: names, messageType: messageType,
-                    nullResult: nullResult, methodLiteral: methodLiteral
+                    nullResult: nullResult
                 ))
             }
         } else if discardsResult {

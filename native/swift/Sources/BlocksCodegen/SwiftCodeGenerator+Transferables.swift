@@ -65,12 +65,12 @@ extension SwiftCodeGenerator {
     /// `nullResult` is the guard for a null body (`return nil` for a nullable result, else a throw).
     func transferableResultLines(
         _ type: ResolvedType, operation: Operation, names: OperationNames, messageType: String?,
-        nullResult: String, methodLiteral: String
+        nullResult: String
     ) -> [String] {
-        guard case .transferable(let blocksType, let typeArgs) = type else { return [] }
+        guard case .transferable(let blocksType, _) = type else { return [] }
         let result = names.result
         let descriptor = names.descriptor
-        func descriptorLines(_ kind: String) -> [String] {
+        func descriptorLines() -> [String] {
             [
                 "        \(nullResult)",
                 "        guard let \(descriptor) = try JSONSerialization.jsonObject(with: \(result)) as? [String: Any] else {",
@@ -91,13 +91,13 @@ extension SwiftCodeGenerator {
                     + ".decode(\(runtimePrefix)RealtimeChannel<\(messageType)>.self, from: \(result))"
             )
         case "file-bucket/download":
-            lines.append(contentsOf: descriptorLines("file"))
+            lines.append(contentsOf: descriptorLines())
             lines.append("        return try \(runtimePrefix)FileDownloadHandle.fromJSON(\(descriptor))")
         case "file-bucket/upload":
-            lines.append(contentsOf: descriptorLines("file"))
+            lines.append(contentsOf: descriptorLines())
             lines.append("        return try \(runtimePrefix)FileUploadHandle.fromJSON(\(descriptor))")
         case "oidc/client":
-            lines.append(contentsOf: descriptorLines("OIDC client"))
+            lines.append(contentsOf: descriptorLines())
             let property = "self.\(names.clientProperty)"
             let provider = messageType ?? "String"
             lines.append(
@@ -107,7 +107,7 @@ extension SwiftCodeGenerator {
         default:
             // A tag a block's native package declares hydrates into the declared type; any other tag is the
             // unbound fallback, `UnknownTransferable`.
-            lines.append(contentsOf: descriptorLines("transferable"))
+            lines.append(contentsOf: descriptorLines())
             let hydration = transferableHydrationLines(
                 declared: declaredBindings[blocksType],
                 tagLiteral: "\"\(swiftStringContent(blocksType))\"",
