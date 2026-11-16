@@ -10,8 +10,9 @@
  * Every doc or excerpt printed starts with the line `# <folder>/<file>` (`# bb-kv-store/README.md`,
  * `# README.md` for a root doc), so the reader can cite the file and print it again by that name. No
  * output names a path on disk: in an app, that path is inside node_modules, which agents are told not
- * to read. Everything below {@link docs} reads a docs folder passed in, so tests run it on a fixture
- * folder.
+ * to read. With `--output json` the same answer is one JSON document ({@link Answer}), each doc in it
+ * named by `doc: '<folder>/<file>'`. Everything below {@link docs} reads a docs folder passed in, so
+ * tests run it on a fixture folder.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -62,6 +63,7 @@ const DOCS_OPTIONS = [
 	'  --section <topic>      the part of the docs about a topic; repeatable; with no topic, the headings',
 	'  --exports [filter...]  the names @aws-blocks/blocks and its entries export, and which entry to use',
 	'  --search <term>        matching lines in every doc, or in the named blocks, with their section',
+	'  --output json          the same answer as one JSON document, each doc in it named by "doc"',
 ];
 
 /** Lines of a README section a card prints before pointing at `--section`. */
@@ -181,6 +183,51 @@ export interface DocsRequest {
 	exports?: boolean;
 }
 
+/** What `cdk-blocks docs` prints for a request: the text, and the same answer as data for `--output json`. */
+export interface Answer {
+	text: string;
+	json: Record<string, unknown>;
+}
+
+/** A doc, or the part of one, in a JSON answer: what the text prints under a `# <folder>/<file>` header. */
+export interface DocPart {
+	/** `<folder>/<file>`: `bb-kv-store/README.md`, `README.md` for a root doc, `<package>/<path>` for a type file. */
+	doc: string;
+	/** The slug of the section's heading: a `--section` answer, or the README section of a name's card. */
+	section?: string;
+	/** The first and last line of the file that `text` holds (1-based), or the file's lines for the headings. */
+	lines?: [number, number];
+	/** Why this part is the answer (`closest heading to "query"`), or what more there is. */
+	note?: string;
+	/** The Markdown, or the declaration's TypeScript. Absent for the headings of a bare `--section`. */
+	text?: string;
+	/** The doc's headings, for a bare `--section`. */
+	headings?: { level: number; title: string; slug: string; lines: [number, number] }[];
+}
+
+/** A matching line of `--search`: its doc, line number and section (the heading's slug). */
+export interface SearchHit {
+	doc: string;
+	line: number;
+	section?: string;
+	text: string;
+}
+
+/** A name `--exports` lists: the entry to import it from (`import`), and the other entries that export it. */
+export interface ExportRow {
+	name: string;
+	kind: string;
+	package?: string;
+	entry: string;
+	import: string;
+	also?: string[];
+	/** The name in its own package, when @aws-blocks/blocks exports it under another (KVPutOptions: PutOptions). */
+	original?: string;
+}
+
+/** The answer of `--exports` and of an entry's name (`docs ui`): the names, and notes on where code imports them. */
+type ExportsAnswer = { text: string; json: { names: ExportRow[]; notes?: string[] } };
+
 interface Section {
 	level: number;
 	title: string;
@@ -224,7 +271,9 @@ export async function docs(ctx: Context, input: CommandInput): Promise<number> {
 		search: typeof input.flags.search === 'string' ? input.flags.search : undefined,
 		exports: input.flags.exports === true,
 	};
-	ctx.out.text(renderDocs(loadDocs(shippedDocsDir()), request, blocksVersion()));
+	const answer = answerDocs(loadDocs(shippedDocsDir()), request, blocksVersion());
+	// Text unless --output json asks for the data: the registry keeps JSON from being a default (jsonOnRequest).
+	ctx.out.result(answer.json, answer.text);
 	return ExitCode.Ok;
 }
 
@@ -726,6 +775,14 @@ function typesExports(file: string, seen = new Set<string>()): Map<string, boole
 
 /** The text `cdk-blocks docs` prints for a request. */
 export function renderDocs(index: DocsIndex, request: DocsRequest, version: string): string {
+	return answerDocs(index, request, version).text;
+}
+
+/**
+ * The answer to a request, as text and as JSON. Several names answer `{answers: [...]}`, one element per name in
+ * the order given; one name answers its element alone.
+ */
+export function answerDocs(index: DocsIndex, request: DocsRequest, version: string): Answer {
 	const { names } = request;
 	if (request.exports) {
 		if (request.search !== undefined || request.toc || request.sections.length || request.api) {
@@ -753,19 +810,19 @@ export function renderDocs(index: DocsIndex, request: DocsRequest, version: stri
 		return listing(index, version);
 	}
 	// `--section` with several blocks reads each: `KVStore FileBucket --section local`.
-	return names.map((name) => renderName(index, name, request)).join('\n');
+	const answers = names.map((name) => renderName(index, name, request));
+	if (answers.length === 1) return answers[0];
+	return { text: answers.map((a) => a.text).join('\n'), json: { answers: answers.map((a) => a.json) } };
 }
 
-function renderName(index: DocsIndex, name: string, request: DocsRequest): string {
+function renderName(index: DocsIndex, name: string, request: DocsRequest): Answer {
 	checkNameLength(name);
 	const block = findBlock(index, name);
 	if (!block) {
 		const decls = findDeclarations(index, name);
-		if (decls) return `${decls.note ? `${decls.note}\n` : ''}${card(index, decls.name, decls.found, decls.member)}`;
-		const imported = importCard(index, name);
-		if (imported) return imported;
-		const entry = entryListing(index, name) ?? valueCard(index, name);
-		if (entry) return entry;
+		if (decls) return card(index, decls.name, decls.found, decls.member, decls.note);
+		const answer = importCard(index, name) ?? entryListing(index, name) ?? valueCard(index, name);
+		if (answer) return answer;
 		throw unknownName(index, name);
 	}
 	// A doc path or a doc's own name names its file too: `bb-cron-job/DESIGN.md`, `CUSTOMIZING-AUTH-UI`, a header's
@@ -775,9 +832,11 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 	const own = block.files.find((f) => f.toLowerCase() === fileName);
 	const files = [request.api ? 'API.md' : (own ?? path ?? block.main)];
 	const out: string[] = [];
+	const docs: DocPart[] = [];
 	const read = (file: string) => {
 		const path = join(block.dir, file);
-		return { path, text: readFileSync(path, 'utf-8'), header: docHeader(`${block.prefix}${file}`) };
+		const doc = `${block.prefix}${file}`;
+		return { file, doc, path, text: readFileSync(path, 'utf-8'), header: docHeader(doc) };
 	};
 	for (const file of files) {
 		if (!block.files.includes(file)) {
@@ -786,9 +845,11 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 				hint: `${CLI} ${block.name}${block.files.includes('API.md') ? ' --api' : ''}`,
 			});
 		}
-		const { text, header } = read(file);
+		const main = read(file);
 		if (request.toc) {
-			out.push(toc(block, file, text));
+			const headings = toc(block, main);
+			out.push(headings.text);
+			docs.push(headings.part);
 		} else if (request.sections.length) {
 			// The block's README is its default doc, not its only one. A heading of the README answers first; else a
 			// heading of another doc that names the topic (bb-auth's CUSTOMIZING-AUTH-UI.md, by its title); else the
@@ -800,7 +861,7 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 					? block.files.filter((f) => f !== file && !/^(changelog|api)\.md$/i.test(f))
 					: [];
 			let shown: string | undefined;
-			const candidates = [{ file, text, header }, ...others.map((f) => ({ file: f, ...read(f) }))];
+			const candidates = [main, ...others.map(read)];
 			for (const raw of request.sections) {
 				// grep's alternatives (`deepEqual\|equal`): the first one a heading names, else the first.
 				const options = decodeEntities(raw)
@@ -819,7 +880,7 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 					let first: unknown;
 					for (const doc of [named, ...candidates.filter((d) => d !== named)]) {
 						try {
-							return { doc, text: sectionText(block, doc.file, doc.text, wanted) };
+							return { doc, part: sectionText(block, doc.file, doc.text, wanted) };
 						} catch (error) {
 							if (!(error instanceof UsageError)) throw error;
 							first ??= error;
@@ -829,13 +890,28 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 				});
 				if (found.doc.header !== shown) out.push(found.doc.header);
 				shown = found.doc.header;
-				out.push(found.text);
+				const { slug, start, end, label, text } = found.part;
+				out.push(`(lines ${start}-${end}${label ? `; ${label}` : ''})\n${text}`);
+				docs.push({
+					doc: found.doc.doc,
+					section: slug,
+					lines: [start, end],
+					...(label ? { note: label } : {}),
+					text,
+				});
 			}
 		} else {
-			out.push(header, text.endsWith('\n') ? text.slice(0, -1) : text);
+			const text = main.text.endsWith('\n') ? main.text.slice(0, -1) : main.text;
+			out.push(main.header, text);
+			docs.push({ doc: main.doc, lines: [1, text.split('\n').length], text });
 		}
 	}
-	return `${out.join('\n')}\n`;
+	return { text: `${out.join('\n')}\n`, json: { docs } };
+}
+
+/** `import { name } from 'entry';`, with `import type` for a type. */
+function plainImport(name: string, entry: string, type: boolean): string {
+	return `import ${type ? 'type ' : ''}{ ${name} } from '${entry}';`;
 }
 
 /** The line a doc or excerpt is printed under: `# <folder>/<file>`, alone on its line. */
@@ -908,7 +984,7 @@ export function findBlock(index: DocsIndex, name: string): DocsBlock | undefined
  * The names of a subpath entry named as `ui`, `/ui`, `blocks/ui` or `@aws-blocks/blocks/ui`, with the import they take;
  * undefined for any other name.
  */
-function entryListing(index: DocsIndex, name: string): string | undefined {
+function entryListing(index: DocsIndex, name: string): ExportsAnswer | undefined {
 	const key = name
 		.trim()
 		.toLowerCase()
@@ -919,11 +995,16 @@ function entryListing(index: DocsIndex, name: string): string | undefined {
 	if (!entry) return undefined;
 	const [path, names] = entry;
 	const sorted = [...names.keys()].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
-	return `${[
+	const text = `${[
 		`${path} (${sorted.length} names): import { <name> } from '${path}';${path === CLIENT ? ' browser code and tests import values from it' : ''}`,
 		`  ${sorted.join(', ')}`,
 		`A name's declaration: ${CLI} <name>`,
 	].join('\n')}\n`;
+	const rows: ExportRow[] = sorted.map((n) => {
+		const type = names.get(n) === true;
+		return { name: n, kind: type ? 'type' : 'export', entry: path, import: plainImport(n, path, type) };
+	});
+	return { text, json: { names: rows } };
 }
 
 /**
@@ -931,7 +1012,7 @@ function entryListing(index: DocsIndex, name: string): string | undefined {
  * `KVStoreErrors.ConditionalCheckFailed` and others): the members that hold it, and the first one's
  * declaration. Undefined when no report declaration holds it.
  */
-function valueCard(index: DocsIndex, input: string): string | undefined {
+function valueCard(index: DocsIndex, input: string): Answer | undefined {
 	const name = input.trim();
 	if (!/^[\w$.-]+$/.test(name)) return undefined;
 	const holds = new RegExp(`^\\s+(?:readonly\\s+)?([\\w$]+)\\??:\\s*["']${escapeRegExp(name)}["']`);
@@ -942,7 +1023,21 @@ function valueCard(index: DocsIndex, input: string): string | undefined {
 	const first = holders[0].decl;
 	const block = index.blocks.find((b) => b.name === first.block) as DocsBlock;
 	const names = holders.slice(0, NAMES_LISTED).map((h) => `${h.decl.name}.${h.member} (${packageOf(h.decl.block)})`);
-	return `${[`${name}: the value of ${names.join(', ')}`, '', docHeader(`${block.prefix}API.md`), ...first.lines].join('\n')}\n`;
+	const summary = `${name}: the value of ${names.join(', ')}`;
+	const doc = `${block.prefix}API.md`;
+	const declaration = first.lines.join('\n');
+	return {
+		text: `${[summary, '', docHeader(doc), ...first.lines].join('\n')}\n`,
+		json: {
+			name,
+			kind: 'value',
+			of: holders.slice(0, NAMES_LISTED).map((h) => `${h.decl.name}.${h.member}`),
+			package: packageOf(first.block),
+			declaration,
+			summary,
+			docs: [{ doc, text: declaration }],
+		},
+	};
 }
 
 /**
@@ -1196,7 +1291,7 @@ function unknownName(index: DocsIndex, name: string): UsageError {
 		[
 			`no block, export or option named "${name}".${near ? ` Did you mean "${near}"?` : ''}`,
 			...(containing.length ? [`Exports with every word of it: ${containing.join(', ')}`] : []),
-			...(hits.length ? ['The docs mention it here:', ...hits] : []),
+			...(hits.length ? ['The docs mention it here:', ...hits.map(formatHit)] : []),
 		].join('\n'),
 		{ hint: `${CLI} --search ${JSON.stringify(name)}, or ${CLI} for the list of blocks` },
 	);
@@ -1275,10 +1370,11 @@ function entryName(
  * Its import, its declaration and doc comment from the installed type file when one has it, then the doc lines
  * that mention it.
  */
-function importCard(index: DocsIndex, input: string): string | undefined {
+function importCard(index: DocsIndex, input: string): Answer | undefined {
 	const name = input.trim();
 	const named = entryName(index, name);
 	let first: string;
+	let about: { name: string; kind: string; package: string; import?: string };
 	let declaration: { file: string; kind: string; lines: string[] } | undefined;
 	if (named) {
 		const { publicName, backend } = named;
@@ -1291,12 +1387,21 @@ function importCard(index: DocsIndex, input: string): string | undefined {
 			: `export${of}, with no declaration in the docs.`;
 		const kind: NameKind = !declaration ? 'unknown' : TYPE_KINDS.has(declaration.kind) ? 'type' : 'value';
 		first = `${publicName}: ${what} ${importLine(index, publicName, backend, kind)}`;
+		const [entry, type] = backend ? [BLOCKS, kind === 'type'] : subpathsOf(index, publicName)[0];
+		about = {
+			name: publicName,
+			kind: declaration?.kind ?? 'export',
+			package: source?.pkg ?? (ref ? packageOf(ref.block) : BLOCKS),
+			import: plainImport(publicName, entry, type),
+		};
 	} else {
 		const external = exportName(index.externals.keys(), name);
 		const x = external === undefined ? undefined : index.externals.get(external);
 		if (external !== undefined && x) {
 			const reports = x.blocks.map((b) => (b === UMBRELLA ? BLOCKS : b)).join(', ');
-			first = `${external}: from ${x.from}, not an AWS Blocks package. The API reports of ${reports} import it: import ${x.type ? 'type ' : ''}{ ${external} } from '${x.from}';`;
+			const line = plainImport(external, x.from, x.type);
+			first = `${external}: from ${x.from}, not an AWS Blocks package. The API reports of ${reports} import it: ${line}`;
+			about = { name: external, kind: x.type ? 'type' : 'export', package: x.from, import: line };
 		} else {
 			// A package the reports import from (zod): what they import from it.
 			const from = [...index.externals].filter(([, e]) => e.from.toLowerCase() === name.toLowerCase());
@@ -1305,15 +1410,28 @@ function importCard(index: DocsIndex, input: string): string | undefined {
 				([n, e]) => `${n} (${e.blocks.map((b) => (b === UMBRELLA ? BLOCKS : b)).join(', ')})`,
 			);
 			first = `${from[0][1].from}: a package outside AWS Blocks. The API reports import from it: ${names.join('; ')}`;
+			about = { name: from[0][1].from, kind: 'package', package: from[0][1].from };
 		}
 	}
 	const lines = [first];
+	const docs: DocPart[] = [];
 	if (declaration) {
-		lines.push('', docHeader(typeFile(declaration.file).path), ...declaration.lines);
+		const doc = typeFile(declaration.file).path;
+		lines.push('', docHeader(doc), ...declaration.lines);
+		docs.push({ doc, text: declaration.lines.join('\n') });
 	}
 	const { hits } = searchHits(index, name.toLowerCase(), [], UNKNOWN_NAME_HITS);
-	if (hits.length) lines.push(...(declaration ? [''] : []), 'The docs mention it here:', ...hits);
-	return `${lines.join('\n')}\n`;
+	if (hits.length) lines.push(...(declaration ? [''] : []), 'The docs mention it here:', ...hits.map(formatHit));
+	return {
+		text: `${lines.join('\n')}\n`,
+		json: {
+			...about,
+			...(declaration ? { declaration: declaration.lines.join('\n') } : {}),
+			summary: first,
+			docs,
+			mentions: hits,
+		},
+	};
 }
 
 /** A type file's package (the nearest package.json's name) and its path in that package: `@aws-blocks/auth-common/dist/ui.d.ts`. */
@@ -1334,11 +1452,19 @@ function typeFile(file: string): { pkg: string; path: string } {
  * (case-insensitive substrings), one line per name. A filter that names an entry (`utils`, `/client`) lists that
  * entry's names instead.
  */
-function exportsList(index: DocsIndex, filters: string[]): string {
+function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 	const entryLists = filters.map((f) => entryListing(index, f));
 	if (entryLists.some(Boolean)) {
 		const rest = filters.filter((_, i) => !entryLists[i]);
-		return `${entryLists.filter(Boolean).join('')}${rest.length ? exportsList(index, rest) : ''}`;
+		const answers = [
+			...entryLists.filter((a): a is ExportsAnswer => a !== undefined),
+			...(rest.length ? [exportsList(index, rest)] : []),
+		];
+		const notes = answers.flatMap((a) => a.json.notes ?? []);
+		return {
+			text: answers.map((a) => a.text).join(''),
+			json: { names: answers.flatMap((a) => a.json.names), ...(notes.length ? { notes } : {}) },
+		};
 	}
 	const entries = new Map<string, { kind: string; block?: string; original?: string; subpaths: string[] }>();
 	const subpaths = (name: string) => subpathsOf(index, name).map(([entry]) => entry);
@@ -1388,14 +1514,37 @@ function exportsList(index: DocsIndex, filters: string[]): string {
 				hint: `${CLI} --exports, or ${CLI} --search ${JSON.stringify(filters[0])}`,
 			});
 		}
-		return `${[
+		const lines = [
 			`@aws-blocks/blocks exports no name containing ${quoted}.`,
 			...(unexported.length ? [`Declared by a block it does not re-export: ${unexported.join('; ')}`] : []),
 			...(members.length ? [`Members that contain it: ${members.join('; ')}`] : []),
 			...(external.length ? [`Names from other packages: ${external.join('; ')}`] : []),
 			`A name's declaration and docs: ${CLI} <name>`,
-		].join('\n')}\n`;
+		];
+		return { text: `${lines.join('\n')}\n`, json: { names: [], notes: lines } };
 	}
+	const rows: ExportRow[] = shown.map(([name, e]) => {
+		if (e.block !== undefined) {
+			return {
+				name,
+				kind: e.kind,
+				package: packageOf(e.block),
+				entry: BLOCKS,
+				import: plainImport(name, BLOCKS, TYPE_KINDS.has(e.kind)),
+				...(e.subpaths.length ? { also: e.subpaths } : {}),
+				...(e.original ? { original: e.original } : {}),
+			};
+		}
+		const [entry, ...others] = e.subpaths;
+		const type = index.entries?.subpaths.get(entry)?.get(name) === true;
+		return {
+			name,
+			kind: type ? 'type' : 'export',
+			entry,
+			import: plainImport(name, entry, type),
+			...(others.length ? { also: others } : {}),
+		};
+	});
 	const backend = shown.filter(([, e]) => e.block !== undefined);
 	const head = `Names you can import from @aws-blocks/blocks in backend code${wanted.length ? ` containing ${quoted}` : ''} (${backend.length}): import { <name> } from '@aws-blocks/blocks';`;
 	let browser: string | undefined;
@@ -1406,13 +1555,14 @@ function exportsList(index: DocsIndex, filters: string[]): string {
 	const foot = `Its declaration and docs: ${CLI} <name>`;
 	if (wanted.length) {
 		const width = Math.max(...shown.map(([name]) => name.length));
-		const rows = shown.map(([name, e]) => {
+		const lines = shown.map(([name, e]) => {
 			const where = e.block
 				? `${e.kind} in ${packageOf(e.block)}${e.original ? ` (${e.original} there)` : ''}${e.subpaths.length ? `; also from ${e.subpaths.join(', ')}` : ''}`
 				: `only from ${e.subpaths.join(' or ')}`;
 			return `  ${name.padEnd(width)}  ${where}`;
 		});
-		return `${[head, ...(browser ? [`${browser} Other entries as marked.`] : []), ...rows, foot].join('\n')}\n`;
+		const text = `${[head, ...(browser ? [`${browser} Other entries as marked.`] : []), ...lines, foot].join('\n')}\n`;
+		return { text, json: { names: rows, ...(browser ? { notes: [browser] } : {}) } };
 	}
 	const byPackage = new Map<string, string[]>();
 	for (const [name, e] of backend) {
@@ -1434,10 +1584,13 @@ function exportsList(index: DocsIndex, filters: string[]): string {
 					.join(', ')}`,
 		);
 	const tail = others.length ? ["The other entries' names: import { <name> } from '<entry>';", ...others] : [];
-	return `${[head, ...groups, ...(browser ? [browser] : []), ...tail, foot].join('\n')}\n`;
+	return {
+		text: `${[head, ...groups, ...(browser ? [browser] : []), ...tail, foot].join('\n')}\n`,
+		json: { names: rows, ...(browser ? { notes: [browser] } : {}) },
+	};
 }
 
-function listing(index: DocsIndex, version: string): string {
+function listing(index: DocsIndex, version: string): Answer {
 	const blocks = index.blocks.filter((b) => b.prefix);
 	const roots = index.blocks.filter((b) => !b.prefix);
 	const width = Math.max(...index.blocks.map((b) => b.name.length));
@@ -1451,7 +1604,7 @@ function listing(index: DocsIndex, version: string): string {
 	});
 	// A root doc is a name for a file, not a folder: `guide` is the package README.
 	const files = roots.map((b) => `  ${b.name.padEnd(width)}  ${b.main} of @aws-blocks/blocks: ${b.purpose}`);
-	return [
+	const text = [
 		`AWS Blocks docs for @aws-blocks/blocks ${version}`,
 		'',
 		`Usage: ${CLI} [name...] [options]`,
@@ -1470,10 +1623,31 @@ function listing(index: DocsIndex, version: string): string {
 		...files,
 		'',
 	].join('\n');
+	return {
+		text,
+		json: {
+			version,
+			blocks: blocks.map((b) => ({
+				name: b.name,
+				classes: b.classes,
+				summary: b.purpose,
+				doc: `${b.prefix}${b.main}`,
+				files: b.files.map((f) => `${b.prefix}${f}`),
+			})),
+			framework: roots.map((b) => ({ name: b.name, summary: b.purpose, doc: b.main })),
+		},
+	};
 }
 
-function card(index: DocsIndex, name: string, decls: Declaration[], member: boolean): string {
-	const out: string[] = [];
+/**
+ * A name's card: one line per declaration with its import, then each owner block's declaration and the README section
+ * about it. `note` (an inherited member, an `Omit` that leaves the member out) comes first.
+ */
+function card(index: DocsIndex, name: string, decls: Declaration[], member: boolean, note?: string): Answer {
+	const out: string[] = note ? [note] : [];
+	const notes: string[] = note ? [note] : [];
+	const summary: string[] = [];
+	const docs: DocPart[] = [];
 	// The blocks a class of which names the block (KVStore.put) come first, then the rest; at most
 	// CARD_OWNERS print in full and the others are named, each with the lookup that prints it.
 	const named = (block: string) => index.blocks.find((b) => b.name === block)?.named ?? [];
@@ -1492,7 +1666,9 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 			];
 			return phrases.length ? `${n} (${phrases.join(', ')})` : n;
 		});
-		out.push(`${name}: member of ${shown.join(', ')} (${owners.map(packageOf).join(', ')})`);
+		const line = `${name}: member of ${shown.join(', ')} (${owners.map(packageOf).join(', ')})`;
+		out.push(line);
+		summary.push(line);
 	} else {
 		// One line per declaration shown (once for overloads), with the name @aws-blocks/blocks exports it under
 		// (KVPutOptions for bb-kv-store's PutOptions), or its own package when the umbrella does not.
@@ -1511,13 +1687,16 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 			);
 		}
 		out.push(...lines);
+		summary.push(...lines);
 	}
 	const rest = owners.slice(CARD_OWNERS);
+	let also: string[] = [];
 	if (rest.length) {
 		const lookups = rest.flatMap((o) =>
 			decls.filter((d) => d.block === o).map((d) => (member ? `${CLI} ${d.name}.${name}` : `${CLI} ${o} --api`)),
 		);
-		out.push(`Also in ${rest.join(', ')}: ${[...new Set(lookups)].join('; ')}`);
+		also = [...new Set(lookups)];
+		out.push(`Also in ${rest.join(', ')}: ${also.join('; ')}`);
 	}
 	for (const owner of owners.slice(0, CARD_OWNERS)) {
 		const block = index.blocks.find((b) => b.name === owner) as DocsBlock;
@@ -1526,9 +1705,18 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 		// A member comes from the block's installed type file when it has the member: there it has its doc comment.
 		const typed = new Map(reported.map((d) => [d, member ? typedMember(index, d, name) : undefined]));
 		const fromReport = reported.filter((d) => !typed.get(d));
-		if (fromReport.length) out.push('', docHeader(`${block.prefix}API.md`));
-		for (const decl of fromReport) out.push(...(member ? memberLines(decl, name) : decl.lines));
-		for (const t of typed.values()) if (t) out.push('', docHeader(typeFile(t.file).path), ...t.lines);
+		if (fromReport.length) {
+			const doc = `${block.prefix}API.md`;
+			const lines = fromReport.flatMap((decl) => (member ? memberLines(decl, name) : decl.lines));
+			out.push('', docHeader(doc), ...lines);
+			docs.push({ doc, text: lines.join('\n') });
+		}
+		for (const t of typed.values()) {
+			if (!t) continue;
+			const doc = typeFile(t.file).path;
+			out.push('', docHeader(doc), ...t.lines);
+			docs.push({ doc, text: t.lines.join('\n') });
+		}
 		// Declarations the report only names, and those a report declaration shown here stands for.
 		const standIns = member
 			? []
@@ -1545,20 +1733,77 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 				: whole.length > WHOLE_DECLARATION_LINES
 					? withoutDocComments(decl.lines)
 					: whole;
-			out.push('', docHeader(typeFile(file).path), `(${decl.name}: not exported by its package)`, ...shown);
+			const doc = typeFile(file).path;
+			const what = `${decl.name}: not exported by its package`;
+			out.push('', docHeader(doc), `(${what})`, ...shown);
+			docs.push({ doc, note: what, text: shown.join('\n') });
 		}
 		if (block.files.includes('README.md')) {
 			const text = readFileSync(join(block.dir, 'README.md'), 'utf-8');
 			const words = member ? [name] : [...new Set([decls[0].name, name])];
 			const section = sectionMentioning(text, words);
+			const doc = `${block.prefix}README.md`;
 			if (section) {
-				out.push('', docHeader(`${block.prefix}README.md`), ...excerpt(block, text, section));
+				const { lines, part } = excerpt(block, text, section);
+				out.push('', docHeader(doc), ...lines);
+				docs.push({ doc, ...part });
 			} else {
-				out.push('', `${block.prefix}README.md does not mention ${name}; try ${CLI} --search ${name}`);
+				const missing = `${doc} does not mention ${name}; try ${CLI} --search ${name}`;
+				out.push('', missing);
+				notes.push(missing);
 			}
 		}
 	}
-	return `${out.join('\n')}\n`;
+	const first = decls.find((d) => d.block === owners[0]) as Declaration;
+	const imported = declarationImport(index, first, member);
+	return {
+		text: `${out.join('\n')}\n`,
+		json: {
+			name,
+			kind: member ? 'member' : first.kind,
+			...(member ? { of: declNames } : {}),
+			package: packageOf(first.block),
+			...(imported ? { import: imported } : {}),
+			declaration: docs.find((d) => d.section === undefined)?.text,
+			summary: summary.join('\n'),
+			docs,
+			...(also.length ? { also } : {}),
+			...(notes.length ? { notes } : {}),
+		},
+	};
+}
+
+/**
+ * The import line of a card's declaration, or for a member that of its owner: the name @aws-blocks/blocks exports
+ * for it, else for the export that stands for it (Vault for VaultImpl) or the constructor that returns it (Hub for
+ * HubServer, first for a member), else its own package's. Undefined for a declaration that nothing exports.
+ */
+function declarationImport(index: DocsIndex, decl: Declaration, member: boolean): string | undefined {
+	const standIns = [...index.aliases].filter(([, as]) => as.some((a) => a.name === decl.name)).map(([key]) => key);
+	const names = member
+		? [...(decl.returnedBy ?? []), ...standIns, decl.name]
+		: [decl.name, ...(decl.returnedBy ?? []), ...standIns];
+	const refs = [...index.umbrellaExports].filter(([, ref]) => ref.block === decl.block);
+	for (const candidate of names) {
+		const lower = candidate.toLowerCase();
+		const matching = refs.filter(([, ref]) => ref.name.toLowerCase() === lower);
+		const key = (matching.find(([k]) => k === candidate) ?? matching[0])?.[0];
+		if (key !== undefined) return plainImport(key, BLOCKS, candidate === decl.name && TYPE_KINDS.has(decl.kind));
+	}
+	// Else from its own package: the first of the same names that its API report declares (`import type` when that
+	// name is a type only there).
+	for (const candidate of names) {
+		const same = (index.declarations.get(exportName(index.declarations.keys(), candidate) ?? '') ?? []).filter(
+			(d) => d.block === decl.block && !d.file,
+		);
+		if (same.length)
+			return plainImport(
+				same[0].name,
+				packageOf(decl.block),
+				same.every((d) => TYPE_KINDS.has(d.kind)),
+			);
+	}
+	return undefined;
 }
 
 /**
@@ -1638,24 +1883,41 @@ function withoutDocComments(lines: string[]): string[] {
 	return out;
 }
 
-function excerpt(block: DocsBlock, text: string, section: Section): string[] {
+/** A README section as a card prints it (at most CARD_SECTION_LINES), and the same lines as a JSON doc part. */
+function excerpt(block: DocsBlock, text: string, section: Section): { lines: string[]; part: Omit<DocPart, 'doc'> } {
 	const lines = text.split('\n').slice(section.start - 1, section.end);
 	const shown = lines.slice(0, CARD_SECTION_LINES);
 	const out = [`(lines ${section.start}-${section.end})`, ...shown];
-	if (lines.length > shown.length) {
-		out.push(`... ${lines.length - shown.length} more lines: ${CLI} ${block.name} --section ${section.slug}`);
-	}
-	return out;
+	const more =
+		lines.length > shown.length
+			? `... ${lines.length - shown.length} more lines: ${CLI} ${block.name} --section ${section.slug}`
+			: undefined;
+	if (more) out.push(more);
+	return {
+		lines: out,
+		part: {
+			section: section.slug,
+			lines: [section.start, section.start + shown.length - 1],
+			...(more ? { note: more } : {}),
+			text: shown.join('\n'),
+		},
+	};
 }
 
-function toc(block: DocsBlock, file: string, text: string): string {
-	const sections = parseSections(text);
-	const lines = [
-		`${block.prefix}${file}: ${text.split('\n').length} lines; ${CLI} ${docArgs(block, file)} --section <topic>`,
-	];
+function toc(block: DocsBlock, doc: { file: string; doc: string; text: string }): { text: string; part: DocPart } {
+	const sections = parseSections(doc.text);
+	const count = doc.text.split('\n').length;
+	const lines = [`${doc.doc}: ${count} lines; ${CLI} ${docArgs(block, doc.file)} --section <topic>`];
 	for (const s of sections)
 		lines.push(`${'  '.repeat(Math.max(0, s.level - 1))}${s.title}  [${s.slug}]  lines ${s.start}-${s.end}`);
-	return lines.join('\n');
+	return {
+		text: lines.join('\n'),
+		part: {
+			doc: doc.doc,
+			lines: [1, count],
+			headings: sections.map((s) => ({ level: s.level, title: s.title, slug: s.slug, lines: [s.start, s.end] })),
+		},
+	};
 }
 
 /** The arguments that print a block's file: `core`, `core --api`, or the doc path `bb-cron-job/DESIGN.md`. */
@@ -1684,12 +1946,26 @@ function namedSection(text: string, wanted: string, exact = false): Section | un
 	);
 }
 
-function sectionText(block: DocsBlock, file: string, text: string, wanted: string): string {
+/** The lines of a doc a `--section` topic answers with: the heading's slug, the line span, and why when not named. */
+interface SectionPart {
+	slug: string;
+	start: number;
+	end: number;
+	label?: string;
+	text: string;
+}
+
+function sectionText(block: DocsBlock, file: string, text: string, wanted: string): SectionPart {
 	const sections = parseSections(text);
 	const key = wanted.trim().toLowerCase();
 	const lines = text.split('\n');
-	const print = (s: Section, end: number, label?: string) =>
-		[`(lines ${s.start}-${end}${label ? `; ${label}` : ''})`, ...lines.slice(s.start - 1, end)].join('\n');
+	const print = (s: Section, end: number, label?: string): SectionPart => ({
+		slug: s.slug,
+		start: s.start,
+		end,
+		...(label ? { label } : {}),
+		text: lines.slice(s.start - 1, end).join('\n'),
+	});
 	const named = namedSection(text, wanted);
 	if (named) return print(named, named.end);
 	// Not named as written. Every word that carries meaning has to match, so "read caching" never lands on
@@ -1782,7 +2058,7 @@ function stem(word: string): string {
  * message), then the same searches in every doc when blocks were named; each fallback says what it searched. When no
  * doc mentions it at all but it is an export or option, its card.
  */
-function search(index: DocsIndex, term: string, only: DocsBlock[]): string {
+function search(index: DocsIndex, term: string, only: DocsBlock[]): Answer {
 	const needle = decodeEntities(term).trim().toLowerCase();
 	if (!needle) throw new UsageError(`--search needs a term, for example: ${CLI} --search ConditionalCheckFailed`);
 	const words = [...new Set(meaningfulWords(needle))];
@@ -1810,32 +2086,51 @@ function search(index: DocsIndex, term: string, only: DocsBlock[]): string {
 	for (const { scope, match, note } of attempts) {
 		const { hits, total, filesHit } = searchHits(index, match, scope, SEARCH_HITS);
 		if (total === 0) continue;
-		const out = [`search "${term}" in the docs of @aws-blocks/blocks`, ...(note ? [note] : []), ...hits];
+		const out = [
+			`search "${term}" in the docs of @aws-blocks/blocks`,
+			...(note ? [note] : []),
+			...hits.map(formatHit),
+		];
+		const notes = note ? [note] : [];
 		if (hits.length < total) {
-			out.push(
-				`${total} matching lines in ${filesHit} files; showing ${hits.length} (at most ${SEARCH_HITS_PER_FILE} per file). Name a block to narrow: ${CLI} --search ${JSON.stringify(term)} <block>`,
-			);
+			const more = `${total} matching lines in ${filesHit} files; showing ${hits.length} (at most ${SEARCH_HITS_PER_FILE} per file). Name a block to narrow: ${CLI} --search ${JSON.stringify(term)} <block>`;
+			out.push(more);
+			notes.push(more);
 		}
 		out.push(`Read one: ${CLI} <block> --section <section>`);
-		return `${out.join('\n')}\n`;
+		return {
+			text: `${out.join('\n')}\n`,
+			json: { term, hits, total, files: filesHit, ...(notes.length ? { notes } : {}) },
+		};
 	}
 	// No doc mentions it, but it can be a name the docs never write out: installCookieJar of /utils.
 	const decls = findDeclarations(index, term.trim());
 	const lookup = decls ? card(index, decls.name, decls.found, decls.member) : importCard(index, term);
-	if (lookup) return `no doc mentions "${term}"; it is a name you can look up:\n${lookup}`;
+	if (lookup) {
+		const lead = `no doc mentions "${term}"; it is a name you can look up:`;
+		return {
+			text: `${lead}\n${lookup.text}`,
+			json: { term, hits: [], total: 0, files: 0, notes: [lead], lookup: lookup.json },
+		};
+	}
 	throw new CliError(`no doc mentions "${term}".`, { hint: `${CLI} for the list of blocks` });
 }
 
 /** What a search line has: a lowercase needle, every one of several lowercase words, or any of several needles. */
 type Match = string | string[] | { any: string[] };
 
-/** Lines that have `match` as `folder/file:line [section]: text`: READMEs first, then API reports. */
+/** A hit as the text prints it: `folder/file:line [section]: text`, the section's slug cut to what `--section` needs. */
+function formatHit(hit: SearchHit): string {
+	return `${hit.doc}:${hit.line}${hit.section ? ` [${hit.section.slice(0, SEARCH_SLUG_LENGTH)}]` : ''}: ${hit.text}`;
+}
+
+/** Lines that have `match`, each with its doc, line and section: READMEs first, then API reports. */
 function searchHits(
 	index: DocsIndex,
 	match: Match,
 	only: DocsBlock[],
 	maxHits: number,
-): { hits: string[]; total: number; filesHit: number } {
+): { hits: SearchHit[]; total: number; filesHit: number } {
 	const matches = (line: string) =>
 		typeof match === 'string'
 			? line.includes(match)
@@ -1852,7 +2147,7 @@ function searchHits(
 			block.files.filter((file) => !/^changelog\.md$/i.test(file)).map((file) => ({ block, file })),
 		)
 		.sort((a, b) => order(a.file) - order(b.file));
-	const hits: string[] = [];
+	const hits: SearchHit[] = [];
 	let total = 0;
 	let filesHit = 0;
 	const seen = new Set<string>();
@@ -1869,9 +2164,7 @@ function searchHits(
 			inFile++;
 			if (inFile > SEARCH_HITS_PER_FILE || hits.length >= maxHits) return;
 			const section = innermost(sections, i + 1);
-			hits.push(
-				`${key}:${i + 1}${section ? ` [${section.slug.slice(0, SEARCH_SLUG_LENGTH)}]` : ''}: ${clip(line)}`,
-			);
+			hits.push({ doc: key, line: i + 1, ...(section ? { section: section.slug } : {}), text: clip(line) });
 		});
 		if (inFile) filesHit++;
 	}

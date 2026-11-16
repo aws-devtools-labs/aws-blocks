@@ -32,4 +32,21 @@ describe('the cdk-blocks bin', () => {
 		assert.strictEqual(code, 0, stderr);
 		assert.doesNotMatch(stderr, /EPIPE|Unhandled/);
 	});
+
+	it('prints docs as Markdown on a pipe without --output, and as JSON only with --output json', async () => {
+		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		const run = async (args: string[]) => {
+			const cli = spawn(process.execPath, [bin, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+			let stdout = '';
+			cli.stdout.on('data', (chunk) => (stdout += chunk));
+			const code = await new Promise<number | null>((resolve) => cli.on('close', resolve));
+			return { code, stdout };
+		};
+		const text = await run(['docs', 'KVStore']);
+		assert.strictEqual(text.code, 0);
+		assert.match(text.stdout, /^# bb-kv-store\/README\.md\b/);
+		const json = await run(['docs', 'KVStore', '--output', 'json']);
+		assert.strictEqual(json.code, 0);
+		assert.strictEqual(JSON.parse(json.stdout).docs[0].doc, 'bb-kv-store/README.md');
+	});
 });
