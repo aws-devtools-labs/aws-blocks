@@ -131,6 +131,8 @@ describe("CloudFront door — the server origin's integration follows the server
     assert.equal(result.statusCode, 201);
     assert.equal(result.body, 'POST /api/echo');
     assert.deepEqual(result.multiValueHeaders['set-cookie'], ['a=1; Path=/', 'b=2; Path=/']);
+    // A cookie-setting response is never stored by CloudFront (the SSR cache guard).
+    assert.deepEqual(result.multiValueHeaders['cache-control'], ['private, no-store']);
   });
 
   it('a streaming Lambda handler (Nitro `aws-lambda`, streaming on) is invoked with STREAM', () => {
