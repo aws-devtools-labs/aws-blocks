@@ -7,6 +7,7 @@ import 'blocks_rpc_exception.dart';
 import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
+import 'timeout_client.dart';
 import 'token_store.dart';
 
 /// JSON-RPC 2.0 HTTP client for Blocks backends.
@@ -27,7 +28,7 @@ class BlocksClient {
     SessionStore? sessionStore,
     TokenStore? tokenStore,
     this.authProvider,
-  }) : _httpClient = client ?? http.Client(),
+  }) : _httpClient = client ?? newBlocksHttpClient(),
        sessionStore = sessionStore ?? InMemorySessionStore(),
        tokenStore = tokenStore ?? InMemoryTokenStore();
 
