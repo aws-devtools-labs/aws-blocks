@@ -69,9 +69,9 @@ class CodegenModelBuilder {
 
         val servers = if (model.servers.isEmpty()) {
             // The generator appends x-blocks-endpoint to every server URL, so the RPC path is only
-            // added here when the spec declares no endpoint of its own. Without it the fallback
-            // points at the origin, where the backend serves no RPC.
-            val path = if (model.endpoint == null) DEFAULT_RPC_PATH else ""
+            // added here when the spec declares no endpoint of its own (or an empty one). Without
+            // it the fallback points at the origin, where the backend serves no RPC.
+            val path = if (model.endpoint.isNullOrEmpty()) DEFAULT_RPC_PATH else ""
             listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + path))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }

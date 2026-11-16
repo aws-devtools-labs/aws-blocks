@@ -94,6 +94,40 @@ class BlocksEntryPointTest : FunSpec({
         source shouldNotContain "server.url.toString()"
     }
 
+    test("the endpoint suffix follows a server url's trailing slash without doubling it") {
+        val source = generate(
+            spec(
+                endpoint = "/aws-blocks/api",
+                servers = """[{ "name": "local", "url": "http://h:3001/" }]""",
+            ),
+        )
+
+        source shouldContain """BlocksServer(name = "local", url = "http://h:3001/aws-blocks/api")"""
+        source shouldNotContain "//aws-blocks/api"
+    }
+
+    test("an endpoint of a single slash puts the server at its origin") {
+        val source = generate(
+            spec(
+                endpoint = "/",
+                servers = """[{ "name": "local", "url": "http://h:3001" }]""",
+            ),
+        )
+
+        source shouldContain """BlocksServer(name = "local", url = "http://h:3001/")"""
+    }
+
+    test("an endpoint without a leading slash is joined with one") {
+        val source = generate(
+            spec(
+                endpoint = "api",
+                servers = """[{ "name": "local", "url": "http://h:3001" }]""",
+            ),
+        )
+
+        source shouldContain """BlocksServer(name = "local", url = "http://h:3001/api")"""
+    }
+
     test("the endpoint suffix reaches the server the builder defaults to") {
         val source = generate(spec(endpoint = "/aws-blocks/api"))
 
@@ -106,12 +140,26 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
     }
 
+    test("the default server carries the rpc path when the spec declares an empty endpoint") {
+        val source = generate(spec(endpoint = ""))
+
+        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
+    }
+
     test("a declared server url is used as given") {
         val source = generate(
             spec(servers = """[{ "name": "staging", "url": "https://staging.example.com/rpc" }]"""),
         )
 
         source shouldContain """BlocksServer(name = "staging", url = "https://staging.example.com/rpc")"""
+    }
+
+    test("a declared server url keeps its trailing slash when the spec declares no endpoint") {
+        val source = generate(
+            spec(servers = """[{ "name": "staging", "url": "https://staging.example.com/rpc/" }]"""),
+        )
+
+        source shouldContain """BlocksServer(name = "staging", url = "https://staging.example.com/rpc/")"""
     }
 
     test("a zero-argument accessor is generated for the spec's default server") {

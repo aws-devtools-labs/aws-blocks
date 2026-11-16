@@ -34,6 +34,7 @@ abstract class AwsBlocksExtension(project: Project) {
      * spec file, or are added as new servers if the name doesn't exist in the spec.
      *
      * Map of server name → URL.
+     * A URL set here is checked the same way as one given through [servers].
      */
     abstract val serverOverrides: MapProperty<String, String>
 
@@ -78,16 +79,23 @@ abstract class AwsBlocksExtension(project: Project) {
      * ```kotlin
      * awsBlocks {
      *     servers {
-     *         local("http://10.0.2.2:3001")
-     *         sandbox("https://sandbox.example.com")
-     *         prod("https://api.example.com")
-     *         custom("staging", "https://staging.example.com")
+     *         local("http://10.0.2.2:3001/aws-blocks/api")
+     *         sandbox("https://sandbox.example.com/aws-blocks/api")
+     *         prod("https://api.example.com/aws-blocks/api")
+     *         custom("staging", "https://staging.example.com/aws-blocks/api")
      *     }
      * }
      * ```
      *
      * Servers defined here override matching entries from the spec file by name,
      * or are added as new entries if no match exists.
+     *
+     * Each URL is the RPC URL the generated client posts to, so it carries the
+     * `/aws-blocks/api` path unless the spec declares a non-empty
+     * `x-blocks-endpoint`. Code generation rejects a URL that does not parse,
+     * has no `http://` or `https://` scheme or no host, carries a query or
+     * fragment, or (without such an endpoint) has no RPC path (nothing but
+     * slashes and dot segments), because such a server reaches no RPC.
      */
     fun servers(action: Action<ServersDsl>) {
         val dsl = ServersDsl()

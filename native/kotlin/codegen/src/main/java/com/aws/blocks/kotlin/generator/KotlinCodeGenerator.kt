@@ -1316,9 +1316,10 @@ class KotlinCodeGenerator(
     // ── Servers.kt generation ─────────────────────────────────────────
 
     /**
-     * [endpoint] is the path the spec serves RPC on. It is appended here rather than by the
-     * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
-     * right URL from the constant alone.
+     * [endpoint] is the path the spec serves RPC on. It is appended here (joined to the server URL
+     * with exactly one `/`, whatever slashes either side carries) rather than by the runtime, because
+     * the runtime never sees the spec: `Blocks(Servers.local)` has to reach the right URL from the
+     * constant alone.
      */
     private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>, endpoint: String?): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
@@ -1326,6 +1327,11 @@ class KotlinCodeGenerator(
         // Servers object using BlocksServer from the runtime
         val serversObjectBuilder = TypeSpec.objectBuilder("Servers")
         for ((i, entry) in servers.withIndex()) {
+            val url = if (endpoint.isNullOrEmpty()) {
+                entry.url
+            } else {
+                entry.url.trimEnd('/') + "/" + endpoint.trimStart('/')
+            }
             serversObjectBuilder.addProperty(
                 PropertySpec
                     .builder(propertyNames[i], blocksServerClass)
@@ -1334,7 +1340,7 @@ class KotlinCodeGenerator(
                         "%T(name = %S, url = %L)",
                         blocksServerClass,
                         entry.name,
-                        kotlinStringLiteral(entry.url + (endpoint ?: "")),
+                        kotlinStringLiteral(url),
                     )
                     .build(),
             )
