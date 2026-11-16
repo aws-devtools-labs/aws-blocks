@@ -814,7 +814,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 				const body = await jsonBody(ctx);
 				const refreshToken = body && str(body, 'refreshToken');
 				// `provider` may be omitted when only one provider is configured
-				// (the Swift and Dart SDKs send only the refresh token).
+				// (the Swift and Dart SDKs can send only the refresh token).
 				const providerId =
 					(body && str(body, 'provider')) ??
 					(host.providers.length === 1 ? host.providers[0].provider.id : undefined);

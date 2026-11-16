@@ -1870,6 +1870,7 @@ class FileMigrator {
 		if (block === 'oidc') {
 			const gone = own(OIDC_GONE_MEMBERS, method);
 			if (gone) this.todo(node, gone);
+			if (method === 'createApi') this.todo(node, TODOS.oidcCreateApi);
 		}
 	}
 

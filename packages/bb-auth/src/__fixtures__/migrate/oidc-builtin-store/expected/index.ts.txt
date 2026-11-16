@@ -28,4 +28,5 @@ export const auth = new Auth(scope, 'sso', {
 	},
 });
 
+// TODO(aws-blocks-auth-migrate): createApi() is now the sign-in state machine (getAuthState / setAuthState) and has no getClient(). Native apps that called getClient() on this export: also export auth.createOidcApi() and call getClient() on that (MIGRATION.md, "Native apps").
 export const authApi = auth.createApi();

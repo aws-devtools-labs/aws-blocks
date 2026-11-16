@@ -200,27 +200,44 @@ What changes:
 
 ### Native apps (Dart, Swift, Kotlin)
 
-A native app that called `authApi.getClient()` stops compiling once it regenerates its client against an `Auth` backend. This applies to a `cognitoFederated()` block too.
+A native app that called `oidcAuthApi.getClient()` keeps that call. The backend exports the block twice, once per job:
 
-- **Build the OIDC client with `forAuth`.** `OidcClient.forAuth(...)` (`OIDCClient.forAuth(...)` in Swift) takes the app's Blocks client, so it shares its HTTP client and cookie store, plus the block's provider ids and the app's `relayTo`. It derives every auth route itself and makes no network call. If the backend moves its routes with `redirects.callbackPath` / `redirects.signOutPath`, pass the same paths to `forAuth`. The Kotlin runtime has `forAuth`; the Dart and Swift runtimes get it in their next releases.
+```ts
+import { Scope } from '@aws-blocks/blocks';
+import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+
+const auth = new Auth(new Scope('my-app'), 'auth', {
+	store: 'builtin',
+	providers: { google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'google-client-id' } },
+	redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] },
+});
+export const authApi = auth.createApi(); // the sign-in state machine: getAuthState / setAuthState
+export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs' OIDC client for federated sign-in
+```
+
+- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's Blocks client, so it shares that client's HTTP client and cookie store, and types `signIn` by the block's provider ids:
 
   ```kotlin
-  val oidc = OidcClient.forAuth(blocksClient, providers = listOf("google", "github"), relayTo = "myapp://auth")
+  val oidc = blocks.oidcAuthApi.getClient()
+  val user = oidc.signIn(OidcAuthApi.GetClient.Provider.Google)
   ```
 
   ```dart
-  final oidc = OidcClient.forAuth(client, providers: ['google', 'github'], relayTo: 'myapp://auth');
+  final oidc = await blocks.oidcAuthApi.getClient();
+  final user = await oidc.signInRelay('google', launcher: launcher, relayTo: 'myapp://auth');
   ```
 
   ```swift
-  let oidc = OIDCClient.forAuth(client: client, providers: ["google", "github"], relayTo: "myapp://auth")
+  let oidc = try await blocks.oidcAuthApi.getClient()
+  let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)
   ```
 
-- **`signIn:<id>` actions are browser URLs.** Each provider shows up in `getAuthState()` as a `signIn:<id>` action whose `url` starts a browser-cookie sign-in, so opening it would leave the session cookie in the system browser, not in the app. A native app calls its OIDC client with the id instead (`oidc.signIn("google")`), then calls `getAuthState()` again.
+- **Federated sign-in buttons come from the client, everything else from the state machine.** Render one button per entry in the typed `providers` of the client `getClient()` returns, and call `signIn(provider)` on it (the calls above), then `getAuthState()` again. Don't route `getAuthState()`'s `signIn:<id>` actions: their `url` starts a browser-cookie sign-in, which would leave the session cookie in the system browser, not in the app. Every other action (email + password, MFA, reset) goes through `setAuthState`, whose result is the next state: render it as it is. `getAuthState()` only ever reports signed in or signed out, never a step in progress (`confirmingSignUp`, `confirmingSignIn`, `confirmingPasswordReset`), so call it on launch and after a federated sign-in or sign-out, not to continue a flow. A failure the user can retry (`retriable: true`) comes back with `actions: []`: keep the current form and show `error`.
 - **Keep `relayTo` allowed.** The app's `relayTo` (its custom scheme, for example `myapp://auth`) must stay in `redirects.allowedRelayOrigins`, as `relayOrigin('myapp://auth')`. A desktop app's loopback `http://127.0.0.1:<port>` is always allowed.
 - **Users sign in once more** after the upgrade, as on the web: the old session cookie is ignored.
-- **Restore on launch** through `GET /aws-blocks/auth/session`, sent with the session cookie: `200 { user }` means signed in, `401` means signed out. The OIDC client's `restore()` makes this call in the releases that add `forAuth`. Don't derive the user from a stored token.
-- **The session is the cookie.** Bearer tokens from the native SDKs aren't supported yet, so a native app needs no `allowBearerAuth`.
+- **On launch, call `getAuthState()`.** It reports the signed-in user from the session cookie, for every sign-in method. To restore a federated session, a block with providers also serves `GET <base>/session` (default `/aws-blocks/auth/session`): `200 { user }` means signed in, `401` means signed out. A block without providers has no session route. Don't derive the user from a stored token.
+- **Sign out** through `POST <signOutPath>?format=json`, which ends the session and may return the IdP's `logoutUrl`. Open it with the app's browser launcher to end the IdP session too, so the next sign-in asks the provider again.
+- **The session is the cookie.** The OIDC client signs in with the session cookie that `/exchange` sets. It sends `tokens: false`, so `/exchange` returns no tokens to it, even with `allowBearerAuth`.
 
 ### `stubIdp()` is local and sandbox only
 
