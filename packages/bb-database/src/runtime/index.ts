@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isWireSafeError } from '@aws-blocks/core';
-import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common';
+import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from '../constants.js';
-import { withTransaction } from '../engines/handle.js';
+import { type RowCountingEngine, withTransaction } from '../engines/handle.js';
 import {
 	asError,
 	DatabaseErrors,
@@ -15,21 +15,22 @@ import {
 	reTagged,
 } from '../errors.js';
 import type { QueryOptions, Transaction, TransactionOptions } from '../types.js';
+import { Session } from './session.js';
 import { currentTransactionScope, runInTransactionScope, TransactionScope } from './tx-scope.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface DatabaseCoreOptions {
-	engine: () => Promise<DatabaseEngine>;
+	engine: () => Promise<RowCountingEngine>;
 }
 
 export class DatabaseCore {
-	private engine: Promise<DatabaseEngine> | null = null;
+	private engine: Promise<RowCountingEngine> | null = null;
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
 
 	/** @internal */
-	getEngine(): Promise<DatabaseEngine> {
+	getEngine(): Promise<RowCountingEngine> {
 		if (!this.engine) {
 			const engine = this.options.engine();
 			this.engine = engine;
@@ -43,6 +44,15 @@ export class DatabaseCore {
 	/** @internal Drops the cached engine; the next statement builds it again. */
 	invalidateEngine(): void {
 		this.engine = null;
+	}
+
+	/** @internal One connection for the Kysely dialect; its statements take the same engine, retry and join path. */
+	session(): Session {
+		return new Session({
+			engine: () => this.getEngine(),
+			joined: () => this.joinedHandle(),
+			retry: (fn) => this.withConflictRetry(fn),
+		});
 	}
 
 	// A single auto-commit statement is safe to re-run; a transaction() callback may have side effects,

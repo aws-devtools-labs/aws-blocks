@@ -24,6 +24,8 @@ import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-d
 import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
 import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
+import { type Generated, Kysely, sql as kyselySql } from 'kysely';
+import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
 
 
 const scope = new Scope('test-app');
@@ -608,6 +610,12 @@ export const realtime = new Realtime(scope, 'collab', {
 // Database - SQL database (Aurora Serverless v2 via Data API)
 const db = new Database(scope, 'db', {
   migrationsPath: './aws-blocks/migrations',
+  // `true` because this app runs on the sandbox preset, which leaves rotation
+  // off; the rotation path needs a deploy to be covered at all. It is covered
+  // here, at the cost of the rotation Lambda's network interfaces slowing this
+  // lane's teardown, because the vpc-smoke lane that also asserts it does not
+  // run yet (issue #987). Move it there once that lane is back on.
+  secretRotation: true,
 });
 
 // DistributedDatabase - Aurora DSQL (serverless, multi-region PostgreSQL)
@@ -633,6 +641,11 @@ const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 // transaction may change any number of rows. Scales to zero between requests.
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
 const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+// Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
+interface DbxcTables {
+  tasks: { id: Generated<number>; title: string; done: Generated<boolean>; updated_at: Generated<Date> };
+}
+const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
 const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
 // AsyncJob - Background job processing
@@ -837,6 +850,14 @@ const fallbackAgent = new Agent(scope, 'fallback', {
 
 // FileBucket - File storage (S3)
 const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
+
+// FileBucket with upload constraints: only listed content types, uploads of at
+// most 1 KiB (presigned uploads must sign a contentLength).
+const constrainedBucket = new FileBucket(scope, 'constrained-files', {
+  allowedContentTypes: ['text/plain', 'image/*'],
+  maxUploadBytes: 1024,
+  removalPolicy: 'destroy',
+});
 
 // FileBucket with versioning enabled
 const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
@@ -1940,6 +1961,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return descriptor as unknown as typeof ch;
   },
 
+  async realtimeGetPrincipalChannel(subChannel: string, principal: string) {
+    return realtime.getChannel('cursors', subChannel, { principal });
+  },
+
+  async realtimeGetMismatchedPrincipalChannel(subChannel: string, channelPrincipal: string, connectionPrincipal: string) {
+    // A handle whose channel token is bound to `channelPrincipal` but whose connect token is
+    // bound to `connectionPrincipal`: what a client holding someone else's channel token sends.
+    const channelHandle = await realtime.getChannel('cursors', subChannel, { principal: channelPrincipal });
+    const connectionHandle = await realtime.getChannel('cursors', subChannel, { principal: connectionPrincipal });
+    const descriptor = channelHandle.toJSON();
+    descriptor.connectToken = connectionHandle.toJSON().connectToken;
+    return descriptor as unknown as typeof channelHandle;
+  },
+
+  async realtimeRevokeBetweenHandles(subChannel: string, principal: string) {
+    // `stale` carries a channel token minted before revokeAccess() on a connect token minted
+    // after it, so the subscribe-time check (not the connect-time one) is what refuses it.
+    const before = await realtime.getChannel('cursors', subChannel, { principal });
+    await realtime.revokeAccess(principal);
+    // Revocation compares whole seconds; wait one out before minting the new handle.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const fresh = await realtime.getChannel('cursors', subChannel, { principal });
+    const stale = before.toJSON();
+    stale.connectToken = fresh.toJSON().connectToken;
+    return { stale: stale as unknown as typeof fresh, fresh };
+  },
+
   async realtimeGetPoisonedChannel(subChannel: string) {
     // Return a channel descriptor with a bad token — middleware hydrates it normally,
     // but the WS server / AppSync will reject the invalid token on subscribe.
@@ -2127,6 +2175,68 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE title = ${title}`);
     return { seenInside, committed: rowCount === 1 };
+  },
+
+  // Kysely through DatabaseDialect: typed rows, and affected-row counts that come from the engine.
+  async dbxcKyselyRoundTrip(title: string) {
+    const inserted = await dbxcKysely
+      .insertInto('tasks')
+      .values({ title })
+      .returning(['id', 'title', 'done'])
+      .executeTakeFirstOrThrow();
+    const updated = await dbxcKysely.updateTable('tasks').set({ done: true }).where('id', '=', inserted.id).executeTakeFirst();
+    const row = await dbxcKysely.selectFrom('tasks').select(['id', 'title', 'done']).where('id', '=', inserted.id).executeTakeFirst();
+    const deleted = await dbxcKysely.deleteFrom('tasks').where('id', '=', inserted.id).executeTakeFirst();
+    return {
+      inserted,
+      updated: Number(updated.numUpdatedRows),
+      row: row ?? null,
+      deleted: Number(deleted.numDeletedRows),
+    };
+  },
+
+  // A Kysely transaction that throws keeps nothing, and the ApiError passes through.
+  async dbxcKyselyRollback(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxcKysely.transaction().execute(async (trx) => {
+        await trx.insertInto('tasks').values([{ title: `${prefix}-1` }, { title: `${prefix}-2` }]).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A Kysely statement inside the block's transaction() runs in that transaction.
+  async dbxcKyselyInBlockTransaction(title: string) {
+    let seenInside = false;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+        const row = await dbxcKysely.selectFrom('tasks').select('id').where('title', '=', title).executeTakeFirst();
+        seenInside = row !== undefined;
+        await dbxcKysely.insertInto('tasks').values({ title: `${title}-kysely` }).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${title}%`}`);
+    return { seenInside, kept: row?.n ?? 0 };
+  },
+
+  // What Kysely returns for bigint, numeric and timestamp values, read on the server: JSON would hide a Date.
+  async dbxcKyselyValueTypes() {
+    const { rows } = await kyselySql<{ big: unknown; num: unknown; at: unknown; n: unknown }>`
+      select 7::bigint as big, 1.50::numeric as num, now() as at, count(*) as n from tasks
+    `.execute(dbxcKysely);
+    const kind = (value: unknown) => (value instanceof Date ? 'Date' : typeof value);
+    const [row] = rows;
+    return row ? { big: kind(row.big), num: kind(row.num), at: kind(row.at), n: kind(row.n) } : null;
   },
 
   // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
@@ -2816,9 +2926,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { deleted: true };
   },
 
-  async agentInferenceOnly(message: string) {
-    const result = await inferenceAgent.stream(message);
+  async agentInferenceOnly(message: string, conversationId?: string) {
+    // An inferenceOnly agent scopes its sessions and channels to the caller by default
+    // (sessionScope: 'user'), so it takes the session user's id like a persistent agent.
+    const user = await auth.getCurrentUser(context);
+    const result = await inferenceAgent.stream(message, { conversationId, userId: user?.userSub ?? 'anonymous' });
     return { channelId: result.channelId };
+  },
+
+  async agentInferenceOnlyGetChannel(channelId: string) {
+    const user = await auth.getCurrentUser(context);
+    return { channel: await inferenceAgent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
@@ -2863,7 +2981,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async agentPresetStream(presetName: string, message: string) {
     const presetAgent = presetAgents[presetName];
     if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
-    const result = await presetAgent.stream(message);
+    const result = await presetAgent.stream(message, { userId: 'test-user' });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },
@@ -2929,6 +3047,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async fileVerifyUploaded(path: string) {
     const file = await bucket.get(path);
+    if (!file) return null;
+    return { body: file.body.toString(), contentType: file.contentType, size: file.size };
+  },
+
+  async filePutUrlWithOptions(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await bucket.putUrl(path, options);
+  },
+
+  async fileGetUrlAttachment(path: string, attachment: boolean | string) {
+    return await bucket.getUrl(path, { attachment });
+  },
+
+  // FileBucket with allowedContentTypes / maxUploadBytes
+
+  async constrainedFilePutUrl(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await constrainedBucket.putUrl(path, options);
+  },
+
+  async constrainedFilePut(path: string, content: string, contentType?: string) {
+    await constrainedBucket.put(path, content, contentType ? { contentType } : undefined);
+    return { success: true };
+  },
+
+  async constrainedFileGet(path: string) {
+    const file = await constrainedBucket.get(path);
     if (!file) return null;
     return { body: file.body.toString(), contentType: file.contentType, size: file.size };
   },
@@ -3054,7 +3197,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbAgentToolSearch(message: string) {
     // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
     // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
-    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const result = await kbToolAgent.stream(message, { userId: 'test-user', context: { folder: 'faq' } });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },

@@ -240,9 +240,9 @@ it never carries the value.
 
 ## Framework keys (`@aws-blocks/bb-secret/internal`)
 
-Some blocks generate a signing key for their own use. `Realtime`
-(`token-secret`) creates it with `frameworkKey(scope, id)` from the `./internal`
-subpath; other blocks that generate keys will adopt the helper. The subpath
+Some blocks generate a signing key for their own use: `Auth`
+(`session-secret`) and `Realtime` (`token-secret`). They create it with
+`frameworkKey(scope, id)` from the `./internal` subpath. The subpath
 has the same runtime conditions as `.` (cdk, aws-runtime, browser, mock) and is
 not part of the public API.
 
@@ -303,7 +303,8 @@ the setting.
 **Value format.** The SSM path stores 32 random bytes as base64url; the Secrets
 Manager path stores the 64-character generated string. Consumers must use the
 key as a UTF-8 string (for example an HMAC key), never as decoded bytes, so both
-formats work. `Realtime` passes it straight to `createHmac('sha256', key)`.
+formats work. `Realtime` passes it straight to `createHmac('sha256', key)`;
+`Auth` uses it as an HMAC key and as HKDF input (`Buffer.from(key, 'utf8')`).
 
 ## Non-goals (v1)
 

@@ -165,6 +165,10 @@ export class ApiGatewayRestConstruct extends Construct {
 			restApiName: `blocks-${buildId}`.substring(0, 128),
 			endpointTypes: [EndpointType.REGIONAL],
 			deployOptions: { stageName: 'prod' },
+			// No per-stack CloudWatch role from CDK: this stage configures no
+			// logging, and CDK RETAINs that role, so every `cdk destroy` would
+			// orphan one. (Matches the CloudFront door's server-origin RestApi.)
+			cloudWatchRole: false,
 			binaryMediaTypes: ['*/*'],
 		});
 

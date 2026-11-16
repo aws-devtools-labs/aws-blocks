@@ -64,6 +64,19 @@ class FileUploadHandle(
         }
     }
 
+    /**
+     * Streams [source] to the presigned upload URL.
+     *
+     * When [contentLength] is `null` the body is sent without a `Content-Length`
+     * header (chunked). If the handle was created on the server with a
+     * `contentLength` option, that size is signed into the URL and the upload is
+     * rejected unless it sends exactly that `Content-Length`: pass the same value
+     * here, and make [source] yield exactly that many bytes.
+     *
+     * @param source The bytes to upload.
+     * @param contentLength The body size in bytes, or `null` to stream without one.
+     * @throws TransferableIOException On an HTTP error or a network failure.
+     */
     suspend fun uploadFrom(source: RawSource, contentLength: Long? = null) {
         try {
             val parsedContentType = fileContentType?.let { ContentType.parse(it) }

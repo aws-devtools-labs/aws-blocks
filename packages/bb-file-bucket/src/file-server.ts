@@ -159,14 +159,18 @@ export function attach(httpServer: Server) {
 			// than inline rendering — so an uploaded document can never run as a
 			// page. This is dev-server hardening only. Deployed FileBucket content
 			// is served via S3 presigned URLs, where the stored Content-Type is
-			// chosen by the uploader and no equivalent Content-Disposition/nosniff
-			// is applied — do not assume this dev-server behavior reflects the
-			// deployed path.
+			// the one signed into the upload URL (or passed to put()), no nosniff
+			// is applied, and a Content-Disposition is only sent when the URL was
+			// created with the `attachment` option — do not assume this
+			// dev-server behavior reflects the deployed path.
+			// When the URL was created with `attachment`, serve the exact signed
+			// disposition (e.g. with a filename), as S3 does for a signed
+			// `response-content-disposition`.
 			res.writeHead(200, {
 				'Content-Type': contentType,
 				'Content-Length': body.length.toString(),
 				'X-Content-Type-Options': 'nosniff',
-				'Content-Disposition': 'attachment',
+				'Content-Disposition': valid.contentDisposition ?? 'attachment',
 			});
 			res.end(body);
 		} else if (req.method === 'PUT') {
@@ -208,10 +212,36 @@ export function attach(httpServer: Server) {
 				return;
 			}
 
+			// Content-Length parity with real S3: when a presigned PUT URL is
+			// minted with a contentLength, the SDK signs `content-length`, so S3
+			// rejects (403 SignatureDoesNotMatch) an upload whose Content-Length
+			// header is missing or differs. Check the header up front, and the
+			// received body size once it has arrived.
+			const signedLength = valid.contentLength;
+			if (signedLength !== undefined && req.headers['content-length'] !== String(signedLength)) {
+				sendError(
+					res,
+					403,
+					`SignatureDoesNotMatch: request Content-Length does not match the signed Content-Length ${signedLength}. ` +
+						`Upload a body of exactly the size that was used to create the upload URL.`,
+				);
+				return;
+			}
+
 			collectBody(req).then(async (body) => {
+				if (signedLength !== undefined && body.length !== signedLength) {
+					sendError(
+						res,
+						403,
+						`SignatureDoesNotMatch: request body size does not match the signed Content-Length ${signedLength}.`,
+					);
+					return;
+				}
 				// When a contentType was signed, it equals the (now validated)
 				// request header. Otherwise fall back to whatever the request
 				// sent, then octet-stream — matching S3's stored content type.
+				// (Upload URLs always sign a contentType; the fallback only
+				// applies to a token minted without one.)
 				const contentType = valid.contentType || requestContentType || 'application/octet-stream';
 				await (bucket.put as (p: string, b: Buffer, o: { contentType: string }) => Promise<void>)(
 					path, body, { contentType },
@@ -219,6 +249,12 @@ export function attach(httpServer: Server) {
 				res.writeHead(200);
 				res.end();
 			}).catch((err) => {
+				// A rejected input (e.g. a body above maxUploadBytes) is a client
+				// error, answered with its static message and a 400.
+				if (isBlocksError(err, 'ValidationFailed')) {
+					sendError(res, 400, err.message);
+					return;
+				}
 				sendError(res, 500, err instanceof Error ? err.message : String(err));
 			});
 		} else {

@@ -11,6 +11,12 @@
 # PW_VERSION (scripts/agent-bench/steps/3-build-and-test.sh) and is bumped with
 # it. A security PR for it fails scripts/ci/agent-bench-playwright.test.mjs
 # until PW_VERSION moves too.
+# The native SDKs under native/ are built with gradle, swift and pub, which have
+# their own entries at the end of this file. native/kotlin and native/swift also
+# have a package.json and package-lock.json of their own, outside the root
+# workspaces, but only for their changesets tooling, which is never shipped; they
+# are deliberately left out of the npm entries (alerts for them still come from
+# the dependency graph).
 #
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
@@ -156,5 +162,127 @@ updates:
       default-days: 3
     groups:
       github-actions:
+        patterns:
+          - "*"
+
+  # Native SDKs (native/kotlin, native/swift, native/dart). Each is built by its
+  # own toolchain rather than npm, so each ecosystem gets its own entry. Minor
+  # and patch only, grouped into one PR per SDK, on the same schedule and
+  # cooldown as the npm entries. A major is a deliberate migration, so majors
+  # are ignored here and moved by hand.
+  #
+  # Release notes: unlike the npm entries, nothing writes a changeset for these
+  # PRs at release time (scripts/generate-dependency-changeset.ts only reads
+  # packages/*/package.json). A maintainer adds one by hand before merging:
+  #   - Kotlin: a patch changeset for aws-blocks-kotlin in native/kotlin/.changeset
+  #     ("Require Kotlin changeset" stays red until it is pushed onto the PR).
+  #   - Swift: likewise in native/swift/.changeset, once Package.swift gains
+  #     dependencies ("Require Swift changeset").
+  #   - Dart: a `## Unreleased` entry in the CHANGELOG.md of each published
+  #     package whose pubspec.yaml moved.
+  # The native sandbox E2E jobs need AWS_ROLE_ARNS, which is set in the
+  # Dependabot secrets store as well as the Actions one, so they run on these
+  # PRs too.
+
+  # Kotlin: the root Gradle build. Versions live in the version catalog,
+  # native/kotlin/gradle/libs.versions.toml, which this entry updates.
+  # native/kotlin/e2e and native/kotlin/example/* are separate builds that
+  # consume the published SDK; they are not covered here.
+  - package-ecosystem: gradle
+    directory: /native/kotlin
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Compiler and build toolchain: a minor is a deliberate migration. A Kotlin
+      # minor is a language release and raises the Kotlin version consumers of
+      # the published library need. Patches still arrive in the group.
+      - dependency-name: "org.jetbrains.kotlin.*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "org.jetbrains.kotlin:*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "com.android.*"
+        update-types: ["version-update:semver-minor"]
+      # Pre-1.0 libraries: a 0.x minor can be a breaking release (kotlinx-datetime
+      # 0.7 changed Instant), and Dependabot classifies it as a minor.
+      - dependency-name: "org.jetbrains.kotlinx:kotlinx-datetime"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "org.jetbrains.kotlinx:atomicfu"
+        update-types: ["version-update:semver-minor"]
+    groups:
+      kotlin:
+        patterns:
+          - "*"
+
+  # Swift: the BlocksRuntime/BlocksCodegen package. It declares no remote
+  # package dependencies today; this entry covers any it gains.
+  - package-ecosystem: swift
+    directory: /native/swift
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      swift:
+        patterns:
+          - "*"
+
+  # Dart/Flutter: the published packages and the example app. pubspec.lock is
+  # gitignored (native/dart/.gitignore), so, as with the create-blocks-app
+  # templates, Dependabot updates the ranges in each pubspec.yaml.
+  # The published packages are libraries: raising a lower bound narrows what
+  # apps that depend on them can resolve, so their floors move only when a new
+  # release falls outside the current range (increase-if-necessary).
+  - package-ecosystem: pub
+    directories:
+      - /native/dart/packages/*
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase-if-necessary
+    ignore:
+      # Published from this repo; bumped together with each release.
+      - dependency-name: "blocks_*"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dart-packages:
+        patterns:
+          - "*"
+
+  # The example app is an app, not a library, so its floors follow each release
+  # (increase), as in the npm entries.
+  - package-ecosystem: pub
+    directory: /native/dart/example
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "blocks_*"
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dart-example:
         patterns:
           - "*"

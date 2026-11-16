@@ -9,7 +9,7 @@ import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
-import { registerSharedConfig } from '@aws-blocks/core/cdk/internal';
+import { markAddedChildrenBlocksOwned, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
@@ -210,6 +210,8 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	// First secret in this stack — create all shared infrastructure
 	state = { params: [{ name: parameterName, keyId }] };
 	(stack as any)[SECRET_BULK_KEY] = state;
+	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	const stackChildrenBefore = new Set(stack.node.children);
 
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
@@ -335,4 +337,8 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
 		},
 	});
+	// The shared secret-init function, provider and custom resource sit at stack
+	// scope but belong to the block, so the service-principal trust check treats
+	// their roles as AWS Blocks roles rather than the app's.
+	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 }

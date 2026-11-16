@@ -51,6 +51,9 @@ export const DEFAULT_MAX_RETRIES = 3;
 
 export const AUTOCOMMIT_CONFLICT_BACKOFF_MS: readonly number[] = [50, 100, 200];
 
+/** Local mode: how long a statement waits for the one session while a Kysely transaction holds it. */
+export const SESSION_TRANSACTION_WAIT_MS = 5000;
+
 export const TRANSACTION_ROW_LIMIT = 3000;
 
 export const TRANSACTION_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;

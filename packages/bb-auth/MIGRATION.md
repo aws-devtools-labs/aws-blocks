@@ -57,7 +57,7 @@ After it runs:
 
 | Switching from | User pool | Session table and secret | Users | Signed-in sessions |
 |---|---|---|---|---|
-| `AuthCognito`, same id | **Kept**: same construct id `pool`, same `userPoolName` | **Kept**: same `sessions` / `session-secret` | Kept, including passwords, groups and attributes | **Stay valid**: same cookie name, HMAC secret and table |
+| `AuthCognito`, same id | **Kept**: same construct id `pool`, same `userPoolName` | `sessions` **kept**. `session-secret`: kept under `secretsStore: 'ssm'`; under `BlocksPresets.production` (`'secrets-manager'`) a new Secrets Manager secret replaces the SSM parameter | Kept, including passwords, groups and attributes | Under `BlocksPresets.production`: every user is **signed out once** (new HMAC secret). With `secretsStore: 'ssm'` set before the deploy: **stay valid** (same cookie name, HMAC secret and table) |
 | `AuthOIDC`, direct (`google()`, `github()`, `customOidc()`, `customOauth2()`, `stubIdp()`) | None is created (direct federation needs no pool); nothing is destroyed | The table is kept. Old rows are treated as signed out. The old `/<fullId>-cookie-secret-<id>` parameter is deleted | The IdP is the source of truth, and `userId` stays `` `${iss}:${sub}` `` | The old `oidc_…` cookie is ignored, so every user signs in once more |
 | `AuthOIDC` with `cognitoFederated()` | The old `cognito-pool` is **deleted** and replaced by `pool`. Its domain prefix collides (see below) | As for direct | The pool's shadow users are deleted. **`userId` changes**, so data keyed on it must be [re-keyed](#re-keying-cognitofederated-users) | Every user signs in once more |
 | `AuthBasic` | A **new** pool | The `users` / `codes` tables and the `jwt-secret` parameter are **retained under `BlocksPresets.production` and deleted under `BlocksPresets.sandbox`** | **Lost**: every user must sign up again | The `auth_<fullId>` cookie is rejected and cleared (signed out, never an error) |
@@ -66,7 +66,7 @@ For `AuthCognito`, "kept" assumes the first `Auth` deploy still has a pool-backe
 
 ## `AuthCognito`
 
-Your pool, your users and their sessions survive, **provided the block's id is unchanged**.
+Your pool and your users survive, **provided the block's id is unchanged**. Their sessions survive only if the session secret stays in SSM: see ["The session secret moves to Secrets Manager"](#the-session-secret-moves-to-secrets-manager) below.
 
 ```ts
 // Before (AuthCognito)
@@ -127,6 +127,12 @@ What changes, and why it matters:
 - **Sign-up:** `signUp()` no longer takes `autoSignIn`. It is `emailPassword.autoSignIn` (default `true`), and applies when the call carries a context, and to the sign-in UI. `AuthCognito`'s `signUp()` defaulted it to `false` (its `createApi()` UI turned it on), so unless your app uses `createApi()` or passes `autoSignIn: true`, the codemod writes `emailPassword: { autoSignIn: false }` and `confirmSignUp()` keeps returning `DONE`. If it does use them, `Auth`'s default stays and the codemod marks each `signUp()` with a context that relied on `false`: `confirmSignUp()` now returns `COMPLETE_AUTO_SIGN_IN` there. `confirmSignIn()` takes the answer as a plain string (`{ code }` → `code`). `signIn()` no longer takes `cognitoSession`.
 - **Errors:** `AuthCognito`'s 29 error names are unchanged, but some flows now answer differently. Sign-up through the sign-in UI no longer reveals an existing account by default (`emailPassword.revealExistingUsers`), and an unrecognised Cognito error now reaches the client as `InternalErrorException` instead of under its raw name. Review every auth error check (the codemod marks each one).
 - **Local data:** the local pool lives in the same `.bb-data/<fullId>/state.json` file, so local users survive.
+
+### The session secret moves to Secrets Manager
+
+`AuthCognito` kept its `session-secret` (the HMAC key that signs session cookies and sign-in challenge envelopes) in an SSM SecureString. `Auth` keeps it where the stack's `defaults.secretsStore` says. `BlocksPresets.production` sets `'secrets-manager'`, so on the first `Auth` deploy a production stack gets a **new** key in Secrets Manager, and the old SSM parameter is deleted. Every signed-in user is signed out once, and a sign-in that is halfway through a challenge (MFA, a new password) has to start again. Users, passwords and the session table are not affected.
+
+To keep sessions valid across the switch, set `secretsStore: 'ssm'` **before** the first `Auth` deploy, for example `defaults: { ...BlocksPresets.production, secretsStore: 'ssm' }` in `BlocksStack.create()`. Synth then warns (`@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`), because production keys belong in Secrets Manager; acknowledge the warning if you keep SSM on purpose. Setting it after a deploy that already moved the key does not bring the old key back. Under `BlocksPresets.sandbox` the store is already `'ssm'`, so sandbox sessions stay valid.
 
 ## `AuthOIDC`, direct federation
 
@@ -374,7 +380,7 @@ Behaviour that changes for your users and your code:
 - [ ] **Commit the immutability baseline.** On the first synth, `Auth` writes `aws-blocks/baselines/<stack>/<fullId>.auth-pool.json` and reports "commit it". The file records the user-pool properties that Cognito can't change on an existing pool (sign-in attributes, username case sensitivity, required attributes, existing custom attributes). From then on, synth refuses a change to them, and the deploy refuses it again before the pool is updated. Without the committed file, CI's synth can't see the change. If you deploy only from CI, make the deploy workflow commit the baselines its synth writes (see "The CI caveat" in [DESIGN.md](./DESIGN.md#immutability-guard)); otherwise the production baseline never reaches the repository and synth never refuses anything.
 - [ ] **Don't rename or remove an `Auth` block by accident.** Synth fails when a committed baseline belongs to a block that no longer exists, because CloudFormation would delete its pool and every user in it. If you really mean it, set `removalPolicy: 'retain'` and deploy first, then re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<fullId>` on the synth/deploy command, and commit the deleted baseline file. The variable must name the block; `=1` does nothing.
 - [ ] **Review every auth error check** (the codemod marks each one). `InvalidCodeException` is now two names. See [Error names](#error-names).
-- [ ] **Expect the cookie cutover.** `AuthCognito` sessions stay valid. `AuthBasic` and `AuthOIDC` users are signed out once.
+- [ ] **Expect the cookie cutover.** `AuthBasic` and `AuthOIDC` users are signed out once. `AuthCognito` users are signed out once under `BlocksPresets.production`, because the session secret moves to Secrets Manager; set `secretsStore: 'ssm'` before this deploy to keep their sessions ([details](#the-session-secret-moves-to-secrets-manager)).
 - [ ] **Email volume:** with Cognito's default sender, sign-up and reset codes are capped at 50 a day.
 - [ ] **`stubIdp()` providers:** a production deployment selects a real provider (for example with `getDeploymentType()`), since synth refuses a stub outside a sandbox ([`stubIdp()` is local and sandbox only](#stubidp-is-local-and-sandbox-only)).
 - [ ] **`cognitoFederated()` apps:** domain prefix plan chosen (new prefix, then re-register redirect URIs; or two deploys), and data keyed on `userId` re-keyed.

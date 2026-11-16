@@ -30,16 +30,16 @@ const ALLOWLIST = [
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:38',
-		reason: 'CORS allowlist compilation; plain origins are matched literally by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:166',
+		reason: 'literalOriginPattern(): the origin goes through escapeOriginToPattern(), which escapes every metacharacter and anchors with ^…$.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:40',
-		reason: 'CORS allowlist compilation through escapeOriginToPattern(); reworked by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:372',
+		reason: 'validateCorsOriginEntry() compiles a user regex entry on its own only to check it is valid; the result is discarded and never matched.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:120',
-		reason: 'Hosting origins compiled through escapeOriginToPattern(); reworked by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:471',
+		reason: 'allowedOrigins regex entries are intentionally regexes: validateCorsOriginEntry() runs first (bare dots, globs, nested quantifiers, standalone compile) and the entry is anchored as ^(?:…)$.',
 	},
 	{
 		at: 'packages/core/src/raw-route.ts:444',

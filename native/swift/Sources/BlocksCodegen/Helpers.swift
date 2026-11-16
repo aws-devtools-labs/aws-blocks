@@ -150,9 +150,10 @@ func safeTypeName(_ name: String, parentName: String?) -> String {
 }
 
 /// Returns true if `name` is a valid Swift identifier:
-/// starts with letter/underscore, rest are letters/digits/underscores.
+/// starts with letter/underscore, rest are letters/digits/underscores. A lone `_` is the wildcard pattern, not an
+/// identifier.
 func isValidSwiftIdentifier(_ name: String) -> Bool {
-    guard let first = name.first else { return false }
+    guard let first = name.first, name != "_" else { return false }
     if !(first.isLetter || first == "_") { return false }
     for char in name.dropFirst() where !(char.isLetter || char.isNumber || char == "_") {
         return false
@@ -162,21 +163,18 @@ func isValidSwiftIdentifier(_ name: String) -> Bool {
 
 /// Sanitize an arbitrary spec property name into a Swift-legal identifier.
 /// Replaces illegal chars with underscores and prefixes a leading underscore
-/// when the name starts with a digit or is empty. Used for record field names
+/// when the name starts with a digit (`9lives` → `_9lives`). A name left empty or
+/// holding only underscores (`$`, `*/`) gains an `unnamed` suffix (`_unnamed`,
+/// `__unnamed`), since a lone `_` can't be declared. Used for record field names
 /// like `custom:email` (Cognito attributes) which are valid JSON keys but
 /// not valid Swift property names.
 func sanitizedSwiftName(_ name: String) -> String {
-    if name.isEmpty { return "_unnamed" }
-    var result = ""
-    for (idx, char) in name.enumerated() {
-        if char.isLetter || char == "_" || (idx > 0 && char.isNumber) {
-            result.append(char)
-        } else {
-            result.append("_")
-        }
-    }
+    var result = String(name.map { $0.isLetter || $0.isNumber || $0 == "_" ? $0 : "_" })
     if let first = result.first, first.isNumber {
         result = "_" + result
+    }
+    if result.allSatisfy({ $0 == "_" }) {
+        result = (result.isEmpty ? "_" : result) + "unnamed"
     }
     return result
 }

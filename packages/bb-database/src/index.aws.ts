@@ -3,7 +3,7 @@
 
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
+import type { SqlQuery } from '@aws-blocks/data-common/core';
 import { clusterConfigKey, sanitizeDbRoleName, searchPathFor } from './constants.js';
 import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';
@@ -72,7 +72,7 @@ export class Database extends Scope {
 			...readClusterConfig(clusterFullId),
 		});
 
-		const buildEngine = async (): Promise<DatabaseEngine> => {
+		const buildEngine = async (): Promise<PgEngine> => {
 			const { clusterEndpoint, region } = getSdkIdentifiers(this);
 			if (!clusterEndpoint || !region) {
 				throw configError(
@@ -92,6 +92,7 @@ export class Database extends Scope {
 		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
+			session: () => this.core.session(),
 			simulateConflict: () => {
 				throw configError('simulateConflict() is only available in local mode (the mock entry point).');
 			},

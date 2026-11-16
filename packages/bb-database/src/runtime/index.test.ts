@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { sql } from '@aws-blocks/data-common';
+import { sql } from '@aws-blocks/data-common/core';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { DatabaseCore } from './index.js';
 

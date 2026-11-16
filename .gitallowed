@@ -21,3 +21,14 @@
 # are public npm packages, not Amazon-internal references — allow them.
 @graphql-tools/apollo-engine-loader
 apollo-engine-loader
+
+# AWS's own documented example access key IDs, used in tests and benchmark
+# fixtures. The access-key-ID pattern matches any ASIA/AKIA prefix followed by
+# 16 characters, so these synthetic values trip it. The hook scans the whole
+# working tree rather than the staged diff, so one of these blocks every commit
+# in the repository, not only commits that touch the file holding it:
+#   AKIAIOSFODNN7EXAMPLE — packages/admin-ui/src/server/redact.test.ts,
+#                          packages/core/src/scripts/preflight-credentials.test.ts
+#   ASIAEXAMPLEKEY123456 — scripts/harbor-bench/test_trials.py
+AKIAIOSFODNN7EXAMPLE
+ASIAEXAMPLEKEY123456

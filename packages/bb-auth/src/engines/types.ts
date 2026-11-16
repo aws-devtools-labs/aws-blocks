@@ -494,6 +494,14 @@ export interface NativeAdminEngine {
 			clientMetadata?: Record<string, string>;
 		},
 	): Promise<NativeAdminUser>;
+	/**
+	 * `AdminUpdateUserAttributes`: write `attributes` (already prefixed) on an
+	 * existing user, IAM-authorized, so a `userWritable: false` attribute and the
+	 * verified flags may be written. Throw `UserNotFoundException` for an
+	 * unknown user, and `InvalidParameterException` for a name the pool's
+	 * schema does not have or an immutable attribute.
+	 */
+	updateUserAttributes(username: string, attributes: Record<string, string>): Promise<void>;
 	/** `AdminDeleteUser`. */
 	deleteUser(username: string): Promise<void>;
 	/** `AdminDisableUser`. */
@@ -757,7 +765,8 @@ export interface BearerTokens {
 export interface AuthLayer {
 	/**
 	 * Where the session-signing secret comes from. AWS: the `session-secret`
-	 * `AppSetting` child (the same SSM parameter `AuthCognito` uses). Mock:
+	 * framework key (Secrets Manager or SSM, per `defaults.secretsStore`; under
+	 * `'ssm'` the same SSM parameter `AuthCognito` uses). Mock:
 	 * `.bb-data/<fullId>/state.json` (the same file `AuthCognito`'s mock uses).
 	 * Called once, in the constructor; the returned function is called per
 	 * request and should cache.

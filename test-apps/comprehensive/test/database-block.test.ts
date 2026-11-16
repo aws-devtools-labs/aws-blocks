@@ -19,6 +19,9 @@ type _Task = Expect<Equal<Task, { id: number; title: string; done: boolean }>>;
 // The result schema, not a type argument, types the validated read on the aurora path too.
 type ValidatedTask = NonNullable<Awaited<ReturnType<typeof apiType.dbxcGetValidated>>>;
 type _ValidatedTask = Expect<Equal<ValidatedTask, { id: number; title: string; done: boolean }>>;
+// A Kysely projection through DatabaseDialect keeps its row type across the RPC boundary.
+type KyselyRoundTrip = Awaited<ReturnType<typeof apiType.dbxcKyselyRoundTrip>>;
+type _KyselyInserted = Expect<Equal<KyselyRoundTrip['inserted'], { id: number; title: string; done: boolean }>>;
 // A result schema, not a type argument, is what types these two: the inferred
 // type must be the schema's output, and `id` must be a number on both environments.
 type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
@@ -218,6 +221,33 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
     test("aurora cluster - a block-level query() inside transaction() sees the callback's own uncommitted write", async () => {
       const result = await getApi().dbxcBlockReadInTransaction(`xc-see-${Date.now().toString(36)}`);
       assert.deepStrictEqual(result, { seenInside: true, committed: true });
+    });
+
+    test('aurora cluster - Kysely through DatabaseDialect: typed rows and affected-row counts', async () => {
+      const title = `ky-${Date.now().toString(36)}`;
+      const result = await getApi().dbxcKyselyRoundTrip(title);
+      const id = result.inserted.id;
+      assert.deepStrictEqual(result, {
+        inserted: { id, title, done: false },
+        updated: 1,
+        row: { id, title, done: true },
+        deleted: 1,
+      });
+    });
+
+    test('aurora cluster - a Kysely transaction that throws keeps nothing, and the ApiError passes through', async () => {
+      const result = await getApi().dbxcKyselyRollback(`ky-rb-${Date.now().toString(36)}`);
+      assert.deepStrictEqual(result, { aborted: true, kept: 0 });
+    });
+
+    test('aurora cluster - a Kysely statement inside transaction() runs in it: it sees the write and rolls back with it', async () => {
+      const result = await getApi().dbxcKyselyInBlockTransaction(`ky-in-${Date.now().toString(36)}`);
+      assert.deepStrictEqual(result, { seenInside: true, kept: 0 });
+    });
+
+    test('aurora cluster - Kysely value types: a bigint is a number, a numeric a string, a timestamp a Date', async () => {
+      const types = await getApi().dbxcKyselyValueTypes();
+      assert.deepStrictEqual(types, { big: 'number', num: 'string', at: 'Date', n: 'number' });
     });
 
     test('aurora cluster - DDL and TRUNCATE are refused: the app role has DML only', async () => {

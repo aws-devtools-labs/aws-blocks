@@ -674,7 +674,10 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted.
+cookies and every RPC then travel unencrypted. `'none'` warns with the same id
+whether or not the app has an API: the S3 website can't serve over TLS, so the
+pages and scripts themselves can be read or altered in transit (see
+[the `'none'` door](#the-none-door)).
 
 The session cookie can't be `Secure` behind such a door either: a browser
 discards a `Secure` cookie set by a plain-HTTP origin. `Auth` therefore
@@ -834,6 +837,20 @@ build's hashed assets: a tab opened before a deploy that then lazy-loads one of
 its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
+
+The website endpoint takes no certificate, so `'none'` always warns at synth
+(`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
+HTML and scripts travel unencrypted and can be altered in transit, and a
+tampered script sees everything the user enters, even when the API it calls is
+HTTPS. Use `'none'` for testing or public, non-interactive content; use the
+CloudFront door for HTTPS. If you chose `'none'` deliberately, acknowledge the
+warning on the stack:
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+```
 
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
 payload format 2.0 event and can't stream, so the server is built for it: the

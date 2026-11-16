@@ -1,0 +1,179 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "name": "main\"; val x = 1 //",
+      "url": "https://example.com"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Sample\"Type${x}`;": {
+        "type": "object",
+        "description": "A type whose name and keys are not identifiers",
+        "properties": {
+          "run { error(\"x\") } || id": {
+            "type": "string",
+            "minLength": 2
+          },
+          "$": {
+            "type": "string"
+          },
+          "${x}": {
+            "type": "string"
+          },
+          "\\(y)": {
+            "type": "string"
+          },
+          "*/": {
+            "type": "string"
+          },
+          "q\"uote": {
+            "type": "string"
+          },
+          "s'ingle": {
+            "type": "string"
+          },
+          "semi;colon": {
+            "type": "string",
+            "maxLength": 10
+          },
+          "back`tick": {
+            "type": "string"
+          },
+          "new\nline": {
+            "type": "string"
+          },
+          "with space": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "9lives": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "a\"b",
+              "c;d",
+              "x`y",
+              "new\nline",
+              "${x}",
+              "\\(z)",
+              "*/",
+              "1st",
+              " sp ace"
+            ]
+          }
+        },
+        "required": [
+          "run { error(\"x\") } || id",
+          "semi;colon",
+          "with space"
+        ]
+      }
+    }
+  },
+  "methods": [
+    {
+      "name": "api.get\"Sample`;x",
+      "description": "An operation whose name and parameters are not identifiers",
+      "params": [
+        {
+          "name": "run { error(\"xParam\") } || p",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "item",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Sample\"Type${x}`;"
+          }
+        },
+        {
+          "name": "opt;ional\n",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "GetResult",
+        "schema": {
+          "$ref": "#/components/schemas/Sample\"Type${x}`;"
+        }
+      }
+    },
+    {
+      "name": "ns.do`Action",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ty pe": {
+                    "type": "string",
+                    "enum": [
+                      "cre\"ate"
+                    ]
+                  },
+                  "ti;tle": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ty pe",
+                  "ti;tle"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "ty pe": {
+                    "type": "string",
+                    "enum": [
+                      "re`move"
+                    ]
+                  },
+                  "${id}": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ty pe",
+                  "${id}"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "DoActionResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok`": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok`"
+          ]
+        }
+      }
+    }
+  ]
+}

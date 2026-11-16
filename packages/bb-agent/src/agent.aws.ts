@@ -33,7 +33,7 @@ function toRuntimeSessionId(base: string): string {
  * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
  * in that user's session. `sessionId` is the conversation's Strands session id (the
  * conversationId, or the owner-scoped key of an `inferenceOnly` agent with
- * `sessionScope: 'user'`), so two users who pass the same conversationId to such an agent
+ * `sessionScope: 'user'`, the default), so two users who pass the same conversationId to such an agent
  * route to different runtime sessions.
  */
 function runtimeSessionIdFor(payload: { conversationId?: string }, sessionId?: string): string {

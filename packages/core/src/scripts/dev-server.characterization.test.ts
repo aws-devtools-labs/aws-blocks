@@ -185,7 +185,20 @@ const CASES: Record<string, Case> = {
     'X-Blocks-User-Agent': 'aws-blocks-swift/1.2.3',
   }),
   'rpc success without origin': rpc(rpcBody('api.echo', ['hi'])),
-  'rpc success with a non-localhost origin': rpc(rpcBody('api.echo', ['hi']), { Origin: 'https://evil.example' }),
+  'rpc refused from a non-localhost origin': rpc(rpcBody('api.echo', ['hi']), { Origin: 'https://evil.example' }),
+  'rpc refused with a text/plain body': rpc(rpcBody('api.echo', ['hi']), { 'Content-Type': 'text/plain;charset=UTF-8' }),
+  'RawRoute POST refused from a non-localhost origin': {
+    method: 'POST',
+    path: '/echo-body',
+    headers: { Origin: 'https://evil.example', 'Content-Type': 'text/plain' },
+    body: '"hi"',
+  },
+  'RawRoute POST keeps a non-JSON content type': {
+    method: 'POST',
+    path: '/echo-body',
+    headers: { Origin: 'http://localhost:5173', 'Content-Type': 'text/plain' },
+    body: '"hi"',
+  },
   'rpc success with an unvalidated client user agent': rpc(rpcBody('api.echo', ['hi']), {
     'X-Blocks-User-Agent': 'not a token',
   }),
@@ -337,8 +350,22 @@ const EXPECTED: Record<string, unknown> = {
     "cookies": [],
     "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
-  "rpc success with a non-localhost origin": {
-    "status": 200,
+  "rpc refused from a non-localhost origin": {
+    "status": 403,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "content-type": "application/json",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"error\":\"Forbidden: cross-origin request rejected\"}"
+  },
+  "rpc refused with a text/plain body": {
+    "status": 415,
     "headers": {
       "access-control-allow-credentials": "true",
       "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
@@ -352,7 +379,38 @@ const EXPECTED: Record<string, unknown> = {
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":415,\"message\":\"Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json\",\"data\":{\"name\":\"UnsupportedMediaType\"}},\"id\":null}"
+  },
+  "RawRoute POST refused from a non-localhost origin": {
+    "status": 403,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "content-type": "application/json",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"error\":\"Forbidden: cross-origin request rejected\"}"
+  },
+  "RawRoute POST keeps a non-JSON content type": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:5173",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"text\":\"\\\"hi\\\"\",\"json\":\"hi\"}"
   },
   "rpc success with an unvalidated client user agent": {
     "status": 200,

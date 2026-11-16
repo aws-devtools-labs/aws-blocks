@@ -105,11 +105,40 @@ export class CronJob<T = void> extends Scope {
 	private _start(): void {
 		if (this._schedule.type === 'rate') {
 			console.log(`[CronJob:${this.id}] scheduled: rate(${formatMs(this._schedule.intervalMs)})`);
-			this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
-			(this._timer as NodeJS.Timeout).unref();
+			if (this._schedule.intervalMs > MAX_TIMEOUT_MS) {
+				this._scheduleLongRateTick(Date.now() + this._schedule.intervalMs);
+			} else {
+				this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
+				(this._timer as NodeJS.Timeout).unref();
+			}
 		} else {
 			this._scheduleCronTick();
 		}
+	}
+
+	/**
+	 * Fires a rate schedule longer than `setTimeout`/`setInterval` allow (about 24.8 days). Node
+	 * clamps a longer delay to 1 ms, so wait for `fireAt` in steps, then fire and schedule the next one.
+	 * If the clock jumped past several intervals (for example the machine was asleep), the handler runs
+	 * once and the next run is the first later slot on the same cadence: like EventBridge Scheduler, the
+	 * mock does not run the slots it missed.
+	 */
+	private _scheduleLongRateTick(fireAt: number): void {
+		const delayMs = fireAt - Date.now();
+		if (delayMs > MAX_TIMEOUT_MS) {
+			this._timer = setTimeout(() => this._scheduleLongRateTick(fireAt), MAX_TIMEOUT_MS);
+		} else {
+			this._timer = setTimeout(
+				() => {
+					this._fire();
+					const intervalMs = (this._schedule as RateSchedule).intervalMs;
+					const missedSlots = Math.max(Math.floor((Date.now() - fireAt) / intervalMs), 0);
+					this._scheduleLongRateTick(fireAt + (missedSlots + 1) * intervalMs);
+				},
+				Math.max(delayMs, 0),
+			);
+		}
+		(this._timer as NodeJS.Timeout).unref();
 	}
 
 	private _scheduleCronTick(): void {

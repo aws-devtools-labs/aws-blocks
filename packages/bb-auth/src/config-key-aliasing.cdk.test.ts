@@ -17,10 +17,14 @@ import { freshAppDir } from './test-support/guard-synth.js';
 const VALIDATE = 'validateUser: async () => {}';
 
 describe('Auth: block ids that fold to one config key fail synth', () => {
+	// `secretsStore: 'ssm'` so the session secret registers no per-block config
+	// key and the first collision is the pool's (the Secrets Manager case is the
+	// next test).
 	test('auth-a + auth_a with validateUser: synth fails naming the shared USER_POOL_ID key', () => {
 		const result = synthBlocksApp({
 			build: `new Auth(stack, 'auth-a', { ${VALIDATE} }); new Auth(stack, 'auth_a', { ${VALIDATE} });`,
 			appDir: freshAppDir(),
+			createOptions: "defaults: { ...BlocksPresets.production, secretsStore: 'ssm' },",
 		});
 		assert.strictEqual(result.ok, false, 'synth must fail');
 		assert.match(
@@ -29,6 +33,20 @@ describe('Auth: block ids that fold to one config key fail synth', () => {
 		);
 		assert.match(result.stderr, /'TestStack-auth-a'/);
 		assert.match(result.stderr, /'TestStack-auth_a'/);
+	});
+
+	test("auth-a + auth_a under secretsStore 'secrets-manager': synth fails naming the shared session secret ARN key", () => {
+		const result = synthBlocksApp({
+			build: `new Auth(stack, 'auth-a'); new Auth(stack, 'auth_a');`,
+			appDir: freshAppDir(),
+		});
+		assert.strictEqual(result.ok, false, 'synth must fail');
+		assert.match(
+			result.stderr,
+			/config key "BLOCKS_SECRET_ARN_TESTSTACK_AUTH_A_SESSION_SECRET" is already registered/,
+		);
+		assert.match(result.stderr, /'TestStack-auth-a-session-secret'/);
+		assert.match(result.stderr, /'TestStack-auth_a-session-secret'/);
 	});
 
 	test('two Auth blocks with distinct ids still synthesize', () => {

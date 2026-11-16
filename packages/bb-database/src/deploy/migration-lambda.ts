@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine } from '@aws-blocks/data-common';
+import type { DatabaseEngine } from '@aws-blocks/data-common/core';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType } from 'aws-blocks';
 
@@ -17,6 +17,20 @@ let api: typeof apiType;
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev'], {
@@ -27,23 +41,15 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
   const mod = await import('aws-blocks');
   api = mod.api;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -57,7 +63,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;

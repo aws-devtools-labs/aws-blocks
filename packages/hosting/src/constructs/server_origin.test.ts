@@ -247,6 +247,22 @@ void describe('server origin lock-down', () => {
       template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
       template.resourceCountIs('AWS::ApiGateway::Account', 1);
     });
+
+    void it('the account-level CloudWatch role trusts API Gateway without a condition', () => {
+      const { template } = synth({ props: { serverOrigin: { accessLogging: true } } });
+      template.hasResourceProperties('AWS::IAM::Role', {
+        AssumeRolePolicyDocument: {
+          Statement: [
+            {
+              Effect: 'Allow',
+              Action: 'sts:AssumeRole',
+              Principal: { Service: 'apigateway.amazonaws.com' },
+              Condition: Match.absent(),
+            },
+          ],
+        },
+      });
+    });
   });
 
   void describe('regional web ACL on the stage', () => {

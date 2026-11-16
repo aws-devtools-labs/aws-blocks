@@ -19,6 +19,12 @@ export const DatabaseErrors = {
   CheckViolation: 'CheckViolationException',
   NotNullViolation: 'NotNullViolationException',
   ForeignKeyViolation: 'ForeignKeyViolationException',
+  /**
+   * `db.crud()` refused a table because row-level security is required but not
+   * in effect on it (see `DatabaseOptions.rlsPolicy` and
+   * `TableMetaEntry.rowLevelSecurity`). The server log names the table and the fix.
+   */
+  RowLevelSecurityRequired: 'RowLevelSecurityRequiredException',
 } as const;
 
 /**

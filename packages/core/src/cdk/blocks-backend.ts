@@ -6,9 +6,10 @@ import * as cdk from 'aws-cdk-lib';
 import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
-import { Construct } from 'constructs';
+import { Construct, type IConstruct } from 'constructs';
 import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { validateAllowedOrigins } from '../cors.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
@@ -29,8 +30,14 @@ import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from 
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
-import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import {
+	coverBlocksRoot,
+	coverStackLevelAdditions,
+	recordFrameworkChildren,
+	snapshotChildren,
+} from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports } from '../rpc-dispatch.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
@@ -186,10 +193,24 @@ export const UPGRADE_GUIDE_URL =
  * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
  * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
  *
+ * Also validates `defaults.allowedOrigins` (see `validateAllowedOrigins` in
+ * `../cors.ts`), so an entry the runtime would ignore — a regex that does not
+ * compile on its own, or one with an unescaped `.` — fails the synth instead.
+ * Unresolved CDK tokens are skipped: their value is not known until deploy.
+ *
  * @internal
  */
-export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
-	if (props.defaults) return;
+export function assertBlocksDefaults(
+	props: { defaults?: { allowedOrigins?: readonly unknown[] } },
+	kind: 'BlocksStack' | 'BlocksBackend',
+): void {
+	if (props.defaults) {
+		const origins = props.defaults.allowedOrigins;
+		if (Array.isArray(origins)) {
+			validateAllowedOrigins(origins.filter((o) => !(typeof o === 'string' && cdk.Token.isUnresolved(o))));
+		}
+		return;
+	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
 			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
@@ -241,8 +262,11 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is
 	// written at synth (after every block has granted) beside the template.
+	// The same set is checked for service-principal trusts that carry no
+	// aws:SourceAccount / aws:SourceArn condition (Lambda execution roles excepted).
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
+	addServicePrincipalTrustCheck(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,
@@ -736,6 +760,11 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
 		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
 		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
+		// What the app's backend module adds — on the backend and at stack scope —
+		// is the app's own unless a Building Block or framework helper marks it
+		// (see recordFrameworkChildren and coverStackLevelAdditions below).
+		const backendChildrenBeforeModule = snapshotChildren(backend);
+		const stackChildrenBeforeModule = snapshotChildren(cdk.Stack.of(backend));
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -747,6 +776,10 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 				);
 			}
 		}
+		const addedByModule = (scope: Construct, before: ReadonlySet<IConstruct>) =>
+			new Set(scope.node.children.filter((c) => !before.has(c)));
+		const backendModuleChildren = addedByModule(backend, backendChildrenBeforeModule);
+		const stackModuleChildren = addedByModule(cdk.Stack.of(backend), stackChildrenBeforeModule);
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared REST API gateway now that the backend module has
@@ -799,7 +832,12 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		// Last, so every role a block or finalizer hoisted to stack scope exists.
-		coverStackLevelAdditions(backend, stackChildrenBefore);
+		coverStackLevelAdditions(backend, stackChildrenBefore, stackModuleChildren);
+		// The backend's direct children the framework added: everything but what
+		// the backend module added. Roles under the rest are app-owned unless a
+		// Building Block or framework helper sits above them (see isAppOwnedRole
+		// in blocks-roles.ts), the same split BlocksStack.create() records.
+		recordFrameworkChildren(backend, new Set(backend.node.children.filter((c) => !backendModuleChildren.has(c))));
 		warnOnMixedBoundaries(backend);
 
 		return backend;

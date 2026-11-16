@@ -90,6 +90,12 @@ export interface CdkSynthOptions {
 	apiUrl?: string | null;
 	/** Extra CDK app context (e.g. `{ sandboxMode: 'true' }`, as `npm run sandbox` sets it). */
 	context?: Record<string, unknown>;
+	/**
+	 * Override `defaults.secretsStore` on top of `preset` (or of the production
+	 * fallback when `preset` is omitted), as a
+	 * `defaults: { ...BlocksPresets.production, secretsStore }` app would.
+	 */
+	secretsStore?: 'ssm' | 'secrets-manager';
 }
 
 /** The harness's default API URL (a literal, so resolved callback URLs are readable). */
@@ -109,7 +115,12 @@ export function synthUnderCdkConditions(options: CdkSynthOptions): CdkSynthResul
 		dirname(fileURLToPath(import.meta.url)),
 		`.cdk-synth-probe.${process.pid}.${probeCounter++}.mjs`,
 	);
-	const presetLine = options.preset ? `stack.defaults = BlocksPresets.${options.preset};` : '';
+	const presetLine = [
+		options.preset ? `stack.defaults = BlocksPresets.${options.preset};` : '',
+		options.secretsStore
+			? `stack.defaults = { ...(stack.defaults ?? BlocksPresets.production), secretsStore: ${JSON.stringify(options.secretsStore)} };`
+			: '',
+	].join('\n');
 	const apiUrl = options.apiUrl === undefined ? HARNESS_API_URL : options.apiUrl;
 	const computeLine = apiUrl === null ? '' : `stack._defaultCompute = { apiUrl: ${JSON.stringify(apiUrl)} };`;
 	writeFileSync(

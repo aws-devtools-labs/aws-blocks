@@ -37,8 +37,8 @@
  *
  * **No per-process state is needed to verify anything.** The signing key, the
  * code-signing key and the refresh-token key are all derived (HKDF-SHA256)
- * from the `Auth` block's session secret — on AWS the `session-secret` SSM
- * parameter, locally `.bb-data/<fullId>/state.json` — with a per-provider
+ * from the `Auth` block's session secret (on AWS the `session-secret`
+ * framework key, in Secrets Manager or SSM per `defaults.secretsStore`; locally `.bb-data/<fullId>/state.json`), with a per-provider
  * label. So every Lambda instance (and every dev-server restart) signs with
  * the same key and serves the same JWKS: a token minted by one instance
  * verifies on another, and an authorize answered by one instance redeems at

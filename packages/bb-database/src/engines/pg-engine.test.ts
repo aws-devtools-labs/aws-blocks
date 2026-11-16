@@ -217,3 +217,33 @@ describe('DSQL lost connection', () => {
 		assert.deepStrictEqual(client.statements, ['BEGIN', 'SELECT 1']);
 	});
 });
+
+describe('PgEngine reports the rows a statement changed', () => {
+	test('queryCounted: the count for a data-changing command, with or without RETURNING; 0 for a query', async () => {
+		const answer = (sql: string): pg.QueryResult =>
+			sql.startsWith('SELECT')
+				? { rows: [{ n: 1 }, { n: 2 }], rowCount: 2, command: 'SELECT', oid: 0, fields: [] }
+				: { rows: [{ id: 7 }], rowCount: 3, command: 'UPDATE', oid: 0, fields: [] };
+		const client: PgPoolClient = { query: async (sql) => answer(sql), release: () => {} };
+		const pool: PgPool = { connect: async () => client, query: async (sql) => answer(sql), end: async () => {} };
+		const engine = new PgEngine({
+			kind: 'aurora',
+			endpoint: 'stub',
+			role: 'app',
+			getAuthToken: async () => '',
+			pool,
+		});
+		assert.deepStrictEqual(await engine.queryCounted('UPDATE t SET x = 1 RETURNING id'), {
+			rows: [{ id: 7 }],
+			rowCount: 3,
+		});
+		assert.deepStrictEqual(await engine.queryCounted('SELECT n FROM t'), {
+			rows: [{ n: 1 }, { n: 2 }],
+			rowCount: 0,
+		});
+		const handle = await engine.beginTransaction();
+		assert.strictEqual((await engine.queryCountedInTransaction(handle, 'UPDATE t SET x = 1')).rowCount, 3);
+		assert.strictEqual((await engine.queryCountedInTransaction(handle, 'SELECT n FROM t')).rowCount, 0);
+		await engine.rollbackTransaction(handle);
+	});
+});
