@@ -136,6 +136,17 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 }), { compute: reportsCompute });
 ```
 
+- **What placement guarantees.** By default, placing a namespace on its own
+  compute is a **routing preference, not a boundary**. The namespace's own path
+  goes to its compute, but the bare `POST /aws-blocks/api` endpoint, served by
+  the default compute, runs **any** namespace named in the request body. So
+  anyone who can call your API can run a placed namespace on the default
+  compute, outside the memory, concurrency, container or VPC you placed it on.
+  Your per-method `requireAuth` and `requireRole` checks still run either way.
+  To make placement a boundary that each compute enforces, set
+  `strictNamespacePlacement: true` in the stack's `defaults`, described in the
+  next item. It is `false` in both presets. Neither setting gives a namespace
+  its own IAM permissions; see "It's placement, not isolation" below.
 - **Clients don't change.** `reports.build('2026-10')` still calls
   `POST /aws-blocks/api/reports` — from the TypeScript client and from the
   Swift, Kotlin and Dart clients alike — and the stack's shared API gateway
