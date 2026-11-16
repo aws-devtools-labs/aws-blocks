@@ -105,6 +105,7 @@ describe('Harbor model credentials', () => {
 		assert.ok(writer, 'expected the trace writer step');
 		assert.equal(Number(writer.with['role-duration-seconds']), MIN_SECONDS);
 		assert.equal(writer.with['unset-current-credentials'], true);
+		assert.ok(removeContainers, 'expected the step that removes the runtime containers');
 		assert.ok(steps.indexOf(removeContainers) < steps.indexOf(writer), 'containers must be removed first');
 	});
 
