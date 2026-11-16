@@ -224,7 +224,7 @@ describe('client pool: one socket per endpoint and principal', () => {
 				client.subscribe({
 					onMessage: () => {},
 					onDisconnect: (r) => reasons.push(r),
-					refresh: async () => ({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, connectToken: connectTokenFor('user-b'), token: 't2' }),
+					refresh: async (): Promise<RealtimeChannelDescriptor> => ({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, connectToken: connectTokenFor('user-b'), token: 't2' } as RealtimeChannelDescriptor),
 				});
 				const socket = FakeWebSocket.instances[0];
 				socket.emitOpen();

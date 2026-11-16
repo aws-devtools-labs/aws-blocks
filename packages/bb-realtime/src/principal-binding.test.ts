@@ -17,7 +17,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { attach, closeWebSocketServer } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { Realtime, RealtimeErrors } from './index.js';
-import { mintChannelToken, mintConnectToken, validateChannelToken, validatePrincipal } from './utils.js';
+import { mintChannelToken, mintConnectToken, validateChannelToken, validatePrincipal, CONNECT_TOKEN_TTL_SECONDS } from './utils.js';
 import { checkSubscriptionAuth, subscriptionEndedMessage, REVOCATION_RETENTION_SECONDS } from './subscription-auth.js';
 
 const SECRET = 'principal-test-secret';
