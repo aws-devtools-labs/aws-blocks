@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { mkdir, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Directory (relative to the repo root) that `npm run publish:local` writes and `serve-local-registry.ts` serves. */
 export const LOCAL_REGISTRY_DIRNAME = "dist-registry";
@@ -34,4 +34,46 @@ export async function resetLocalRegistry(root: string, dir: string): Promise<voi
 	}
 	await rm(target, { recursive: true, force: true });
 	await mkdir(target, { recursive: true });
+}
+
+/**
+ * Map a request URL from `serve-local-registry.ts` to a file inside `registryDir`.
+ *
+ * Returns the decoded URI (with `/index.json` appended for metadata requests)
+ * and the absolute file path, or `undefined` when the path resolves outside
+ * `registryDir` or the URL has malformed percent-encoding.
+ */
+export function resolveRegistryRequest(
+	registryDir: string,
+	rawUrl: string,
+): { uri: string; filePath: string } | undefined {
+	// Decode %2f for scoped packages (same as CloudFront Function)
+	let uri: string;
+	try {
+		uri = decodeURIComponent(rawUrl);
+	} catch (err) {
+		if (err instanceof URIError) {
+			return undefined;
+		}
+		throw err;
+	}
+
+	// Append /index.json for metadata requests (not tarballs)
+	if (!uri.endsWith(".tgz")) {
+		uri = uri + "/index.json";
+	}
+
+	const root = resolve(registryDir);
+	const filePath = resolve(root, uri.replace(/^\/+/, ""));
+
+	// The resolved path must stay within registryDir. A plain startsWith(root)
+	// check is not enough: a sibling such as `dist-registry-extra` shares the
+	// string prefix but is a different directory. path.relative gives a path
+	// starting with `..` (or an absolute path on another Windows drive) for
+	// anything outside root.
+	const rel = relative(root, filePath);
+	if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+		return undefined;
+	}
+	return { uri, filePath };
 }
