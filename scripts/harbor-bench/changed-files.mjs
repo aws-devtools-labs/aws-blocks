@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Builds the changed-file table that the Harbor agent check's `revisions` job writes to the run
-// summary, so the approver sees what the PR changes before approving model access. The PR's
-// install and build scripts run in the approved benchmark job next to the Bedrock credentials, so
-// files that can change what runs there (workflows, scripts, package manifests, lockfiles and npm
-// config) are marked and listed first. Rows feed core.summary.addTable, which inserts cell text as
+// summary, so the approver sees what the PR changes before approving model access. Every file packed
+// into the arm's registry, package source included, runs in the approved benchmark job next to the
+// Bedrock credentials. Files that change install or build behavior (scripts, package manifests,
+// lockfiles, TypeScript, npm and Node config) or CI config are marked and listed first. The
+// workflow, harness and task come from the dispatching main commit, so a PR's changes under
+// `.github/` and `scripts/harbor-bench/` take effect only after merge. Rows feed core.summary.addTable, which inserts cell text as
 // raw HTML: every PR-controlled value is escaped here.
 //
 // The workflow imports this module from its own checkout of the dispatching main commit, never
@@ -14,18 +16,20 @@
 /** Most body rows in the table; the rest are counted as "+N more". */
 export const MAX_ROWS = 50;
 
-/** The marker cell of a file that can change what runs next to the credentials. */
+/** The marker cell of a file that changes install or build behavior, or CI config. */
 export const MARKER = '!';
 
 const SENSITIVE = [
 	/^\.github\//,
-	/^scripts\//,
+	/(^|\/)scripts\//,
 	/(^|\/)package\.json$/,
 	/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+	/(^|\/)tsconfig[^/]*\.json$/,
 	/(^|\/)\.npmrc$/,
+	/(^|\/)\.nvmrc$/,
 ];
 
-/** Whether a changed path can change what the approved benchmark job runs. */
+/** Whether a changed path changes install or build behavior, or CI config. */
 export function isSensitive(path) {
 	return SENSITIVE.some((pattern) => pattern.test(path));
 }
@@ -77,20 +81,18 @@ export function changedFilesSummary(files, { total = files.length, limit = MAX_R
 	const more = count - shownEntries.length;
 	const unlisted = count - files.length;
 
+	const marked =
+		unlisted > 0
+			? `${flagged} of the ${files.length} listed files are marked ${MARKER}; ${unlisted} more were not ` +
+				"listed by the API and were not checked (see the PR's Files changed tab)."
+			: `${flagged} of ${count} changed files are marked ${MARKER}.`;
 	const note =
 		count === 0
 			? 'The PR has no changed files.'
-			: `${flagged} of ${count} changed files are marked ${MARKER}: workflows, scripts (including the Harbor ` +
-				'harness and task), package manifests, lockfiles or npm config, which can change what runs with ' +
-				'the model credentials. Marked files are listed first.';
-	const footer = [
-		more > 0 ? `+${more} more.` : '',
-		unlisted > 0
-			? `${unlisted} files are not listed by the API and were not checked for markers; ` +
-				"see the PR's Files changed tab."
-			: '',
-	]
-		.filter(Boolean)
-		.join(' ');
+			: `${marked} Marked files change install or build behavior (scripts, package manifests, lockfiles, ` +
+				'TypeScript, npm or Node config) or CI config, and are listed first. Every file in the PR, package ' +
+				'source included, runs in the approved job with the model credentials. Changes under .github/ ' +
+				'and scripts/harbor-bench/ (this workflow, its harness and task) take effect only after merge.';
+	const footer = more > 0 ? `+${more} more.` : '';
 	return { rows: [header, ...body], flagged, shown: shownEntries.length, more, note, footer };
 }

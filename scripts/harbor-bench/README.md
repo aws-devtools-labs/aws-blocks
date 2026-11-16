@@ -213,13 +213,17 @@ machine: `calibrate.py` never uploads.
 gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref main -f pr_number=123 -f trials=5
 ```
 
-PR code is built without credentials, but its install scripts run in the approved model job:
-review the candidate before approving. The run summary lists the exact revisions and the PR's
-changed files (at most 50 rows, then "+N more"). Files that can change what runs with the model
-credentials are marked `!` and listed first: anything under `.github/` or `scripts/` (which holds
-this harness and its task), any `package.json`, lockfile or `.npmrc`. `changed-files.mjs` builds
-that table from the main checkout, never from the PR. A new dispatch for the same PR cancels the
-running one.
+PR code is built without credentials, but every file packed into the arm's registry, package
+source included, runs in the approved model job: review the candidate before approving. The run
+summary lists the exact revisions and the PR's changed files (at most 50 rows, then "+N more").
+Files that change install or build behavior, or CI config, are marked `!` and listed first:
+anything under `.github/` or a `scripts/` directory at any depth, any `package.json`, lockfile,
+`tsconfig*.json`, `.npmrc` or `.nvmrc`. An unmarked file still runs with the model credentials.
+This workflow, its harness and its task come from the dispatching `main` commit, so a PR's changes
+under `.github/` and `scripts/harbor-bench/` take effect only after merge. When the API lists only
+part of a large PR, the note above the table says how many files were not checked. `changed-files.mjs`
+builds that table from the main checkout, never from the PR. A new dispatch for the same PR cancels
+the running one.
 
 ## Security boundaries
 

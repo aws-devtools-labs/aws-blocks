@@ -66,8 +66,9 @@ jobs:
             core.setOutput('source_repository', pr.head.repo.full_name);
             // From this job's checkout of the dispatching main commit, not the PR. It escapes the
             // PR-controlled file names; scripts/ci/harbor-approval-gate.test.mjs runs this script.
-            const { changedFilesSummary } = await import(
-              `file://${process.env.GITHUB_WORKSPACE}/scripts/harbor-bench/changed-files.mjs`);
+            const { pathToFileURL } = await import('node:url');
+            const { changedFilesSummary } = await import(pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/harbor-bench/changed-files.mjs`).href);
             const listing = changedFilesSummary(comparison.files ?? [], { total: pr.changed_files });
             await core.summary.addHeading('Requested Harbor evaluation')
               .addTable([['PR', 'Candidate', 'Baseline', 'Trials per arm'],

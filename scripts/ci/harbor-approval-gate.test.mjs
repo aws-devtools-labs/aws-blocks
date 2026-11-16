@@ -18,10 +18,11 @@
 //
 // Run: node --test scripts/ci/harbor-approval-gate.test.mjs
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { changedFilesSummary, isSensitive, MAX_ROWS } from '../harbor-bench/changed-files.mjs';
@@ -95,10 +96,20 @@ describe('Harbor approval summary: changed-file table', () => {
 			'pnpm-lock.yaml',
 			'.npmrc',
 			'packages/core/.npmrc',
+			'packages/hosting/scripts/bundle-handlers.mjs',
+			'tsconfig.json',
+			'packages/core/tsconfig.build.json',
+			'.nvmrc',
 		]) {
 			assert.equal(isSensitive(path), true, path);
 		}
-		for (const path of ['packages/core/src/index.ts', 'docs/scripts/notes.md', 'README.md', 'my-package.json']) {
+		for (const path of [
+			'packages/core/src/index.ts',
+			'docs/notes.md',
+			'README.md',
+			'my-package.json',
+			'mytsconfig.json',
+		]) {
 			assert.equal(isSensitive(path), false, path);
 		}
 	});
@@ -125,6 +136,9 @@ describe('Harbor approval summary: changed-file table', () => {
 		assert.equal(summary.flagged, 2);
 		assert.equal(summary.more, 0);
 		assert.match(summary.note, /2 of 3 changed files/);
+		// Unmarked rows still run with the credentials; harness and workflow edits apply after merge.
+		assert.match(summary.note, /package source included, runs in the approved job/);
+		assert.match(summary.note, /take effect only after merge/);
 	});
 
 	it('marks a file renamed out of a sensitive path and names its old path', () => {
@@ -146,10 +160,10 @@ describe('Harbor approval summary: changed-file table', () => {
 		assert.equal(summary.rows.length, MAX_ROWS + 1);
 		assert.deepEqual(listed(summary)[0], ['!', '<code>scripts/harbor-bench/run.py</code>']);
 		assert.equal(summary.more, 400 - MAX_ROWS);
-		assert.match(summary.footer, new RegExp(`\\+${400 - MAX_ROWS} more`));
-		// The API listed 121 of 400 files: say the unlisted ones were not checked for markers.
-		assert.match(summary.footer, /279 files are not listed by the API/);
-		assert.match(summary.footer, /Files changed tab/);
+		assert.equal(summary.footer, `+${400 - MAX_ROWS} more.`);
+		// The API listed 121 of 400 files: the note above the table says the rest were not checked.
+		assert.match(summary.note, /^1 of the 121 listed files are marked !; 279 more were not listed/);
+		assert.match(summary.note, /Files changed tab/);
 	});
 
 	it('escapes PR-controlled file names', () => {
@@ -180,8 +194,20 @@ describe('Harbor approval summary: revisions step', () => {
 		assert.match(step.with.script, /scripts\/harbor-bench\/changed-files\.mjs/);
 	});
 
+	// A copy of the module under a workspace path that a file:// string concatenation would break.
+	const oddWorkspace = join(mkdtempSync(join(tmpdir(), 'harbor-ws-')), 'a b%20#c');
+	mkdirSync(join(oddWorkspace, 'scripts/harbor-bench'), { recursive: true });
+	copyFileSync(
+		join(REPO, 'scripts/harbor-bench/changed-files.mjs'),
+		join(oddWorkspace, 'scripts/harbor-bench/changed-files.mjs'),
+	);
+	after(() => rmSync(dirname(oddWorkspace), { recursive: true, force: true }));
+
 	// Runs the step's github-script body with a fake API, core.summary and context.
-	it('writes the changed-file table to the run summary', async () => {
+	for (const [label, workspace] of [
+		['the checkout', REPO.replace(/\/$/, '')],
+		['a workspace path with a space, % and #', oddWorkspace],
+	]) it(`writes the changed-file table to the run summary (${label})`, async () => {
 		const pr = {
 			state: 'open',
 			head: { sha: 'h'.repeat(40), repo: { full_name: 'someone/aws-blocks' } },
@@ -213,12 +239,17 @@ describe('Harbor approval summary: revisions step', () => {
 		const core = { summary, setOutput: (k, v) => (outputs[k] = v) };
 		const context = { repo: { owner: 'aws-devtools-labs', repo: 'aws-blocks' } };
 		const AsyncFunction = (async () => {}).constructor;
-		const saved = { ...process.env };
-		Object.assign(process.env, { PR_NUMBER: '7', TRIALS: '1', GITHUB_WORKSPACE: REPO.replace(/\/$/, '') });
+		// Set and restore only these keys, so process.env stays Node's own object.
+		const env = { PR_NUMBER: '7', TRIALS: '1', GITHUB_WORKSPACE: workspace };
+		const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+		Object.assign(process.env, env);
 		try {
 			await new AsyncFunction('github', 'context', 'core', step.with.script)(github, context, core);
 		} finally {
-			process.env = saved;
+			for (const [k, v] of Object.entries(saved)) {
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			}
 		}
 		assert.equal(outputs.candidate, pr.head.sha);
 		const tables = calls.filter(([m]) => m === 'addTable').map(([, rows]) => rows);
