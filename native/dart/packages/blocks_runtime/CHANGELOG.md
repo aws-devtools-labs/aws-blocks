@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **Breaking:** remove `toJson()` from `RealtimeChannel`, `FileDownloadHandle`,
+  `FileUploadHandle`, `OidcClient` and `UnknownTransferable`, which 0.2.0
+  added. Transferables are read-only again: the server sends them, but never
+  turns a `{"__blocks": …}` value it receives back into a live object, so an
+  app shouldn't send a transferable to the server. Code that calls `toJson()`
+  on one of these types no longer compiles, and `jsonEncode` of one throws
+  `JsonUnsupportedObjectError`. Send the plain values the method needs instead.
+
+## 0.2.0
+
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers
@@ -36,6 +46,13 @@
 - Add `blocksDeepEquals` and `blocksDeepHash`, value equality for lists and
   maps (recursively, with a map's key order ignored). Generated models use
   them to compare their list and map fields.
+- Add `toJson()` to `RealtimeChannel`, `FileDownloadHandle`,
+  `FileUploadHandle`, `OidcClient` and `UnknownTransferable`. It returns the
+  `{"__blocks": …}` descriptor the value was hydrated from, unchanged (keys
+  this runtime doesn't read included), as a copy. An `OidcClient` built with
+  its constructor describes its providers and paths, in the shape
+  `OidcClient.fromJson` reads. Generated clients send a transferable this way
+  when a call passes one back to the server, and `jsonEncode` calls it too.
 - **Breaking:** `SessionStore` gains `cookieHeaderFor(Uri)` and an optional
   `requestUri` argument on `setCookies`; custom implementations must add both.
   `InMemorySessionStore` and `PersistentSessionStore` now parse and enforce the

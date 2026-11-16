@@ -268,8 +268,9 @@ a counter rather than the reference's `Date.now()`, which repeats within a milli
 
 **D23 — The endpoint is derived server-side and never accepted from a request.** Resolution takes a
 stage and a mode; the URL comes from the app's own server script (local) or the deployed stack's
-`ApiUrl` output (cloud), with `.blocks-sandbox/config.json` only as a fallback because that file can be
-stale from a previous sandbox. The dashboard is an authenticated server running on the developer's
+`ApiUrl` output (cloud), with the stage's `.blocks-sandbox/config.<stage>.json` only as a fallback because
+that file can be stale from a previous deploy. (`.blocks-sandbox/config.json` holds a dev server's local
+URL and is never read for a deployed stage.) The dashboard is an authenticated server running on the developer's
 machine with their AWS credentials, so a caller-supplied endpoint would make it a request forger. The
 reference console takes `endpoint` as a parameter and validates nothing, which is survivable only
 because it is unauthenticated everywhere else. The resolved value is still validated, since a stack
@@ -796,9 +797,10 @@ built and are not in the code: an optional `local` member on `EnvironmentsRespon
 CloudFormation vocabulary for local — did land, by the client-side union above. The liveness feature does
 not exist at all: the local card states what local READS, never that a dev server is currently up, and a
 missing dev server or an absent `.bb-data` store stays a per-block fact the data pages report. The
-observation that killed the config-file approach still holds and is why no probe was written from it:
-`.blocks-sandbox/config.json` is written by `dev-server.ts` *and* by `deploy.ts`/`sandbox.ts`, so its
-presence cannot tell a local run from a deployed one.
+observation that killed the config-file approach: when this was decided, `.blocks-sandbox/config.json` was
+written by `dev-server.ts` *and* by `deploy.ts`/`sandbox.ts`, so its presence could not tell a local run
+from a deployed one. (A deploy now records its URL in `config.<stage>.json`; only a dev server writes
+`config.json`.)
 
 **D98 — A deployment that has not FINISHED gets no empty-window explanation, only its own recorded reason.**
 Found by Stage 6's audit of the module Stage 4 shipped, and the more instructive half of D93: the fix for

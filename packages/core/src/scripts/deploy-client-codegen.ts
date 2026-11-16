@@ -26,7 +26,7 @@ export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
  *
  * The worker loads the TypeScript backend with `--import tsx`, which Node
  * resolves from the working directory (the app). A launcher that runs the
- * deploy with a `tsx` the app may not resolve itself (the `blocks` CLI) sets
+ * deploy with a `tsx` the app may not resolve itself (the `cdk-blocks` CLI) sets
  * {@link TSX_IMPORT_ENV} to that loader's file URL instead.
  *
  * @param foundationPath - Absolute path to the backend definition (`aws-blocks/index.ts`).

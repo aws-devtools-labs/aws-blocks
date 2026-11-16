@@ -224,7 +224,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 			},
 			{ name: 'all', type: 'boolean', description: 'Stop every dev server this app recorded, on any port' },
 		],
-		json: { stopped: [{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null }] },
+		json: {
+			stopped: [
+				{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null, holders: [{ pid: null, command: null }] },
+			],
+		},
 		examples: [
 			{ command: 'cdk-blocks dev stop', description: 'Stop the dev server on the configured port' },
 			{ command: 'cdk-blocks dev stop --all', description: 'Stop every dev server this app started' },
@@ -552,7 +556,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'  0  fully migrated, or nothing to do\n' +
 			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
 			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
-			'     instead of the result (with --query, only the error on stderr)\n' +
+			'     instead of the result (with --query, only the error on stderr), as it does for wrappers it\n' +
+			'     could not delete after rewriting package.json (fix them, then run it again with --force)\n' +
 			'  2  usage error',
 		flags: [
 			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
@@ -568,7 +573,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			removed: [null],
 			kept: [{ file: null, reason: null }],
 			scriptsRewritten: { '*': { from: null, to: null } },
-			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
+			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null, generateClient: null },
 		},
 		examples: [
 			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },

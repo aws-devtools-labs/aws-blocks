@@ -17,7 +17,7 @@ export const requestSchema = z.object({
 	channelId: z.string(),
 	/** Conversation to persist to / restore the session from. Absent means no persistence (as in the mock). */
 	conversationId: z.string().optional(),
-	/** Owner of the conversation. Required when persistence is enabled (not inferenceOnly), and for an inferenceOnly agent with `sessionScope: 'user'`. */
+	/** Owner of the conversation. Required when persistence is enabled (not inferenceOnly), and for an inferenceOnly agent with `sessionScope: 'user'` (the default). */
 	userId: z.string().optional(),
 	/** HITL resume: approval responses to apply instead of a new prompt. */
 	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
@@ -51,7 +51,7 @@ export function handleInvocation(
 			conversationId: request.conversationId,
 			channelId: request.channelId,
 			// Passed through as-is: the agent decides what a missing userId means (the 'anonymous'
-			// default, or a refused turn for an inferenceOnly agent with sessionScope: 'user').
+			// default, or a refused turn for an inferenceOnly agent with sessionScope: 'user', its default).
 			userId: request.userId,
 			interruptResponses: request.interruptResponses,
 			context: request.context,

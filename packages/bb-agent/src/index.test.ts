@@ -418,24 +418,44 @@ describe('inferenceOnly error handling', () => {
 		assert.ok(result.channelId);
 	});
 
-	// inferenceOnly agents keep no conversation records, so the ownership check must
-	// not apply to them: a conversationId is passed through, not rejected.
+	// inferenceOnly agents keep no conversation records, so there is no record to check: a
+	// conversationId is passed through, not rejected. (The default sessionScope: 'user' keys
+	// the session by the userId instead; see the sessionScope tests below.)
 	test('stream() with a conversationId is not ownership-checked', async () => {
 		const result = await agent.stream('hello', { conversationId: crypto.randomUUID(), userId: 'u' });
 		const done = await result.complete();
 		assert.strictEqual(done.type, 'done');
 	});
 
-	// The per-user channel scoping only applies with persistence: an inferenceOnly
-	// agent has no owner to scope by, so its channel is the bare channelId.
-	test("the channel is not user-scoped (getChannel's userId is not used)", async () => {
+	// The default sessionScope ('user') scopes an inferenceOnly agent's channel to the caller,
+	// as with persistence: someone else who passes the same channelId gets a different channel.
+	test("the channel is user-scoped by default (another userId doesn't receive the turn)", async () => {
 		const channelId = crypto.randomUUID();
-		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
-		const received: unknown[] = [];
-		const sub = channel.subscribe((chunk) => { received.push(chunk); });
-		await (await agent.stream('hello', { channelId })).complete();
-		sub.unsubscribe();
-		assert.ok(received.some((c: any) => c.type === 'done'));
+		const own = await agent.getChannel(channelId, { userId: 'test-user' });
+		const other = await agent.getChannel(channelId, { userId: 'someone-else' });
+		const ownReceived: unknown[] = [];
+		const otherReceived: unknown[] = [];
+		const ownSub = own.subscribe((chunk) => { ownReceived.push(chunk); });
+		const otherSub = other.subscribe((chunk) => { otherReceived.push(chunk); });
+		await (await agent.stream('hello', { channelId, userId: 'test-user' })).complete();
+		ownSub.unsubscribe();
+		otherSub.unsubscribe();
+		assert.ok(ownReceived.some((c: any) => c.type === 'done'), "the caller's own channel carries the turn");
+		assert.strictEqual(otherReceived.length, 0, "another user's channel must not carry the turn");
+	});
+
+	// An agent written before 'user' became the default calls stream() without a userId. That
+	// must fail loudly, with an error that says what to pass and names the 'shared' opt-out.
+	test('stream() without a userId throws InvalidUsage that names the fix', async () => {
+		await assert.rejects(
+			() => agent.stream('hello'),
+			(err: any) => {
+				assert.ok(isBlocksError(err, AgentErrors.InvalidUsage));
+				assert.match(err.message, /options\.userId/);
+				assert.match(err.message, /sessionScope: 'shared'/);
+				return true;
+			},
+		);
 	});
 
 	// Regression: resuming an interrupted agent needs a conversationId to restore
@@ -449,9 +469,10 @@ describe('inferenceOnly error handling', () => {
 			(err: any) => {
 				assert.strictEqual(err.name, AgentErrors.InterruptRequired);
 				assert.match(err.message, /conversationId/);
-				// For an inferenceOnly agent the message must explain it's a
-				// fundamental limitation (no persistent session), not a missing param.
+				// For an inferenceOnly agent the message must say how to resume (pass the
+				// same conversationId), not that such agents can't be resumed: they can.
 				assert.match(err.message, /inferenceOnly/);
+				assert.doesNotMatch(err.message, /cannot be resumed/);
 				return true;
 			},
 		);
@@ -636,14 +657,162 @@ describe("inferenceOnly sessionScope: 'user'", () => {
 		);
 	});
 
-	// The default keeps the documented shared-key behaviour, so existing sessions keep resolving.
-	test("the default ('shared') keys the session by the conversationId alone", async () => {
-		const { agent, storage } = makeAgent('iosu4');
+	// 'shared' is an explicit opt-in that keeps the conversationId-only key.
+	test("'shared' keys the session by the conversationId alone", async () => {
+		const { agent, storage } = makeAgent('iosu4', 'shared');
 		const conversationId = crypto.randomUUID();
 		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
 		storage.loads = [];
 		await (await agent.stream('again', { conversationId, userId: 'bob' })).complete();
 		assert.ok(storage.loads.some(({ sessionId }) => sessionId === conversationId));
+	});
+
+	test("'shared' still streams without a userId, on the bare channelId", async () => {
+		const { agent } = makeAgent('iosu10', 'shared');
+		const channelId = crypto.randomUUID();
+		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
+		const received: unknown[] = [];
+		const sub = channel.subscribe((chunk) => { received.push(chunk); });
+		const turn = await agent.stream('hello', { channelId });
+		assert.strictEqual((await turn.complete()).type, 'done');
+		sub.unsubscribe();
+		assert.ok(received.some((c: any) => c.type === 'done'), "'shared' channels are not user-scoped");
+	});
+
+	test("the default is 'user': alice and bob on one conversationId get different sessions", async () => {
+		const { agent, storage } = makeAgent('iosu11');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		const aliceSessions = new Set(storage.loads.map(({ sessionId }) => sessionId));
+		storage.loads = [];
+		await (await agent.stream('what did I tell you?', { conversationId, userId: 'bob' })).complete();
+		const bobSessions = new Set(storage.loads.map(({ sessionId }) => sessionId));
+		assert.ok(aliceSessions.size > 0 && bobSessions.size > 0, 'both turns should load (or try to load) a session');
+		for (const id of bobSessions) {
+			assert.ok(!aliceSessions.has(id), "bob's turn must not select alice's session");
+			assert.notStrictEqual(id, conversationId, 'the session must not be keyed by the bare conversationId');
+			assert.match(id, /^u-[0-9a-f]{64}$/);
+		}
+	});
+
+	test("by default, a foreign conversationId can't reach another user's session state or chunks", async () => {
+		const { agent, storage } = makeAgent('iosu12');
+		const conversationId = crypto.randomUUID();
+		const aliceChannel = await agent.getChannel(conversationId, { userId: 'alice' });
+		const aliceReceived: AgentStreamChunk[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		const aliceDoneBefore = aliceReceived.filter((c) => c.type === 'done').length;
+
+		storage.loads = [];
+		const bobTurn = await agent.stream('what did I tell you?', { conversationId, userId: 'bob' });
+		const bobDone = await bobTurn.complete();
+		aliceSub.unsubscribe();
+		assert.ok(!JSON.stringify(bobDone).includes(secret), "bob's turn must not see alice's session state");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+		assert.strictEqual(aliceReceived.filter((c) => c.type === 'done').length, aliceDoneBefore, "bob's turn must not publish onto alice's channel");
+	});
+
+	test("'shared' refuses resume() before approving anything", async () => {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope('test-io-scope-iosu13'), 'iosu13', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			sessionScope: 'shared',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				// A handler that calls interrupt() itself can't be detected at construction (unlike
+				// needsApproval/interrupt, refused below), so resume() still has to refuse the turn.
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), handler: async ({ interrupt }) => { interrupt({ name: 'confirm-weather' }); handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		const conversationId = crypto.randomUUID();
+		const turn = await agent.stream('what is the weather?', { conversationId, userId: 'alice' });
+		const err = await turn.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, 'sanity: the turn should pause for approval');
+		const responses = err.interrupts.map((i) => ({ interruptId: i.id, approved: true }));
+		for (const userId of ['alice', 'bob', undefined]) {
+			await assert.rejects(
+				() => agent.resume(turn.channelId, responses, { conversationId, userId }),
+				(e: any) => {
+					assert.ok(isBlocksError(e, AgentErrors.InvalidUsage), `resume as ${userId}`);
+					assert.match(e.message, /sessionScope: 'shared'/);
+					return true;
+				},
+			);
+		}
+		await new Promise((r) => setTimeout(r, 50));
+		assert.strictEqual(handlerCalls, 0, 'a refused resume must not run the pending tool call');
+	});
+
+	for (const [label, def] of [
+		['needsApproval', { needsApproval: true }],
+		['interrupt', { interrupt: ({ interrupt }: { interrupt: (p: { name: string }) => unknown }) => { interrupt({ name: 'confirm' }); } }],
+	] as const) {
+		test(`'shared' refuses a tool with ${label} at construction`, () => {
+			assert.throws(
+				() => new Agent(new Scope(`test-io-scope-hitl-${label}`), `ioh${label.length}`, {
+					systemPrompt: 'test',
+					inferenceOnly: true,
+					sessionScope: 'shared',
+					model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+					tools: (tool) => ({
+						getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), ...def, handler: async () => ({ temp: 22 }) }),
+					}),
+				}),
+				(e: any) => {
+					assert.ok(isBlocksError(e, AgentErrors.InvalidModelConfig), String(e));
+					assert.match(e.message, /'getWeather'/);
+					assert.match(e.message, /sessionScope: 'shared'/);
+					return true;
+				},
+			);
+		});
+	}
+
+	test("'user' (the default) accepts a tool with needsApproval on an inferenceOnly agent", () => {
+		new Agent(new Scope('test-io-scope-hitl-user'), 'iohu', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }),
+			}),
+		});
+	});
+});
+
+// ── Agent chunks channel handles: exact token scope ─────────────────────────
+
+describe('agent chunks channel handles authorize the exact channel only', () => {
+	/** The channel path a handle's token authorizes, and how: `exact` or `channel` (subtree). */
+	function tokenScope(handle: { toJSON(): unknown }): { exact?: string; channel?: string } {
+		const descriptor = handle.toJSON();
+		const token = typeof descriptor === 'object' && descriptor !== null ? Reflect.get(descriptor, 'token') : undefined;
+		assert.ok(typeof token === 'string', 'the handle carries a channel token');
+		return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
+	}
+
+	const configs: Array<[string, { inferenceOnly?: boolean; sessionScope?: 'shared' | 'user' }]> = [
+		['persistence', {}],
+		["inferenceOnly, sessionScope: 'user' (default)", { inferenceOnly: true }],
+		["inferenceOnly, sessionScope: 'shared'", { inferenceOnly: true, sessionScope: 'shared' }],
+	];
+	configs.forEach(([label, extra], i) => {
+		test(`${label}: getChannel() and stream().channel`, async () => {
+			const agent = new Agent(new Scope(`test-exact-scope-${i}`), `ex${i}`, { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } }, ...extra });
+			const viaGetChannel = tokenScope(await agent.getChannel('chan-1', { userId: 'alice' }));
+			assert.ok(viaGetChannel.exact?.endsWith('/chan-1'), `getChannel() token should be exact, got ${JSON.stringify(viaGetChannel)}`);
+			assert.strictEqual(viaGetChannel.channel, undefined);
+			const conversationId = extra.inferenceOnly ? undefined : await agent.createConversationId('alice');
+			const turn = await agent.stream('hello', { channelId: 'chan-2', userId: 'alice', conversationId });
+			const viaStream = tokenScope(await turn.channel);
+			await turn.complete();
+			assert.ok(viaStream.exact?.endsWith('/chan-2'), `stream().channel token should be exact, got ${JSON.stringify(viaStream)}`);
+			assert.strictEqual(viaStream.channel, undefined);
+		});
 	});
 });
 
@@ -1421,21 +1590,21 @@ describe('CannedProvider', () => {
 
 		try {
 			writeFileSync(filePath, JSON.stringify({ release: 'initial response' }));
-			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'initial response');
+			assert.strictEqual((await (await agent.stream('release', { userId: 'test-user' })).complete()).text, 'initial response');
 
 			writeFileSync(replacementPath, JSON.stringify({ release: 'atomically replaced response' }));
 			renameSync(replacementPath, filePath);
-			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'atomically replaced response');
+			assert.strictEqual((await (await agent.stream('release', { userId: 'test-user' })).complete()).text, 'atomically replaced response');
 
 			writeFileSync(filePath, '{ malformed');
-			const malformed = await agent.stream('release');
+			const malformed = await agent.stream('release', { userId: 'test-user' });
 			await assert.rejects(
 				() => malformed.complete(),
 				error => error instanceof Error && error.name === AgentErrors.StreamFailed && /Malformed canned responses JSON/.test(error.message),
 			);
 
 			writeFileSync(filePath, JSON.stringify({ recovered: 'healthy again' }));
-			assert.strictEqual((await (await agent.stream('recovered')).complete()).text, 'healthy again');
+			assert.strictEqual((await (await agent.stream('recovered', { userId: 'test-user' })).complete()).text, 'healthy again');
 		} finally {
 			rmSync(filePath, { force: true });
 			rmSync(replacementPath, { force: true });
@@ -1901,6 +2070,138 @@ describe('runaway protection caps', () => {
 		sub.unsubscribe();
 		assert.ok(terminal, 'turn 2 should reach a terminal chunk');
 		assert.strictEqual(terminal.type, 'done', `turn 2 must get a fresh budget, got ${terminal.type}: ${terminal.error ?? ''}`);
+	});
+});
+
+// ── tool-call chunks for approval-gated tools ────────────────────────────────
+
+/**
+ * Run one turn, answering every interrupt with `approved`, and collect the chunks of the
+ * whole turn (the paused segment plus the resumed one) from a single subscription.
+ */
+async function runAnsweringInterrupts(agent: any, message: string, conversationId: string, userId: string, approved: boolean) {
+	const chunks: any[] = [];
+	const result = await agent.stream(message, { conversationId, userId });
+	const channel = await result.channel;
+	const sub = channel.subscribe((chunk: any) => { chunks.push(chunk); });
+	const isTerminal = (c: any) => c.type === 'done' || c.type === 'error' || c.type === 'interrupt';
+	const waitFor = async (from: number) => {
+		for (let i = 0; i < 200; i++) {
+			const hit = chunks.slice(from).find(isTerminal);
+			if (hit) return hit;
+			await new Promise(r => setTimeout(r, 25));
+		}
+		return undefined;
+	};
+	let resumes = 0;
+	let terminal = await waitFor(0);
+	while (terminal?.type === 'interrupt' && resumes < 5) {
+		resumes++;
+		const seen = chunks.length;
+		await agent.resume(result.channelId, terminal.interrupts.map((i: any) => ({ interruptId: i.id, approved })), { conversationId, userId });
+		terminal = await waitFor(seen);
+	}
+	sub.unsubscribe();
+	return { chunks, terminal, resumes };
+}
+
+describe('tool-call chunks for approval-gated tools', () => {
+	const model = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+
+	test('a tool the user denies publishes no tool-call or tool-result chunk', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-deny-chunks');
+		const agent = new Agent(scope, 'denychunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the denied turn should still finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 0, 'a denied tool must not run');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-call'), [], 'a denied tool must not publish a tool-call chunk');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-result'), [], 'a denied tool must not publish a tool-result chunk');
+	});
+
+	test('a denied tool still keeps its paired tool-call/tool-result rows in history', async () => {
+		// The README documents that a denial is kept in history for audit: the tool-result row
+		// records the denial. Only the live chunks change.
+		const scope = new Scope('test-deny-history');
+		const agent = new Agent(scope, 'denyhist', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
+		const toolCalls = history.filter(m => m.role === 'tool-call');
+		const toolResults = history.filter(m => m.role === 'tool-result');
+		assert.strictEqual(toolCalls.length, 1, 'the denied call keeps its tool-call row');
+		assert.strictEqual(toolResults.length, 1, 'the denied call keeps its tool-result row');
+		assert.match(JSON.stringify(toolResults[0].metadata), /User denied permission to run getWeather/);
+	});
+
+	test('a tool the user approves publishes exactly one tool-call then one tool-result', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-approve-chunks');
+		const agent = new Agent(scope, 'approvechunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the approved turn should finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 1, 'an approved tool runs once');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getWeather', 'tool-result:getWeather']);
+		const interruptAt = chunks.findIndex(c => c.type === 'interrupt');
+		const callAt = chunks.findIndex(c => c.type === 'tool-call');
+		assert.ok(interruptAt < callAt, 'the tool-call chunk comes after the approval, not before the interrupt');
+	});
+
+	test('a tool without approval still publishes one tool-call then one tool-result', async () => {
+		const scope = new Scope('test-noapproval-chunks');
+		const agent = new Agent(scope, 'noapprovalchunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'run getStatus', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 0, 'no approval is needed');
+		assert.strictEqual(terminal?.type, 'done');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getStatus', 'tool-result:getStatus']);
+		assert.deepStrictEqual(toolChunks[0].input, {});
+	});
+
+	test('a tool call stopped by maxToolIterations publishes no tool chunks', async () => {
+		// The cap cancels the second call through the same `event.cancel` as a denial.
+		const scope = new Scope('test-cap-chunks');
+		const agent = new Agent(scope, 'capchunks', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model,
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal } = await runAnsweringInterrupts(agent, 'run alpha and bravo', convId, 'test-user', true);
+
+		assert.strictEqual(terminal?.type, 'error');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:alpha', 'tool-result:alpha']);
 	});
 });
 

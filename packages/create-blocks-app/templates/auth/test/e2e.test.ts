@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning, totpCodeFor } from '@aws-blocks/blocks/utils';
+import type { AuthState } from '@aws-blocks/blocks';
 import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -20,6 +21,11 @@ let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 
 // The sign-in tests below read each emailed code with `getLastAuthCode()`, which
 // reads the local mock pool's files (.bb-data/): against a running sandbox the
@@ -48,13 +54,13 @@ async function waitForServer() {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
 }
 
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -65,7 +71,11 @@ test.before(async () => {
     server.unref();
   }
 
-  await waitForServer();
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
   // aws-blocks/client.js before it listens, so an earlier import could load a
@@ -87,7 +97,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -108,7 +118,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet`/`setValue`/`getValue` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -238,4 +248,58 @@ test('KV Store - set and get (signed in, keys isolated per user)', async (t) => 
 
   // A different user sees their own namespace, not the first user's value.
   assert.strictEqual(await b.api.getValue('test-key'), null);
+});
+
+// ─── MFA (authenticator app) ──────────────────────────────────────────────────
+// The steps a custom MFA settings page and the <Authenticator> submit. The local
+// pool checks codes against the shared secret (`totpVerification: 'rfc6238'`),
+// and `totpCodeFor` computes the code an authenticator app would show.
+
+/** The value `state` carries in field [field] of its action [action]. */
+function fieldOf(state: AuthState, action: string, field: string): string {
+  const value = state.actions.find((a) => a.name === action)?.fields.find((f) => f.name === field)?.defaultValue;
+  assert.ok(value, `${action}.${field} in ${JSON.stringify(state)}`);
+  return value;
+}
+
+/** A six-digit code the pool cannot accept: none of the steps around now. */
+function wrongTotpCode(sharedSecret: string): string {
+  const near = new Set([-1, 0, 1, 2].map((step) => totpCodeFor(sharedSecret, Date.now() + step * 30_000)));
+  for (let n = 0; ; n++) {
+    const code = String(n).padStart(6, '0');
+    if (!near.has(code)) return code;
+  }
+}
+
+test('mfa: a user who sets up an authenticator app must enter its code at sign-in', async (t) => {
+  if (skipUnlessLocal(t)) return;
+  const name = `mfa-${Date.now().toString(36)}@example.com`;
+  const user = await newUser(name);
+
+  const setup = await user.authApi.setAuthState({ action: 'setUpTotp' });
+  const sharedSecret = fieldOf(setup, 'verifyTotpSetup', 'sharedSecret');
+  assert.match(fieldOf(setup, 'verifyTotpSetup', 'otpauthUri'), new RegExp(`^otpauth://totp/.*secret=${sharedSecret}`));
+
+  const badSetup = await user.authApi.setAuthState({ action: 'verifyTotpSetup', code: wrongTotpCode(sharedSecret) });
+  assert.strictEqual(badSetup.errorName, 'EnableSoftwareTokenMFAException');
+  assert.strictEqual(badSetup.retriable, true, 'a wrong code keeps the setup form');
+  const enrolled = await user.authApi.setAuthState({ action: 'verifyTotpSetup', code: totpCodeFor(sharedSecret) });
+  assert.strictEqual(enrolled.state, 'signedIn', JSON.stringify(enrolled));
+  assert.strictEqual(enrolled.error, undefined);
+
+  await user.authApi.setAuthState({ action: 'signOut' });
+  const challenged = await user.authApi.setAuthState({ action: 'signIn', username: name, password });
+  assert.strictEqual(challenged.state, 'confirmingSignIn', 'the password alone no longer signs in');
+  assert.strictEqual(fieldOf(challenged, 'confirmSignIn', 'challenge'), 'code');
+  const session = fieldOf(challenged, 'confirmSignIn', 'session');
+  await assert.rejects(() => user.api.whoAmI(), (e: unknown) => isBlocksError(e, 'NotAuthenticatedException'));
+
+  const wrong = await user.authApi.setAuthState({ action: 'confirmSignIn', challenge: 'code', session, code: wrongTotpCode(sharedSecret) });
+  assert.strictEqual(wrong.errorName, 'CodeMismatchException');
+  assert.strictEqual(wrong.retriable, true, 'the user can try the code again');
+  await assert.rejects(() => user.api.whoAmI(), (e: unknown) => isBlocksError(e, 'NotAuthenticatedException'));
+
+  const signedIn = await user.authApi.setAuthState({ action: 'confirmSignIn', challenge: 'code', session, code: totpCodeFor(sharedSecret) });
+  assert.strictEqual(signedIn.state, 'signedIn', JSON.stringify(signedIn));
+  assert.strictEqual((await user.api.whoAmI()).attributes.email, name);
 });

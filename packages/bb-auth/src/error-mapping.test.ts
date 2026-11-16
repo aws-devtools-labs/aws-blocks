@@ -311,6 +311,8 @@ describe('status and retriable tables', () => {
 		assert.strictEqual(statusForAuthError(AuthErrors.EmailPasswordNotEnabled), 409);
 		assert.strictEqual(statusForAuthError(AuthErrors.NoFederatedProvider), 409);
 		assert.strictEqual(statusForAuthError(AuthErrors.InternalError), 500);
+		// A session refused over a plain-HTTP front door is a deploy misconfiguration, not the client's fault.
+		assert.strictEqual(statusForAuthError(AuthErrors.InsecureTransport), 500);
 	});
 
 	test('retriable set is AuthCognito’s', () => {

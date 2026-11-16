@@ -57,7 +57,7 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 |--------|---------|-------------|
 | `handler` | (required) | Async function that processes each job |
 | `schema` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
-| `maxRetries` | 3 | Maximum attempts before sending to the dead-letter queue |
+| `maxRetries` | 3 | Total deliveries, **including the first**, before the job goes to the dead-letter queue (the queue's `maxReceiveCount`). `3` = one attempt plus two retries; to run a job at most twice, set `maxRetries: 2` |
 | `batchSize` | 10 | Messages per Lambda invocation |
 | `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |

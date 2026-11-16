@@ -33,6 +33,7 @@ import { buildAdminSurface, markServerOnly } from './auth-admin.js';
 import { bearerTokenOf, poolBearerIdentity } from './bearer.js';
 import { bearerAuthEnabled, requiresUserPool } from './cdk/contract.js';
 import {
+	assertSessionCookieTransport,
 	clearAutoSignInCookie,
 	clearSessionCookie,
 	decryptAutoSignInPayload,
@@ -57,6 +58,7 @@ import type {
 	NativeSignInOutcome,
 	PoolBearerVerifier,
 	PoolTokens,
+	PublicAuthorizeParams,
 	ResolvedProvider,
 } from './engines/types.js';
 import { fabricateCodeDelivery, isAccountStateAnswer } from './enumeration.js';
@@ -734,7 +736,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 *
 	 * `getClient()` is public, like `getAuthState()`: it returns only what the
 	 * `authorize-params` routes already serve to anyone. A provider that is
-	 * unavailable in this runtime (managed login in `npm run dev`) is left out.
+	 * unavailable in this runtime (managed login in `npm run dev`), or whose
+	 * discovery fails, is left out (logged at warn), so the others stay usable.
 	 *
 	 * @example
 	 * ```ts
@@ -758,7 +761,18 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		const providerConfigs: Record<string, OidcProviderConfig> = {};
 		for (const { provider, engine } of this.providers.values()) {
 			if (engine.unavailable || !engine.authorizeParams) continue;
-			const params = await engine.authorizeParams(context);
+			let params: PublicAuthorizeParams;
+			try {
+				params = await engine.authorizeParams(context);
+			} catch (e) {
+				// One provider whose discovery fails must not cost the app every other sign-in button:
+				// leave it out, as an unavailable provider is.
+				this.log.warn('[bb-auth] getClient: a provider could not be described; leaving it out', {
+					provider: provider.id,
+					error: e instanceof Error ? e.name : typeof e,
+				});
+				continue;
+			}
 			providers.push(provider.id as ProviderIdOf<O>);
 			providerConfigs[provider.id] = {
 				authorizeUrl: params.authorizeUrl,
@@ -776,6 +790,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			signOutPath: paths.signOut,
 			signInBasePath: `${paths.base}/signin`,
 			authorizeParamsBasePath: `${paths.base}/authorize-params`,
+			sessionPath: paths.session,
+			refreshPath: paths.refreshCompat,
 		};
 		const { __blocks: _tag, ...fields } = descriptor;
 		return { ...fields, toJSON: () => descriptor };
@@ -1838,13 +1854,22 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	/**
 	 * Validate, persist and cookie a new session, then run `onSignIn` (a throw
 	 * rolls the session back). `validateUser` runs before anything is written, so
-	 * rejecting it prevents the session.
+	 * rejecting it prevents the session. A request that could not carry the
+	 * session cookie (a plain-HTTP front door outside a sandbox deploy) is
+	 * refused first, with `AuthErrors.InsecureTransport`: nothing is stored and
+	 * the engine's upstream tokens are revoked, best-effort.
 	 */
 	private async issueSession(
 		context: BlocksContext,
 		record: SessionRecord,
 		idpClaims?: Record<string, unknown>,
 	): Promise<AuthenticatedUser<O>> {
+		try {
+			assertSessionCookieTransport(context, this.crossDomain);
+		} catch (e) {
+			await this.revokeUpstream(record, context, false).catch(() => undefined);
+			throw e;
+		}
 		const identity = identityOf(record);
 		const claims = idpClaims ?? ('kind' in record ? {} : (decodeJwtPayload(record.idToken) ?? {}));
 		try {

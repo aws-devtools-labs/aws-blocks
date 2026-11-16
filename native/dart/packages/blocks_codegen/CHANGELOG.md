@@ -1,16 +1,33 @@
 ## Unreleased
 
+- **Breaking:** generated clients no longer send a realtime channel, a file
+  handle or an OIDC client back to the server, which 0.2.0 added. One passed as
+  a parameter, or inside a model, list, map, tuple or union variant a call
+  sends, fails again when the call is encoded (`JsonUnsupportedObjectError`), as
+  before 0.2.0, because `blocks_runtime`'s transferables no longer have
+  `toJson()`. The server never turns such a value back into a live object, so
+  pass the plain values the method needs instead. Decoding transferables,
+  including inside models, lists, maps and realtime messages, is unchanged.
+  Requires `blocks_runtime` with the matching change.
+
+## 0.2.0
+
 - Fix two arms of one union whose discriminator values generate the same
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
   an arm named like another type already does.
-- **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
+- Accept `build` 5, which `build_runner` 2.17.1 requires; `build` 5.0.0 is the
+  retracted 4.1.0 republished as a major, and only packages that
+  implement `BuildStep` are affected
+  ([dart-lang/build#5223](https://github.com/dart-lang/build/issues/5223)).
+  `build` 4 stays accepted, so consumers on `mockito` or other `build <5`
+  packages still resolve.
+- **Requires `blocks_runtime` 0.2.0.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
-  `RealtimeChannel.fromJsonValue`, a list-typed `BlocksClient.call`), and
-  each generated library's header now names the minimum runtime. Release
-  note: raise the `blocks_runtime` constraint in this package's
-  `pubspec.yaml` to `^0.1.5` in the same change that publishes
-  `blocks_runtime` 0.1.5.
+  `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
+  list-typed `BlocksClient.call`), and each generated library's header now
+  names the minimum runtime. The `blocks_runtime` constraint in this
+  package's `pubspec.yaml` is `^0.2.0` to match.
 - Fix two results that each hold a realtime channel with a different message
   type (`{channel: RealtimeChannel<{text}>}` and
   `{channel: RealtimeChannel<{count}>}`) being merged into one model, so the
@@ -302,6 +319,15 @@
     `Servers`, `override`, `identical`) shadowed it in the whole library. It
     is now `String$` and so on. A namespace class that a schema already has
     the name of (`TodosApi`) is now `TodosApi$`.
+- Fix generated clients that threw `JsonUnsupportedObjectError` when a call
+  sent a realtime channel, a file handle or an OIDC client back to the server:
+  as a parameter, or inside a model, list, map, tuple or union variant the
+  call sends. Each one is now sent as its `{"__blocks": …}` descriptor, the
+  JSON the server sent it as, through the runtime type's new `toJson()`. A
+  model's `toJson()` encodes them the same way, so `X.fromJson(x.toJson())`
+  round-trips a model that holds one. A transferable with no runtime binding
+  is typed `dynamic`, holds its descriptor already, and is sent as is.
+  Requires `blocks_runtime` with `toJson()` on those types.
 - Fix generated clients that named an undeclared type, or the wrong type,
   for a `$ref` to a component schema the generator renamed. A `$ref` now
   follows every rename:

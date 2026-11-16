@@ -58,6 +58,8 @@ kotlin {
 
         jvmMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
         }
 
         iosMain.dependencies {

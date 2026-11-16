@@ -249,6 +249,7 @@ export const CLIENT_ERROR_MESSAGES: Readonly<Record<AuthErrorName, string>> = {
 	[AuthErrors.InvalidLambdaResponse]: 'User pool Lambda trigger returned an invalid response',
 	[AuthErrors.UserLambdaValidation]: 'User pool Lambda trigger rejected the request',
 	[AuthErrors.InternalError]: INTERNAL_ERROR_MESSAGE,
+	[AuthErrors.InsecureTransport]: 'Sign-in is not available over a plain-HTTP connection',
 };
 
 /** `a`, `a and b`, `a, b and c`. */

@@ -865,3 +865,166 @@ describe('readValidation behaves identically on the mock and the AWS runtime', (
 		assert.deepStrictEqual(await table.get({ orderId: 'o1' }), preserved);
 	});
 });
+
+describe('malformed keys, indexes and order fail with the same InvalidQuery on the mock and the AWS runtime', () => {
+	// A key passed as a bare string (`get('alice')`) or missing its sort key used
+	// to return `null` / no-op on the mock while DynamoDB rejected it with a generic
+	// ValidationException; an unknown `order` sorted ascending; an array `indexes`
+	// declared indexes named '0', '1', …. Both layers now reject these before any
+	// lookup or DynamoDB call, with the same name and message.
+	const schema = z.object({ handle: z.string(), postId: z.string(), status: z.string().optional() });
+	const looseSchema = schema.partial();
+	const key = { partitionKey: 'handle', sortKey: 'postId' } as const;
+	const indexes = { byStatus: { partitionKey: 'status', sortKey: 'postId' } } as const;
+
+	/** One table per layer; the AWS table counts DynamoDB calls and never makes one. */
+	function bothLayers(id: string) {
+		let sends = 0;
+		const mock = new DistributedTable(testScope(), id, { schema: looseSchema, key, indexes });
+		const aws = new AwsDistributedTable(testScope(), id, { schema: looseSchema, key, indexes });
+		(aws as any).docClient = { send: async () => { sends++; return {}; } };
+		return { mock, aws, sends: () => sends };
+	}
+
+	/** Run `call` on both layers; assert the same InvalidQuery message (matching `pattern`) and no DynamoDB call. */
+	async function rejectsOnBoth(id: string, call: (table: any) => Promise<unknown>, pattern: RegExp): Promise<void> {
+		const { mock, aws, sends } = bothLayers(id);
+		const messages: string[] = [];
+		for (const table of [mock, aws]) {
+			await assert.rejects(() => call(table), (err: unknown) => {
+				assert.ok(isBlocksError(err, DistributedTableErrors.InvalidQuery), `expected InvalidQuery, got ${err}`);
+				assert.match((err as Error).message, pattern);
+				messages.push((err as Error).message);
+				return true;
+			});
+		}
+		assert.strictEqual(messages[0], messages[1], 'mock and AWS must produce the same message');
+		assert.strictEqual(sends(), 0, 'the AWS runtime must reject before calling DynamoDB');
+	}
+
+	test('get() with a string instead of a key object says to pass the key object', async () => {
+		await rejectsOnBoth('shape-get-string', t => t.get('alice'),
+			/^InvalidQueryException: get\(\) takes the key as an object with 'handle' and 'postId', e\.g\. get\(\{ handle: \.\.\., postId: \.\.\. \}\); got a string$/);
+	});
+
+	test('get() with a partial composite key names the missing sort key', async () => {
+		await rejectsOnBoth('shape-get-partial', t => t.get({ handle: 'alice' }), /got an object without a value for 'postId'$/);
+		await rejectsOnBoth('shape-get-null', t => t.get({ handle: 'alice', postId: null }), /got an object without a value for 'postId'$/);
+		await rejectsOnBoth('shape-get-undefined', t => t.get(undefined), /got undefined$/);
+		await rejectsOnBoth('shape-get-array', t => t.get(['alice', 'p1']), /got an array$/);
+	});
+
+	test('the message describes the bad value without echoing it', async () => {
+		await rejectsOnBoth('shape-no-echo', t => t.get('secret-handle'), /^(?!.*secret-handle)/);
+	});
+
+	test('delete() rejects a string or partial key the same way', async () => {
+		await rejectsOnBoth('shape-delete-string', t => t.delete('alice'), /^InvalidQueryException: delete\(\) takes the key as an object .*got a string$/);
+		await rejectsOnBoth('shape-delete-partial', t => t.delete({ postId: 'p1' }, { ifExists: true }), /got an object without a value for 'handle'$/);
+	});
+
+	test('put() / putBatch() reject an item without its key fields even when the schema allows it', async () => {
+		await rejectsOnBoth('shape-put', t => t.put({ handle: 'alice' }),
+			/^InvalidQueryException: put\(\) needs the item to include its key fields 'handle' and 'postId'; got an object without a value for 'postId'$/);
+		await rejectsOnBoth('shape-putbatch', t => t.putBatch([{ handle: 'a', postId: 'p1' }, { postId: 'p2' }]),
+			/^InvalidQueryException: putBatch\(\) needs every item to include its key fields .*'handle' at index 1$/);
+	});
+
+	test('getBatch() / deleteBatch() check every key before any is sent and name its position', async () => {
+		await rejectsOnBoth('shape-getbatch', t => t.getBatch([{ handle: 'a', postId: 'p1' }, 'b']),
+			/^InvalidQueryException: getBatch\(\) takes an array of key objects with 'handle' and 'postId', e\.g\. getBatch\(\[\{ handle: \.\.\., postId: \.\.\. \}\]\); got a string at index 1$/);
+		await rejectsOnBoth('shape-deletebatch', t => t.deleteBatch([{ handle: 'a', postId: 'p1' }, { handle: 'b' }]),
+			/deleteBatch\(\) .*got an object without a value for 'postId' at index 1$/);
+	});
+
+	test('a deleteBatch() rejected for one bad key deletes nothing on the mock', async () => {
+		const { mock } = bothLayers('shape-deletebatch-atomic');
+		await mock.put({ handle: 'a', postId: 'p1' });
+		await assert.rejects(() => mock.deleteBatch([{ handle: 'a', postId: 'p1' }, 'b' as any]));
+		assert.deepStrictEqual(await mock.get({ handle: 'a', postId: 'p1' }), { handle: 'a', postId: 'p1' });
+	});
+
+	test("query() rejects an order other than 'asc' / 'desc' instead of sorting ascending", async () => {
+		await rejectsOnBoth('shape-order', t => collect(t.query({ where: { handle: { equals: 'a' } }, order: 'DESC' })),
+			/^InvalidQueryException: query\(\) order must be 'asc' or 'desc'; got 'DESC'$/);
+		await rejectsOnBoth('shape-order-number', t => collect(t.query({ where: { handle: { equals: 'a' } }, order: -1 })),
+			/got a number$/);
+	});
+
+	test('query() on an unknown index lists the declared indexes', async () => {
+		await rejectsOnBoth('shape-index', t => collect(t.query({ index: 'byStats', where: { status: { equals: 'open' } } })),
+			/^InvalidQueryException: Index 'byStats' not found; declared indexes: 'byStatus'$/);
+
+		const plain = [
+			new DistributedTable(testScope(), 'shape-no-index', { schema, key }),
+			new AwsDistributedTable(testScope(), 'shape-no-index', { schema, key }),
+		];
+		for (const table of plain) {
+			await assert.rejects(
+				() => collect(table.query({ index: 'byStatus', where: { status: { equals: 'open' } } } as any)),
+				/Index 'byStatus' not found; declared indexes: none$/,
+			);
+		}
+	});
+
+	test('the constructor rejects indexes given as an array', () => {
+		const arrayIndexes = [{ partitionKey: 'status', sortKey: 'postId' }] as any;
+		for (const Table of [DistributedTable, AwsDistributedTable]) {
+			assert.throws(
+				() => new Table(testScope(), 'shape-array-indexes', { schema, key, indexes: arrayIndexes }),
+				(err: unknown) => {
+					assert.ok(isBlocksError(err, DistributedTableErrors.InvalidQuery));
+					assert.strictEqual((err as Error).message,
+						"InvalidQueryException: indexes must be an object keyed by index name, e.g. indexes: { byStatus: { partitionKey: 'status', sortKey: 'createdAt' } }; got an array");
+					return true;
+				},
+			);
+		}
+	});
+
+	test('valid input behaves as before on both layers', async () => {
+		// Absent / null indexes and order keep their defaults.
+		for (const Table of [DistributedTable, AwsDistributedTable]) {
+			new Table(testScope(), 'shape-null-indexes', { schema, key, indexes: null as any });
+		}
+
+		const { mock, aws } = bothLayers('shape-valid');
+		const item = { handle: 'a', postId: 'p1', status: 'open' };
+		await mock.put(item);
+		// A whole item is a valid key: the extra fields are ignored.
+		assert.deepStrictEqual(await mock.get(item), item);
+		assert.deepStrictEqual(await collect(mock.query({ where: { handle: { equals: 'a' } }, order: null as any })), [item]);
+
+		const inputs: any[] = [];
+		(aws as any).docClient = { send: async (command: any) => { inputs.push(command.input); return { Items: [] }; } };
+		await aws.get(item);
+		await aws.delete({ handle: 'a', postId: 'p1' });
+		await collect(aws.query({ where: { handle: { equals: 'a' } }, order: 'desc' }));
+		await collect(aws.query({ where: { handle: { equals: 'a' } } }));
+		assert.deepStrictEqual(inputs[0].Key, { handle: 'a', postId: 'p1' }, 'only the key fields are sent');
+		assert.deepStrictEqual(inputs[1].Key, { handle: 'a', postId: 'p1' });
+		assert.strictEqual(inputs[2].ScanIndexForward, false);
+		assert.strictEqual(inputs[3].ScanIndexForward, undefined);
+	});
+});
+
+describe('a conditional-write conflict message names ConditionalCheckFailed on both layers', () => {
+	const schema = z.object({ id: z.string() });
+
+	test('mock and AWS produce the same 409 message', async () => {
+		const mock = new DistributedTable(testScope(), 'ccf-message', { schema, key: { partitionKey: 'id' } });
+		await mock.put({ id: '1' });
+		const aws = awsTableWithFakeClient('ccf-message', { schema, key: { partitionKey: 'id' } }, async () => {
+			const err = new Error('The conditional request failed');
+			err.name = 'ConditionalCheckFailedException';
+			throw err;
+		});
+		for (const table of [mock, aws] as any[]) {
+			await assert.rejects(() => table.put({ id: '1' }, { ifNotExists: true }), (err: unknown) => {
+				assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+				assert.strictEqual((err as Error).message, 'ConditionalCheckFailedException: The conditional request failed');
+				return true;
+			});
+		}
+	});
+});
