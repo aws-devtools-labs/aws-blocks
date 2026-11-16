@@ -68,6 +68,16 @@ class OidcClient implements AuthProvider {
 
   final http.Client _httpClient;
 
+  /// Prepended to every [tokenStore] key. [fromJson] sets it to the
+  /// directory of the descriptor's `exchangePath` followed by `/`, such as
+  /// `/aws-blocks/auth/`, so the clients of several `Auth` blocks can share
+  /// one token store. Empty for a client built with the constructor, which
+  /// keeps the unprefixed keys.
+  String _keyPrefix = '';
+
+  /// The [tokenStore] key for [name].
+  String _key(String name) => '$_keyPrefix$name';
+
   final _controller = StreamController<OidcAuthState>.broadcast();
   Completer<void>? _refreshCompleter;
 
@@ -168,9 +178,9 @@ class OidcClient implements AuthProvider {
     final state = generateVerifier();
     final nonce = generateNonce();
 
-    await tokenStore.set('oidc_verifier', verifier);
-    await tokenStore.set('oidc_state', state);
-    await tokenStore.set('oidc_nonce', nonce);
+    await tokenStore.set(_key('oidc_verifier'), verifier);
+    await tokenStore.set(_key('oidc_state'), state);
+    await tokenStore.set(_key('oidc_nonce'), nonce);
 
     final authorizeUri = Uri.parse(config.authorizeUrl).replace(
       queryParameters: {
@@ -191,18 +201,18 @@ class OidcClient implements AuthProvider {
     );
 
     final returnedState = callbackUri.queryParameters['state'];
-    final storedState = await tokenStore.get('oidc_state');
+    final storedState = await tokenStore.get(_key('oidc_state'));
     if (returnedState != storedState) {
       throw StateError('OIDC state mismatch — possible CSRF attack');
     }
 
     final code = callbackUri.queryParameters['code']!;
-    final storedVerifier = (await tokenStore.get('oidc_verifier'))!;
-    final storedNonce = (await tokenStore.get('oidc_nonce'))!;
+    final storedVerifier = (await tokenStore.get(_key('oidc_verifier')))!;
+    final storedNonce = (await tokenStore.get(_key('oidc_nonce')))!;
 
-    await tokenStore.delete('oidc_verifier');
-    await tokenStore.delete('oidc_state');
-    await tokenStore.delete('oidc_nonce');
+    await tokenStore.delete(_key('oidc_verifier'));
+    await tokenStore.delete(_key('oidc_state'));
+    await tokenStore.delete(_key('oidc_nonce'));
 
     return exchange(
       code: code,
@@ -418,19 +428,22 @@ class OidcClient implements AuthProvider {
     // enabled. The default (cookie) flow returns just `{user}`, so store tokens
     // only when they exist.
     if (json['accessToken'] != null) {
-      await tokenStore.set('access_token', json['accessToken'] as String);
+      await tokenStore.set(_key('access_token'), json['accessToken'] as String);
     }
     if (json['refreshToken'] != null) {
-      await tokenStore.set('refresh_token', json['refreshToken'] as String);
+      await tokenStore.set(
+        _key('refresh_token'),
+        json['refreshToken'] as String,
+      );
     }
     if (json['expiresAt'] != null) {
-      await tokenStore.set('expires_at', json['expiresAt'].toString());
+      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
     } else if (json['expiresIn'] != null) {
       // Relay exchange (Kotlin parity) reports lifetime in seconds.
       final expiresAt = DateTime.now()
           .add(Duration(seconds: (json['expiresIn'] as num).toInt()))
           .millisecondsSinceEpoch;
-      await tokenStore.set('expires_at', expiresAt.toString());
+      await tokenStore.set(_key('expires_at'), expiresAt.toString());
     }
 
     final userJson = json['user'];
@@ -451,7 +464,7 @@ class OidcClient implements AuthProvider {
     }
     _refreshCompleter = Completer<void>();
     try {
-      final refreshToken = await tokenStore.get('refresh_token');
+      final refreshToken = await tokenStore.get(_key('refresh_token'));
       if (refreshToken == null) {
         _controller.add(OidcSignedOut());
         return;
@@ -470,10 +483,13 @@ class OidcClient implements AuthProvider {
       }
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
-      await tokenStore.set('access_token', json['accessToken'] as String);
-      await tokenStore.set('expires_at', json['expiresAt'].toString());
+      await tokenStore.set(_key('access_token'), json['accessToken'] as String);
+      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
       if (json.containsKey('refreshToken')) {
-        await tokenStore.set('refresh_token', json['refreshToken'] as String);
+        await tokenStore.set(
+          _key('refresh_token'),
+          json['refreshToken'] as String,
+        );
       }
     } finally {
       _refreshCompleter!.complete();
@@ -506,7 +522,7 @@ class OidcClient implements AuthProvider {
   ///   failure throws the HTTP client's error. Both clear the stored tokens
   ///   but keep the session cookie and the state.
   Future<Uri?> signOut() async {
-    final refreshToken = await tokenStore.get('refresh_token');
+    final refreshToken = await tokenStore.get(_key('refresh_token'));
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
     final http.Response response;
     try {
@@ -584,7 +600,7 @@ class OidcClient implements AuthProvider {
   ///   failure throws the HTTP client's error. Neither changes the state.
   Future<OidcUser?> restore() async {
     final url = Uri.parse('$_authBaseUrl$sessionPath');
-    final accessToken = await tokenStore.get('access_token');
+    final accessToken = await tokenStore.get(_key('access_token'));
     final cookie = sessionStore.cookieHeaderFor(url);
     final response = await _httpClient.get(
       url,
@@ -643,11 +659,11 @@ class OidcClient implements AuthProvider {
 
   @override
   Future<String?> getAccessToken() async {
-    final token = await tokenStore.get('access_token');
+    final token = await tokenStore.get(_key('access_token'));
     if (token == null) return null;
     if (await _isExpired()) {
       await refresh();
-      return tokenStore.get('access_token');
+      return tokenStore.get(_key('access_token'));
     }
     return token;
   }
@@ -664,6 +680,11 @@ class OidcClient implements AuthProvider {
 
   // --- Factory ---
 
+  /// A client for the `{"__blocks": "oidc/client", …}` descriptor a block's
+  /// `getClient()` returns. It stores its tokens and sign-in state under
+  /// keys prefixed with the directory of the descriptor's `exchangePath`
+  /// (such as `/aws-blocks/auth/access_token`), so the clients of several
+  /// blocks can share one token store.
   static OidcClient fromJson(
     Map<String, dynamic> descriptor, {
     required String baseUrl,
@@ -693,13 +714,19 @@ class OidcClient implements AuthProvider {
       tokenStore: tokenStore,
       sessionStore: sessionStore,
       httpClient: httpClient,
-    );
+    ).._keyPrefix = '${_directoryOf(descriptor['exchangePath'] as String)}/';
+  }
+
+  /// [path] up to its last `/`, or `''` when it has none.
+  static String _directoryOf(String path) {
+    final slash = path.lastIndexOf('/');
+    return slash < 0 ? '' : path.substring(0, slash);
   }
 
   // --- Private helpers ---
 
   Future<bool> _isExpired() async {
-    final expiresAt = await tokenStore.get('expires_at');
+    final expiresAt = await tokenStore.get(_key('expires_at'));
     if (expiresAt == null) return true;
     final expiry = int.tryParse(expiresAt);
     if (expiry == null) return true;
@@ -707,8 +734,8 @@ class OidcClient implements AuthProvider {
   }
 
   Future<void> _clearTokens() async {
-    await tokenStore.delete('access_token');
-    await tokenStore.delete('refresh_token');
-    await tokenStore.delete('expires_at');
+    await tokenStore.delete(_key('access_token'));
+    await tokenStore.delete(_key('refresh_token'));
+    await tokenStore.delete(_key('expires_at'));
   }
 }

@@ -22,6 +22,13 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- **Breaking:** an `OidcClient` from a block's `getClient()` (or
+  `OidcClient.fromJson`) stores its tokens and sign-in state under keys
+  prefixed with the directory of the block's `exchangePath`, such as
+  `/aws-blocks/auth/access_token`, so the clients of several `Auth` blocks
+  can share one token store. They used to share the unprefixed keys and
+  overwrite each other's tokens. A client built with the constructor keeps
+  the unprefixed keys.
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
