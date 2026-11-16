@@ -856,14 +856,11 @@ export interface CloudFrontOverRouterFrontDoor {
    *
    * Without either, the hop is plain HTTP on port 80 — unencrypted. Through a
    * VPC origin (`internal: true`) it stays on the AWS network; to an
-   * internet-facing ALB it reaches the ALB's public addresses, and synth warns
-   * (`@aws-blocks/hosting:StackedRouterPlainHttp`).
-   *
-   * The edge never sends the router's origin-verify header over that public
-   * plain-HTTP hop in a production deploy: synth fails with
-   * `OriginSecretOverPlainHttpError`. A sandbox deploy (`sandboxMode`
-   * context) synthesizes and also warns
-   * (`@aws-blocks/hosting:OriginSecretOverPlainHttp`).
+   * internet-facing ALB it reaches the ALB's public addresses: a production
+   * deploy fails synth (`OriginSecretOverPlainHttpError`), and a sandbox
+   * deploy (`sandboxMode` context) warns
+   * (`@aws-blocks/hosting:StackedRouterPlainHttp`,
+   * `@aws-blocks/hosting:OriginSecretOverPlainHttp`).
    */
   certificate?: import('aws-cdk-lib/aws-certificatemanager').ICertificate;
   /**
@@ -1451,8 +1448,8 @@ export class Hosting extends Construct {
       if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal) {
         cdk.Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:StackedRouterPlainHttp',
-          "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, sign-in, " +
-            'the origin-verify header) cross to the ALB\'s public addresses unencrypted. Give the router a ' +
+          "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, " +
+            'sign-in) cross to the ALB\'s public addresses unencrypted. Give the router a ' +
             '`certificate` and `features.router.domain` for HTTPS :443, or use `internal: true` (a VPC origin, on the ' +
             'AWS network).',
         );
