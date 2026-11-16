@@ -113,12 +113,9 @@ const isSandboxDeploy = (scope: Construct): boolean => {
 };
 
 /**
- * Refuse to send the router's origin-verify headers over a plain-HTTP hop to
- * an internet-facing router: CloudFront would carry the secret to the ALB's
- * public addresses in cleartext, and anyone who reads it can reach the router
- * from their own distribution, past the edge's web ACL. An HTTPS hop, or a
- * plain-HTTP hop through a CloudFront VPC origin (an internal router, on the
- * AWS network), passes.
+ * Require an HTTPS hop, or a CloudFront VPC origin (an internal router, on the
+ * AWS network), before attaching the router's required headers (its
+ * origin-verify secret) to the edge → router origin.
  *
  * A production deploy fails synth, so the secret is never sent. A sandbox
  * deploy (`sandboxMode` context) synthesizes with a warning
@@ -132,8 +129,8 @@ const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['origin
   if (handle.protocol === 'https' || handle.privateLoadBalancer) return;
   const headers = Object.keys(handle.customHeaders ?? {}).join(', ');
   const message =
-    `The stacked door's CloudFront edge would send the router's origin-verify header (${headers}) over plain HTTP ` +
-    "to the internet-facing ALB router's public addresses, unencrypted.";
+    `The stacked door's CloudFront edge would send the router's required headers (${headers}) over plain HTTP ` +
+    "to the internet-facing router's public addresses, unencrypted.";
   const resolution =
     'Give the router a `certificate` and `features.router.domain` so the edge → router hop is HTTPS :443, or set ' +
     '`internal: true` so the edge reaches the router through a CloudFront VPC origin on the AWS network.';
@@ -155,8 +152,8 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
 
   /**
    * @throws Error when there is no `upstream` door to front.
-   * @throws HostingError('OriginSecretOverPlainHttpError') when the router requires origin-verify headers over a
-   *   plain-HTTP hop to an internet-facing router, outside a sandbox deploy.
+   * @throws HostingError('OriginSecretOverPlainHttpError') when the router requires headers (its origin-verify
+   *   secret) over a plain-HTTP hop to an internet-facing router, outside a sandbox deploy.
    */
   build(scope, input) {
     const router = input.upstream;
@@ -171,8 +168,8 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     // The headers the router requires on every request (its origin-verify
     // secret). Over plain HTTP to an internet-facing router they would cross
     // the internet in cleartext, so that hop fails synth (see
-    // `assertSecretHopEncrypted`).
-    if (handle.customHeaders) assertSecretHopEncrypted(scope, handle);
+    // `assertSecretHopEncrypted`). A router that requires none has nothing to protect.
+    if (Object.keys(handle.customHeaders ?? {}).length > 0) assertSecretHopEncrypted(scope, handle);
     const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     const protocolPolicy = https ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY;
     const routerPort = https ? 443 : 80;

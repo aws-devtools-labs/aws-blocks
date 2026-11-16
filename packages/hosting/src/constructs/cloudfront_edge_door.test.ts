@@ -367,7 +367,11 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
 describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-HTTP public hop', () => {
   const VERIFY = 'x-blocks-origin-verify';
   /** Build the edge over a stand-in router handle; `sandbox` sets the sandbox deploy's `sandboxMode` context. */
-  const build = (id: string, handle: { protocol: 'http' | 'https'; private?: boolean }, sandbox = false) => {
+  const build = (
+    id: string,
+    handle: { protocol: 'http' | 'https'; private?: boolean; customHeaders?: Record<string, string> },
+    sandbox = false,
+  ) => {
     const app = new App(sandbox ? { context: { sandboxMode: 'true' } } : {});
     const stack = new Stack(app, id, { env: { account: '111111111111', region: 'us-east-1' } });
     const bucket = new Bucket(stack, 'Assets');
@@ -391,7 +395,11 @@ describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-
           : {
               service: 'alb',
               url: `${handle.protocol}://router.example.com`,
-              originHandle: { domainName: 'router.example.com', protocol: handle.protocol, customHeaders: { [VERIFY]: 'v' } },
+              originHandle: {
+                domainName: 'router.example.com',
+                protocol: handle.protocol,
+                customHeaders: handle.customHeaders ?? { [VERIFY]: 'v' },
+              },
             },
       },
       { wiringCheck: false },
@@ -435,6 +443,13 @@ describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-
     }>).find((o) => o.CustomOriginConfig);
     assert.equal(router?.CustomOriginConfig?.OriginProtocolPolicy, 'https-only');
     assert.deepEqual(router?.OriginCustomHeaders, [{ HeaderName: VERIFY, HeaderValue: 'v' }]);
+    assert.equal(plainHttpWarnings(stack), 0);
+  });
+
+  it('an upstream that requires no headers synthesizes over plain HTTP outside a sandbox, with no warning', () => {
+    // A `custom` router door may hand over an empty header map: there is no secret to protect.
+    const stack = build('NoHeadersProd', { protocol: 'http', customHeaders: {} });
+    assert.equal(sendsSecret(stack), false);
     assert.equal(plainHttpWarnings(stack), 0);
   });
 
