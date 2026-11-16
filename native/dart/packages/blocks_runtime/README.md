@@ -10,6 +10,39 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 
 This package is used by generated client code produced by `blocks_codegen`. You typically don't interact with it directly.
 
+## File transfers
+
+`FileUploadHandle` and `FileDownloadHandle` wrap a presigned URL. `upload(bytes)` and `download()` hold the whole file in memory. To stream it instead:
+
+```dart
+// Upload from any byte stream. contentLength is required: presigned upload
+// URLs do not accept a chunked body.
+await uploadHandle.uploadFrom(source, contentLength: length);
+
+// In Flutter, from an XFile (image_picker, file_selector). This works on
+// every platform, including the web.
+await uploadHandle.uploadFrom(
+  xfile.openRead(),
+  contentLength: await xfile.length(),
+);
+
+// Download into any StreamConsumer, such as an IOSink or a StreamController.
+// It is not closed for you.
+final sink = File('photo.jpg').openWrite();
+await downloadHandle.downloadTo(sink);
+await sink.close();
+
+// Or use a file path (not available on the web).
+await uploadHandle.uploadFromFile('photo.jpg');
+await downloadHandle.downloadToFile('photo.jpg');
+```
+
+If the backend created the upload handle with a `contentLength` option, the size is signed into the URL and the upload must send exactly that many bytes. Pass the same value as `contentLength`. A source that yields more or fewer bytes than `contentLength` fails the upload before the request completes, and a source that yields nothing for 60 seconds fails it with a `TimeoutException`. `uploadFromFile` sends the file's size.
+
+`downloadToFile` is atomic: it writes to a new file in the same directory and renames it over the path when the download completes, so the path holds either the previous file or the whole download. It does not fsync before the rename. A process killed mid-download leaves the `<path>.<hex>.part` file behind. `downloadTo` writes into the consumer as bytes arrive, so a failed download leaves what was already written there.
+
+On the web, package:http's browser client reads the whole request body into memory before sending, so `uploadFrom` does not save memory there. `uploadFromFile` and `downloadToFile` throw `UnsupportedError` on the web.
+
 ## User-agent attribution
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.

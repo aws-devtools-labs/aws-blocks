@@ -1,4 +1,7 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
+
 import 'harness.dart';
 
 void main() async {
@@ -61,6 +64,54 @@ void main() async {
   final down3 = await blocks.api.fileGetHandle(path: '$prefix/large.bin');
   final bytes3 = await down3.download();
   check(bytes3.length == 100000, 'large file length (got: ${bytes3.length})');
+
+  group('FileBucket: streaming upload/download (1MB)');
+  final streamData = Uint8List.fromList(
+    List.generate(1024 * 1024, (i) => (i * 7) % 256),
+  );
+  final up4 = await blocks.api.fileCreateUploadHandle(
+    path: '$prefix/stream.bin',
+  );
+  // Several chunks, sent as they come.
+  await up4.uploadFrom(
+    Stream.fromIterable([
+      for (var i = 0; i < streamData.length; i += 64 * 1024)
+        streamData.sublist(i, i + 64 * 1024),
+    ]),
+    contentLength: streamData.length,
+  );
+  final down4 = await blocks.api.fileGetHandle(path: '$prefix/stream.bin');
+  final streamed = BytesBuilder(copy: false);
+  final sink = StreamController<List<int>>();
+  final drained = sink.stream.forEach(streamed.add);
+  await down4.downloadTo(sink.sink);
+  await sink.close();
+  await drained;
+  check(
+    _bytesEqual(streamed.takeBytes(), streamData),
+    'chunked uploadFrom then downloadTo round-trips byte-for-byte',
+  );
+
+  final dir = await Directory.systemTemp.createTemp('blocks_e2e_');
+  try {
+    final source = File('${dir.path}/source.bin');
+    await source.writeAsBytes(streamData);
+    final up5 = await blocks.api.fileCreateUploadHandle(
+      path: '$prefix/stream-file.bin',
+    );
+    await up5.uploadFromFile(source.path);
+    final down5 = await blocks.api.fileGetHandle(
+      path: '$prefix/stream-file.bin',
+    );
+    final target = File('${dir.path}/target.bin');
+    await down5.downloadToFile(target.path);
+    check(
+      _bytesEqual(await target.readAsBytes(), streamData),
+      'uploadFromFile then downloadToFile round-trips byte-for-byte',
+    );
+  } finally {
+    await dir.delete(recursive: true);
+  }
 
   printResults();
 }
