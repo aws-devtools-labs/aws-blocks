@@ -162,6 +162,18 @@ export function validatePrincipal(principal: unknown): asserts principal is stri
 	}
 }
 
+/**
+ * Validate the principal passed to `revokeAccess()`. Unlike `getChannel()`, where an absent
+ * principal is valid, revocation always needs one.
+ *
+ * @throws {RealtimeErrors.ValidationFailed} If it is missing, or fails {@link validatePrincipal}.
+ */
+export function validateRevokePrincipal(principal: unknown): asserts principal is string {
+	// validatePrincipal() intentionally allows undefined (valid for getChannel()), so reject it separately here.
+	validatePrincipal(principal);
+	if (principal === undefined) throw blocksError(RealtimeErrors.ValidationFailed, 'revokeAccess() requires a principal');
+}
+
 /** What a validated channel or connect token says. */
 export interface ChannelTokenClaims {
 	/** The path the token was minted for; `undefined` when the payload has no string path. */

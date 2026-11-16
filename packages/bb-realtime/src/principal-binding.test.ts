@@ -301,6 +301,10 @@ describe('Realtime (mock): revokeAccess()', () => {
 		await assert.rejects(() => rt.revokeAccess(''), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed));
 	});
 
+	it('rejects an undefined principal', async () => {
+		await assert.rejects(() => rt.revokeAccess(undefined as unknown as string), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed));
+	});
+
 	it('rejects a getChannel() principal that is not a valid id', async () => {
 		await assert.rejects(() => rt.getChannel('chat', 'bad', { principal: '' }), (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed));
 	});

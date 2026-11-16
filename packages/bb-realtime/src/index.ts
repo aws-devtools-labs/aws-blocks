@@ -26,7 +26,7 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal, validateRevokePrincipal } from './utils.js';
 import { getBroadcastBus, LOCAL_TOKEN_SECRET, revokePrincipal } from './local-dev.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -185,7 +185,7 @@ export const Realtime: {
 	}
 
 	async revokeAccess(principal: string): Promise<void> {
-		validatePrincipal(principal);
+		validateRevokePrincipal(principal);
 		revokePrincipal(principal);
 	}
 

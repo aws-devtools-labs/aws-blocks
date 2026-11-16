@@ -41,6 +41,8 @@ export function checkSubscriptionAuth(
 	revokedAt: number | undefined,
 	now: number,
 ): SubscriptionAuthFailure | null {
+	// token_expired is reported first by design, so a refresh-capable client can renew. Revocation is still
+	// enforced when it re-subscribes, via the `tokenIat <= revokedAt` check below.
 	if (sub.tokenExp < now) return 'token_expired';
 	if (sub.principal !== connectionPrincipal) return 'principal_mismatch';
 	if (revokedAt !== undefined && sub.tokenIat <= revokedAt) return 'access_revoked';

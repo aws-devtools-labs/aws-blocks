@@ -40,7 +40,7 @@ import type {
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
 import { localListener, serverSubscribe, type ServerSubscription } from './server-subscribe.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal, isClientChannelPath } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal, validateRevokePrincipal, isClientChannelPath } from './utils.js';
 import { checkSubscriptionAuth, subscriptionEndedMessage, REVOCATION_RETENTION_SECONDS } from './subscription-auth.js';
 import type { SubscriptionAuthFailure } from './subscription-auth.js';
 
@@ -562,8 +562,8 @@ export const Realtime: {
 	}
 
 	async revokeAccess(principal: string): Promise<void> {
-		validatePrincipal(principal);
-		if (principal === undefined) throw blocksError(RealtimeErrors.ValidationFailed, 'revokeAccess() requires a principal');
+		// validatePrincipal() allows undefined (valid for getChannel()), so the shared helper rejects it separately.
+		validateRevokePrincipal(principal);
 		const now = Math.floor(Date.now() / 1000);
 		await connectionsTable().put({ ...revocationKey(principal), revokedAt: now, expiresAt: now + REVOCATION_RETENTION_SECONDS });
 	}
