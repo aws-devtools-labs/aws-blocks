@@ -131,11 +131,10 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
         await assertThrowsBlocksError(AuthErrorNames.codeMismatch) {
             _ = try await self.api.basicConfirmSignUp(username: username, code: wrong)
         } inspect: { error in
-            XCTAssertTrue(error.isBlocksError(name: AuthErrorNames.codeMismatch))
             XCTAssertEqual(error.code, 400)
-            XCTAssertTrue(error.retriable, "a wrong code can be retried in place")
-            XCTAssertEqual(error.data?["name"], .string(AuthErrorNames.codeMismatch))
-            XCTAssertEqual(error.data?["retriable"], .bool(true))
+            XCTAssertTrue(error.retriable)
+            XCTAssertEqual(error.data, ["name": .string(AuthErrorNames.codeMismatch), "retriable": .bool(true)])
+            XCTAssertTrue(error.isBlocksError(name: AuthErrorNames.codeMismatch))
         }
     }
 

@@ -175,8 +175,7 @@ public final class BlocksClient: Sendable {
             )
         }
 
-        // Not a JSON-RPC error (a gateway or route error, or a body that is not a JSON object):
-        // a transport failure that keeps the HTTP status as its `code`.
+        // Check HTTP status: a non-2xx with no JSON-RPC error reports its status as `code`
         if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
             throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)", code: httpResponse.statusCode)
         }
@@ -356,9 +355,9 @@ public struct RPCError: BlocksError {
     public let underlyingError: Error?
 
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
-    /// status (e.g. `401`); `-1` when `code` is absent or not readable as an `Int`. For a non-2xx response
-    /// with no JSON-RPC error (a gateway or route error), the HTTP status, with `name` and `data`
-    /// nil and `retriable` false. `nil` for other transport and decoding failures.
+    /// status (e.g. `401`); `-1` when `code` is absent or not readable as an `Int`. For a non-2xx
+    /// response with no JSON-RPC error (a gateway or route error), the HTTP status (`name` and `data`
+    /// are `nil`, `retriable` is `false`). `nil` for other transport and decoding failures.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).

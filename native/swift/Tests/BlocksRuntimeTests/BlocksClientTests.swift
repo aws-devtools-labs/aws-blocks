@@ -307,9 +307,8 @@ final class BlocksClientTests: XCTestCase {
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             let data = Data("""
-            {"jsonrpc":"2.0","error":{"code":400,"message":"Wrong code","data":{
-                "name":"CodeMismatchException","attemptsLeft":2,"ratio":0.5,"detail":{"a":null,"list":[1,"x"]}
-            }},"id":1}
+            {"jsonrpc":"2.0","error":{"code":400,"message":"Wrong code","data":{"name":"CodeMismatchException",\
+            "attemptsLeft":2,"ratio":0.5,"detail":{"a":null,"list":[1,"x"]}}},"id":1}
             """.utf8)
             return (response, data)
         }
@@ -392,25 +391,21 @@ final class BlocksClientTests: XCTestCase {
     }
 
     func testExecuteFillsInACodeAndMessageTheErrorLacks() async {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
         let cases: [(body: String, message: String)] = [
-            ("{\"jsonrpc\":\"2.0\",\"error\":{},\"id\":1}", "Error occured with code: -1 message: Unknown error"),
-            ("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":\"abc\",\"message\":\"Odd code\"},\"id\":1}", "Error occured with code: -1 message: Odd code")
+            (#"{"jsonrpc":"2.0","error":{},"id":1}"#, "Error occured with code: -1 message: Unknown error"),
+            (#"{"jsonrpc":"2.0","error":{"code":"abc","message":"Odd code"},"id":1}"#, "Error occured with code: -1 message: Odd code")
         ]
-
         for (body, message) in cases {
-            MockURLProtocol.handler = { _ in
-                let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MockURLProtocol.self]
+            let session = URLSession(configuration: config)
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
                 return (response, Data(body.utf8))
             }
-
             let client = BlocksClient(url: "http://localhost:3001/api", session: session)
-            let request = BlocksRequest(method: "api.fail", params: [], id: 1)
-
             do {
-                _ = try await client.execute(request)
+                _ = try await client.execute(BlocksRequest(method: "api.fail", params: [], id: 1))
                 XCTFail("\(body): expected an RPCError")
             } catch let error as RPCError {
                 XCTAssertEqual(error.code, -1, body)
