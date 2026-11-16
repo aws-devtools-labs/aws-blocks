@@ -938,6 +938,8 @@ describe('create-blocks-app auto-detection', () => {
       /** Installs Blocks, Core and Hosting in the project (what the scaffold's install would). */
       install?: (app: string) => void;
       template?: string;
+      /** The project's package.json dependency maps; by default it depends on `next`. */
+      declares?: Record<string, Record<string, string>>;
       /** Text the warning must contain; no warning expected when omitted. */
       warns?: string[];
     };
@@ -984,6 +986,30 @@ describe('create-blocks-app auto-detection', () => {
         template: 'backend',
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
       },
+      // Templates other than `nextjs` let Hosting detect the framework from package.json, which reads
+      // `peerDependencies` too.
+      'a template detects the next the project declares as a peer': {
+        next: '16.4.2',
+        template: 'default',
+        declares: { peerDependencies: { next: '^16.0.0' } },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
+        warns: ['next@16.4.2', 'next >=99.0.0'],
+      },
+      // Hosting's detection ignores an undeclared `next` (here one hoisted from another app of a
+      // monorepo), so it builds this app with another adapter.
+      'a template detects no next in a project that declares none': {
+        next: '16.4.2',
+        template: 'default',
+        declares: { devDependencies: { vite: '^6.0.0' } },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
+      },
+      // The `nextjs` template sets `framework: 'nextjs'`, so Hosting builds Next.js whatever package.json declares.
+      'the nextjs template builds a next the project does not declare': {
+        next: '16.4.2',
+        declares: { devDependencies: { vite: '^6.0.0' } },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
+        warns: ['next@16.4.2', 'next >=99.0.0'],
+      },
     };
 
     /** Runs the built CLI and keeps its stderr, which `run` drops on success. */
@@ -996,23 +1022,25 @@ describe('create-blocks-app auto-detection', () => {
       });
 
     /** An existing project with `next` installed, outside this repository so nothing resolves the repository's packages. */
-    const withExistingProject = (next: string, test: (app: string) => void) => {
+    const withExistingProject = (next: string, test: (app: string) => void, declares: Record<string, Record<string, string>> = { dependencies: { next: '^14.2.0' } }) => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-next-compat-'));
       try {
         const app = join(tmpDir, 'app');
         mkdirSync(app);
-        writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'my-app', version: '1.0.0', dependencies: { next: '^14.2.0' } }));
+        writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'my-app', version: '1.0.0', ...declares }));
         writePackage(app, 'next', { version: next });
         test(app);
         const after = JSON.parse(readFileSync(join(app, 'package.json'), 'utf-8'));
-        assert.strictEqual(after.dependencies.next, '^14.2.0', 'the project\'s next changed');
+        for (const field of ['dependencies', 'devDependencies', 'peerDependencies']) {
+          assert.strictEqual(after[field]?.next, declares[field]?.next, `the project's ${field}.next changed`);
+        }
         assert.strictEqual(JSON.parse(readFileSync(join(app, 'node_modules', 'next', 'package.json'), 'utf-8')).version, next);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
     };
 
-    for (const [name, { next, install, template = 'nextjs', warns }] of Object.entries(projects)) {
+    for (const [name, { next, install, template = 'nextjs', declares, warns }] of Object.entries(projects)) {
       it(`${warns ? 'warns' : 'says nothing'} when ${name}, exits 0 and leaves next alone`, () => {
         withExistingProject(next, (app) => {
           install?.(app);
@@ -1026,7 +1054,7 @@ describe('create-blocks-app auto-detection', () => {
           } else {
             assert.doesNotMatch(result.stdout, WARNING);
           }
-        });
+        }, declares);
       });
     }
 

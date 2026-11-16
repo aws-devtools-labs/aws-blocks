@@ -1049,9 +1049,13 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  import { api } from \'aws-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
-  // Only a backend that hosts the app builds its Next.js; the backend-only templates define no `Hosting`.
+  // Only a backend whose Hosting builds the app with Next.js: the backend-only templates define no
+  // `Hosting`, and the others build Next.js when they set `framework: 'nextjs'` or when Hosting detects
+  // it from package.json. Hosting's detection reads only the declarations, so an undeclared `next`
+  // (for example one hoisted from another app of a monorepo) is not built with Next.js.
   const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
-  if (backendStack.includes('new Hosting(')) await warnIfNextOutsideHostingRange(targetDir, awsBlocksDest);
+  const buildsNext = backendStack.includes("framework: 'nextjs'") || hostingDetectsNext(existingPkg);
+  if (backendStack.includes('new Hosting(') && buildsNext) await warnIfNextOutsideHostingRange(targetDir, awsBlocksDest);
 }
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
@@ -1067,6 +1071,14 @@ interface PackageDeps {
 /** Whether the project builds with Next.js, whose `next build` ignores project references when it type-checks. */
 function usesNext(pkg: PackageDeps): boolean {
   return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
+}
+
+/**
+ * Whether `Hosting`'s framework detection picks Next.js for the project: `next` in any of the
+ * dependency maps it reads (`detectFramework` in `@aws-blocks/hosting`).
+ */
+function hostingDetectsNext(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): boolean {
+  return [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies].some((deps) => deps !== undefined && 'next' in deps);
 }
 
 /**
