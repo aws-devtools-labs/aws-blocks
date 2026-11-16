@@ -232,7 +232,9 @@ async function deleteEndedSubscription(record: ConnectionRecord): Promise<void> 
 
 /**
  * The subscription records that may still receive a message: those whose channel token has not expired and
- * whose principal's access has not been revoked since the token was issued. Ended records are deleted lazily.
+ * whose principal's access has not been revoked since the token was issued. Ended records are skipped but
+ * not deleted: the connection's next ping deletes them and tells the client why each one ended
+ * (`token_expired` / `access_revoked`), which a deletion here would pre-empt.
  * This enforces expiry and revocation at fan-out, so a client that never pings is cut off as well
  * (DynamoDB TTL deletion is lazy and queries still return expired items).
  */
@@ -245,16 +247,9 @@ async function liveSubscriptions(records: ConnectionRecord[], now: number): Prom
 		const found = await connectionsTable().getBatch(principals.map(revocationKey));
 		found.forEach((record, i) => { if (record?.revokedAt !== undefined) revokedAtByPrincipal.set(principals[i], record.revokedAt); });
 	}
-	const live: ConnectionRecord[] = [];
-	const ended: ConnectionRecord[] = [];
-	for (const record of records) {
-		const ok = record.tokenExp !== undefined && record.tokenIat !== undefined
-			&& record.tokenExp >= now
-			&& !(record.principal !== undefined && revokedAtByPrincipal.has(record.principal) && record.tokenIat <= revokedAtByPrincipal.get(record.principal)!);
-		(ok ? live : ended).push(record);
-	}
-	await Promise.all(ended.map(r => deleteEndedSubscription(r).catch(() => {})));
-	return live;
+	return records.filter(record => record.tokenExp !== undefined && record.tokenIat !== undefined
+		&& record.tokenExp >= now
+		&& !(record.principal !== undefined && revokedAtByPrincipal.has(record.principal) && record.tokenIat <= revokedAtByPrincipal.get(record.principal)!));
 }
 
 async function deleteConnectionRecords(connectionId: string): Promise<void> {

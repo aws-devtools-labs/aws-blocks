@@ -461,23 +461,23 @@ describe('WebSocket handler: publish enforces expiry and revocation without a pi
 		assert.strictEqual(messagesTo(connectionId).length, 1);
 	});
 
-	it('does not deliver to a subscription revoked since it was made, and removes its record', async () => {
+	it('does not deliver to a subscription revoked since it was made, and keeps its record for the next ping', async () => {
 		const { connectionId, descriptor } = await connected('fan-revoked', { principal: 'fan-user-1' });
 		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
 		await rt.revokeAccess('fan-user-1');
 		posted.length = 0;
 		await rt.publish('chat', 'fan-revoked', { n: 1 });
 		assert.deepStrictEqual(messagesTo(connectionId), []);
-		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__', descriptor.channel].sort());
 	});
 
-	it('does not deliver to a subscription whose token has expired, and removes its record', async () => {
+	it('does not deliver to a subscription whose token has expired, and keeps its record for the next ping', async () => {
 		const { connectionId, descriptor } = await connected('fan-expired', { principal: 'fan-user-2' });
 		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
 		posted.length = 0;
 		await withClockAdvanced(3700, () => rt.publish('chat', 'fan-expired', { n: 1 }));
 		assert.deepStrictEqual(messagesTo(connectionId), []);
-		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__', descriptor.channel].sort());
 	});
 
 	it('does not deliver to a subscription record without token details', async () => {
@@ -496,5 +496,40 @@ describe('WebSocket handler: publish enforces expiry and revocation without a pi
 		await rt.publish('chat', 'fan-shared', { n: 1 });
 		assert.deepStrictEqual(messagesTo(a.connectionId), []);
 		assert.strictEqual(messagesTo(b.connectionId).length, 1);
+	});
+});
+
+// publish() skips an ended subscription without deleting it, so the connection's
+// next ping still finds the record and tells the client why it ended.
+describe('WebSocket handler: a subscription skipped by publish is ended by the next ping', () => {
+	const messagesTo = (connectionId: string) => repliesTo(connectionId).filter(r => r.type === 'message');
+
+	it('tells the client its token expired', async () => {
+		const { connectionId, descriptor } = await connected('fan-ping-expired', { principal: 'fan-ping-user-1' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		posted.length = 0;
+		await withClockAdvanced(3700, async () => {
+			await rt.publish('chat', 'fan-ping-expired', { n: 1 });
+			assert.deepStrictEqual(messagesTo(connectionId), []);
+			await wsHandler()(messageEvent(connectionId, { action: 'ping' }));
+		});
+		assert.deepStrictEqual(repliesTo(connectionId), [
+			{ type: 'error', channel: descriptor.channel, code: 'token_expired', message: 'Unauthorized: token expired' },
+		]);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+	});
+
+	it('tells the client its access was revoked', async () => {
+		const { connectionId, descriptor } = await connected('fan-ping-revoked', { principal: 'fan-ping-user-2' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		await rt.revokeAccess('fan-ping-user-2');
+		posted.length = 0;
+		await rt.publish('chat', 'fan-ping-revoked', { n: 1 });
+		assert.deepStrictEqual(messagesTo(connectionId), []);
+		await wsHandler()(messageEvent(connectionId, { action: 'ping' }));
+		assert.deepStrictEqual(repliesTo(connectionId), [
+			{ type: 'error', channel: descriptor.channel, code: 'access_revoked', message: 'Unauthorized: access revoked' },
+		]);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 	});
 });
