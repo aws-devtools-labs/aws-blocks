@@ -1557,19 +1557,14 @@ export {
  * `--legacy-peer-deps`) let such a pair install, and OpenNext then builds a
  * combination it was never released against. Warn rather than fail: the pair
  * may still work, and the fix (upgrade `next` within its major, or pick a
- * different OpenNext) is the user's call. The verdict is
- * {@link checkNextjsCompatibility}'s, which the
+ * different OpenNext) is the user's call. The verdict and the warning's words
+ * are {@link checkNextjsCompatibility}'s, which the
  * `@aws-blocks/hosting/nextjs-compatibility` subpath exports.
  */
 const warnIfNextOutsideOpenNextPeerRange = (
   compatibility: NextjsCompatibility | undefined,
 ): void => {
-  if (!compatibility || compatibility.supported) return;
-  const { nextVersion, openNextVersion, nextRange } = compatibility;
-  process.stderr.write(
-    `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextRange}). ` +
-      'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
-  );
+  if (compatibility?.warning) process.stderr.write(`⚠️  ${compatibility.warning}\n`);
 };
 
 /**
@@ -2199,7 +2194,8 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   // The compatibility verdict names the OpenNext it found; without a verdict
   // (no `next`, or an installed OpenNext with no usable `next` peer range),
   // look it up here.
-  const compatibility = checkNextjsCompatibility(projectDir);
+  // This adapter builds whatever framework detection would say, so name it.
+  const compatibility = checkNextjsCompatibility(projectDir, { framework: 'nextjs' });
   const installed = compatibility
     ? compatibility.openNextSource === 'installed'
     : findInstalledOpenNext(projectDir) !== undefined;

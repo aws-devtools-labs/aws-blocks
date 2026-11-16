@@ -34,11 +34,11 @@ void describe('checkNextjsCompatibility', () => {
   let app: string;
 
   beforeEach(() => {
-    // A workspace root, and an app under it that installs nothing yet.
+    // A workspace root, and a Next.js app under it that installs nothing yet.
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'nextjs-compatibility-test-'));
     app = path.join(root, 'apps', 'web');
     fs.mkdirSync(app, { recursive: true });
-    fs.writeFileSync(path.join(app, 'package.json'), '{}');
+    fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ dependencies: { next: '*' } }));
   });
 
   afterEach(() => {
@@ -58,15 +58,37 @@ void describe('checkNextjsCompatibility', () => {
     });
   });
 
-  void it('checks against the fallback OpenNext when the project resolves none', () => {
+  void it('checks against the fallback OpenNext when the project resolves none, and words the warning', () => {
     writePkg(app, 'next', '15.5.7');
-    assert.deepStrictEqual(checkNextjsCompatibility(app), {
+    const result = checkNextjsCompatibility(app);
+    assert.ok(result, 'expected a verdict');
+    const { warning, ...verdict } = result;
+    assert.deepStrictEqual(verdict, {
       nextVersion: '15.5.7',
       openNextVersion: OPENNEXT_FALLBACK_VERSION,
       nextRange: OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
       openNextSource: 'fallback',
       supported: false,
     });
+    for (const fact of ['next@15.5.7', `@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`, OPENNEXT_FALLBACK_NEXT_PEER_RANGE]) {
+      assert.ok(warning?.includes(fact), `expected the warning to name ${fact}; it was: ${warning}`);
+    }
+  });
+
+  void it('has no verdict for a project Hosting does not build with Next.js', () => {
+    // A Vite app that declares no next, under a root that installs another app's.
+    fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ devDependencies: { vite: '^6.0.0' } }));
+    writePkg(root, 'next', '14.2.35');
+    assert.strictEqual(checkNextjsCompatibility(app), undefined);
+    // Given `framework: 'nextjs'`, Hosting builds it with Next.js whatever it declares.
+    assert.strictEqual(checkNextjsCompatibility(app, { framework: 'nextjs' })?.supported, false);
+  });
+
+  void it('has no verdict when Hosting is given another framework', () => {
+    // A static export: the app depends on next, and Hosting serves it with `framework: 'static'`.
+    writePkg(app, 'next', '14.2.35');
+    assert.strictEqual(checkNextjsCompatibility(app)?.supported, false);
+    assert.strictEqual(checkNextjsCompatibility(app, { framework: 'static' }), undefined);
   });
 
   void it('finds a next and an OpenNext hoisted to the workspace root', () => {
@@ -132,7 +154,7 @@ void describe('@aws-blocks/hosting/nextjs-compatibility', () => {
       execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf-8' }),
     );
     assert.ok(urls.some((u) => u.includes('/semver/')), `expected semver among ${urls.join(', ')}`);
-    for (const forbidden of ['/aws-cdk-lib/', '/constructs/', '/adapters/nextjs.js', '/fast-glob/', '/cross-spawn/']) {
+    for (const forbidden of ['/aws-cdk-lib/', '/constructs/', '/adapters/index.js', '/adapters/nextjs.js', '/fast-glob/', '/cross-spawn/']) {
       assert.ok(!urls.some((u) => u.includes(forbidden)), `loaded ${forbidden}: ${urls.join(', ')}`);
     }
   });
