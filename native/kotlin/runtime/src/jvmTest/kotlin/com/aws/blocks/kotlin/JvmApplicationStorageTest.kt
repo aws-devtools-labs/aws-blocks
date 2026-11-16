@@ -105,6 +105,44 @@ class JvmApplicationStorageTest {
     }
 
     @Test
+    fun `a session keeps persisting when the key tier goes away and comes back`() = runTest {
+        // The jar is where losing this hurts. It treats a failed read as temporary: it stays
+        // unloaded, and addCookie deliberately declines to write, because overwriting storage with
+        // one cookie would discard whatever else is in there. So a store that throws on read never
+        // receives the write that would heal it, and the session stops persisting for good.
+        //
+        // The sequence is a tier that goes away and returns with its key intact — a keyring, then
+        // a session with none, then the keyring again; or a declined Keychain prompt later allowed.
+        val keyring = mutableMapOf<String, ByteArray>()
+        val onTheKeyring: (Path) -> KeyCustody = { AliasedCustody(keyring) }
+        val besideTheEntries: (Path) -> KeyCustody = { FileKeyCustody(it) }
+        val directory = applicationStorageDirectory("com.example.one", root)
+
+        // Each launch gets its own jar, because a jar held in memory would hide what reached disk.
+        suspend fun launch(custodyFor: (Path) -> KeyCustody, signInAs: String?): String? {
+            forgetCookieJars()
+            val jar = cookieJarIn(directory, custodyFor)
+            val restored = jar.get(url).singleOrNull()?.value
+            if (signInAs != null) jar.addCookie(url, Cookie(name = "session", value = signInAs))
+            return restored
+        }
+
+        launch(onTheKeyring, signInAs = "first").shouldBeNull()
+        launch(onTheKeyring, signInAs = null) shouldBe "first"
+
+        // The keyring is unreachable. The file tier mints, and this launch signs in again.
+        launch(besideTheEntries, signInAs = "second").shouldBeNull()
+        launch(besideTheEntries, signInAs = null) shouldBe "second"
+
+        // The keyring returns, holding the key from the first launch. The entries on disk were
+        // written under the file key, so there is nothing here for it to restore — but it has to
+        // persist the sign-in that follows rather than failing every read from now on.
+        launch(onTheKeyring, signInAs = "third").shouldBeNull()
+        launch(onTheKeyring, signInAs = null) shouldBe "third"
+        launch(onTheKeyring, signInAs = null) shouldBe "third"
+    }
+
+    @Test
     fun `no id keeps the session in memory rather than guessing a directory`() = runTest {
         val jar = PersistentCookiesStorage(platformKeyValueStore("cookies", applicationId = null))
         jar.addCookie(url, Cookie(name = "session", value = "a-session"))

@@ -308,4 +308,61 @@ class EncryptedFileKeyValueStoreTest {
         recovered.get("jar") shouldBe "post-loss"
     }
 
+    @Test
+    fun recoversWhenTheKeyItLoadsIsOlderThanTheEntries() = runTest {
+        // The mirror of the test above, and the one a minting check cannot answer. A tier that goes
+        // away and comes back while a different key wrote the entries in between leaves this store
+        // loading a key older than what is on disk — so it mints nothing, sweeps nothing, and used
+        // to throw for the one entry that matters on every launch from here on.
+        val keyring = InMemoryKeyCustody(ByteArray(32) { 1 })
+        val onTheKeyring = { EncryptedFileKeyValueStore("cookies", root, "a") { keyring } }
+        val besideTheEntries =
+            { EncryptedFileKeyValueStore("cookies", root, "a") { FileKeyCustody(it) } }
+
+        onTheKeyring().put("jar", "from-the-keyring")
+        // The keyring is unreachable, so the file tier mints and the session is rewritten under it.
+        besideTheEntries().put("jar", "from-the-file")
+        besideTheEntries().get("jar") shouldBe "from-the-file"
+
+        // The keyring comes back, still holding the key it had. The entry is not its to read.
+        onTheKeyring().get("jar").shouldBeNull()
+        onTheKeyring().put("jar", "after-the-flip")
+        onTheKeyring().get("jar") shouldBe "after-the-flip"
+    }
+
+    @Test
+    fun stillReportsCorruptionAfterMintingItsOwnKey() = runTest {
+        // An instance that minted the key used to report every undecryptable entry as absent for
+        // the rest of its life, which switched off the guarantee
+        // `reportsAnUnreadableEntryRatherThanCallingItAbsent` makes — on the first launch on a
+        // fresh machine, where the store mints. Damage to an entry written under the key in hand
+        // has to surface however that key was obtained.
+        val store = store()
+        store.put("jar", "hello")
+
+        // Keep the fingerprint this key wrote and damage only the ciphertext, so the entry is
+        // attributable to this key and still unreadable.
+        val path = storageDir.toPath().resolve(Base64.getUrlEncoder().encodeToString("jar".toByteArray()))
+        val envelope = Base64.getDecoder().decode(Files.readString(path))
+        envelope[envelope.size - 1] = (envelope[envelope.size - 1] + 1).toByte()
+        Files.writeString(path, Base64.getEncoder().encodeToString(envelope))
+
+        shouldThrow<KeyValueStoreException> { store.get("jar") }
+    }
+
+    @Test
+    fun clearKeepsEveryFileOfItsOwnAndNoEntries() = runTest {
+        val store = store()
+        store.put("jar", "hello")
+        // Stands in for the lock file the directory lock adds. Unlinking it would not block the
+        // holder: it would keep its lock on an unreachable inode while the next process locked a
+        // new file, and both would believe they held the directory.
+        Files.writeString(storageDir.toPath().resolve(".lock"), "")
+
+        store.clear()
+
+        File(storageDir, ".key").exists() shouldBe true
+        File(storageDir, ".lock").exists() shouldBe true
+        storageDir.listFiles().orEmpty().filterNot { it.name.startsWith(".") }.shouldBeEmpty()
+    }
 }
