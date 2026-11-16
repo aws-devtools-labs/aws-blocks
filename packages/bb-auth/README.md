@@ -156,7 +156,7 @@ export const adminApi = new ApiNamespace(scope, 'adminApi', (context) => ({
 
 `requireRole` reads the user's groups live from the user pool, so a group change applies at the user's next request, not at their next sign-in. To require the group on every method of a namespace, use `auth.protect(scope, 'adminApi', { methods }, { role: 'admin' })` instead ([Protect every method](#protect-every-method)).
 
-`auth.admin` checks only that the block opted in and that the action was granted, never who is calling, so every method that calls it must authorize its caller first, as `listUsers` does above. The handle itself is never an API: exporting `auth.admin`, or returning it from an `ApiNamespace` handler, answers *method not found*. Copying its methods into your own object (`{ ...auth.admin }`) exposes them like any other method you write.
+`auth.admin` checks only that the block opted in and that the action was granted, never who is calling, so every method that calls it must authorize its caller first, as `listUsers` does above. The handle itself is never an API: exporting `auth.admin`, returning it from an `ApiNamespace` handler, or copying its methods into your own object (`{ ...auth.admin }`, `Object.assign({}, auth.admin)`, `{ remove: auth.admin.deleteUser }`) answers *method not found*. To serve an admin action, write your own method that checks the caller and then calls `auth.admin`, as `listUsers` does.
 
 ### The first admin
 

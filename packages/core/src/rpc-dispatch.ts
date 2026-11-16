@@ -59,6 +59,40 @@ function isManagedValue(value: unknown): boolean {
 }
 
 /**
+ * Functions that are server-side APIs, never RPC methods (each `auth.admin`
+ * method is added). Membership is by function identity, so a copy of the method
+ * made by spread, `Object.assign` or destructuring is the same function and is
+ * refused too, however it reaches the module's exports. Held on a global-registry
+ * key so duplicate `@aws-blocks/core` copies in one bundle share one set.
+ *
+ * shortcut: a new function that wraps or `bind`s an admin method is not in the
+ * set; that is an application method and needs its own caller check.
+ */
+const SERVER_ONLY_FUNCTIONS = Symbol.for('@aws-blocks/core.ServerOnlyFunctions');
+
+function serverOnlyFunctions(): WeakSet<object> {
+  const registry = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
+  registry[SERVER_ONLY_FUNCTIONS] ??= new WeakSet();
+  return registry[SERVER_ONLY_FUNCTIONS];
+}
+
+/**
+ * Mark `fn` as a server-side API: the RPC dispatcher never serves it, as an
+ * export or as a method, wherever it is copied. Calling it from server code is
+ * unaffected. Exported through `@aws-blocks/core/internal`.
+ *
+ * @internal
+ */
+export function markServerOnlyFunction(fn: (...args: never[]) => unknown): void {
+  serverOnlyFunctions().add(fn);
+}
+
+/** True for a function marked with {@link markServerOnlyFunction}. */
+function isServerOnly(value: unknown): boolean {
+  return typeof value === 'function' && serverOnlyFunctions().has(value);
+}
+
+/**
  * Whether a backend-module export may be dispatched to as an API namespace.
  *
  * Rejects `_`-private exports, non-function/non-object values, Building Block
@@ -69,6 +103,7 @@ function isManagedValue(value: unknown): boolean {
  */
 export function isDispatchableExport(name: string, value: unknown): boolean {
   if (name.startsWith('_')) return false;
+  if (isServerOnly(value)) return false;
   if (isApiNamespace(value)) return true;
   if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return false;
   return !isScopeLike(value) && !isManagedValue(value);
@@ -107,7 +142,8 @@ export function resolveApiMethod(
   const own = Object.getOwnPropertyDescriptor(apiMethods, method);
   if (own && !own.enumerable) return undefined;
   const fn = (apiMethods as Record<string, unknown>)[method];
-  if (typeof fn !== 'function') return undefined;
+  // A server-only function (each `auth.admin` method) is refused wherever it was copied to.
+  if (typeof fn !== 'function' || isServerOnly(fn)) return undefined;
   return fn.bind(apiMethods) as (...args: unknown[]) => unknown;
 }
 
