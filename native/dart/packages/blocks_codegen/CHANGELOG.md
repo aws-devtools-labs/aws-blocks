@@ -62,6 +62,9 @@
 
 ### Other changes
 
+- A declared native binding whose Dart type is named `FileTokenStore` is
+  rejected, as for every other type `blocks_runtime` exports, because the
+  runtime now exports a class of that name.
 - **Requires the `blocks_runtime` release with this change.**
 - A spec that names no providers, and an OIDC client inside a model, list,
   map or parameter, are still a plain `OidcClient`, unchanged.

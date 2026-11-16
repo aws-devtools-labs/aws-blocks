@@ -1,3 +1,30 @@
+## Unreleased
+
+- **Behavior change:** this package is now a Dart plugin. On Android, iOS,
+  macOS, Linux and Windows, Flutter registers a `PersistentSessionStore` over
+  `FlutterSecureStore` as the default session store before `main`, so every
+  `Blocks`, `BlocksClient` and `OidcClient` built without a `sessionStore`
+  keeps the session across app restarts. To keep sessions in memory, pass
+  `sessionStore: InMemorySessionStore()`, or call
+  `registerDefaultSessionStore(null)` at the start of `main`. Nothing is
+  registered on the web, or under `flutter test`; an `integration_test` run
+  on a device keeps the session between runs. A storage error is passed to
+  `FlutterError.reportError` as a silent error, once until storage works
+  again, and the session is kept in memory.
+- Platform setup the default store needs (see the README): on macOS the
+  `keychain-access-groups` entitlement, without which every read fails with
+  `errSecMissingEntitlement` (the report names it); on Android
+  `android:allowBackup="false"` or a backup rule excluding the secure storage,
+  since a restored copy cannot be decrypted; on Linux the libsecret runtime and
+  a Secret Service.
+- A `PersistentSessionStore(store: FlutterSecureStore())` you build yourself
+  must be the only one over its storage key: pass it to every client, or drop
+  it and use the default.
+- `FlutterSecureStore` creates the Flutter binding
+  (`WidgetsFlutterBinding.ensureInitialized()`) on the main isolate before its
+  first read or write, so it can be used before `runApp` without the app
+  initializing the binding first.
+
 ## 0.2.0
 
 - `FlutterSecureStore()` now stores iOS and macOS Keychain items with
