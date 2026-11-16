@@ -140,10 +140,17 @@ for (const fromAddress of ['noreply@acme.com', 'noreply@notexample.com', 'norepl
 
 test('CDK: the reserved-sender warning is raised on sandbox and production synths', () => {
 	const contexts: Array<Record<string, string>> = [{ sandboxMode: 'true' }, {}];
+	const messages: string[] = [];
 	for (const context of contexts) {
-		const ids = synthWarnings({ fromAddress: 'noreply@example.com' }, context).map((w) => w.id);
-		assert.ok(ids.includes(SENDER_WARNING), `expected ${SENDER_WARNING} with context ${JSON.stringify(context)}`);
+		const warnings = synthWarnings({ fromAddress: 'noreply@example.com' }, context).filter((w) => w.id === SENDER_WARNING);
+		assert.strictEqual(warnings.length, 1, `expected one ${SENDER_WARNING} with context ${JSON.stringify(context)}`);
+		messages.push(warnings[0].message);
 	}
+	// The address is reserved on every stage, so the consequence is the same everywhere: the message
+	// must not suggest a stage-specific failure.
+	assert.strictEqual(messages[0], messages[1], 'the warning text must not depend on the stage');
+	assert.match(messages[0], /every send from it will fail with DomainNotVerifiedException once deployed/);
+	assert.doesNotMatch(messages[0], /sandbox|production/);
 });
 
 test('CDK: a reply-to address on a reserved domain raises its own warning', () => {

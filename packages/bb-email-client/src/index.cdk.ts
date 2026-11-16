@@ -4,7 +4,7 @@
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Annotations, Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { IConstruct } from 'constructs';
 
@@ -33,17 +33,17 @@ const UNDELIVERABLE_REPLY_TO_WARNING_ID = '@aws-blocks/bb-email-client:Undeliver
 /**
  * Flag a sender or reply-to address on a reserved domain. A warning, not an
  * error, on every stage: the app still synthesizes and the local mock still
- * works, but the message says that sends will fail once deployed.
+ * works, but the message says that sends will fail once deployed. The text is
+ * the same on every stage, because the domain is reserved everywhere.
  */
 function warnOnReservedDomains(scope: IConstruct, options: EmailOptions): void {
-	const stage = isSandboxContext(scope) ? 'this sandbox' : 'production';
 	const senderDomain = reservedDomainOf(options.fromAddress);
 	if (senderDomain) {
 		Annotations.of(scope).addWarningV2(
 			UNVERIFIABLE_SENDER_WARNING_ID,
 			`EmailClient fromAddress ${JSON.stringify(options.fromAddress)} is on the reserved domain "${senderDomain}", ` +
-				'which can never be verified as an SES identity, so every send from it fails in ' +
-				`${stage} with DomainNotVerifiedException. Set fromAddress to an address on a domain you have ` +
+				'which can never be verified as an SES identity, so every send from it will fail with ' +
+				'DomainNotVerifiedException once deployed. Set fromAddress to an address on a domain you have ' +
 				'verified in SES (https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html), or ' +
 				'acknowledge this warning if the stack never sends email.',
 		);
