@@ -31,6 +31,11 @@ extension String: OIDCProviderName {
 /// `Provider` is the type `signIn` takes: the generated provider enum, so a
 /// client only accepts its own providers, or `String` for an untyped spec.
 ///
+/// Hold one client per `Auth` block for the app's lifetime: fetch it once with the block's
+/// `getClient()` and keep it. `authState`, `authStateChanges()` and the guard against a stale
+/// `restore()` are per client, so a second client for the same block doesn't see the first one's
+/// sign-in, and its subscribers miss the first one's transitions.
+///
 /// All mutable state is protected by actor isolation.
 public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
