@@ -154,8 +154,9 @@ public final class BlocksClient: Sendable {
         // Parse response to check for errors (minimal parsing)
         let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        // A 4xx from an `httpErrorStatus: true` server namespace carries the same JSON-RPC error body
-        // as a 200, so decode it before checking the status.
+        // Order: decode a JSON-RPC `error` body, then check the HTTP status. The "Invalid JSON
+        // response" guard now runs after both (it was first at base), so a non-2xx whose body is
+        // not a JSON object is reported by its status below, not as "Invalid JSON".
         if let errorObj = responseJson?["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
@@ -175,8 +176,8 @@ public final class BlocksClient: Sendable {
             )
         }
 
-        // Not a JSON-RPC error (a gateway or route error, or no JSON at all): a transport failure
-        // that keeps the HTTP status as its `code`.
+        // Not a JSON-RPC error (a gateway or route error, or a body that is not a JSON object):
+        // a transport failure that keeps the HTTP status as its `code`.
         if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
             throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)", code: httpResponse.statusCode)
         }
@@ -358,6 +359,8 @@ public struct RPCError: BlocksError {
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
     /// HTTP status (e.g. `401`). For a non-2xx response that carries no JSON-RPC error
     /// (a gateway or route error), the HTTP status. `nil` for other transport and decoding failures.
+    /// A transport-origin status always comes with `name == nil`, `retriable == false`, and
+    /// `data == nil`, which tells it apart from an application error that uses the same status.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
@@ -367,11 +370,12 @@ public struct RPCError: BlocksError {
 
     /// Whether the caller can retry the same action without restarting the broader flow
     /// (`error.data.retriable`, e.g. a wrong MFA code on a sign-in challenge). `false` when
-    /// the server sent none, and for transport and decoding failures.
+    /// the server sent none, and for transport and decoding failures. Marks whether the kind
+    /// of failure is retriable in principle, not a guarantee that a given retry will succeed.
     public let retriable: Bool
 
-    /// The server's raw `error.data` object. `nil` when the server sent none, and for
-    /// transport and decoding failures.
+    /// The server's raw `error.data` object. `nil` when the server sent none or sent `error.data`
+    /// that is not a JSON object, and for transport and decoding failures.
     public let data: [String: JSONValue]?
 
     public init(
@@ -392,9 +396,11 @@ public struct RPCError: BlocksError {
 }
 
 public extension Error {
-    /// Whether this is an `RPCError` whose server error name is `name` (e.g. `"NotAuthenticatedException"`).
+    /// Whether this carries the server error name `name` (e.g. `"NotAuthenticatedException"`):
+    /// an `RPCError` (`error.data.name`) or a `RawRouteError` (its `errorName`). As with Kotlin's
+    /// `Throwable.isBlocksError`, it is offered on any `Error`.
     func isBlocksError(name: String) -> Bool {
-        (self as? RPCError)?.name == name
+        (self as? RPCError)?.name == name || (self as? RawRouteError)?.errorName == name
     }
 }
 
