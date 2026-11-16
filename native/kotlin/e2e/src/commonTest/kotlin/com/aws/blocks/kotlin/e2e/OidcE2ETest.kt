@@ -11,6 +11,8 @@ import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
 import com.aws.blocks.kotlin.oidc.OidcSignInOptions
 import com.aws.blocks.kotlin.oidc.OidcSignInOutcome
+import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
@@ -118,6 +120,23 @@ class OidcE2ETest {
 
         client.authState.value shouldBe OidcAuthState.SignedOut
         api.oidcCheckAuth() shouldBe false
+    }
+
+    @Test
+    fun restoreFollowsTheSessionCookie() = runTest {
+        if (!hasHeadlessIdp()) {
+            markSkipped(NEEDS_HEADLESS_IDP)
+            return@runTest
+        }
+        val client = oidcClient()
+        val user = client.signIn(OidcAuthApi.GetClient.Provider.Google)
+
+        // A second client on the same Blocks instance shares its cookie jar, as a relaunch does.
+        val restored = oidcClient().restore()
+        restored.shouldNotBeNull().userId shouldBe user.userId
+
+        client.signOut().shouldNotBeNull() // the stub IdP has a logout URL
+        oidcClient().restore().shouldBeNull()
     }
 
     private companion object {
