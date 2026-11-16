@@ -6,7 +6,7 @@ import kotlin.test.Test
 class ApiExceptionTest {
 
     @Test
-    fun `carries the status, name and retriable flag`() {
+    fun `carries the status and name and retriable flag`() {
         val e = ApiException("Username already taken", 409, "ConditionalCheckFailedException", retriable = true)
         e.message shouldBe "Username already taken"
         e.status shouldBe 409
