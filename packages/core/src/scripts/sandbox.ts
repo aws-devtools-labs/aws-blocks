@@ -8,6 +8,7 @@ import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
+import { runPredeployHooks } from './predeploy-hooks.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
@@ -401,6 +402,15 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   } = options;
   const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
+  // startSandbox isn't wrapped in trackCommand, so a step that fails before the
+  // deploy sends its own FAIL event.
+  const sendFailure = (error: unknown) =>
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
 
   // Load .env.local so CDK can read secret ARNs and other config.
   try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -417,30 +427,9 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   try {
     await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: classifyError(error),
-    });
+    sendFailure(error);
     throw error;
   }
-
-  // Provision connection string to SSM SecureString.
-  // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
-  // projectRoot is process.cwd() — the same value passed to cdk as --context
-  // projectRoot below — so the written name matches the name resolved at synth.
-  const secrets = await ensureSecrets('sandbox', process.cwd());
-  if (secrets.created.length > 0) {
-    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
-  }
-  if (secrets.updated.length > 0) {
-    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
-  }
-
-  // Apply external-database migrations to the sandbox database before
-  // deploying. No-op unless this app uses an external DB and has ./migrations.
-  await applyExternalMigrations({ stage: 'sandbox' });
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the
@@ -456,12 +445,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     await generateDeployClient(backendDefPath, clientPath);
   } catch (error) {
     // Not wrapped in trackCommand (see the credential check above): emit FAIL.
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: classifyError(error),
-    });
+    sendFailure(error);
     throw error;
   }
 
@@ -493,13 +477,61 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
+  const deployFailed = (error: unknown): unknown => {
+    registerFrameworkFromSink(frameworkSink);
+    history.fail(error);
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
+    });
+    cdkOutput.printRetained();
+    console.error("\n❌ Deployment failed.");
+    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
+    return error;
+  };
+
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
     await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
+  } catch (error) {
+    throw deployFailed(error);
+  }
 
+  // Pre-deploy hooks the installed blocks declare in their package.json
+  // (`aws-blocks.hooks.predeploy`), on the assembly just synthesized. Before the
+  // secrets, the external migrations and any stack change, so a stop leaves
+  // nothing to recover: no failure banner and no destroy hint. Changes that
+  // `cdk watch` deploys later are not checked.
+  try {
+    await runPredeployHooks({ stage: 'sandbox', projectRoot: process.cwd(), assemblyDir });
+  } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
+    sendFailure(error);
+    throw error;
+  }
+
+  // Provision connection string to SSM SecureString.
+  // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
+  // projectRoot is process.cwd() — the same value passed to cdk as --context
+  // projectRoot above — so the written name matches the name resolved at synth.
+  const secrets = await ensureSecrets('sandbox', process.cwd());
+  if (secrets.created.length > 0) {
+    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+  }
+  if (secrets.updated.length > 0) {
+    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
+  }
+
+  // Apply external-database migrations to the sandbox database before
+  // deploying. No-op unless this app uses an external DB and has ./migrations.
+  await applyExternalMigrations({ stage: 'sandbox' });
+
+  try {
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
     // deployed has one and already exists — or can't be inspected (fail closed).
@@ -519,18 +551,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
       { env: cdkEnv },
     );
   } catch (error) {
-    registerFrameworkFromSink(frameworkSink);
-    history.fail(error);
-    buildAndSendEvent({
-      command: 'sandbox',
-      state: 'FAIL',
-      duration: Date.now() - sandboxStartTime,
-      error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
-    });
-    cdkOutput.printRetained();
-    console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
-    throw error;
+    throw deployFailed(error);
   }
 
   registerFrameworkFromSink(frameworkSink);
