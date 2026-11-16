@@ -706,6 +706,8 @@ By default, tools run autonomously. Set `needsApproval: true` on tools that shou
 | `needsApproval: true` | Pauses for approval every time — user sees Yes / No |
 | `needsApproval: true, trustable: true` | Pauses for approval — user sees Yes / No / Trust. "Trust" auto-approves for the rest of the conversation |
 
+The default stays `false` on purpose. The agent can only call tools your app registers, and each call's arguments are validated against the tool's `parameters` schema before the handler runs; the schema bounds the arguments, not the decision to call the tool. Whether a tool needs a human decision depends on what it does, which only the app knows, and requiring approval by default would pause every read-only lookup. So the choice is per tool. With the default, the model calls a tool whenever it decides to, including when an instruction in a tool result or other content the user didn't write tells it to, so set `needsApproval: true` on tools with side effects.
+
 Tools that modify state should require user approval. Set `needsApproval: true`:
 
 ```typescript
