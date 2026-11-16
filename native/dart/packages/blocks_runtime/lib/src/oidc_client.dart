@@ -22,6 +22,12 @@ import 'token_store.dart';
 /// providers returns a `TypedOidcClient` instead, the same client with those
 /// methods narrowed to an enum of that method's providers, so a provider the
 /// client doesn't have is a compile error.
+///
+/// Hold one client per block for the app's lifetime: keep the client a
+/// block's `getClient()` returns and use it for every sign-in, sign-out and
+/// [restore], instead of calling `getClient()` again. Each client tracks its
+/// own sign-in state, and only the requests of one client know to drop a
+/// result a later sign-in or sign-out made stale.
 class OidcClient implements AuthProvider {
   final String exchangePath;
   final String refreshPath;
@@ -120,6 +126,19 @@ class OidcClient implements AuthProvider {
   }
 
   final _controller = StreamController<OidcAuthState>.broadcast();
+
+  /// Counts the sign-ins and sign-outs that changed this client's session.
+  /// [exchange] and [signOut] increment it when they change it, and a
+  /// request that started before (such as [restore]) applies its result only
+  /// if it is unchanged, so a late result never undoes a newer sign-in or
+  /// sign-out.
+  int _generation = 0;
+
+  /// The user of the current state, or null when it isn't signed in.
+  OidcUser? get _currentUser => switch (_authState) {
+    OidcSignedIn(:final user) => user,
+    _ => null,
+  };
   OidcAuthState _authState = OidcLoading();
   Completer<void>? _refreshCompleter;
 
@@ -485,6 +504,8 @@ class OidcClient implements AuthProvider {
       }),
     );
 
+    _generation++;
+
     // Capture the session cookie set by the backend so the owning
     // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow).
     sessionStore.setCookies(
@@ -595,6 +616,9 @@ class OidcClient implements AuthProvider {
   ///   failure throws the HTTP client's error. Both clear the stored tokens
   ///   but keep the session cookie and the state.
   ///
+  /// A [restore] or a token refresh still in flight when the sign-out
+  /// finishes doesn't apply its result.
+  ///
   /// The session store is never cleared, because it may hold the cookies of
   /// other `Auth` blocks on the same app. This block's cookie is removed by
   /// the `Set-Cookie` the server sends on the response.
@@ -611,9 +635,11 @@ class OidcClient implements AuthProvider {
         body: '{}',
       );
     } catch (_) {
+      _generation++;
       await _clearTokens();
       rethrow;
     }
+    _generation++;
     await _clearTokens();
     sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
 
@@ -675,8 +701,13 @@ class OidcClient implements AuthProvider {
   ///   read throws an [OidcRequestException] and leaves the state as is.
   /// - Any other status throws an [OidcRequestException], and a transport
   ///   failure throws the HTTP client's error. Neither changes the state.
+  ///
+  /// When a sign-in or sign-out finishes while the request is in flight,
+  /// the response is ignored and [restore] returns the current state's user,
+  /// or null, so a late answer never undoes the newer state.
   Future<OidcUser?> restore() async {
     await _ready;
+    final generation = _generation;
     final url = Uri.parse('$_authBaseUrl$sessionPath');
     final storedToken = await tokenStore.get(_key('access_token'));
     final accessToken = storedToken != null && !await _isExpired()
@@ -690,6 +721,9 @@ class OidcClient implements AuthProvider {
         if (accessToken != null) 'authorization': 'Bearer $accessToken',
       },
     );
+    // A sign-in or sign-out finished while this was in flight: its state is
+    // newer, so don't apply this response's cookies, user or sign-out.
+    if (generation != _generation) return _currentUser;
     sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
 
     switch (response.statusCode) {
@@ -787,7 +821,8 @@ class OidcClient implements AuthProvider {
   /// `getClient()` returns. It stores its tokens and sign-in state under
   /// keys prefixed with the directory of the descriptor's `exchangePath`
   /// (such as `/aws-blocks/auth/access_token`), so the clients of several
-  /// blocks can share one token store.
+  /// blocks can share one token store. Hold one client per block (see
+  /// [OidcClient]).
   ///
   /// Only `exchangePath` is required: a descriptor without it, or with a
   /// non-string one, throws a [FormatException] naming the field. The session

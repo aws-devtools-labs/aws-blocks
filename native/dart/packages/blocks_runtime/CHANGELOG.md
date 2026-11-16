@@ -73,6 +73,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 
 ### Other changes
 
+- A `restore()` still in flight when a sign-in or sign-out finishes ignores
+  its response and returns the current user, or null. A late 401 used to sign
+  out, and clear the tokens of, a sign-in that had just finished, and a late
+  200 used to sign back in after a sign-out.
+- The `OidcClient` docs say to hold one client per block for the app's
+  lifetime instead of calling `getClient()` again.
 - `OidcClient.fromJson` reads the descriptor's `sessionPath` and `refreshPath`
   when it sends them, and otherwise derives them, and a missing `signOutPath`,
   `callbackPath` or `authorizeParamsBasePath`, from the directory of
