@@ -12,6 +12,9 @@ Errors now fall into a few types you can tell apart by what the caller should do
 - `Error.isBlocksError(_:)`: true when an error is an `ApiError` with the given name, so `error.isBlocksError("ConditionalCheckFailed")` works the same way as the TypeScript client's `isBlocksError`.
 - `TransferableError`: a transferable descriptor could not be hydrated. `.unknownType(_)` means no hydrator is registered for the `__blocks` type, and `.invalidDescriptor(blocksType:missingField:)` means a required field is missing or unusable.
 
+**Raw-route errors**
+A raw route that answers outside 2xx now reports the server's status and error name as an `ApiError`, instead of being misread as a malformed success. The name comes from the body: a Blocks route's `name` wins; otherwise a plain OAuth `error` is the name when it sits beside `error_description` or reads like a code (no spaces), and `error_description` is kept as the detail. A nameless one-word message such as `{ "error": "Unauthorized" }` reads as a code and becomes the name. For example, a refused exchange reads `/aws-blocks/auth/exchange answered HTTP 400 (IdpErrorException: The sign-in provider refused the sign-in.)`, with `status` 400 and `name` `"IdpErrorException"`. The OIDC client wraps its own raw-route calls, so catch `OIDCError` around `signIn` and `exchange`; the `ApiError` is `OIDCError.exchangeFailed`'s `underlyingError`. Catch `ApiError` for other raw routes.
+
 **Breaking changes**
 - `RPCError` is removed. A rejected JSON-RPC call now throws `ApiError`, and a transport-level failure throws `TransportError`. Generated clients throw these in its place.
 - `RawRouteError` is removed. Raw routes (OIDC exchange and refresh, sign-out) throw `ApiError` when the server answers with an error status, and `TransportError` for everything else. A network failure that used to escape as a bare `URLError` or `NSError` is now a `TransportError` with the original in `underlyingError`.
@@ -23,6 +26,7 @@ Errors now fall into a few types you can tell apart by what the caller should do
 **Additions to existing types**
 - `OIDCError.cancelled`: a `BrowserLauncher` throws this when the user dismisses the sign-in sheet, so a catch site can tell a dismissal from a failure.
 - `OIDCError.exchangeFailed(_:_:)`: the OIDC code exchange was rejected. The `ApiError` or `TransportError` that caused it is available as `underlyingError`. A caller who catches `OIDCError` now sees a rejected exchange; it used to arrive as a raw-route error. A closed client still throws `ClientClosedError`, since that says nothing about the session.
+- A failure fetching the authorize parameters during `signIn` now surfaces as `OIDCError.callbackError` ("Failed to fetch authorize params: ...") instead of escaping as a bare `ApiError` or `TransportError`, matching the Kotlin and Dart clients. The cause is not retained on this case.
 - `RealtimeError.channelClosed` is documented as a catchable error: a channel closes on its own when the server goes away or the connection drops.
 
 `Decodable` conformances still throw `DecodingError` when a payload does not match its type; that is unchanged.

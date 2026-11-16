@@ -174,7 +174,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
         let authorizeParamsPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
-        let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        let paramsJSON: [String: Any]
+        do {
+            paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.callbackError(
+                "Failed to fetch authorize params: \((error as? BlocksError)?.message ?? error.localizedDescription)"
+            )
+        }
 
         guard let authorizeUrl = paramsJSON["authorizeUrl"] as? String,
               let clientId = paramsJSON["clientId"] as? String,

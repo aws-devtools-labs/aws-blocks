@@ -831,6 +831,27 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testAuthorizeParamsFailureSurfacesAsOIDCCallbackError() async {
+        OIDCMockURLProtocol.handler = { request in
+            let data = try JSONSerialization.data(withJSONObject: ["error": "nope"])
+            return (errorResponse(for: request.url!, status: 500), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=s"))
+            XCTFail("Expected OIDCError.callbackError")
+        } catch let error as OIDCError {
+            guard case .callbackError(let detail) = error else {
+                return XCTFail("Expected callbackError, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("Failed to fetch authorize params"), detail)
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+    }
+
     func testDescriptorMissingARequiredFieldThrowsTransferableError() {
         let descriptor: [String: Any] = ["exchangePath": "/auth/exchange"]
         XCTAssertThrowsError(try OIDCClient<String>.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
