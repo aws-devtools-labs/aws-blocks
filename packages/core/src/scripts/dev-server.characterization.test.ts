@@ -356,7 +356,7 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-credentials": "true",
       "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
-      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-origin": "http://localhost:<port>",
       "access-control-max-age": "7200",
       "content-type": "application/json",
       "vary": "Origin"
@@ -387,7 +387,7 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-credentials": "true",
       "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
-      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-origin": "http://localhost:<port>",
       "access-control-max-age": "7200",
       "content-type": "application/json",
       "vary": "Origin"
