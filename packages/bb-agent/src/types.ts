@@ -111,11 +111,14 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 *   receives its chunks. Only safe when your app never lets a caller choose the
 	 *   `conversationId` or `channelId` (for example, the server generates them and keeps them
 	 *   to itself). `resume()` throws `AgentErrors.InvalidUsage` in this mode: a session with no
-	 *   owner can't tell who may approve its pending tool calls.
+	 *   owner can't tell who may approve its pending tool calls. For the same reason, the
+	 *   constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or
+	 *   `interrupt`.
 	 *
 	 * Switching an existing agent between `'shared'` and `'user'` starts new sessions: sessions stored
-	 * under the other key are not resumed. Agents created before `'user'` became the default
-	 * used `'shared'`; set it explicitly to keep that behaviour.
+	 * under the other key are not resumed. Earlier releases keyed every `inferenceOnly` session by the
+	 * bare `conversationId`; those sessions are not resumed under `'user'`, and `'shared'` keys
+	 * sessions the same way.
 	 *
 	 * Ignored when persistence is enabled (`inferenceOnly` unset or `false`): those agents always
 	 * check that the `userId` owns the conversation and scope channels to the user.

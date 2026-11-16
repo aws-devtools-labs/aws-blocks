@@ -5,15 +5,17 @@
 
 fix(bb-agent): scope `inferenceOnly` sessions to the user by default
 
-`sessionScope` now defaults to `'user'`. An `inferenceOnly` agent keys each session by the `userId` together with the `conversationId` and scopes its Realtime channel to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. `'shared'` stays available as an explicit opt-in.
+An `inferenceOnly` agent keeps no conversation records, so it can't check that a `conversationId` belongs to the caller. It now keys each session by the `userId` together with the `conversationId` and scopes its Realtime channel to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. On AWS, the two users also run in different AgentCore runtime sessions. The new `sessionScope` option controls this: `'user'` is the default, and `'shared'` is an explicit opt-out. The option is ignored when persistence is enabled; those agents already check conversation ownership.
 
 **Breaking for `inferenceOnly` agents:**
 
-- `stream()`, `resume()` and `getChannel()` on an `inferenceOnly` agent now require `options.userId` and throw `AgentErrors.InvalidUsage` without it. Pass the authenticated user's id, as for a persistent agent.
-- Sessions stored under the bare `conversationId` are not resumed once an agent moves to `'user'`.
-- With `sessionScope: 'shared'`, `resume()` now throws `AgentErrors.InvalidUsage`: a session with no owner can't tell who may approve its pending tool calls.
+- `stream()`, `resume()` and `getChannel()` on an `inferenceOnly` agent now require a non-empty string `options.userId` and throw `AgentErrors.InvalidUsage` without one. Pass the authenticated user's id, as for a persistent agent. A runtime invocation that arrives without a `userId` is refused rather than run as `'anonymous'`.
+- Sessions previously keyed by the bare `conversationId` are no longer resumed.
 
-To keep the previous behaviour, set `sessionScope: 'shared'` on the agent, but only if callers can't choose the `conversationId` or `channelId` (for example, the server generates them and keeps them to itself). With `'shared'`, anyone who passes the same `conversationId` continues that session, and anyone who passes the same `channelId` receives its chunks.
+To key sessions by the `conversationId` alone, as before, set `sessionScope: 'shared'` on the agent, but only if callers can't choose the `conversationId` or `channelId` (for example, the server generates them and keeps them to itself). With `'shared'`, anyone who passes the same `conversationId` continues that session, and anyone who passes the same `channelId` receives its chunks. Because such a session has no owner who could approve a pending tool call:
+
+- `resume()` throws `AgentErrors.InvalidUsage`.
+- The constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or `interrupt`. An agent with approval steps needs the default `'user'` scope (or persistence).
 
 Also:
 

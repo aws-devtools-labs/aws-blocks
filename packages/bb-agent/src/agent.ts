@@ -239,6 +239,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, `sessionScope must be 'shared' or 'user', got ${JSON.stringify(config.sessionScope)}.`);
 		}
 		this.toolMap = resolveTools<TContext>(config.tools);
+		// resume() refuses an inferenceOnly agent with sessionScope: 'shared' (its sessions have no
+		// owner to approve a pending tool call), so a tool that declares an approval step could only
+		// ever pause on a prompt nobody can answer. Reject that configuration up front.
+		if (config.inferenceOnly && config.sessionScope === 'shared') {
+			const approvalTools = [...this.toolMap.values()].filter(t => t.needsApproval || t.interrupt).map(t => t.name);
+			if (approvalTools.length) {
+				throw blocksAgentError(AgentErrors.InvalidModelConfig, `Tools ${approvalTools.map(n => `'${n}'`).join(', ')} set 'needsApproval' or 'interrupt', but an inferenceOnly agent with sessionScope: 'shared' can't resume() a paused turn, so their approval prompts could never be answered. Use sessionScope: 'user' (the default) and pass the caller's userId, or enable persistence.`);
+			}
+		}
 		this.modelConfig = modelConfig;
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
@@ -958,8 +967,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` (the default)
 	 * is called without a userId: the default 'anonymous' would put every such caller in one
-	 * shared scope. The message names the `'shared'` opt-out, since this is what an agent written
-	 * before `'user'` became the default hits first.
+	 * shared scope. The message names the `'shared'` opt-out, since this is what an existing
+	 * inferenceOnly agent hits first after upgrading.
 	 */
 	private assertUserIdForUserScope(userId: unknown, method: string): void {
 		// Same test as requireUserId: an untyped RPC caller's `123` would otherwise get the

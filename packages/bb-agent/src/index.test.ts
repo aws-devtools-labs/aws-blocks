@@ -723,7 +723,9 @@ describe("inferenceOnly sessionScope: 'user'", () => {
 			sessionScope: 'shared',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
 			tools: (tool) => ({
-				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+				// A handler that calls interrupt() itself can't be detected at construction (unlike
+				// needsApproval/interrupt, refused below), so resume() still has to refuse the turn.
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), handler: async ({ interrupt }) => { interrupt({ name: 'confirm-weather' }); handlerCalls++; return { temp: 22 }; } }),
 			}),
 		});
 		const conversationId = crypto.randomUUID();
@@ -743,6 +745,42 @@ describe("inferenceOnly sessionScope: 'user'", () => {
 		}
 		await new Promise((r) => setTimeout(r, 50));
 		assert.strictEqual(handlerCalls, 0, 'a refused resume must not run the pending tool call');
+	});
+
+	for (const [label, def] of [
+		['needsApproval', { needsApproval: true }],
+		['interrupt', { interrupt: ({ interrupt }: { interrupt: (p: { name: string }) => unknown }) => { interrupt({ name: 'confirm' }); } }],
+	] as const) {
+		test(`'shared' refuses a tool with ${label} at construction`, () => {
+			assert.throws(
+				() => new Agent(new Scope(`test-io-scope-hitl-${label}`), `ioh${label.length}`, {
+					systemPrompt: 'test',
+					inferenceOnly: true,
+					sessionScope: 'shared',
+					model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+					tools: (tool) => ({
+						getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), ...def, handler: async () => ({ temp: 22 }) }),
+					}),
+				}),
+				(e: any) => {
+					assert.ok(isBlocksError(e, AgentErrors.InvalidModelConfig), String(e));
+					assert.match(e.message, /'getWeather'/);
+					assert.match(e.message, /sessionScope: 'shared'/);
+					return true;
+				},
+			);
+		});
+	}
+
+	test("'user' (the default) accepts a tool with needsApproval on an inferenceOnly agent", () => {
+		new Agent(new Scope('test-io-scope-hitl-user'), 'iohu', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }),
+			}),
+		});
 	});
 });
 
