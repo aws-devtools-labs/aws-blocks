@@ -11,15 +11,19 @@
 
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+import type { NativeEngine } from './engines/types.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import { makeAwsAuth } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => {
+	mock.restoreAll();
+	rmSync('.bb-data', { recursive: true, force: true });
+});
 
 const PASSWORD = 'Passw0rd!';
 let counter = 0;
@@ -133,10 +137,16 @@ describe('copies of auth.admin methods are never served over RPC (mock runtime)'
 	for (const shape of copyShapes) {
 		test(shape.name, async () => {
 			const auth = await mockAuthWithUser('dave');
+			// Watch the engine call itself, not the user's groups: a dispatch that
+			// reaches the admin method with other arguments (the export treated as a
+			// handler factory, called with the request context) still shows up here.
+			const engine = (auth as unknown as { native: NativeEngine }).native;
+			const engineCall = mock.method(engine.admin, 'addUserToGroup');
 			const handler = createLambdaHandler(async () => shape.exports(auth.admin));
 
 			const res = await handler(rpc(shape.method, ['dave', 'admins']));
 			assert.ok(methodNotFound(res), JSON.stringify(body(res)));
+			assert.strictEqual(engineCall.mock.callCount(), 0, 'no admin method ran');
 			assert.deepStrictEqual(await auth.admin.listGroupsForUser('dave'), []);
 		});
 	}

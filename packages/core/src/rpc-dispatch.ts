@@ -97,11 +97,13 @@ function isServerOnly(value: unknown): boolean {
 /**
  * Whether a backend-module export may be dispatched to as an API namespace.
  *
- * Rejects `_`-private exports, non-function/non-object values, Building Block
- * (`Scope`) instances, and `secret()`/`config()` managed values. `ApiNamespace`
- * values — and, for backward compatibility, plain exported functions/objects that
- * `generate-client` also proxies — are allowed. An `ApiNamespace` is allowed even if
- * it happens to look like a `Scope`, the same order `generate-client` checks in.
+ * Rejects `_`-private exports, server-only functions (see
+ * {@link markServerOnlyFunction}, e.g. an `auth.admin` method exported on its own),
+ * non-function/non-object values, Building Block (`Scope`) instances, and
+ * `secret()`/`config()` managed values. `ApiNamespace` values — and, for backward
+ * compatibility, plain exported functions/objects — are allowed. An `ApiNamespace`
+ * is allowed even if it happens to look like a `Scope`. `generate-client` uses this
+ * same predicate to decide which exports get a client proxy.
  */
 export function isDispatchableExport(name: string, value: unknown): boolean {
   if (name.startsWith('_')) return false;
