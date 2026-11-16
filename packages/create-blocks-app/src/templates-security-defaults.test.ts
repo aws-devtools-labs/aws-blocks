@@ -702,11 +702,17 @@ describe('create-blocks-app template email senders are explicit placeholders, no
     });
 
     it(`template "${name}" passes its sender through a named constant marked for replacement`, () => {
-      const match = /new EmailClient\([^)]*fromAddress:\s*([A-Z_][A-Z0-9_]*)\b/.exec(source);
-      assert.ok(match, `${name}: fromAddress should be a named constant, not an inline string`);
-      const declaration = new RegExp(`const ${match[1]} = '([^']+)'`).exec(source);
-      assert.ok(declaration, `${name}: ${match[1]} should be declared as a string constant`);
-      assert.match(declaration[1], /\.invalid$/, `${name}: the placeholder sender should be on the reserved .invalid domain`);
+      // Each `new EmailClient(...)` statement, up to its closing `);`, so a call inside the
+      // options (e.g. `configurationSet: name()`) doesn't cut the match short.
+      const constructions = [...source.matchAll(/new EmailClient\(([\s\S]*?)\);/g)];
+      assert.ok(constructions.length > 0, `${name}: expected a new EmailClient(...) statement`);
+      for (const [statement, args] of constructions) {
+        const match = /fromAddress:\s*([A-Z_][A-Z0-9_]*)\b/.exec(args);
+        assert.ok(match, `${name}: fromAddress should be a named constant, not an inline string, in ${statement}`);
+        const declaration = new RegExp(`const ${match[1]} = '([^']+)'`).exec(source);
+        assert.ok(declaration, `${name}: ${match[1]} should be declared as a string constant`);
+        assert.match(declaration[1], /\.invalid$/, `${name}: the placeholder sender should be on the reserved .invalid domain`);
+      }
       assert.match(raw, /verified SES identity before deploying to\s+(?:\/\/\s*)?production/, `${name}: say to replace the sender before production`);
     });
   }
