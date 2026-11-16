@@ -11,7 +11,8 @@ deployed.
 
 `.github/workflows/harbor-agent-check.yml`, dispatched from `main` for an open PR:
 
-1. Resolve the PR head and its merge-base with the PR base SHA.
+1. Resolve the PR head and its merge-base with the PR base SHA, and list both and the PR's changed
+   files in the run summary for the approver.
 2. On credential-free runners, `npm ci`, `npm run build` and `npm run publish:local` at both commits.
 3. After one blocks-team approval of the `approval` job (environment `harbor-bench-approval`), each
    (arm, trial) matrix job runs in the `harbor-bench` environment: `prepare.py` builds one task with
@@ -213,7 +214,12 @@ gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref
 ```
 
 PR code is built without credentials, but its install scripts run in the approved model job:
-review the candidate before approving. A new dispatch for the same PR cancels the running one.
+review the candidate before approving. The run summary lists the exact revisions and the PR's
+changed files (at most 50 rows, then "+N more"). Files that can change what runs with the model
+credentials are marked `!` and listed first: anything under `.github/` or `scripts/` (which holds
+this harness and its task), any `package.json`, lockfile or `.npmrc`. `changed-files.mjs` builds
+that table from the main checkout, never from the PR. A new dispatch for the same PR cancels the
+running one.
 
 ## Security boundaries
 

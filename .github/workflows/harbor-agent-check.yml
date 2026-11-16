@@ -64,11 +64,20 @@ jobs:
             core.setOutput('candidate', pr.head.sha);
             core.setOutput('baseline', comparison.merge_base_commit.sha);
             core.setOutput('source_repository', pr.head.repo.full_name);
+            // From this job's checkout of the dispatching main commit, not the PR. It escapes the
+            // PR-controlled file names; scripts/ci/harbor-approval-gate.test.mjs runs this script.
+            const { changedFilesSummary } = await import(
+              `file://${process.env.GITHUB_WORKSPACE}/scripts/harbor-bench/changed-files.mjs`);
+            const listing = changedFilesSummary(comparison.files ?? [], { total: pr.changed_files });
             await core.summary.addHeading('Requested Harbor evaluation')
               .addTable([['PR', 'Candidate', 'Baseline', 'Trials per arm'],
                 [value, pr.head.sha, comparison.merge_base_commit.sha, process.env.TRIALS]])
               .addRaw('Optional and non-required. Review these exact revisions before approving model access. '
-                + 'A new dispatch for this PR cancels this run.').write();
+                + 'A new dispatch for this PR cancels this run.', true)
+              .addHeading('Changed files', 3)
+              .addRaw(listing.note, true)
+              .addTable(listing.rows)
+              .addRaw(listing.footer, true).write();
 
   packages:
     needs: revisions
