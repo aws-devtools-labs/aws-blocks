@@ -1,7 +1,7 @@
 ## Unreleased
 
 - The generated `Blocks` gains a `Blocks.fromConfig(BlocksConfig config)`
-  constructor, for the URL and HTTP timeouts in a `BlocksConfig`.
+  constructor, which takes the URL from a `BlocksConfig`.
   `Blocks(baseUrl: ...)` is unchanged and now forwards to it. A namespace
   named `fromConfig` is generated as `fromConfig$`, since a field cannot share
   a name with the constructor. It needs `BlocksClient.fromConfig`, which is

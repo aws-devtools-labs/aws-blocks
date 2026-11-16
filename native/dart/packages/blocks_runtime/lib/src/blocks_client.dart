@@ -33,11 +33,8 @@ class BlocksClient {
        sessionStore = sessionStore ?? InMemorySessionStore(),
        tokenStore = tokenStore ?? InMemoryTokenStore();
 
-  /// Creates a client configured by [config]: its [BlocksConfig.baseUrl] and
-  /// timeouts. The other arguments are the same as the default constructor's.
-  ///
-  /// The timeouts apply to the HTTP client this creates. A [client] you pass
-  /// is used as it is, without them.
+  /// Creates a client configured by [config]. The other arguments are the
+  /// same as the default constructor's.
   BlocksClient.fromConfig(
     BlocksConfig config, {
     http.Client? client,
@@ -46,12 +43,7 @@ class BlocksClient {
     AuthProvider? authProvider,
   }) : this(
          baseUrl: config.baseUrl,
-         client:
-             client ??
-             newBlocksHttpClient(
-               connectTimeout: config.connectTimeout,
-               idleTimeout: config.idleTimeout,
-             ),
+         client: client,
          sessionStore: sessionStore,
          tokenStore: tokenStore,
          authProvider: authProvider,

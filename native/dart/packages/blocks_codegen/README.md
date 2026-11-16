@@ -23,18 +23,15 @@ dart run build_runner build
 The generated `Blocks` class has one field per API namespace and two
 constructors: `Blocks(baseUrl: ...)` (the URL defaults to the spec's first
 server when the spec declares one), and `Blocks.fromConfig(config)`, which
-takes a `BlocksConfig` from `blocks_runtime` for the URL and the HTTP
-timeouts. The generated library re-exports `BlocksConfig` (and
+takes a `BlocksConfig` from `blocks_runtime`. The generated library re-exports `BlocksConfig` (and
 `rewriteLocalhost`), so an app that imports only the generated client can use
 it. A namespace named `fromConfig` is generated as `fromConfig$`, since a
-field cannot share a name with a constructor.
+field cannot share a name with a constructor. Requests use the runtime's
+default timeouts; see the `blocks_runtime` README.
 
 ```dart
 final blocks = Blocks.fromConfig(
-  const BlocksConfig(
-    baseUrl: 'https://api.example.com/aws-blocks/api',
-    idleTimeout: Duration(minutes: 2),
-  ),
+  const BlocksConfig(baseUrl: 'https://api.example.com/aws-blocks/api'),
 );
 ```
 

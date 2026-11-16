@@ -122,11 +122,11 @@ void main() {
 }
 ''';
 
-/// Builds fixture 01's generated `Blocks` from a `BlocksConfig` with a short
-/// idle timeout and calls a server that never answers, exiting non-zero
-/// unless the call fails with that timeout.
+/// Builds fixture 01's generated `Blocks` from a `BlocksConfig` and calls a
+/// server that answers with a JSON-RPC error, exiting non-zero unless the call
+/// reached the config's URL.
 const _fromConfig = r'''
-import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -134,25 +134,31 @@ import 'package:scratch/primitives.dart';
 
 Future<void> main() async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-  server.listen((_) {});
-  const idle = Duration(milliseconds: 200);
+  String? path;
+  server.listen((request) async {
+    path = request.uri.path;
+    await request.drain<void>();
+    request.response
+      ..headers.contentType = ContentType.json
+      ..write(jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'error': {'code': -32601, 'message': 'no'},
+      }));
+    await request.response.close();
+  });
   final blocks = Blocks.fromConfig(
-    BlocksConfig(
-      baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api',
-      idleTimeout: idle,
-    ),
+    BlocksConfig(baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api'),
   );
   var code = 1;
   try {
-    await blocks.api
-        .echo(text: 'x', count: 1, score: 1, enabled: true)
-        .timeout(const Duration(seconds: 10));
+    await blocks.api.echo(text: 'x', count: 1, score: 1, enabled: true);
     stderr.writeln('the call returned');
-  } on TimeoutException catch (e) {
-    if (e.duration == idle) {
+  } on BlocksRpcException {
+    if (path == '/aws-blocks/api/api') {
       code = 0;
     } else {
-      stderr.writeln('timed out after ${e.duration}, not $idle');
+      stderr.writeln('called $path');
     }
   }
   await server.close(force: true);
@@ -228,7 +234,7 @@ dependencies:
     );
   });
 
-  test('generated Blocks takes its timeout from a BlocksConfig', () async {
+  test('generated Blocks calls the URL in a BlocksConfig', () async {
     _expectSuccess(
       await _dart(['run', 'bin/from_config.dart'], scratch.path),
       'from config',
