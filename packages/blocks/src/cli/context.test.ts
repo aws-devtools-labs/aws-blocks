@@ -784,6 +784,14 @@ describe('per-app dev config', () => {
 		);
 	});
 
+	it('starts every detected frontend dev server on 127.0.0.1, whatever its own config or HOST says', () => {
+		// The dev server's `host` is the only opt-in to the network: the frontend behind its proxy stays on loopback.
+		for (const dependency of ['next', 'nuxt', 'astro', 'vite']) {
+			const { frontendCommand } = resolveDevConfig(fixtureApp({ dependencies: { [dependency]: '*' } }));
+			assert.match(frontendCommand ?? '', /--host(name)?[ =]127\.0\.0\.1\b/, dependency);
+		}
+	});
+
 	it('detects the framework before the vite it builds on, and next before every other', () => {
 		// Astro and Nuxt run Vite themselves, and an app can also list vite: `npx vite` would not serve its pages.
 		assert.strictEqual(
