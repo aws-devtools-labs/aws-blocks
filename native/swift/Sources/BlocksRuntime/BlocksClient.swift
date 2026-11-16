@@ -356,9 +356,9 @@ public struct RPCError: BlocksError {
     public let underlyingError: Error?
 
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
-    /// status (e.g. `401`); `-1` when the error carries no `code`. For a non-2xx response with no
-    /// JSON-RPC error (a gateway or route error), the HTTP status, with `name`, `data` nil and
-    /// `retriable` false. `nil` for other transport and decoding failures.
+    /// status (e.g. `401`); `-1` when `code` is absent or not an integer. For a non-2xx response
+    /// with no JSON-RPC error (a gateway or route error), the HTTP status, with `name` and `data`
+    /// nil and `retriable` false. `nil` for other transport and decoding failures.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
@@ -371,7 +371,7 @@ public struct RPCError: BlocksError {
     /// it marks the kind of failure as retriable, not that a given retry will succeed.
     public let retriable: Bool
 
-    /// The server's `error.data` object as `JSONValue` holds it. `nil` when the server sent none
+    /// The server's `error.data` object, as `[String: JSONValue]`. `nil` when the server sent none
     /// or sent `error.data` that is not a JSON object, and for transport and decoding failures.
     public let data: [String: JSONValue]?
 

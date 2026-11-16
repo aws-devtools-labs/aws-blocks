@@ -391,7 +391,7 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
-    func testExecuteReportsMinusOneWhenTheErrorHasNoCode() async {
+    func testExecuteFillsInACodeAndMessageTheErrorLacks() async {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: config)
@@ -399,7 +399,7 @@ final class BlocksClientTests: XCTestCase {
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             let data = Data("""
-            {"jsonrpc":"2.0","error":{"message":"No code"},"id":1}
+            {"jsonrpc":"2.0","error":{},"id":1}
             """.utf8)
             return (response, data)
         }
@@ -412,7 +412,7 @@ final class BlocksClientTests: XCTestCase {
             XCTFail("Expected error")
         } catch let error as RPCError {
             XCTAssertEqual(error.code, -1)
-            XCTAssertEqual(error.message, "Error occured with code: -1 message: No code")
+            XCTAssertEqual(error.message, "Error occured with code: -1 message: Unknown error")
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }
