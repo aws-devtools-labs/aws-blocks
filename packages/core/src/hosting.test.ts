@@ -2949,7 +2949,9 @@ describe('Hosting', () => {
     for (const [label, frontDoor, claims, origin] of doors) {
       it(`${label}: registers the door url and ${claims ? 'claims' : 'does not claim'} the API front-door role`, () => {
         createSpaBuildOutput(tmpDir);
-        const stack = new Stack(new App(), `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+        const app = label === 'alb' ? new App({ context: { sandboxMode: 'true' } }) : new App();
+        const stack = new Stack(app, `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
         const claimed: string[] = [];
         const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claimed.push(url) };
         const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor });
@@ -3128,9 +3130,28 @@ describe('Hosting', () => {
   });
 
   describe("frontDoor: { kind: 'alb' } (regional ALB — no CloudFront)", () => {
+    it('outside a sandbox, the ALB door without a certificate fails synth (PlainHttpFrontDoorError); a sandbox deploy warns', () => {
+      createSpaBuildOutput(tmpDir);
+      const prod = new Stack(new App(), 'AlbPlainHttpProd', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () => new Hosting(prod, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } }),
+        (e: Error & { resolution?: string }) =>
+          e.name === 'PlainHttpFrontDoorError' &&
+          /The 'alb' front door serves the app over plain HTTP/.test(e.message) &&
+          /`certificate` and `features\.domain`/.test(e.resolution ?? ''),
+      );
+      const sandbox = new Stack(new App({ context: { sandboxMode: 'true' } }), 'AlbPlainHttpSandbox', {
+        env: { account: '111111111111', region: 'us-east-1' },
+      });
+      new Hosting(sandbox, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
+      const warnings = Annotations.fromStack(sandbox).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      assert.strictEqual(warnings.length, 1);
+    });
+
     it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
       createSpaBuildOutput(tmpDir);
-      const app = new App();
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const app = new App({ context: { sandboxMode: 'true' } });
       const stack = new Stack(app, 'AlbStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
@@ -3170,7 +3191,9 @@ describe('Hosting', () => {
         createSpaBuildOutput(tmpDir);
         registerRoute({ method: 'GET', path: '/hooks/door-probe', handler: async () => {} });
         registerRoute({ method: 'GET', path: '/users/{id}', handler: async () => {} });
-        const stack = new Stack(new App(), `RawRoutes-${label.replace(/\W/g, '')}`, {
+        // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+        const app = label === 'alb' ? new App({ context: { sandboxMode: 'true' } }) : new App();
+        const stack = new Stack(app, `RawRoutes-${label.replace(/\W/g, '')}`, {
           env: { account: '111111111111', region: 'us-east-1' },
         });
         new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor });
@@ -3779,7 +3802,8 @@ describe('Hosting', () => {
 
     it('the standalone ALB door stays public by design (open listener, plain forward)', () => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'AlbStaysPublic', { env: { account: '111111111111', region: 'us-east-1' } });
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'AlbStaysPublic', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
       const t = Template.fromStack(stack);
       assert.ok(albIngress(t).some((r) => r.CidrIp === '0.0.0.0/0'));
@@ -3945,7 +3969,8 @@ describe('Hosting — frontDoor.features', () => {
   });
 
   it('ALB: features (and a supported alias) reach the router', () => {
-    const stack = newStack('FeatAlb');
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'FeatAlb', { env: { account: '111111111111', region: 'us-east-1' } });
     new Hosting(stack, 'Hosting', {
       root: tmpDir,
       api: MOCK_API,

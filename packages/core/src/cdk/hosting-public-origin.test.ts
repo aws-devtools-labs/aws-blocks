@@ -87,9 +87,13 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 type Tier = 'cloudfront' | 'apigateway';
 
-/** Synthesize a stack + Hosting behind `frontDoor`; return what the browser and the runtime get. */
-const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
-	const app = new cdk.App();
+/**
+ * Synthesize a stack + Hosting behind `frontDoor`; return what the browser and the runtime get.
+ * `sandbox` synthesizes a sandbox deploy (`sandboxMode` context): a plain-HTTP ALB door with an API
+ * fails synth in production (`PlainHttpFrontDoorError`).
+ */
+const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor'], sandbox = false) => {
+	const app = new cdk.App(sandbox ? { context: { sandboxMode: 'true' } } : undefined);
 	const stack = await BlocksStack.create(app, `Origin${tier}`, {
 		backendHandlerPath: join(fixtures, 'handler.js'),
 		backendCDKPath: join(fixtures, 'side-effect-backend.js'),
@@ -118,14 +122,14 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
 
 describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browsers', () => {
 	test("ALB without a certificate under 'cloudfront': the ALB stays the public origin (the API distribution doesn't overwrite it)", async () => {
-		const r = await synth('cloudfront', { kind: 'alb' });
+		const r = await synth('cloudfront', { kind: 'alb' }, true);
 		assert.ok(r.apiFrontDoorBuilt, 'an http:// door does not claim, so native clients keep an HTTPS ApiUrl');
 		assert.match(r.publicOrigin ?? '', /"http:\/\/",\{"Fn::GetAtt":\["HostingAlb[0-9A-F]+","DNSName"\]\}/);
 		assert.match(r.apiUrlOutput, /ApiFrontDoor/);
 	});
 
 	test("ALB without a certificate under 'apigateway': the ALB is the public origin", async () => {
-		const r = await synth('apigateway', { kind: 'alb' });
+		const r = await synth('apigateway', { kind: 'alb' }, true);
 		assert.ok(!r.apiFrontDoorBuilt);
 		assert.match(r.publicOrigin ?? '', /HostingAlb[0-9A-F]+","DNSName"/);
 	});

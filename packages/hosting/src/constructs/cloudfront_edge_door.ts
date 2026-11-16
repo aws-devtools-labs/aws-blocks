@@ -54,6 +54,7 @@ import { Annotations, Duration } from 'aws-cdk-lib';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import { HostingError } from '../hosting_error.js';
+import { isSandboxDeploy } from './deploy_stage.js';
 import {
   AllowedMethods,
   type BehaviorOptions,
@@ -99,17 +100,6 @@ export type CloudFrontEdgeDoorResult = FrontDoorResult & {
    * it wait for the build's asset uploads.
    */
   staticFunction?: CloudFrontFunction;
-};
-
-/**
- * Whether `scope` is synthesized for a sandbox deploy: the CDK context key
- * `sandboxMode` the sandbox scripts pass (`-c sandboxMode=true`), the same
- * rule as `isSandboxContext` in `@aws-blocks/core/cdk`. Anything else is a
- * production deploy.
- */
-const isSandboxDeploy = (scope: Construct): boolean => {
-  const value: unknown = scope.node.tryGetContext('sandboxMode');
-  return value === 'true' || value === true;
 };
 
 /**

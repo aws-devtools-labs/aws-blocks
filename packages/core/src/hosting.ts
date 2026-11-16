@@ -566,7 +566,10 @@ export interface HostingProps {
    * error in `features`. The ALB proxies the same-origin API (`/aws-blocks/*`
    * and the backend's raw routes) through a forwarder Lambda, so cookie auth
    * works with no CORS. SSR responses are buffered. Give it a `certificate`
-   * and `features.domain` for HTTPS at your domain.
+   * and `features.domain` for HTTPS at your domain. Without them it serves
+   * plain HTTP, which with an API is sandbox-only: a production deploy fails
+   * synth (`PlainHttpFrontDoorError`), and a sandbox deploy (`sandboxMode`
+   * context) warns (`@aws-blocks/hosting:PlainHttpFrontDoor`).
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
    * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
