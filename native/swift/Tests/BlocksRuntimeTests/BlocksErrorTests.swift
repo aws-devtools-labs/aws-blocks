@@ -31,10 +31,10 @@ final class BlocksErrorTests: XCTestCase {
 
     func testIsBlocksErrorMatchesOnTheNameOnly() {
         let error: Error = ApiError(message: "nope", status: 409, name: "ConditionalCheckFailedException")
-        XCTAssertTrue(error.isBlocksError("ConditionalCheckFailedException"))
-        XCTAssertFalse(error.isBlocksError("SomeOtherException"))
-        XCTAssertFalse(ClientClosedError().isBlocksError("ConditionalCheckFailedException"))
-        XCTAssertFalse(ApiError(message: "nameless", status: 500).isBlocksError("ConditionalCheckFailedException"))
+        XCTAssertTrue(error.isBlocksError(name: "ConditionalCheckFailedException"))
+        XCTAssertFalse(error.isBlocksError(name: "SomeOtherException"))
+        XCTAssertFalse(ClientClosedError().isBlocksError(name: "ConditionalCheckFailedException"))
+        XCTAssertFalse(ApiError(message: "nameless", status: 500).isBlocksError(name: "ConditionalCheckFailedException"))
     }
 
     func testTransportErrorHasNoStatusWhenNoResponseArrived() {

@@ -40,12 +40,15 @@ public struct ApiError: BlocksError {
 
     /// The server's error name, or `nil` when it sent none. Errors cross the wire by name,
     /// so match on this rather than on `message` or `status` — a named error thrown without
-    /// a status arrives as a 500 with its name intact.
+    /// a status arrives as a 500 with its name intact. `nil` when the server sent none or
+    /// sent a name that is not a string.
     public let name: String?
 
     /// Whether the same action can be retried without restarting the wider flow. Meaningful
     /// for multi-step flows such as an auth challenge, where a wrong code can be re-entered
-    /// against the same session but an expired session cannot.
+    /// against the same session but an expired session cannot. `true` only when the server
+    /// sent the JSON boolean `true`; it marks the kind of failure as retriable, not that a
+    /// given retry will succeed.
     public let retriable: Bool
 
     public init(message: String, status: Int, name: String? = nil, retriable: Bool = false) {
@@ -77,9 +80,11 @@ public struct TransportError: BlocksError {
 }
 
 public extension Error {
-    /// True when this is an `ApiError` whose `name` is `name`. Errors cross the wire by
-    /// name, so match with this rather than on a message or a status.
-    func isBlocksError(_ name: String) -> Bool {
+    /// True when this is an `ApiError` whose `name` is `name` (e.g. `"NotAuthenticatedException"`).
+    /// Errors cross the wire by name, so match with this rather than on a message or a status.
+    /// Like Kotlin's `Throwable.isBlocksError`, it is offered on any `Error`, and is `false`
+    /// for transport and decoding failures.
+    func isBlocksError(name: String) -> Bool {
         (self as? ApiError)?.name == name
     }
 }
