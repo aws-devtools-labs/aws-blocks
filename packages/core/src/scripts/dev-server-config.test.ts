@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildBlocksConfig, isBlocksConfigRequest } from './dev-server.js';
+import { buildBlocksConfig, buildServedBlocksConfig, isBlocksConfigRequest } from './dev-server.js';
 
 describe('buildBlocksConfig — client runtime config', () => {
   it('points the browser at the localhost front door RPC endpoint', () => {
@@ -21,6 +21,28 @@ describe('buildBlocksConfig — client runtime config', () => {
       apiUrl: 'http://localhost:3000/aws-blocks/api',
       environment: 'sandbox',
     });
+  });
+
+  it('points at the specific host the dev server binds, which localhost does not reach', () => {
+    assert.strictEqual(buildBlocksConfig(41083, false, '10.253.66.118').apiUrl, 'http://10.253.66.118:41083/aws-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, 'fd00::5').apiUrl, 'http://[fd00::5]:3000/aws-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, '0.0.0.0').apiUrl, 'http://localhost:3000/aws-blocks/api');
+  });
+});
+
+describe('buildServedBlocksConfig — the config.json the dev server answers', () => {
+  it('serves the same-origin /aws-blocks/api for an all-interfaces bind', () => {
+    // A browser loads such a server at any of the machine's addresses; localhost would be another origin.
+    for (const host of ['0.0.0.0', '::', '[::]']) {
+      assert.deepStrictEqual(buildServedBlocksConfig(41041, false, host), { apiUrl: '/aws-blocks/api', environment: 'local' }, host);
+    }
+    assert.deepStrictEqual(buildServedBlocksConfig(41041, true, '0.0.0.0'), { apiUrl: '/aws-blocks/api', environment: 'sandbox' });
+  });
+
+  it('serves the file config, an absolute URL, for any other bind', () => {
+    for (const host of [undefined, '127.0.0.1', '::1', 'localhost', '10.253.66.118', 'fd00::5']) {
+      assert.deepStrictEqual(buildServedBlocksConfig(41041, false, host), buildBlocksConfig(41041, false, host), String(host));
+    }
   });
 });
 

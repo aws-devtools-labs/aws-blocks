@@ -315,13 +315,14 @@ export const WATCHER_EXIT_MS = 1000;
  * The pids of the children of `pid` (POSIX `ps`); none when `ps` fails, and none
  * on Windows: there a signal is `TerminateProcess`, so no runner runs a cleanup
  * to wait for, and a `ps` on `PATH` (Git for Windows' MSYS one) takes no `-A`.
- * Its stderr never reaches the user's terminal.
+ * Its stderr never reaches the user's terminal. One `-o` per column: procps-ng
+ * 3.3.10 (CentOS 7, AL2) reads `-o pid=,ppid=` as a single pid column.
  */
 export function childPids(
 	pid: number,
 	platform: NodeJS.Platform = process.platform,
 	list: () => string = () =>
-		execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }),
+		execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }),
 ): number[] {
 	if (platform === 'win32') return [];
 	try {

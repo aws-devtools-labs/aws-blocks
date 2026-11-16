@@ -260,7 +260,7 @@ aws-blocks/
 	blocks.spec.json        # all namespaces, all methods
 ```
 
-**Environment config** — when a deployed config exists (`.blocks-sandbox/config.json`), the CLI populates the OpenRPC `servers` array with the API URL:
+**Environment config** — the CLI populates the OpenRPC `servers` array with the API URL of the running dev server (`.blocks-sandbox/config.json`) or, with `BLOCKS_SPEC_STAGE=sandbox` or `production`, of that stage's last deploy (`.blocks-sandbox/config.<stage>.json`). A deploy never writes `config.json`, so a spec targets AWS only when you ask:
 
 ```json
 {
@@ -270,7 +270,7 @@ aws-blocks/
 }
 ```
 
-If no config exists (e.g., running before the first deploy), the `servers` array is omitted and native SDKs must get the endpoint URL from their own environment config at runtime.
+If that file does not exist (no dev server has run, or the stage was never deployed from this machine), the `servers` array is omitted and native SDKs must get the endpoint URL from their own environment config at runtime.
 
 The spec describes the API shape. The `servers` entry is a convenience for codegen tools that want a default URL, but the platform SDK should still support runtime URL override for multi-environment deployments.
 
@@ -299,7 +299,7 @@ flowchart LR
   DB[(Postgres<br/>information_schema)] -. "npx bb-data pull" .-> TS
   App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
   TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
-  Sandbox[.blocks-sandbox/config.json] -- servers URL --> Spec
+  Sandbox[.blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
   Spec -- local file read --> Dart[blocks_codegen]
   Spec -- local file read --> Swift[BlocksCodegen plugins]
   Spec -- local file read --> Kotlin[Gradle codegen task]

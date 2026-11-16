@@ -143,8 +143,8 @@ export interface DispatchCorsPolicy {
    * dev server refuses only state-changing requests from a foreign origin).
    */
   rejects(origin: string, request: DispatchRequest): boolean;
-  /** The CORS headers for a response to a request from `origin` (`''` when absent). */
-  headers(origin: string): Record<string, string>;
+  /** The CORS headers for a response to `request`, from `origin` (`''` when absent). */
+  headers(origin: string, request: DispatchRequest): Record<string, string>;
 }
 
 /**
@@ -174,7 +174,7 @@ export interface DispatchRpcTrace {
 /** The deployed CORS policy: the configured allowlist, when there is one. */
 const ALLOWLIST_CORS_POLICY: DispatchCorsPolicy = {
   rejects: (origin) => getCorsPatterns() !== null && !isOriginAllowed(origin),
-  headers: buildCorsHeaders,
+  headers: (origin) => buildCorsHeaders(origin),
 };
 
 /**
@@ -253,7 +253,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   return async (request) => {
     const { origin, method: httpMethod } = request;
-    const corsHeaders = cors.headers(origin);
+    const corsHeaders = cors.headers(origin, request);
 
     // Reject cross-origin requests from disallowed origins
     if (origin && cors.rejects(origin, request)) {

@@ -49,9 +49,10 @@ interface SandboxRun {
 		product: { buildingBlocks?: Array<{ name: string; version: string }> };
 		counters?: { blocksCount: number };
 	}>;
-	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; clientExisted: boolean }>;
-	/** `.blocks-sandbox/config.json` and `aws-blocks/client.js` after the run, if written. */
+	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; appEntry: string | undefined; clientExisted: boolean }>;
+	/** `.blocks-sandbox/config.json`, `config.sandbox.json` and `aws-blocks/client.js` after the run, if written. */
 	configJson?: string;
+	sandboxConfigJson?: string;
 	clientJs?: string;
 }
 
@@ -61,7 +62,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 	let success: SandboxRun;
 	let failure: SandboxRun;
 
-	const runSandbox = (name: string, failDeploy: boolean): SandboxRun => {
+	const runSandbox = (name: string, failDeploy: boolean, script = 'run-sandbox.mjs', extraEnv: NodeJS.ProcessEnv = {}): SandboxRun => {
 		rmSync(join(appDir, '.blocks-sandbox'), { recursive: true, force: true });
 		rmSync(join(appDir, 'aws-blocks', 'client.js'), { force: true });
 		const telemetryFile = join(tmp, `${name}-telemetry.json`);
@@ -83,10 +84,11 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 			FAKE_NPM_LOG: npmLog,
 			FAKE_NPM_FAIL: failDeploy ? '1' : '',
 			FX_CORE_COMMON_URL: pathToFileURL(join(distScripts, '..', 'common', 'index.js')).href,
+			...extraEnv,
 		});
 		const result = spawnSync(
 			process.execPath,
-			[join(tmp, 'run-sandbox.mjs'), `--telemetry-file=${telemetryFile}`],
+			[join(tmp, script), `--telemetry-file=${telemetryFile}`],
 			{
 				cwd: appDir,
 				env,
@@ -98,6 +100,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 		const readIfExists = (path: string) => (existsSync(path) ? readFileSync(path, 'utf-8') : undefined);
 		return {
 			configJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.json')),
+			sandboxConfigJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.sandbox.json')),
 			clientJs: readIfExists(join(appDir, 'aws-blocks', 'client.js')),
 			status: result.status,
 			signal: result.signal,
@@ -163,7 +166,7 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 			`import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 const argv = process.argv.slice(2);
-appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, clientExisted: existsSync('aws-blocks/client.js') }) + '\\n');
+appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, appEntry: process.env.BLOCKS_CDK_APP_ENTRY, clientExisted: existsSync('aws-blocks/client.js') }) + '\\n');
 if (process.env.FAKE_NPM_FAIL) process.exit(1);
 // \`cdk synth\` writes no outputs file; only \`cdk deploy\` is given one.
 const outputsAt = argv.indexOf('--outputs-file');
@@ -207,6 +210,49 @@ try {
 		assert.match(success.stdout, /RETURNED https:\/\/fake-api\.example\.com\//);
 	});
 
+	it('a watch-mode sandbox ends, and stops its cdk watch, when its dev server ends (U2)', () => {
+		// `cdk-blocks dev stop` stops the sandbox's dev server; the sandbox used to stay up, headless, its
+		// `cdk watch` hotswapping every save into AWS, with no command left that could find or stop it.
+		const watchPid = join(tmp, 'watch.pid');
+		writeFileSync(
+			join(tmp, 'bin', 'npx'),
+			`#!/bin/sh\nexec node -e "require('fs').writeFileSync(process.env.FAKE_WATCH_PID, String(process.pid)); setInterval(() => {}, 1000)"\n`,
+		);
+		chmodSync(join(tmp, 'bin', 'npx'), 0o755);
+		// The dev server records its sandbox session, then ends on its own, as one that `dev stop` stopped.
+		const devServer = join(tmp, 'dev-server.mjs');
+		writeFileSync(
+			devServer,
+			"import { writeFileSync } from 'node:fs';\n" +
+				"writeFileSync(process.env.FAKE_DEV_ENV, process.env.BLOCKS_SANDBOX_SESSION ?? '');\n" +
+				'setTimeout(() => process.exit(0), 1500);\n',
+		);
+		writeFileSync(
+			join(tmp, 'run-sandbox-watch.mjs'),
+			`import { startSandbox } from ${JSON.stringify(pathToFileURL(join(distScripts, 'sandbox.js')).href)};
+await startSandbox({ backendPath: ${JSON.stringify(BACKEND_PATH)}, devCommand: ${JSON.stringify(`node ${devServer}`)} });
+`,
+		);
+		const devEnv = join(tmp, 'dev-env.txt');
+		const run = runSandbox('watch', false, 'run-sandbox-watch.mjs', { FAKE_WATCH_PID: watchPid, FAKE_DEV_ENV: devEnv });
+		const watcher = existsSync(watchPid) ? Number(readFileSync(watchPid, 'utf-8')) : 0;
+		let watcherAlive = false;
+		try {
+			process.kill(watcher, 0);
+			watcherAlive = watcher > 1;
+		} catch {
+			// stopped with the session
+		} finally {
+			if (watcherAlive) process.kill(watcher, 'SIGKILL'); // never leave it behind, even when the test fails
+		}
+		assert.strictEqual(run.signal, null, `still running after ${RUN_TIMEOUT_MS}ms:\n${run.stdout}\n${run.stderr}`);
+		assert.strictEqual(run.status, 0, run.stderr);
+		assert.match(run.stdout + run.stderr, /Stopped local processes/);
+		assert.ok(watcher > 1, 'cdk watch was started');
+		assert.strictEqual(watcherAlive, false, 'cdk watch is stopped with the session');
+		assert.match(readFileSync(devEnv, 'utf-8'), /^\d+$/, 'the dev server is told its sandbox session');
+	});
+
 	it('the SUCCESS event reports the app’s blocks', () => {
 		assert.strictEqual(success.telemetry.length, 1, success.stdout);
 		const [event] = success.telemetry;
@@ -228,7 +274,7 @@ try {
 	it('deploys as `sandbox` does: `cdk synth`, then `cdk deploy` of that assembly, both under `--conditions=cdk`', () => {
 		// Since #778 the sandbox synthesizes first (to check the assembly for
 		// resources Express Mode can't update), then deploys the assembly.
-		const options = { outDir: '.blocks-sandbox', projectRoot: appDir, backendPath: BACKEND_PATH };
+		const options = { outDir: '.blocks-sandbox', projectRoot: appDir };
 		assert.strictEqual(success.npmCalls.length, 2);
 		const [synth, deploy] = success.npmCalls;
 		assert.deepStrictEqual(synth.argv, buildSandboxSynthArgs(options));
@@ -238,15 +284,19 @@ try {
 		);
 		assert.strictEqual(synth.nodeOptions, '--conditions=cdk');
 		assert.strictEqual(deploy.nodeOptions, '--conditions=cdk');
+		// The --app command reads the backend entry from the environment (see cdkAppCommand).
+		assert.strictEqual(synth.appEntry, BACKEND_PATH);
 	});
 
-	it('writes the same outputs: config.json and the aws-runtime client (generated before the deploy)', () => {
+	it('writes the same outputs: config.sandbox.json and the aws-runtime client (generated before the deploy)', () => {
 		assert.strictEqual(success.npmCalls[0].clientExisted, true);
-		assert.ok(success.configJson, 'config.json was not written');
-		assert.deepStrictEqual(JSON.parse(success.configJson), {
+		assert.ok(success.sandboxConfigJson, 'config.sandbox.json was not written');
+		assert.deepStrictEqual(JSON.parse(success.sandboxConfigJson), {
 			apiUrl: 'https://fake-api.example.com/',
 			environment: 'sandbox',
 		});
+		// config.json is the dev server's: the Node client reads it, so a deploy must not point it at AWS.
+		assert.strictEqual(success.configJson, undefined, 'the deploy wrote the dev server config.json');
 		assert.match(success.clientJs ?? '', /export const api = /);
 		assert.match(success.stdout, /BLOCKS_DEPLOYED api=https:\/\/fake-api\.example\.com\//);
 	});
