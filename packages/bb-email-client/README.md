@@ -10,7 +10,7 @@ Transactional email sending via Amazon SES.
 import { EmailClient } from '@aws-blocks/bb-email-client';
 
 const emailClient = new EmailClient(scope, 'notifications', {
-  fromAddress: 'noreply@example.com',
+  fromAddress: 'noreply@your-verified-domain.com', // an address on a domain verified in SES
   configurationSet: 'my-tracking-set', // optional
 });
 
@@ -67,7 +67,8 @@ const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
 // App-owned profile data, keyed by the user's `userSub`. The app writes each user's address here.
 const profiles = new KVStore<{ email: string }>(scope, 'profiles');
-const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@example.com' });
+// fromAddress must be on a domain verified in SES (see "Reserved sender domains" below).
+const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@your-verified-domain.com' });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async sendMeASummary() {
