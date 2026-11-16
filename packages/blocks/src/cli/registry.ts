@@ -89,7 +89,10 @@ export interface CommandSpec {
 	 * which prints that verb's usage without side effects.
 	 */
 	verbs?: readonly string[];
-	/** The shape of the `--output json` result; absent when the command has no JSON output. */
+	/**
+	 * The shape of the JSON result; absent when the command has no JSON output. A command
+	 * with one prints it by default when stdout is not a terminal (see `resultFormat`).
+	 */
 	json?: JsonObjectShape;
 	/**
 	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
@@ -130,7 +133,7 @@ export const GLOBAL_FLAGS: readonly FlagSpec[] = [
 		name: 'output',
 		type: 'string',
 		value: 'text|json',
-		description: 'Result format on stdout; json prints one JSON document, progress stays on stderr',
+		description: 'Result format on stdout (json: one JSON document); progress stays on stderr',
 	},
 	{ name: 'yes', short: 'y', type: 'boolean', description: 'Assume yes for confirmations' },
 	{
@@ -307,7 +310,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Deploy the production stack',
 		description:
 			'Deploy the production stack. The target (stack, Region, credentials) is printed first.\n' +
-			'With --output json, stdout carries one document: {apiUrl, url, stack, account, region}.',
+			'When stdout is not a terminal, or with --output json, stdout carries one document:\n' +
+			'{apiUrl, url, stack, account, region, live}.',
 		flags: [
 			{
 				name: 'wait-live',
@@ -326,7 +330,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		examples: [
 			{ command: 'cdk-blocks deploy', description: 'Deploy to production' },
 			{ command: 'cdk-blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
-			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
+			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region, live}' },
 			{ command: 'API_URL=$(cdk-blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
 		aws: true,
@@ -555,7 +559,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Exit codes:\n' +
 			'  0  fully migrated, or nothing to do\n' +
 			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
-			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
+			'     wrote nothing; in JSON format a refusal prints {"error": {"message", "hint"}} on stdout\n' +
 			'     instead of the result (with --query, only the error on stderr), as it does for wrappers it\n' +
 			'     could not delete after rewriting package.json (fix them, then run it again with --force)\n' +
 			'  2  usage error',

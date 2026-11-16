@@ -28,6 +28,11 @@ export interface FakeOptions {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
 	stdinIsTTY?: boolean;
+	/**
+	 * Whether stdout is a terminal. Default: true, so that a command with a JSON
+	 * result prints text unless the test passes `--output json` or sets this false.
+	 */
+	stdoutIsTTY?: boolean;
 	/** The prompt's answer; `null` interrupts the prompt, as Ctrl-C does. */
 	answer?: string | null;
 	/**
@@ -70,7 +75,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		argv: ['node', 'cdk-blocks', ...argv],
 	};
 	const deps: CliDeps = {
-		stdout: { write: (chunk: string) => (run.stdout += chunk) },
+		stdout: { write: (chunk: string) => (run.stdout += chunk), isTTY: options.stdoutIsTTY ?? true },
 		stderr: { write: (chunk: string) => (run.stderr += chunk) },
 		stdinIsTTY: options.stdinIsTTY ?? false,
 		env: run.env,

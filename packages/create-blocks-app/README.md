@@ -130,6 +130,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`: `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings live in `package.json#blocks.dev`.
 
+Results are JSON when stdout isn't a terminal; pass `--output text` for text. Piped or redirected to a file, `npm run deploy`, `npm run sandbox:deploy` and `npm run sandbox:preview` print one JSON document on stdout (`{apiUrl, url, stack, account, region}`, and `live` for `deploy`), with progress on stderr. In a terminal they print text.
+
 ```json
 {
   "scripts": {

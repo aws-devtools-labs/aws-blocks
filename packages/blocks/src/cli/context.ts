@@ -16,7 +16,7 @@ import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
 import { CliError, UsageError } from './errors.js';
-import { Output, type OutputStream } from './output.js';
+import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
 
 /** The `@aws-blocks/core/scripts` module. Tests replace parts of it. */
@@ -119,6 +119,20 @@ export function isCi(env: NodeJS.ProcessEnv): boolean {
 	return Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0';
 }
 
+/**
+ * The format of the run's result on stdout. An explicit `--output` wins. Without it,
+ * a command with a JSON result prints JSON when stdout is not a terminal (a pipe, a
+ * file, a coding agent's shell) and text on a terminal; every other command, help
+ * and `--version` print text whatever stdout is. `--query` prints its field either
+ * way (see {@link Output}).
+ */
+export function resultFormat(parsed: ParsedInvocation, stdout: OutputStream): OutputFormat {
+	const { globals, command } = parsed;
+	if (globals.output !== undefined) return globals.output;
+	if (globals.help || globals.version || !command?.json) return 'text';
+	return stdout.isTTY === true ? 'text' : 'json';
+}
+
 /** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`, `eusc-de-east-1`. */
 export const REGION_PATTERN = /^[a-z]{2,}(-[a-z]+)+-\d+$/;
 
@@ -214,7 +228,7 @@ export class Context {
 		this.out = new Output(
 			deps.stdout,
 			deps.stderr,
-			this.globals.output,
+			resultFormat(parsed, deps.stdout),
 			this.logLevel === 'quiet',
 			this.env,
 			// --version prints only the version; it does not query it.

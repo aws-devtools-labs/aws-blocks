@@ -35,7 +35,11 @@ export interface Globals {
 	quiet: boolean;
 	verbose: boolean;
 	debug: boolean;
-	output: 'text' | 'json';
+	/**
+	 * `--output` as given; absent without the flag. The context resolves the
+	 * format of the run from it (see `resultFormat` in `context.ts`).
+	 */
+	output?: 'text' | 'json';
 	yes: boolean;
 	noInput: boolean;
 	profile?: string;
@@ -234,8 +238,8 @@ function liftGlobals(tail: readonly string[], values: FlagValues): string[] {
 }
 
 function toGlobals(values: FlagValues): Globals {
-	const output = values.output ?? 'text';
-	if (output !== 'text' && output !== 'json') {
+	const output = values.output;
+	if (output !== undefined && output !== 'text' && output !== 'json') {
 		throw new UsageError(`option --output must be "text" or "json", not ${JSON.stringify(output)}.`);
 	}
 	const text = (name: string) => (typeof values[name] === 'string' ? (values[name] as string) : undefined);

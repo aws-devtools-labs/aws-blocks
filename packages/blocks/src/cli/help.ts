@@ -50,6 +50,8 @@ export function rootHelp(version: string): string {
 		'Global options',
 		...table(GLOBAL_FLAGS.map((flag) => [flagLabel(flag), flag.description])),
 		'',
+		"Results are JSON when stdout isn't a terminal; pass --output text for text. Commands without",
+		'a JSON result always print text.',
 		'Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM.',
 		'Run "cdk-blocks help <command>" or "cdk-blocks <command> --help" for details.',
 	);
@@ -64,6 +66,9 @@ export function commandHelp(command: CommandSpec): string {
 	}
 	if (command.flags?.length) {
 		lines.push('', 'Options', ...table(command.flags.map((flag) => [flagLabel(flag), flag.description])));
+	}
+	if (command.json && command.handler) {
+		lines.push('', "Results are JSON when stdout isn't a terminal; pass --output text for text.");
 	}
 	const subcommands = subcommandsOf(command.path);
 	if (subcommands.length > 0) {

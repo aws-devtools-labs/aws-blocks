@@ -21,9 +21,12 @@ import {
 	logLevelFor,
 	PromptInterrupted,
 	promptLine,
+	resultFormat,
 } from './context.js';
 import { CliError } from './errors.js';
+import { Output, type OutputStream } from './output.js';
 import { parseArgv } from './parse.js';
+import { COMMANDS } from './registry.js';
 import { DEV_FAILURE_FILE_ENV, DEV_OPTIONS_ENV, DEV_STATE, runnerArgs, runnerPath, shellQuote } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -207,6 +210,68 @@ async function isListening(port: number): Promise<boolean> {
 		socket.destroy();
 	}
 }
+
+describe('the result format', () => {
+	const terminal: OutputStream = { write: () => true, isTTY: true };
+	const pipe: OutputStream = { write: () => true };
+	const format = (argv: string[], stdout: OutputStream) => resultFormat(parseArgv(argv), stdout);
+	const JSON_COMMANDS = COMMANDS.filter((command) => command.json);
+
+	it('is JSON for a command with a JSON result when stdout is not a terminal, text on one', () => {
+		assert.deepStrictEqual(JSON_COMMANDS.map((command) => command.path.join(' ')).sort(), [
+			'deploy',
+			'dev stop',
+			'migrate',
+			'sandbox deploy',
+			'sandbox preview',
+			'whoami',
+		]);
+		// The canonical names, and the aliases that run them.
+		for (const argv of [
+			...JSON_COMMANDS.map((command) => [...command.path]),
+			['dev:stop'],
+			['cleanup'],
+			['sandbox:deploy'],
+			['sandbox', '--deploy-only'],
+			['sandbox:preview'],
+			['sandbox', '--preview'],
+		]) {
+			assert.strictEqual(format(argv, pipe), 'json', argv.join(' '));
+			assert.strictEqual(format(argv, { ...pipe, isTTY: false }), 'json', argv.join(' '));
+			assert.strictEqual(format(argv, terminal), 'text', argv.join(' '));
+		}
+	});
+
+	it('an explicit --output wins, on a terminal or not', () => {
+		for (const stdout of [terminal, pipe]) {
+			assert.strictEqual(format(['whoami', '--output', 'text'], stdout), 'text');
+			assert.strictEqual(format(['--output=json', 'deploy'], stdout), 'json');
+			assert.strictEqual(format(['dev', '--output', 'text', 'stop'], stdout), 'text');
+		}
+	});
+
+	it('is text for every command without a JSON result, and for help and --version, whatever stdout is', () => {
+		const { globals } = parseArgv([]);
+		const others = COMMANDS.filter((command) => !command.json);
+		assert.ok(others.length > 10);
+		for (const command of others) {
+			const parsed = { command, globals, flags: {}, positionals: [], passthrough: [] };
+			assert.strictEqual(resultFormat(parsed, pipe), 'text', command.path.join(' '));
+		}
+		for (const argv of [[], ['--version'], ['deploy', '--version'], ['whoami', '--help'], ['help', 'deploy']]) {
+			assert.strictEqual(format(argv, pipe), 'text', argv.join(' '));
+		}
+	});
+
+	it('prints JSON under --query, even when the format is text', () => {
+		for (const argv of [['whoami', '--query', 'account'], ['whoami', '--output', 'text', '--query', 'account']]) {
+			for (const stdout of [terminal, pipe]) {
+				const out = new Output(stdout, pipe, format(argv, stdout), false, {}, 'account');
+				assert.strictEqual(out.format, 'json', argv.join(' '));
+			}
+		}
+	});
+});
 
 /** Whether any process of the group `pgid` is running, or exited and not yet reaped. */
 function isGroupRunning(pgid: number): boolean {
@@ -507,7 +572,8 @@ setInterval(() => {}, 1000);
 			const stopCode = await stop.closed;
 			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- cdk-blocks dev:\n${dev.output()}`;
 			assert.strictEqual(stopCode, 0, context);
-			assert.match(stop.output(), /Stopped the dev server/, context);
+			// Its stdout is a pipe, so the result is JSON.
+			assert.match(stop.output(), /"stopped": true,/, context);
 			const devCode = await Promise.race([dev.closed, sleep(15_000).then(() => 'still running')]);
 			assert.strictEqual(devCode, 0, context);
 			assert.strictEqual(isGroupRunning(pgid), false, `a process of cdk-blocks dev outlived it${context}`);

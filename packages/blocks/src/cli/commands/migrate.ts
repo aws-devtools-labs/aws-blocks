@@ -1062,15 +1062,15 @@ export function applyMigration(root: string, plan: MigrationPlan): void {
 }
 
 /**
- * `error`, after printing it as `{"error": {"message", "hint"}}` under
- * `--output json` when it is a refusal: a JSON consumer tells a refusal
+ * `error`, after printing it as `{"error": {"message", "hint"}}` in JSON
+ * format when it is a refusal: a JSON consumer tells a refusal
  * (nothing written; or, for wrappers that could not be deleted, `package.json`
  * rewritten, as the message says) from kept items (also exit 1) by this
  * document. `--query` prints one field of the result, which a refusal does not
  * have: the error goes to stderr only.
  */
 function refusal(ctx: Context, error: unknown): unknown {
-	if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {
+	if (error instanceof CliError && ctx.out.format === 'json' && ctx.globals.query === undefined) {
 		ctx.out.text(JSON.stringify({ error: { message: error.message, hint: error.hint ?? null } }, null, 2));
 	}
 	return error;

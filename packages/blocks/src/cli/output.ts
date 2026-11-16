@@ -3,8 +3,9 @@
 
 /**
  * Output of the `cdk-blocks` CLI: results on stdout; progress, warnings and errors
- * on stderr. With `--output json`, stdout carries exactly one JSON document.
- * Colour is used only on a TTY, never when `NO_COLOR` is set or `TERM=dumb`.
+ * on stderr. In JSON format, stdout carries exactly one JSON document: with
+ * `--output json`, and by default for a command with a JSON result when stdout is
+ * not a terminal. Colour is used only on a TTY, never when `NO_COLOR` is set or `TERM=dumb`.
  */
 
 /** The part of a stream that the CLI writes to. */
@@ -37,7 +38,10 @@ export function valueAtPath(value: unknown, path: string): unknown {
 
 export class Output {
 	readonly stderrColor: boolean;
-	/** `json` with `--output json`, and with `--query`, so that child output stays off stdout. */
+	/**
+	 * The run's format (see `resultFormat` in `context.ts`), and `json` with `--query`,
+	 * so that child output stays off stdout.
+	 */
 	readonly format: OutputFormat;
 
 	constructor(
@@ -56,7 +60,7 @@ export class Output {
 	/**
 	 * Print a command result: with `--query`, the value at the path, raw (a string
 	 * without quotes, `null` or an absent value such as a list element past the
-	 * end as an empty line, an object as JSON); with `--output json`, `value` as
+	 * end as an empty line, an object as JSON); in JSON format, `value` as
 	 * one JSON document; otherwise `text`. Results print under `--quiet` too.
 	 */
 	result(value: unknown, text: string): void {

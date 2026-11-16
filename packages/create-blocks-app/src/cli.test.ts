@@ -389,7 +389,8 @@ describe('create-blocks-app template metadata', () => {
     const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
     const recipes = guide.match(/`npm run [^`]*&`/g) ?? [];
     assert.ok(recipes.some((recipe) => recipe.startsWith('`npm run dev ')), 'AGENTS.md has a background dev recipe');
-    for (const recipe of recipes) assert.match(recipe, / > [\w.-]+\.log 2>&1 &`$/, recipe);
+    // Both streams go to *.log files: one log, or the JSON result and the progress apart.
+    for (const recipe of recipes) assert.match(recipe, / > [\w.-]+\.log (2>&1|2> [\w.-]+\.log) &`$/, recipe);
     const templatesDir = join(__dirname, '..', 'templates');
     const missing: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {

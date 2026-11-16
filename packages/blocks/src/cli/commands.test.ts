@@ -1984,6 +1984,73 @@ describe('JSON output', () => {
 		assert.strictEqual(run.stdout, '');
 	});
 
+	it('prints the JSON result by default when stdout is not a terminal; --output text keeps text', async () => {
+		const root = fixtureApp();
+		const piped = {
+			cwd: root,
+			env: AWS_ENV,
+			stdoutIsTTY: false,
+			onSpawn: () => {
+				writeLastDeploy(root, { production: PROD });
+				return { code: 0 };
+			},
+		};
+		const json = await runCli(['deploy'], piped);
+		assert.strictEqual(json.code, 0, json.stderr);
+		// As with --output json: the child's stdout goes to stderr.
+		assert.strictEqual(json.spawned[0].stdoutToStderr, true);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			apiUrl: prodUrl,
+			url: 'https://d111.cloudfront.net',
+			stack: 'demo-prod',
+			account: '210987654321',
+			region: 'eu-west-3',
+			live: null,
+		});
+		const text = await runCli(['deploy', '--output', 'text'], piped);
+		assert.strictEqual(text.code, 0, text.stderr);
+		// The child keeps stdout, and the CLI adds no JSON.
+		assert.strictEqual(text.spawned[0].stdoutToStderr, false);
+		assert.strictEqual(text.stdout, '');
+
+		const core = { readAwsIdentity: async () => IDENTITY };
+		const whoami = await runCli(['whoami'], { cwd: root, core, stdoutIsTTY: false });
+		assert.strictEqual(whoami.code, 0, whoami.stderr);
+		assert.strictEqual(JSON.parse(whoami.stdout).stacks.production, 'demo-prod');
+		const whoamiText = await runCli(['whoami', '--output', 'text'], { cwd: root, core, stdoutIsTTY: false });
+		assert.match(whoamiText.stdout, /Production: {2}demo-prod/);
+		// --query prints its field raw whatever stdout is and whatever --output says.
+		for (const [argv, stdoutIsTTY] of [
+			[['whoami', '--query', 'stacks.production'], false],
+			[['whoami', '--query', 'stacks.production'], true],
+			[['whoami', '--output', 'text', '--query', 'stacks.production'], false],
+		] as const) {
+			const query = await runCli([...argv], { cwd: root, core, stdoutIsTTY });
+			assert.strictEqual(query.stdout, 'demo-prod\n', `${argv.join(' ')}, TTY ${stdoutIsTTY}`);
+		}
+	});
+
+	it('keeps text for a command without a JSON result when stdout is not a terminal, and never errors', async () => {
+		const destroy = await runCli(['sandbox', 'destroy'], { cwd: fixtureApp(), env: AWS_ENV, stdoutIsTTY: false });
+		assert.strictEqual(destroy.code, 0, destroy.stderr);
+		assert.match(destroy.stdout, /^No sandbox on this machine/);
+		const dev = await runCli(['dev'], { cwd: fixtureApp(), stdoutIsTTY: false });
+		assert.strictEqual(dev.code, 0, dev.stderr);
+		assert.strictEqual(dev.spawned[0].stdoutToStderr, false, 'the dev server keeps stdout');
+		const version = await runCli(['--version'], { cwd: fixtureApp(), stdoutIsTTY: false });
+		assert.match(version.stdout, /^\d+\.\d+\.\d+\S*\n$/);
+		const help = await runCli(['whoami', '--help'], { cwd: fixtureApp(), stdoutIsTTY: false });
+		assert.match(help.stdout, /^Show the AWS identity/);
+		// An explicit --output json is still a usage error there.
+		const rejected = await runCli(['sandbox', 'destroy', '--output', 'json'], {
+			cwd: fixtureApp(),
+			env: AWS_ENV,
+			stdoutIsTTY: false,
+		});
+		assert.strictEqual(rejected.code, 2);
+		assert.match(rejected.stderr, /--output json is not supported for "cdk-blocks sandbox destroy"/);
+	});
+
 	it('sends a real child stdout to stderr when asked', () => {
 		const context = pathToFileURL(fileURLToPath(new URL('./context.js', import.meta.url))).href;
 		const script = [
