@@ -359,8 +359,7 @@ public struct RPCError: BlocksError {
     /// HTTP status (e.g. `401`). For a non-2xx response that carries no JSON-RPC error
     /// (a gateway or route error), the HTTP status. `nil` for other transport and decoding failures.
     /// A transport-origin status always comes with `name == nil`, `retriable == false` and
-    /// `data == nil`; so does a nameless server 500 (an unbranded exception), which then differs
-    /// only in `message`.
+    /// `data == nil`; a nameless server error can look the same, so only `message` is sure to differ.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
@@ -375,8 +374,9 @@ public struct RPCError: BlocksError {
     /// guarantee that a given retry will succeed.
     public let retriable: Bool
 
-    /// The server's raw `error.data` object. `nil` when the server sent none or sent `error.data`
-    /// that is not a JSON object, and for transport and decoding failures.
+    /// The server's `error.data` object as `JSONValue` holds it (an integer beyond `Int` arrives as
+    /// `.double`). `nil` when the server sent none or sent `error.data` that is not a JSON object,
+    /// and for transport and decoding failures.
     public let data: [String: JSONValue]?
 
     public init(

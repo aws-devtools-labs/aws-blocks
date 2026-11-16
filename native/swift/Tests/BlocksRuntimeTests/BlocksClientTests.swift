@@ -363,6 +363,34 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
+    func testExecuteIgnoresNonBooleanRetriableAndNonStringName() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"code":400,"message":"Odd data","data":{"name":42,"retriable":1}},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertNil(error.name)
+            XCTAssertFalse(error.retriable)
+            XCTAssertEqual(error.data, ["name": .int(42), "retriable": .int(1)])
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
     func testIsBlocksErrorIsFalseForOtherErrors() {
         XCTAssertFalse(RPCError(message: "Invalid JSON response").isBlocksError(name: "NotAuthenticatedException"))
         XCTAssertFalse(ClientClosedError().isBlocksError(name: "NotAuthenticatedException"))
