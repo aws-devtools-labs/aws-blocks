@@ -442,9 +442,13 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
         assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
         return true;
       });
-      assert.throws(build({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }), (e: Error) => {
+      assert.throws(build({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }), (e: Error & { resolution?: string }) => {
         assert.equal(e.name, 'PlainHttpFrontDoorError');
-        assert.match(e.message, /The 'custom' front door/);
+        assert.match(e.message, /The 'custom' front door's URL is `http:\/\/`, so the pages/);
+        assert.doesNotMatch(e.message, /no certificate/);
+        assert.match(e.resolution ?? '', /Serve the custom door over HTTPS \(return an `https:\/\/` url\), or use the CloudFront or stacked door/);
+        assert.doesNotMatch(e.resolution ?? '', /ALB door/);
+        assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
         return true;
       });
       // HTTPS doors, and the ALB door with a certificate, synthesize.

@@ -2133,11 +2133,21 @@ export class HostingConstruct extends Construct {
           // A plain-HTTP door with a same-origin API: sign-in, session cookies
           // and every RPC cross the network unencrypted. A production deploy
           // fails synth; a sandbox deploy (`sandboxMode` context) only warns.
-          const message =
-            `The '${resolved.kind}' front door serves the app over plain HTTP (no certificate), ` +
-            'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted.';
-          const resolution =
-            "Give the ALB door a `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront or stacked door.";
+          // Worded by kind: only the ALB door has a `certificate` to give.
+          const exposure =
+            'the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted.';
+          const { message, resolution } =
+            resolved.kind === 'custom'
+              ? {
+                  message: `The 'custom' front door's URL is \`http://\`, so ${exposure}`,
+                  resolution:
+                    'Serve the custom door over HTTPS (return an `https://` url), or use the CloudFront or stacked door.',
+                }
+              : {
+                  message: `The '${resolved.kind}' front door serves the app over plain HTTP (no certificate), so ${exposure}`,
+                  resolution:
+                    'Give the ALB door a `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront or stacked door.',
+                };
           if (!isSandboxDeploy(this)) {
             throw new HostingError('PlainHttpFrontDoorError', {
               message: `${message} A production deploy refuses to serve it.`,
