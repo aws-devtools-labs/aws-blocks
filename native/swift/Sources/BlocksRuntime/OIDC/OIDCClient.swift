@@ -40,6 +40,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     public nonisolated let providers: [String]
     public nonisolated let providerConfigs: [String: OIDCProviderConfig]
     public nonisolated let baseUrl: String
+    /// The IdP `redirect_uri` path: the descriptor's `callbackPath`, or `exchangePath` with
+    /// `/exchange` replaced by `/callback` when the descriptor has none.
+    public nonisolated let callbackPath: String
+    /// The directory the authorize-params routes sit in (`<base>/authorize-params`): the descriptor's
+    /// `authorizeParamsBasePath`, or one derived from `exchangePath` when the descriptor has none.
+    public nonisolated let authorizeParamsBasePath: String
 
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
@@ -80,7 +86,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         providerConfigs: [String: OIDCProviderConfig],
         baseUrl: String,
         client: BlocksClient,
-        wireDescriptor: [String: JSONValue]?
+        wireDescriptor: [String: JSONValue]?,
+        callbackPath: String? = nil,
+        authorizeParamsBasePath: String? = nil
     ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
@@ -90,6 +98,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.baseUrl = baseUrl
         self.client = client
         self.wireDescriptor = wireDescriptor
+        // A descriptor without these fields predates them: derive them from `exchangePath`, as before.
+        self.callbackPath = callbackPath ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
+        self.authorizeParamsBasePath = authorizeParamsBasePath
+            ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params")
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
@@ -172,7 +184,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         // Step 1: Fetch signed authorize params from server
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
-        let authorizeParamsPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
+        let authorizeParamsPath = "\(authorizeParamsBasePath)/\(Self.encodeURIComponent(provider))"
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
         let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
 
@@ -185,7 +197,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let nonce = paramsJSON["nonce"] as? String
 
         // Step 2: Build full authorize URL with server's callback as redirect_uri
-        let callbackPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
         let serverCallbackUrl = client.rawRouteBase + callbackPath
 
         guard var components = URLComponents(string: authorizeUrl) else {
@@ -275,6 +286,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         nonce: String,
         iss: String? = nil
     ) async throws -> OIDCUser {
+        guard providers.contains(provider) else {
+            throw OIDCError.unknownProvider(provider)
+        }
         var body: [String: Any] = [
             "code": code,
             "verifier": verifier,
@@ -435,6 +449,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Factory
 
+    /// `encodeURIComponent`, as the server applies it to a provider id in a route path.
+    private static func encodeURIComponent(_ value: String) -> String {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
+    }
+
     /// Hydrates an `OIDCClient` from a server-supplied transferable descriptor.
     ///
     /// Expected shape:
@@ -444,9 +464,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   "providerConfigs": { "google": { "authorizeUrl": "...", "clientId": "...", "scopes": [...], "kind": "..." } },
     ///   "exchangePath": "/aws-blocks/auth/exchange",
     ///   "refreshPath": "/aws-blocks/auth/exchange/refresh",
-    ///   "signOutPath": "/aws-blocks/auth/signout"
+    ///   "signOutPath": "/aws-blocks/auth/signout",
+    ///   "callbackPath": "/aws-blocks/auth/callback",
+    ///   "authorizeParamsBasePath": "/aws-blocks/auth/authorize-params"
     /// }
     /// ```
+    ///
+    /// `callbackPath` and `authorizeParamsBasePath` are the block's own routes, so a block with a custom
+    /// `redirects.callbackPath` signs in at its routes. A descriptor without them derives them from
+    /// `exchangePath`.
     public static func fromJSON(
         _ descriptor: [String: Any],
         baseUrl: String,
@@ -474,7 +500,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             wireDescriptor: JSONValue(serialized: descriptor).flatMap { value in
                 if case .dictionary(let entries) = value { return entries }
                 return nil
-            }
+            },
+            callbackPath: descriptor["callbackPath"] as? String,
+            authorizeParamsBasePath: descriptor["authorizeParamsBasePath"] as? String
         )
     }
 
@@ -597,7 +625,9 @@ extension OIDCClient: Codable {
             providerConfigs: hydrated.providerConfigs,
             baseUrl: hydrated.baseUrl,
             client: client,
-            wireDescriptor: descriptor
+            wireDescriptor: descriptor,
+            callbackPath: hydrated.callbackPath,
+            authorizeParamsBasePath: hydrated.authorizeParamsBasePath
         )
     }
 
