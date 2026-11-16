@@ -35,7 +35,7 @@ import { getOrCreateOnRoot } from './root-registry.js';
 
 /** How one CloudFormation resource type names its resource. */
 interface NameRule {
-	/** The property of the resource's CDK class (`Cfn*`) that holds the physical name. */
+	/** The CloudFormation property of the resource type that holds the physical name. */
 	readonly property: string;
 	/** The resource, as the error calls it. */
 	readonly what: string;
@@ -48,7 +48,7 @@ interface NameRule {
 }
 
 const DYNAMODB_TABLE: NameRule = {
-	property: 'tableName',
+	property: 'TableName',
 	what: 'DynamoDB table',
 	accepts: /[A-Za-z0-9_.-]/,
 	acceptsText: "letters, digits, '_', '.' and '-'",
@@ -75,20 +75,20 @@ const NAME_RULES: Readonly<Record<string, NameRule>> = {
 	'AWS::DynamoDB::Table': DYNAMODB_TABLE,
 	'AWS::DynamoDB::GlobalTable': DYNAMODB_TABLE,
 	'AWS::SQS::Queue': {
-		property: 'queueName',
+		property: 'QueueName',
 		what: 'SQS queue',
 		accepts: /[A-Za-z0-9_-]/,
 		acceptsText: "letters, digits, '_' and '-'",
 		suffix: '.fifo',
 	},
 	'AWS::Scheduler::Schedule': {
-		property: 'name',
+		property: 'Name',
 		what: 'EventBridge Scheduler schedule',
 		accepts: /[A-Za-z0-9_.-]/,
 		acceptsText: "letters, digits, '_', '.' and '-'",
 	},
 	'AWS::Cognito::UserPool': {
-		property: 'userPoolName',
+		property: 'UserPoolName',
 		what: 'Cognito user pool',
 		// Documented as `[\w\s+=,.@-]+`. Any letter or digit is let through, in case
 		// the service reads `\w` as more than ASCII.
@@ -96,14 +96,50 @@ const NAME_RULES: Readonly<Record<string, NameRule>> = {
 		acceptsText: "letters, digits, spaces, '_', '+', '=', ',', '.', '@' and '-'",
 	},
 	'AWS::SecretsManager::Secret': {
-		property: 'name',
+		property: 'Name',
 		what: 'Secrets Manager secret',
 		accepts: /[A-Za-z0-9/_+=.@-]/,
 		acceptsText: "letters, digits, '/', '_', '+', '=', '.', '@' and '-'",
 	},
-	'AWS::Bedrock::KnowledgeBase': { property: 'name', what: 'Bedrock knowledge base', ...BEDROCK_NAME },
-	'AWS::Bedrock::DataSource': { property: 'name', what: 'Bedrock data source', ...BEDROCK_NAME },
+	'AWS::Bedrock::KnowledgeBase': { property: 'Name', what: 'Bedrock knowledge base', ...BEDROCK_NAME },
+	'AWS::Bedrock::DataSource': { property: 'Name', what: 'Bedrock data source', ...BEDROCK_NAME },
 };
+
+/**
+ * A `CfnResource` as this check reads it. `_toCloudFormation()` renders the
+ * resource as it reaches the template, raw overrides included; `aws-cdk-lib`
+ * marks it internal, so it is not in the public typings.
+ */
+interface RenderableResource extends cdk.CfnResource {
+	_toCloudFormation(): object;
+}
+
+function isRenderable(resource: cdk.CfnResource): resource is RenderableResource {
+	return typeof (resource as Partial<RenderableResource>)._toCloudFormation === 'function';
+}
+
+/**
+ * The physical name `resource` has in the rendered template, under the
+ * CloudFormation property `property`, after its raw overrides. `undefined`
+ * when the template holds no literal string there.
+ */
+function renderedName(resource: cdk.CfnResource, property: string): string | undefined {
+	if (!isRenderable(resource)) return undefined;
+	const rendered: unknown = cdk.Stack.of(resource).resolve(resource._toCloudFormation());
+	const resources = field(rendered, 'Resources');
+	if (typeof resources !== 'object' || resources === null) return undefined;
+	// The rendering holds this resource only, under its logical id.
+	for (const entry of Object.values(resources)) {
+		const name = field(field(entry, 'Properties'), property);
+		return typeof name === 'string' ? name : undefined;
+	}
+	return undefined;
+}
+
+/** The own property `key` of `value`, when `value` is an object. */
+function field(value: unknown, key: string): unknown {
+	return typeof value === 'object' && value !== null ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+}
 
 /** Per backend root: whether the name check is registered. */
 const RESOURCE_NAME_CHECK = Symbol.for('blocks:ResourceNameCheck');
@@ -160,8 +196,8 @@ function resourceNameErrors(root: Construct): string[] {
 		const rule = NAME_RULES[node.cfnResourceType];
 		const scopes = scopesAbove(node, root);
 		if (scopes.length === 0) continue;
-		const name: unknown = cdk.Stack.of(node).resolve((node as unknown as Record<string, unknown>)[rule.property]);
-		if (typeof name !== 'string') continue;
+		const name = renderedName(node, rule.property);
+		if (name === undefined) continue;
 		const rejected = rejectedCharacters(name, rule);
 		if (rejected.length === 0) continue;
 		// The ids that put a rejected character into this name. An id that was cut

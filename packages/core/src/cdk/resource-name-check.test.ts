@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { App, Aws, Stack } from 'aws-cdk-lib';
+import { App, Aws, CfnResource, Stack } from 'aws-cdk-lib';
 import { CfnDataSource, CfnKnowledgeBase } from 'aws-cdk-lib/aws-bedrock';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { AttributeType, Table, TableV2 } from 'aws-cdk-lib/aws-dynamodb';
@@ -203,5 +203,21 @@ describe('CDK Scope: an id that a resource name cannot contain fails synth', () 
 		const error = synthError(first) ?? '';
 		assert.ok(error.includes("'@acme/one'") && error.includes("'@acme/two'"), `both roots report: ${error}`);
 		assert.strictEqual(error.split("'@acme/one'").length - 1, 1, 'each id once');
+	});
+
+	test('the name is read from the rendered resource, so a raw override counts', () => {
+		/** The synth result of a table under `scopeId`, with its `TableName` overridden to `override`. */
+		const synthOverridden = (scopeId: string, override: string) => {
+			const stack = root();
+			const block = new NamedBlock(new Scope(scopeId, { parent: stack as never }), 'carts', 'table');
+			const table = block.node.findAll().find((c) => c instanceof CfnResource);
+			assert.ok(table instanceof CfnResource, 'the block has a table');
+			table.addPropertyOverride('TableName', override);
+			return synthError(stack);
+		};
+		assert.strictEqual(synthOverridden('@acme/shop', 'acme-shop-carts'), undefined, 'a valid override on a bad id');
+		const error = synthOverridden('shop', 'shop/carts');
+		assert.ok(error, 'synth must fail: a bad override on a good id');
+		assert.ok(error.includes("'shop/carts'") && error.includes("'/'"), `names the overridden name: ${error}`);
 	});
 });
