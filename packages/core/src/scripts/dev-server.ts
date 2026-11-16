@@ -24,7 +24,7 @@ import {
   writeInternalServerError,
   writeResponse,
 } from '../http-server.js';
-import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from '../rpc.js';
+import { MAX_RPC_BODY_BYTES, errorResponse, payloadTooLargeResponse } from '../rpc.js';
 import { redactToJson } from '../redact.js';
 import { isIpLiteral, isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -105,6 +105,91 @@ export function isAllowedDevRequestHost(
     }
   }
   return false;
+}
+
+/** The request methods that can change state; a foreign `Origin` is refused only on these. */
+const STATE_CHANGING_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Whether the dev server should run a state-changing request (`POST`, `PUT`,
+ * `PATCH`, `DELETE`) that carries this `Origin`. This is the cross-site request
+ * forgery check. The `Host` check ({@link isAllowedDevRequestHost}) doesn't
+ * stop it: a page on another site that sends a `POST` to
+ * `http://localhost:3000/aws-blocks/api` addresses the dev server by its real,
+ * loopback name. A `text/plain` body even goes without a CORS preflight, so the
+ * call would run before the browser hides the answer. Allowed origins:
+ *
+ * - a loopback origin — `localhost`, `127.x.x.x`, `[::1]` on any port and with
+ *   any scheme: the dev server's own front door, and a frontend dev server
+ *   (Vite on `:5173`, Next on `:3001`) calling the backend directly;
+ * - the request's own origin: the `Origin` names the host and port in `Host`,
+ *   which the `Host` check has already accepted (a page reached by IP address
+ *   with a wildcard bind, or by the host set in `BLOCKS_DEV_HOST`);
+ * - on any port, the concrete host the dev server was told to bind
+ *   (`bindHost`) or the one in `BLOCKS_DEV_HOST` (`devHost`). A wildcard bind
+ *   adds no origins here: an IP-literal origin on another port could be any
+ *   site served by IP.
+ *
+ * `Origin: null` (a sandboxed frame, a `file:` page, a cross-site redirect) and
+ * a value that isn't a URL are refused. A request with no `Origin` header isn't
+ * checked here (curl, server-side rendering, native clients; a browser sends
+ * `Origin` on every cross-origin `POST`). The classification is the one the
+ * realtime WebSocket's `Origin` check uses (`common/loopback.ts`).
+ */
+export function isAllowedDevRequestOrigin(
+  origin: string,
+  hostHeader: string | undefined,
+  bindHost: string,
+  devHost: string | undefined = process.env.BLOCKS_DEV_HOST,
+): boolean {
+  let from: URL;
+  try {
+    from = new URL(origin);
+  } catch {
+    return false; // `null`, or another value that isn't a URL
+  }
+  const hostname = normalizeHostname(from.hostname);
+  if (!hostname) return false;
+  if (isLoopbackHost(hostname)) return true;
+  const host = HOST_HEADER.exec(hostHeader?.trim() ?? '');
+  if (host && normalizeHostname(host[1]) === hostname) {
+    const defaultPort = from.protocol === 'https:' ? '443' : '80';
+    if ((from.port || defaultPort) === (host[2] ?? defaultPort)) return true;
+  }
+  for (const configured of [bindHost, devHost]) {
+    const optIn = configured?.trim();
+    if (optIn && !isWildcardHost(optIn) && normalizeHostname(optIn) === hostname) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the dev server refuses a request from `origin` with a 403: a
+ * state-changing method from an origin {@link isAllowedDevRequestOrigin}
+ * doesn't accept. `GET`, `HEAD` and `OPTIONS` are never refused for their
+ * origin. Called only for a non-empty origin.
+ */
+export function rejectsDevRequestOrigin(
+  origin: string,
+  method: string,
+  hostHeader: string | undefined,
+  bindHost: string,
+  devHost: string | undefined = process.env.BLOCKS_DEV_HOST,
+): boolean {
+  if (!STATE_CHANGING_METHODS.has(method.toUpperCase())) return false;
+  return !isAllowedDevRequestOrigin(origin, hostHeader, bindHost, devHost);
+}
+
+/**
+ * Whether a JSON-RPC request's `Content-Type` is `application/json`, with or
+ * without parameters (`application/json; charset=utf-8`). A browser sends a
+ * `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`
+ * body, or one with no `Content-Type`, to another origin without a CORS
+ * preflight, so refusing them keeps a cross-site page from running an RPC call
+ * at all. Every AWS Blocks client sends `application/json`.
+ */
+export function isJsonRpcContentType(contentType: string | undefined): boolean {
+  return (contentType ?? '').split(';')[0].trim().toLowerCase() === 'application/json';
 }
 
 /**
@@ -803,7 +888,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // 5. Create the request dispatcher. It resolves APIs with the same rule as the
   // Lambda handler: no Building Block instances or `_`-private exports.
-  const dispatch = createDevDispatcher(backend);
+  const dispatch = createDevDispatcher(backend, host);
 
   registerBuiltinRoutes({ localDev: true });
   lockRouteRegistry();
@@ -1551,12 +1636,19 @@ export function devRequestLogging(env: NodeJS.ProcessEnv = process.env): {
 /**
  * The dispatcher behind the local API: the same RawRoute and JSON-RPC handling
  * as the deployed handlers, with the dev server's CORS policy (reflect a
- * localhost origin, never refuse one), its request logging, and the available
- * APIs named in an unknown-namespace error.
+ * localhost origin, never refuse one; refuse a state-changing request from a
+ * foreign origin, see {@link isAllowedDevRequestOrigin}), its request logging,
+ * and the available APIs named in an unknown-namespace error. `bindHost` is the
+ * interface the dev server binds.
  */
-function createDevDispatcher(backend: unknown): Dispatcher {
+function createDevDispatcher(backend: unknown, bindHost: string): Dispatcher {
   return createDispatcher(backend, {
-    cors: { rejects: () => false, headers: buildDevCorsHeaders },
+    cors: {
+      // A state-changing request from a foreign origin is refused (see isAllowedDevRequestOrigin).
+      rejects: (origin, request) =>
+        rejectsDevRequestOrigin(origin, request.method, request.headers().get('host') ?? undefined, bindHost),
+      headers: buildDevCorsHeaders,
+    },
     listApisWhenNotFound: true,
     // A request's unhandled rejection is logged with its method (see installDevRejectionHandler).
     runHandler: runDevRequest,
@@ -1604,6 +1696,16 @@ function createDevDispatcher(backend: unknown): Dispatcher {
   });
 }
 
+/** The JSON-RPC error envelope for an RPC body that isn't declared `application/json` (HTTP 415). */
+function unsupportedMediaTypeResponse(): string {
+  return errorResponse(
+    415,
+    'Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json',
+    null,
+    { name: 'UnsupportedMediaType' },
+  );
+}
+
 function handleApiRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1630,6 +1732,15 @@ function handleApiRequest(
         const envelope = payloadTooLargeResponse();
         if (devRequestLogging().traffic) console.log('[rpc-out parse-error]', envelope);
         writeResponse(res, { status: 200, headers: rpcResponseHeaders(corsHeaders), cookies: [], body: envelope }, undefined, corsHeaders);
+        return;
+      }
+      // A JSON-RPC body must be declared `application/json`: the other content
+      // types a browser can send cross-site without a preflight are refused
+      // before dispatch (see isJsonRpcContentType). RawRoutes keep any content type.
+      if (isRpc && !isJsonRpcContentType(req.headers['content-type'])) {
+        const envelope = unsupportedMediaTypeResponse();
+        if (devRequestLogging().traffic) console.log('[rpc-out unsupported-media-type]', envelope);
+        writeResponse(res, { status: 415, headers: rpcResponseHeaders(corsHeaders), cookies: [], body: envelope }, undefined, corsHeaders);
         return;
       }
       // Verbose request/response logging — useful when debugging cross-stack
