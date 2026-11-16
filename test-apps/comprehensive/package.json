@@ -22,6 +22,7 @@
     "test:e2e:production": "npm run test:production",
     "test:upgrade-in-place": "tsx test/upgrade-in-place.ts",
     "test:upgrade-in-place:dry-run": "tsx test/upgrade-in-place.ts --dry-run",
+    "test:upgrade-kv-store": "tsx test/upgrade-kv-store.ts",
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
   "dependencies": {

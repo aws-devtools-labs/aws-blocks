@@ -159,6 +159,39 @@ Point-in-Time Recovery resolves from the per-block option first and then the sta
 - **`encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`** — `'aws-managed'` (default) uses the `aws/dynamodb` key; `'customer-managed'` provisions a dedicated CMK per table; `KVStore.fromKmsKey(arn)` reuses an existing CMK you own, so several tables can share one key. An unrecognized value fails the synth with an error listing the valid values; it never falls back to `'aws-managed'`, so a request for a customer-managed key can't be silently downgraded.
 - **`protection?: 'disposable' | 'retained' | 'locked'`** — one knob for removal policy and deletion protection; see D-KV-11.
 
+## Move the items of an earlier release (`migrateFrom`)
+
+A release up to 0.4.0 keys its table by `pk` and keeps the value as JSON text in `value`. The key of a DynamoDB table cannot change, and CloudFormation does not replace a table that has a fixed name. So a store of this release cannot take over that table. `migrateFrom` keeps the old table in the stack and moves its items into the table of a store with a new id, in one deploy, while the app runs.
+
+**What the construct adds** (`attachMigration` in `index.cdk.ts`):
+
+- The old table, declared as release 0.4.0 declares it, under the construct path that the old store had (`<parent>/<old id>/table`). The path gives the logical id, so CloudFormation sees the table that it has. The one change is `StreamSpecification: NEW_IMAGE`. `migrateFrom` restates the options of the old store because the declaration must match.
+- One provider for the stack, with two Lambda functions from `migrate-lambda.ts`: `handler` names the resource, and `isCompleteHandler` does the work in slices.
+- Two custom resources for the store, `copy` and `drain`.
+- A dependency of each function that runs the app (a function with the shared execution role) on the `copy` of every store of the stack. CloudFormation therefore updates the app after the copies.
+
+**The copy** scans the old table in eight segments with `ConsistentRead`, converts each item with `layoutItem` (the layout of a write, without the schema), and writes batches of 25. Then it replays the stream from its start, pass after pass, until three passes in a row reach the tip of the stream in under a second each. The measure is time, not a count of records, so the copy of a busy table also ends. The position of the copy between two invocations is one item in the new table, which the app does not read yet.
+
+**The drain** starts when its own copy ends. It does not wait for the copies of the other stores or for the update of the app, so the new table stays less than a second behind the old one through the switch. It asks CloudFormation, for the logical ids that the construct gave it as text, when each function was last updated. When they are updated it follows the stream for `drainSeconds` more and ends. If the functions are not updated and nothing else in the stack is in progress for three minutes, this deploy does not update them, and the drain ends the same way. Its position between two invocations is a Systems Manager parameter under `/blocks/kv-migrate/`, because the app reads the new table by then.
+
+**The rule that keeps the two writers apart:** every item that the job writes has the attribute `_bkv_m`. A `put` of the app replaces the whole item, so it has no marker. The replay puts an item only if it is absent or has the marker (`attribute_not_exists(_bkv_pk) OR attribute_exists(_bkv_m)`), and deletes an item only if it has the marker. So the job never overwrites a write of the new code. The marker stays on an item until the app writes it again; a read does not return it.
+
+**What the move guarantees:** every item of the old table is in the new table; a copied item is the item that this release writes for the same value, plus the marker; the items of the old table do not change; a deploy that fails before the app is updated leaves the app on the old table with every write.
+
+**What it cannot guarantee:**
+
+| What can go wrong | When |
+|---|---|
+| A deleted key comes back. | The old code writes a key, and the new code deletes that key before the replay applies the write. The replay finds the key absent and puts it. |
+| An older value wins. | An execution of the old code is still at work after the update and writes a key that the new code also writes. |
+| What the new code wrote is gone. | The deploy fails after the app is updated and rolls back to the old table. |
+| The next deploy is refused. | A deploy fails and the new table is retained. The rollback leaves it in the account, and CloudFormation refuses a change set that creates a table that exists. |
+| A write is not copied. | It is made after the drain ends: a long execution of the old code, or a writer that is not one of the app's functions. |
+
+The first two are one window: the time by which the new table is behind the old one at the update. Only a stop of the writes, or a tombstone that the new code writes for a delete, makes it zero.
+
+**Limits of the first version:** the app's functions are the Lambda functions with the shared execution role. A stack whose app also runs on a container fails at synth, because the container is not ordered after the copy. The copy of a store, and its drain, each have one hour: the limit of CloudFormation for a custom resource. A store with a declared `key` cannot use `migrateFrom`: the stores of those releases have a string key.
+
 ## Mock Implementation
 
 - Data stored in `.bb-data/{scope.fullId}/store.json` via `getMockDataDir()` from core, as `{ "version": 2, "items": [...] }`, where each entry of `items` is the exact DynamoDB item. The file format and its loader are in `src/mock-file.ts` (D-KV-19).
@@ -309,3 +342,13 @@ The value checks are excluded because they guard a write. `get` returns `null` f
 **Decision:** The mock writes `{ "version": 2, "items": [...] }`. On load it converts a version 1 `store.json` (the `KVStore` format before the merge, which has no version field) and, when the directory has no `store.json`, the `data.json` of `DistributedTable`. A conversion puts each entry through `layoutItem`, the layout of a write without the schema, and is all or nothing. A corrupt entry in a current-format file is left out, with a copy of the file kept as `.bak`. A file in any other shape is renamed to `.bak`. Both are reported once at warn level. "A corrupt entry" and "an earlier format" are separate cases with separate tests (`src/mock-file.test.ts`).
 
 **Rationale:** The merge changed the shape of the mock data file. With no version, the loader read a file of the earlier `KVStore` as a list of corrupt entries, loaded an empty store, and the next write replaced the file; the `data.json` of `DistributedTable` was left behind. The local data of an app went away on upgrade with no message. A version field lets the loader tell a file of an earlier format from a damaged file, and lets a later change of the format do the same. A conversion goes through the layout of a write, so a converted item is the item that a `put` of the same value gives. Schema validation is not part of it: the mock loads its file in the constructor, which cannot wait for a schema that validates asynchronously, and `readValidation` reconciles a converted item with the schema on read. A file that the mock cannot read stays on disk under a `.bak` name, because only the developer knows if the data matters.
+
+### D-KV-20: `migrateFrom` copies into a second table; the store gets a new id
+
+**Decision:** A store of a release up to 0.4.0 reaches the layout of this release through a second table. The app gives the store a new id and names the old store in `migrateFrom`. One deploy copies the items, updates the app, and follows the old table through the update. A second deploy, without the option, removes the old table from the stack.
+
+**Rationale:** The other ways keep something for as long as the block lives. To keep the layout of the releases for a store with a string key gives the block two layouts, and such a store has no index and no condition on a field. To keep the table and rewrite its items keeps `pk` as the key attribute, a name that a value may also use. A second table keeps one layout, and the code of the move can go when the upgrades from those releases end. The old table is a way back until the second deploy. The price is a new id, both tables for a time, and a switch that is not exact to the item (see "Move the items of an earlier release").
+
+**Why the id changes:** the table name comes from the id, and two tables cannot have one name. A suffix that the block adds would have to stay with the store for good.
+
+**Tested on AWS:** a copy under 158 writes a second with no lost write and no wrong answer in 177,272 calls; a copy of 1,000,000 items in 261 seconds; a failure before and after the update; a rerun after a failure.

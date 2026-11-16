@@ -517,3 +517,119 @@ test('CDK: calling a runtime data method throws an actionable error (not a crypt
 		);
 	}
 });
+
+// ── migrateFrom ──────────────────────────────────────────────────────
+
+test('CDK: migrateFrom keeps the table of the release under its old logical id, with a stream, and adds the copy and the drain', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'cache-v2', { migrateFrom: { id: 'cache', ttl: true } });
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::DynamoDB::Table', 2);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		TableName: 'TestStack-app-cache',
+		KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }],
+		AttributeDefinitions: [{ AttributeName: 'pk', AttributeType: 'S' }],
+		TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+		StreamSpecification: { StreamViewType: 'NEW_IMAGE' },
+	});
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		TableName: 'TestStack-app-cache-v2',
+		KeySchema: [{ AttributeName: '_bkv_pk', KeyType: 'HASH' }],
+	});
+	template.resourceCountIs('Custom::BlocksKvMigrateCopy', 1);
+	template.resourceCountIs('Custom::BlocksKvMigrateDrain', 1);
+
+	// The old table has the logical id of the table of a store with the old id.
+	const release = setup();
+	new KVStore(release.parent, 'cache');
+	const [oldLogicalId] = Object.keys(Template.fromStack(release.stack).findResources('AWS::DynamoDB::Table'));
+	assert.ok(oldLogicalId in template.findResources('AWS::DynamoDB::Table'), oldLogicalId);
+});
+
+test('CDK: without migrateFrom a store has no old table and no migration resource', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'cache-v2');
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::DynamoDB::Table', 1);
+	template.resourceCountIs('Custom::BlocksKvMigrateCopy', 0);
+	template.resourceCountIs('Custom::BlocksKvMigrateDrain', 0);
+});
+
+test('CDK: migrateFrom restates the options of the old store, and the copy waits for the indexes of the new one', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new KVStore(parent, 'users-v2', {
+		schema: userSchema,
+		indexes: { byEmail: { partitionKey: 'email' } },
+		migrateFrom: { id: 'users', removalPolicy: 'retain', pointInTimeRecovery: true, drainSeconds: 90 },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', {
+		DeletionPolicy: 'Retain',
+		Properties: {
+			TableName: 'TestStack-app-users',
+			PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+		},
+	});
+	template.hasResourceProperties('Custom::BlocksKvMigrateDrain', { DrainSeconds: '90', Phase: 'drain' });
+	const [copyId] = Object.keys(template.findResources('Custom::BlocksKvMigrateCopy'));
+	const copy = template.findResources('Custom::BlocksKvMigrateCopy')[copyId];
+	assert.strictEqual(copy.Properties.KeyOptions, JSON.stringify({ indexes: { byEmail: { partitionKey: 'email' } } }));
+	const [indexResourceId] = Object.keys(template.findResources('AWS::CloudFormation::CustomResource'));
+	assert.ok(copy.DependsOn.includes(indexResourceId), `the copy depends on ${indexResourceId}`);
+});
+
+test('CDK: migrateFrom refuses the id of the store itself, a declared key, and a table from fromExisting', () => {
+	const { parent } = setup();
+	assert.throws(() => new KVStore(parent, 'cache', { migrateFrom: { id: 'cache' } }), /Give this store a new id/);
+	const options: Record<string, unknown> = {
+		schema: userSchema,
+		key: { partitionKey: 'email' },
+		migrateFrom: { id: 'old' },
+	};
+	assert.throws(() => new KVStore(parent, 'keyed', options as never), /cannot declare a key/);
+	const wrapped: Record<string, unknown> = { table: KVStore.fromExisting('a-table'), migrateFrom: { id: 'old' } };
+	assert.throws(() => new KVStore(parent, 'wrapped', wrapped as never), /cannot wrap a table with fromExisting/);
+	assert.throws(
+		() => new KVStore(parent, 'slow-v2', { migrateFrom: { id: 'slow', drainSeconds: Number.NaN } }),
+		/drainSeconds must be a number from 0 to 900/,
+	);
+});
+
+test('CDK: migrateFrom gives the copy the ttl field of the new store, and refuses an app that also runs on a container', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'sessions-v2', {
+		schema: z.object({ userId: z.string(), expiresAt: z.number() }),
+		ttl: 'expiresAt',
+		migrateFrom: { id: 'sessions', ttl: true },
+	});
+	const [copy] = Object.values(Template.fromStack(stack).findResources('Custom::BlocksKvMigrateCopy'));
+	assert.strictEqual(copy.Properties.KeyOptions, JSON.stringify({ ttl: 'expiresAt' }));
+	Annotations.fromStack(stack).hasNoError('*', Match.anyValue());
+
+	new cdk.aws_ecs.CfnTaskDefinition(stack, 'Task', { taskRoleArn: stack.executionRole.roleArn });
+	Annotations.fromStack(stack).hasError(
+		'*',
+		Match.stringLikeRegexp('migrateFrom cannot move a store of an app that also runs on a container'),
+	);
+});
+
+test('CDK: every function that runs the app is updated after the copy, and the drain gets its logical id as text', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'cache-v2', { migrateFrom: { id: 'cache' } });
+	const template = Template.fromStack(stack);
+	const [copyId] = Object.keys(template.findResources('Custom::BlocksKvMigrateCopy'));
+	const [drain] = Object.values(template.findResources('Custom::BlocksKvMigrateDrain'));
+	// The stub stack has one function with the shared execution role: the app's handler.
+	const functions = template.findResources('AWS::Lambda::Function');
+	const appIds: string[] = drain.Properties.FunctionLogicalIds;
+	assert.strictEqual(appIds.length, 1);
+	assert.ok(functions[appIds[0]].DependsOn.includes(copyId), 'the app is updated after the copy');
+	assert.ok(
+		!(drain.DependsOn ?? []).includes(appIds[0]),
+		'the drain starts with the update of the app, not after it',
+	);
+	// The functions of the migration itself do not wait for the copy.
+	for (const [id, fn] of Object.entries(functions)) {
+		if (id !== appIds[0]) assert.ok(!(fn.DependsOn ?? []).includes(copyId), id);
+	}
+});

@@ -43,15 +43,18 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs KVStore && node scripts/generate-readme-test.mjs",
     "build": "tsc --build && npm run build:lambda",
-    "build:lambda": "esbuild src/gsi-manager-lambda.ts --bundle --platform=node --target=node24 --conditions=aws-runtime --outfile=dist/gsi-manager-lambda/index.js --format=cjs --external:@aws-sdk/*",
-    "test": "node --test --test-concurrency=1 dist/index.test.js dist/parity.test.js dist/ttl.test.js dist/mock-file.test.js dist/types.test.js dist/readme.generated.test.js dist/user-agent.test.js dist/index.cdk.test.js dist/gsi-manager-lambda.test.js"
+    "build:lambda": "esbuild src/gsi-manager-lambda.ts --bundle --platform=node --target=node24 --conditions=aws-runtime --outfile=dist/gsi-manager-lambda/index.js --format=cjs --external:@aws-sdk/* && esbuild src/migrate-lambda.ts --bundle --platform=node --target=node24 --conditions=aws-runtime --outfile=dist/migrate-lambda/index.js --format=cjs --external:@aws-sdk/*",
+    "test": "node --test --test-concurrency=1 dist/index.test.js dist/parity.test.js dist/ttl.test.js dist/mock-file.test.js dist/types.test.js dist/readme.generated.test.js dist/user-agent.test.js dist/index.cdk.test.js dist/gsi-manager-lambda.test.js dist/migrate-lambda.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0",
     "@aws-blocks/bb-logger": "^0.3.0",
+    "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/client-dynamodb-streams": "^3.1156.0",
+    "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/lib-dynamodb": "^3.1156.0",
+    "@aws-sdk/util-dynamodb": "^3.996.9",
     "@standard-schema/spec": "^1.1.0",
     "defu": "^6.1.7"
   },

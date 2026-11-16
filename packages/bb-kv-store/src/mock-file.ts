@@ -31,7 +31,7 @@
  * level, and the store starts empty. The mock does not write over a file that
  * it cannot read.
  */
-import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { isPlainObject } from './errors.js';
@@ -105,6 +105,23 @@ export function loadMockFile(
 		items: content.items.filter((item) => !itemExpired(model, item, now)),
 		rewrite: content.converted || content.dropped > 0,
 	};
+}
+
+/**
+ * The `migrateFrom` option, locally. When the directory of this store holds no
+ * file and the directory of the store that it takes over has a data file, copy
+ * that file here. The loader then converts it, as it converts any file of an
+ * earlier format. The file of the old store stays as it is.
+ *
+ * A directory that holds any file is left alone. A file that the loader set
+ * aside (`store.json.bak`) is an earlier copy that it could not read, and the
+ * store must not copy it again on every start.
+ */
+export function adoptReleaseFile(dir: string, fromDir: string): void {
+	const source = join(fromDir, FILE_NAME);
+	if (!existsSync(source) || (existsSync(dir) && readdirSync(dir).length > 0)) return;
+	mkdirSync(dir, { recursive: true });
+	copyFileSync(source, join(dir, FILE_NAME));
 }
 
 /** Write the items of a store to its mock data directory, in the current format. */

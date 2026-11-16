@@ -24,6 +24,7 @@ import {
 	normalizeSortKeyCondition,
 	validateSchema,
 } from './errors.js';
+import { MAX_DRAIN_SECONDS } from './migrate-names.js';
 import {
 	isExpired,
 	nowEpochSeconds,
@@ -33,7 +34,7 @@ import {
 	TTL_ATTRIBUTE,
 	VALUE_ATTRIBUTE,
 } from './ttl.js';
-import type { Expiry, ReadValidationMode, TableOptions } from './types.js';
+import type { Expiry, MigrateFrom, ReadValidationMode, TableOptions } from './types.js';
 
 /** A stored item: one DynamoDB attribute per top-level field, plus the block's `_bkv_` attributes. */
 export type Item = Record<string, unknown>;
@@ -58,11 +59,51 @@ export interface LooseOptions extends TableOptions {
 	indexes?: Record<string, KeyAttributes>;
 	ttl?: string;
 	readValidation?: ReadValidationMode;
+	migrateFrom?: MigrateFrom;
 }
 
 /** Read the typed constructor options of a store as {@link LooseOptions}. */
 export function looseOptions(options: unknown): LooseOptions {
 	return (options ?? {}) as LooseOptions;
+}
+
+/**
+ * Check the `migrateFrom` option of a store, and return it. Every layer calls
+ * this in its constructor, so the local mock refuses what a deploy refuses.
+ *
+ * @throws If the store wraps an existing table, declares a key, or names its own id.
+ */
+export function checkMigrateFrom(id: string, options: unknown): MigrateFrom | undefined {
+	const { migrateFrom, key, table } = looseOptions(options);
+	if (!migrateFrom) return undefined;
+	if (table) {
+		throw new Error(
+			`KVStore '${id}': migrateFrom copies into a table that the block creates, so this store cannot wrap a table with fromExisting().`,
+		);
+	}
+	// A store of a release up to 0.4.0 has a string key. The types refuse a
+	// `key` next to `migrateFrom`; this is for a JavaScript caller.
+	if (key) {
+		throw new Error(
+			`KVStore '${id}': migrateFrom moves a store with a string key, so this store cannot declare a key.`,
+		);
+	}
+	if (migrateFrom.id === id) {
+		throw new Error(
+			`KVStore '${id}': migrateFrom.id is the id of this store. Give this store a new id, and name the id of the old store in migrateFrom.`,
+		);
+	}
+	const { drainSeconds } = migrateFrom;
+	// A value that is not a number (`NaN` from an unset variable) would keep the deploy at work until it times out.
+	if (
+		drainSeconds !== undefined &&
+		!(Number.isFinite(drainSeconds) && drainSeconds >= 0 && drainSeconds <= MAX_DRAIN_SECONDS)
+	) {
+		throw new Error(
+			`KVStore '${id}': migrateFrom.drainSeconds must be a number from 0 to ${MAX_DRAIN_SECONDS}, not ${drainSeconds}.`,
+		);
+	}
+	return migrateFrom;
 }
 
 /** The shape of the store, resolved once in a constructor. */

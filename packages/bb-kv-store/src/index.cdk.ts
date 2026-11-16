@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
+import { computeScopeFullId, type ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
 import {
 	deployTimeLambdaCode,
@@ -10,15 +10,32 @@ import {
 	scopeProviderWaiterTrust,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
-import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
+import { Annotations, Aspects, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { AttributeType, BillingMode, type ITable, StreamViewType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { CfnTaskDefinition } from 'aws-cdk-lib/aws-ecs';
+import { type IRole, PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { CfnFunction, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { looseOptions, probeKeyType, resolveKeyModel } from './item.js';
-import type { ExternalKmsKeyRef, ExternalTableRef, IndexConfig, KeyConfig, KVStoreOptions } from './types.js';
+import { Construct, type IConstruct } from 'constructs';
+import { checkMigrateFrom, type KeyAttributes, looseOptions, probeKeyType, resolveKeyModel } from './item.js';
+import {
+	DEFAULT_DRAIN_SECONDS,
+	MIGRATE_COPY_RESOURCE_TYPE,
+	MIGRATE_DRAIN_RESOURCE_TYPE,
+	MIGRATE_PARAMETER_PATH,
+	RELEASE_PK,
+	RELEASE_TTL,
+} from './migrate-names.js';
+import type {
+	ExternalKmsKeyRef,
+	ExternalTableRef,
+	IndexConfig,
+	KeyConfig,
+	KVStoreOptions,
+	MigrateFrom,
+} from './types.js';
 import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -78,6 +95,7 @@ export class KVStore<
 		// Read the options through the loosely typed view that the runtime shares:
 		// the construct provisions from field names, not from the inferred value types.
 		const config = looseOptions(options);
+		const migrateFrom = checkMigrateFrom(id, options);
 
 		if (config.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name
@@ -218,6 +236,7 @@ export class KVStore<
 
 		// Add GSI manager if indexes are defined
 		const indexes = config.indexes;
+		let gsiResource: CustomResource | undefined;
 		if (indexes && Object.keys(indexes).length > 0) {
 			const gsiProvider = getOrCreateGsiProvider(cdk.Stack.of(this), this.defaults.logRetention);
 			gsiProvider.addTableArn(this.table.tableArn, isSandbox);
@@ -232,7 +251,7 @@ export class KVStore<
 				};
 			}
 
-			const gsiResource = new CustomResource(this, 'gsi-resource', {
+			gsiResource = new CustomResource(this, 'gsi-resource', {
 				serviceToken: gsiProvider.serviceToken,
 				properties: {
 					TableName: this.table.tableName,
@@ -244,6 +263,8 @@ export class KVStore<
 
 			gsiResource.node.addDependency(this.table);
 		}
+
+		if (migrateFrom) attachMigration(this, migrateFrom, this.table, { indexes, ttl: config.ttl }, gsiResource);
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
@@ -276,6 +297,240 @@ export class KVStore<
 	deleteBatch(..._args: unknown[]): never {
 		return synthGuard('KVStore', 'deleteBatch');
 	}
+}
+
+// ── `migrateFrom`: keep the table of an earlier release, copy its items, follow it through the switch ──
+
+const MIGRATE_PROVIDER_KEY = Symbol.for('BLOCKS_KV_MIGRATE_PROVIDER');
+
+interface MigrateProvider {
+	serviceToken: string;
+	/** The function that does the work (`isComplete` of the provider). The tables grant it access. */
+	worker: LambdaFunction;
+	/** The apps of the stack by execution role. A stack can hold more than one backend, each with its own role. */
+	apps: Map<string, MigrateApp>;
+}
+
+interface MigrateApp {
+	/** The copy of each store of the app. Every function that runs the app waits for all of them. */
+	copies: cdk.CfnResource[];
+	/** The logical ids of the functions that run the app. An aspect fills it at synth. */
+	functions: string[];
+}
+
+/** One provider for every store of the stack that has `migrateFrom`. See `migrate-lambda.ts`. */
+function getOrCreateMigrateProvider(stack: cdk.Stack, logRetention: RetentionDays): MigrateProvider {
+	const existing = (stack as unknown as Record<symbol, MigrateProvider | undefined>)[MIGRATE_PROVIDER_KEY];
+	if (existing) return existing;
+
+	// `dist/migrate-lambda/` (build:lambda) when installed; a vendorized copy
+	// (src/ only) bundles src/migrate-lambda.ts at synth instead.
+	const migrateCode = () =>
+		deployTimeLambdaCode({
+			moduleUrl: import.meta.url,
+			bundleDir: './migrate-lambda',
+			source: './migrate-lambda',
+			target: 'node24', // = build:lambda
+		});
+
+	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	const stackChildrenBefore = new Set(stack.node.children);
+
+	const onEvent = new LambdaFunction(stack, 'BlocksKvMigrate', {
+		runtime: DEFAULT_NODE_RUNTIME,
+		handler: 'index.handler',
+		code: migrateCode(),
+		timeout: Duration.minutes(1),
+		logGroup: new LogGroup(stack, 'BlocksKvMigrateLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
+	});
+	// The work is in isComplete: a slice of the copy, or of the drain. The
+	// provider calls it again until the phase is done.
+	const worker = new LambdaFunction(stack, 'BlocksKvMigrateWorker', {
+		runtime: DEFAULT_NODE_RUNTIME,
+		handler: 'index.isCompleteHandler',
+		code: migrateCode(),
+		timeout: Duration.minutes(15),
+		// For the CPU, not for the heap: a slice converts items in eight segments at once.
+		memorySize: 2048,
+		logGroup: new LogGroup(stack, 'BlocksKvMigrateWorkerLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
+	});
+	// The drain keeps its position in a parameter between two invocations, and
+	// removes it when it ends. A Delete of a drain (a rollback) removes it too.
+	for (const fn of [onEvent, worker]) {
+		fn.addToRolePolicy(
+			new PolicyStatement({
+				actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter'],
+				resources: [
+					stack.formatArn({
+						service: 'ssm',
+						resource: 'parameter',
+						resourceName: `${MIGRATE_PARAMETER_PATH.slice(1)}*`,
+					}),
+				],
+			}),
+		);
+	}
+	// The drain reads, from this stack only, whether the app's functions are
+	// updated and what else is in progress. Read-only.
+	worker.addToRolePolicy(
+		new PolicyStatement({
+			actions: ['cloudformation:ListStackResources'],
+			resources: [stack.stackId],
+		}),
+	);
+
+	const provider = new Provider(stack, 'BlocksKvMigrateProvider', {
+		onEventHandler: onEvent,
+		isCompleteHandler: worker,
+		queryInterval: Duration.seconds(5),
+		// The most that CloudFormation gives a custom resource. The copy of a store, and its drain, each have this long.
+		totalTimeout: Duration.hours(1),
+	});
+	scopeProviderWaiterTrust(provider);
+
+	// The functions and the provider sit at stack scope but belong to the block,
+	// so the service-principal trust check treats their roles as AWS Blocks roles.
+	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
+
+	const shared: MigrateProvider = { serviceToken: provider.serviceToken, worker, apps: new Map() };
+
+	// The switch. A function that runs an app has the execution role of that
+	// app. It may be constructed after the store, so an aspect finds it. The
+	// aspect compares resolved values: the same role gives the same Fn::GetAtt
+	// whether the function got the role object or its ARN.
+	Aspects.of(stack).add({
+		visit(node: IConstruct) {
+			if (cdk.Stack.of(node) !== stack) return;
+			if (node instanceof CfnFunction) {
+				const app = shared.apps.get(JSON.stringify(stack.resolve(node.role)));
+				if (!app) return;
+				for (const copy of app.copies) node.addResourceDependency(copy);
+				const logicalId = stack.getLogicalId(node);
+				if (!app.functions.includes(logicalId)) app.functions.push(logicalId);
+			} else if (
+				node instanceof CfnTaskDefinition &&
+				shared.apps.has(JSON.stringify(stack.resolve(node.taskRoleArn)))
+			) {
+				// Only Lambda functions are ordered after the copy. A container would read and write the new table
+				// while the copy runs, and the copy would write over what it wrote.
+				Annotations.of(node).addError(
+					'KVStore migrateFrom cannot move a store of an app that also runs on a container. ' +
+						'The deploy orders only the Lambda functions of the app after the copy, so the container would use the new table during the copy.',
+				);
+			}
+		},
+	});
+
+	(stack as unknown as Record<symbol, MigrateProvider>)[MIGRATE_PROVIDER_KEY] = shared;
+	return shared;
+}
+
+/** The copies and the functions of the app that has this execution role. */
+function migrateApp(provider: MigrateProvider, stack: cdk.Stack, executionRole: IRole): MigrateApp {
+	const key = JSON.stringify(stack.resolve(executionRole.roleArn));
+	let app = provider.apps.get(key);
+	if (!app) {
+		app = { copies: [], functions: [] };
+		provider.apps.set(key, app);
+	}
+	return app;
+}
+
+/**
+ * The `migrateFrom` option: keep the table of the store of an earlier release
+ * in the stack, copy its items into `newTable`, and order the deploy so that
+ * the app switches to `newTable` after the copy.
+ *
+ * - The old table is declared as release 0.4.0 declares it, under the construct
+ *   path that the old store had. The path gives the logical id, so
+ *   CloudFormation sees the table that it has. The one change is a stream.
+ * - `copy` (a custom resource) copies the items and replays the stream.
+ * - Each function that runs the app depends on the copy of every store of the
+ *   app: CloudFormation updates it after the copies.
+ * - `drain` (a custom resource) starts when `copy` ends and follows the stream
+ *   through that update. It gets the logical ids of the functions as text. A
+ *   reference would make it wait for them.
+ *
+ * @param keyOptions - The `indexes` and `ttl` options of the new store: the copy lays each item out as a write of that store does.
+ * @param after - What the copy waits for: the index resource of the new table, so that the copy fills the indexes.
+ */
+function attachMigration(
+	store: BuildingBlockScope,
+	from: MigrateFrom,
+	newTable: ITable,
+	keyOptions: { indexes?: Record<string, KeyAttributes>; ttl?: string },
+	after: IConstruct | undefined,
+): void {
+	const stack = cdk.Stack.of(store);
+	const legacy = new Construct(store.node.scope as Construct, from.id);
+	const removalPolicy =
+		from.removalPolicy === 'destroy'
+			? RemovalPolicy.DESTROY
+			: from.removalPolicy === 'retain'
+				? RemovalPolicy.RETAIN
+				: store.defaults.removalPolicy;
+	const protection = resolveDynamoDbProtection(legacy, from, store.defaults, {
+		warningPrefix: '@aws-blocks/bb-kv-store',
+		fromKmsKeyHint: 'KVStore.fromKmsKey',
+	});
+	const oldTable = new Table(legacy, 'table', {
+		// The name that the old store had: the full id of a store with its id, under the same parent.
+		tableName: computeScopeFullId({ id: from.id, parent: store.parent }).substring(0, 255),
+		partitionKey: { name: RELEASE_PK, type: AttributeType.STRING },
+		billingMode: BillingMode.PAY_PER_REQUEST,
+		removalPolicy,
+		deletionProtection: from.deletionProtection ?? store.defaults.deletionProtection,
+		timeToLiveAttribute: from.ttl ? RELEASE_TTL : undefined,
+		pointInTimeRecoverySpecification: protection.pointInTimeRecoverySpecification,
+		encryption: protection.encryption,
+		encryptionKey: protection.encryptionKey,
+		// The one change to the table: the migration replays its changes.
+		stream: StreamViewType.NEW_IMAGE,
+	});
+	protection.applyKeyRemovalPolicy(oldTable, removalPolicy);
+	// The code of the earlier release runs until the functions are updated, so the role keeps its access.
+	oldTable.grantReadWriteData(store.executionRole);
+
+	const provider = getOrCreateMigrateProvider(stack, store.defaults.logRetention);
+	const app = migrateApp(provider, stack, store.executionRole);
+	oldTable.grantReadData(provider.worker);
+	oldTable.grantStreamRead(provider.worker);
+	newTable.grantReadWriteData(provider.worker);
+
+	const properties = {
+		OldTable: oldTable.tableName,
+		NewTable: newTable.tableName,
+		StreamArn: oldTable.tableStreamArn as string,
+		KeyOptions: JSON.stringify(keyOptions),
+	};
+	const copy = new CustomResource(store, 'migrate-copy', {
+		serviceToken: provider.serviceToken,
+		resourceType: MIGRATE_COPY_RESOURCE_TYPE,
+		properties: { ...properties, Phase: 'copy' },
+	});
+	copy.node.addDependency(newTable, oldTable);
+	// The grants above are policies of the role: the copy must not start before they exist.
+	if (provider.worker.role) copy.node.addDependency(provider.worker.role);
+	if (after) copy.node.addDependency(after);
+	app.copies.push(copy.node.defaultChild as cdk.CfnResource);
+
+	new CustomResource(store, 'migrate-drain', {
+		serviceToken: provider.serviceToken,
+		resourceType: MIGRATE_DRAIN_RESOURCE_TYPE,
+		properties: {
+			...properties,
+			Phase: 'drain',
+			Checkpoints: copy.getAttString('Checkpoints'),
+			DrainSeconds: String(from.drainSeconds ?? DEFAULT_DRAIN_SECONDS),
+			FunctionLogicalIds: cdk.Lazy.list({ produce: () => app.functions }),
+		},
+	});
 }
 
 // ── Shared GSI Manager Provider (one per stack) ─────────────────────────────

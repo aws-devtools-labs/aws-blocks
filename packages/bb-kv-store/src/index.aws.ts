@@ -18,6 +18,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages, remapItemTooLarge } from './errors.js';
 import {
+	checkMigrateFrom,
 	createReader,
 	decodeCursor,
 	deleteCondition,
@@ -144,6 +145,7 @@ export class KVStore<
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		const tableName = options?.table ? options.table.tableName : this.fullId.substring(0, 255);
 		registerSdkIdentifiers(this.fullId, { tableName });
+		checkMigrateFrom(id, options);
 		this.model = resolveKeyModel(options);
 		this.reader = createReader(this.model, options?.readValidation ?? 'coerce', this.log, { store: this.fullId });
 		const client = new DynamoDBClient({

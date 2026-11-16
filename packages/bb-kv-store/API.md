@@ -134,13 +134,20 @@ export const KVStoreErrors: {
 };
 
 // @public
-export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = TableOptions & ({
-    schema?: undefined;
-    key?: undefined;
-    indexes?: undefined;
-    ttl?: undefined;
-    readValidation?: undefined;
-} | SchemaOptions<In, Out, K, I>);
+export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = TableOptions & (StringKeyOptions | SchemaOptions<In, Out, K, I>);
+
+// @public
+export interface MigrateFrom {
+    deletionProtection?: boolean;
+    drainSeconds?: number;
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+    id: string;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
+    removalPolicy?: 'destroy' | 'retain';
+    ttl?: boolean;
+}
 
 // @public
 export type NumberField<In, Out> = IsRecord<Out> extends true ? {
@@ -214,6 +221,7 @@ export interface ScanOptions {
 export interface SchemaOptions<In, Out, K, I> {
     indexes?: I;
     key?: K;
+    migrateFrom?: [K] extends [undefined] ? MigrateFrom : never;
     readValidation?: ReadValidationMode;
     schema: StandardSchemaV1<In, Out>;
     ttl?: NumberField<In, Out>;
@@ -233,6 +241,21 @@ export type SortCondition<V> = OneOf<{
 } & ([V] extends [string] ? {
     beginsWith: string;
 } : {})>;
+
+// @public
+export interface StringKeyOptions {
+    // (undocumented)
+    indexes?: undefined;
+    // (undocumented)
+    key?: undefined;
+    migrateFrom?: MigrateFrom;
+    // (undocumented)
+    readValidation?: undefined;
+    // (undocumented)
+    schema?: undefined;
+    // (undocumented)
+    ttl?: undefined;
+}
 
 // @public
 export interface TableOptions {

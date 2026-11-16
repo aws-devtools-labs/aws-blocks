@@ -1,13 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import { computeScopeFullId, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
+	checkMigrateFrom,
 	compareKeyValues,
 	createReader,
 	decodeCursor,
@@ -31,7 +33,7 @@ import {
 	serializeKey,
 	valueCheckHolds,
 } from './item.js';
-import { loadMockFile, saveMockFile } from './mock-file.js';
+import { adoptReleaseFile, loadMockFile, saveMockFile } from './mock-file.js';
 import { nowEpochSeconds } from './ttl.js';
 import type {
 	ConditionalDeleteOptions,
@@ -129,6 +131,12 @@ export class KVStore<
 		this.dataDir = getMockDataDir(this);
 		this.model = resolveKeyModel(options);
 		this.reader = createReader(this.model, options?.readValidation ?? 'coerce', this.log, { store: this.fullId });
+		// `migrateFrom`: the first load takes over the data file of the store of the earlier release.
+		const from = checkMigrateFrom(id, options);
+		if (from) {
+			const fromFullId = computeScopeFullId({ id: from.id, parent: scope });
+			adoptReleaseFile(this.dataDir, join(getMockDataDir(this, { root: true }), fromFullId));
+		}
 		const loaded = loadMockFile(this.dataDir, this.model, this.log, { store: this.fullId });
 		this.data = new Map(loaded.items.map((item) => [serializeKey(this.model, item), item]));
 		// A load that converted a file of an earlier format, or that left entries

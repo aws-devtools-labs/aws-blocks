@@ -337,6 +337,16 @@ async function _contract() {
 		{ ifValueEquals: { name: 'A', email: 'a@example.com', version: 1 } },
 	);
 
+	// ── 6. migrateFrom: only for a store with a string key ──────────────────────
+	new KVStore<Profile>(scope, 'profiles-v2', { migrateFrom: { id: 'profiles', ttl: true } });
+	new KVStore(scope, 'sessions-v2', { schema: schemaOf<Session>(), migrateFrom: { id: 'sessions' } });
+	new KVStore(scope, 'bad', {
+		schema: schemaOf<Session>(),
+		key: { partitionKey: 'sessionId' },
+		// @ts-expect-error migrateFrom moves a store with a string key
+		migrateFrom: { id: 'sessions' },
+	});
+
 	// A rewrite keeps the expiry of each item.
 	for await (const { key, value, expiresAt } of cache.scan()) {
 		await cache.put(key, value.trim(), { ifValueEquals: value, expiresAt });
@@ -345,7 +355,7 @@ async function _contract() {
 	void user;
 }
 
-test('the public types compile with their 49 rejections', () => {
+test('the public types compile with their 50 rejections', () => {
 	// The contract above is checked by the compiler; this test only records that the file built.
 	assert.strictEqual(typeof _contract, 'function');
 });

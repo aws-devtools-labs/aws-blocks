@@ -382,6 +382,44 @@ export interface ExternalKmsKeyRef {
 	readonly keyArn: string;
 }
 
+/**
+ * The store of a `KVStore` release up to 0.4.0 whose items a store takes over
+ * (the `migrateFrom` option).
+ *
+ * A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`.
+ * This release keeps one attribute for each field, under another key
+ * attribute, so the table of such a release cannot become the table of this
+ * one. `migrateFrom` keeps that table in the stack and copies its items into
+ * the table of this store at the next deploy.
+ *
+ * `id` is the id that the old store had, under the same parent scope. The
+ * other fields restate the options that the old store had. They must match:
+ * the block declares the old table from them, and a difference makes
+ * CloudFormation change that table.
+ */
+export interface MigrateFrom {
+	/** The id of the store of the earlier release. It differs from the id of this store. */
+	id: string;
+	/** Set if the old store had `ttl: true`. */
+	ttl?: boolean;
+	/** The `removalPolicy` option of the old store, if it had one. */
+	removalPolicy?: 'destroy' | 'retain';
+	/** The `deletionProtection` option of the old store, if it had one. */
+	deletionProtection?: boolean;
+	/** The `pointInTimeRecovery` option of the old store, if it had one. */
+	pointInTimeRecovery?: boolean | { retentionDays: number };
+	/** The `encryption` option of the old store, if it had one. */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
+	 * How long the deploy keeps following the old table after the app's
+	 * functions are updated, for writes that the old code still made. From 0
+	 * to 900.
+	 *
+	 * @defaultValue 45
+	 */
+	drainSeconds?: number;
+}
+
 /** Table options that apply to every form of a store. */
 export interface TableOptions {
 	/**
@@ -541,6 +579,14 @@ export interface SchemaOptions<In, Out, K, I> {
 	 */
 	ttl?: NumberField<In, Out>;
 	/**
+	 * Move the items of a store of a `KVStore` release up to 0.4.0 into this
+	 * store at the next deploy. Such a store has a string key, so this store has
+	 * no `key`: with a `key`, `migrateFrom` is a compile error.
+	 *
+	 * See {@link StringKeyOptions.migrateFrom}.
+	 */
+	migrateFrom?: [K] extends [undefined] ? MigrateFrom : never;
+	/**
 	 * How reads (`get`, `getBatch`, `query`, `scan`) reconcile a stored item with
 	 * the configured `schema`. Writes (`put`/`putBatch`) always validate; this
 	 * governs the read side, which matters after a schema change: a row written
@@ -583,6 +629,38 @@ export interface SchemaOptions<In, Out, K, I> {
 	readValidation?: ReadValidationMode;
 }
 
+/** The options of a store with no `schema`: a string key, and a value of the type argument. */
+export interface StringKeyOptions {
+	schema?: undefined;
+	key?: undefined;
+	indexes?: undefined;
+	ttl?: undefined;
+	readValidation?: undefined;
+	/**
+	 * Move the items of a store of a `KVStore` release up to 0.4.0 into this
+	 * store at the next deploy.
+	 *
+	 * Give this store a new id, and name the old store here. The deploy keeps
+	 * the table of the old store, copies its items into the table of this
+	 * store, updates the app, and follows the old table for a short time after
+	 * that. The app stays up. When the deploy is done, remove the option and
+	 * deploy again: the old table then leaves the stack.
+	 *
+	 * The local mock copies the data file of the old store the first time this
+	 * store loads. See the README ("Upgrade a store of an earlier release") for
+	 * the steps and for what the move cannot guarantee.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Release 0.4.0:  new KVStore<Doc>(scope, 'cache', { ttl: true })
+	 * const cache = new KVStore<Doc>(scope, 'cache-v2', {
+	 *   migrateFrom: { id: 'cache', ttl: true },
+	 * });
+	 * ```
+	 */
+	migrateFrom?: MigrateFrom;
+}
+
 /**
  * Constructor options for `KVStore`.
  *
@@ -593,7 +671,4 @@ export interface SchemaOptions<In, Out, K, I> {
  */
 // biome-ignore lint/complexity/noBannedTypes: `{}` is the empty index map (no index declared)
 export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = TableOptions &
-	(
-		| { schema?: undefined; key?: undefined; indexes?: undefined; ttl?: undefined; readValidation?: undefined }
-		| SchemaOptions<In, Out, K, I>
-	);
+	(StringKeyOptions | SchemaOptions<In, Out, K, I>);

@@ -86,6 +86,7 @@ const store = new KVStore(scope, id, options?)
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | Continuous backups. Defaults to the stack `defaults`. |
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | The key for encryption at rest. Defaults to `'aws-managed'`. |
 | `table` | `ExternalTableRef` | Use a table that exists. See [Use a table that exists](#use-a-table-that-exists). |
+| `migrateFrom` | `{ id, ...the options of the old store }` | Move the items of a store of release 0.4.0 or earlier into this store at the next deploy. See [Upgrade a store of an earlier release](#upgrade-a-store-of-an-earlier-release). |
 | `logger` | `ChildLogger` | A logger for internal operations. Defaults to a logger at warn level. |
 
 The mock and browser runtimes ignore `protection`, `pointInTimeRecovery`, and `encryption`.
@@ -443,6 +444,54 @@ for await (const { value, expiresAt } of todos.scan()) {
 	await todosById.put({ todoId: value.todoId }, value, { expiresAt });
 }
 ```
+
+## Upgrade a store of an earlier release
+
+A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a deploy of this release over such a table fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`. The table and its items are not changed by that failure.
+
+`migrateFrom` moves the items into a new table while the app runs. It is for a store with a string key, which is every `KVStore` of those releases.
+
+```typescript
+interface Prefs {
+	theme: string;
+}
+
+// Release 0.4.0:
+//   const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
+
+// Step 1. Give the store a new id. Name the old store, and restate the options that it had.
+const prefs = new KVStore<Prefs>(scope, 'prefs-v2', {
+	migrateFrom: { id: 'prefs', ttl: true },
+});
+
+// Step 2, after that deploy. Remove the option, and deploy again:
+//   const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
+```
+
+The first deploy does this, in order:
+
+1. It creates the table of the new store. The old table stays, and gets a stream.
+2. It copies every item, and then the changes that the app made during the copy.
+3. It updates the app. From here the app reads and writes the new table.
+4. It follows the old table for 45 more seconds (`drainSeconds`), for a write that the old code still made.
+
+The second deploy removes the old table from the stack. A table with a removal policy of `destroy` is deleted. A table that is retained, which is the default of the production preset, stays in your account until you delete it.
+
+Restate these options of the old store in `migrateFrom`, if it had them: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`. The block declares the old table from them. An option that is missing makes CloudFormation change that table.
+
+What to know before the first deploy:
+
+- **The table name changes with the id.** An alarm, a dashboard, or a policy of yours that names the table must follow.
+- **Cost.** The copy uses one write unit for each item of 1 KB or less, and you pay for both tables until the second deploy.
+- **Time.** A new on-demand table accepts 4,000 writes a second, so a million items take about four minutes. An index that you add to the new store in the same deploy is built first, and that can take longer than the copy. CloudFormation gives the copy of a store one hour, which is about ten million items of 1 KB or less. A larger store needs a copy outside the deploy.
+- **A failed deploy rolls back.** Before step 3 the app keeps every write. After step 3, a rollback returns the app to the old table, and what the app wrote to the new table since step 3 is lost.
+- **After a failed deploy, a retained new table is still in your account.** CloudFormation then refuses the next deploy because the table exists. Delete that table, and deploy again.
+- **An item that this release cannot store stops the deploy before step 3.** The error names the item, for example a value with a field that starts with `_bkv_`. Change or delete the item in the old table, and deploy again.
+- **The switch is not exact to the item.** If the old code writes a key and the new code deletes the same key within about a second around step 3, the key can come back. If that matters, stop the writes for the moment of the deploy.
+- **The app must run on Lambda functions.** The deploy orders only the Lambda functions of the app after the copy. A stack whose app also runs on a container fails at synth.
+- **Only the app's own functions are followed.** A script or another stack that writes to the old table after step 4 writes to a table that the app no longer reads.
+
+Locally there is no step: the first start with `migrateFrom` copies the data file of the old store.
 
 ## Best practices
 

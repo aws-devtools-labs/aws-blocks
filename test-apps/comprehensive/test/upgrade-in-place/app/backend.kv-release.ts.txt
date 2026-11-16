@@ -1,0 +1,91 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Fixture of `upgrade-kv-store.ts`: the app on the 0.4.0 release.
+// `op` takes numbers and one of five words only, and builds the key and the
+// value itself: a caller can write nothing but small fixed-shape test items.
+
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { z } from 'zod';
+
+const REV = 'old';
+const scope = new Scope('upgrade');
+const FAR = 4102444800;
+const PAST = 1000000000;
+const profileSchema = z.object({ userId: z.string(), name: z.string(), age: z.number() });
+
+const strings = new KVStore(scope, 'strings');
+const docs = new KVStore<unknown>(scope, 'docs', { removalPolicy: 'retain' });
+const profiles = new KVStore(scope, 'profiles', { schema: profileSchema });
+const expiring = new KVStore<unknown>(scope, 'expiring', { ttl: true });
+const ledger = new KVStore(scope, 'ledger');
+const big = new KVStore<unknown>(scope, 'big');
+
+type Store = { scan(options?: { includeExpired?: boolean }): AsyncIterable<{ key: string; value: unknown }> };
+async function entries(store: Store, options?: { includeExpired?: boolean }) {
+	const all = await Array.fromAsync(store.scan(options));
+	return all.map(({ key, value }) => ({ key, value })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+const int = (n: unknown, max: number) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= max;
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async seed() {
+		await strings.put('greeting', 'hello');
+		await strings.put('empty', '');
+		await strings.put('unicode', 'héllo ✓ "quoted" \\ back\nline');
+		await strings.put('timed', 'expires in 2100', { expiresAt: FAR });
+		await docs.put('object', { a: 1, nested: { b: [1, 2, { c: null }] }, s: 'x', 'key with space': true });
+		await docs.put('array', [1, 'two', { three: 3 }]);
+		await docs.put('number', 42.5);
+		await docs.put('boolean', false);
+		await docs.put('null', null);
+		await profiles.put('u1', { userId: 'u1', name: 'Ada', age: 36 });
+		await profiles.put('u2', { userId: 'u2', name: 'Grace', age: 45 });
+		await expiring.put('live', { v: 1 }, { expiresAt: FAR });
+		await expiring.put('dead', { v: 2 }, { expiresAt: PAST });
+		await expiring.put('forever', { v: 3 });
+		return 'seeded';
+	},
+
+	async dump() {
+		return {
+			strings: await entries(strings),
+			docs: await entries(docs),
+			profiles: await entries(profiles),
+			expiring: await entries(expiring),
+			expiringIncludingExpired: await entries(expiring, { includeExpired: true }),
+			bigSample: [await big.get('i0000000'), await big.get('i0000500')],
+		};
+	},
+
+	/** A value that release 0.4.0 stores and that the new layout refuses: a top-level field with the reserved prefix. */
+	async seedRefused() {
+		await docs.put('refused', { _bkv_pk: 'other', note: 'stored by the release' } as never);
+		return 'seeded';
+	},
+
+	async byName(_name: string) {
+		return 'no index in this revision';
+	},
+
+	async op(worker: number, key: number, seq: number, kind: string, prev?: number) {
+		if (!int(worker, 63) || !int(key, 63) || !int(seq, 1e9) || (prev !== undefined && prev !== null && !int(prev, 1e9))) {
+			throw new Error('bad op');
+		}
+		const k = `w${worker}:k${key}`;
+		try {
+			if (kind === 'put') await ledger.put(k, String(seq));
+			else if (kind === 'cput') await ledger.put(k, String(seq), { ifValueEquals: String(prev) });
+			else if (kind === 'cnew') await ledger.put(k, String(seq), { ifNotExists: true });
+			else if (kind === 'del') await ledger.delete(k);
+			else if (kind === 'get') return { rev: REV, ok: true, value: await ledger.get(k) };
+			else throw new Error('bad op');
+			return { rev: REV, ok: true };
+		} catch (error) {
+			const e = error as { name?: string; message?: string };
+			if (e.message === 'bad op') throw error;
+			return { rev: REV, ok: false, error: e.name };
+		}
+	},
+}));

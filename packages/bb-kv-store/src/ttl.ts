@@ -32,6 +32,14 @@ export const VALUE_ATTRIBUTE = '_bkv_value';
 export const TTL_ATTRIBUTE = '_bkv_ttl';
 
 /**
+ * Attribute that marks an item that `migrateFrom` wrote and that the app has
+ * not written since. It has the reserved prefix, so a read does not return it.
+ * A `put` of the app replaces the whole item and so removes it. An item can
+ * keep the attribute long after the move.
+ */
+export const MIGRATED_MARKER = '_bkv_m';
+
+/**
  * Epoch *seconds* above which a value is almost certainly epoch milliseconds
  * (1e11 seconds is the year 5138). Writing milliseconds into a DynamoDB TTL
  * attribute silently means "never expires", which is the exact failure mode

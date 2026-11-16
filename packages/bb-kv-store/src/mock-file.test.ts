@@ -272,3 +272,45 @@ describe('a file that the store cannot read is set aside and never written over'
 		assert.deepEqual(readdirSync(dir).sort(), ['store.json.bak', 'store.json.bak.2']);
 	});
 });
+
+// ── migrateFrom ──────────────────────────────────────────────────────
+
+describe('migrateFrom: the data file of the store that this store takes over', () => {
+	test('is copied and converted on the first load; the file of the old store stays as it is', async () => {
+		const scope = testScope();
+		const oldDir = dataDir(scope, 'cache');
+		const oldFile = JSON.stringify({ greeting: JSON.stringify('hello'), user: JSON.stringify({ name: 'Ada' }) });
+		writeFileSync(join(oldDir, 'store.json'), oldFile);
+
+		const store = new KVStore<unknown>(scope, 'cache-v2', { migrateFrom: { id: 'cache' } });
+		assert.equal(await store.get('greeting'), 'hello');
+		assert.deepEqual(await store.get('user'), { name: 'Ada' });
+		assert.deepEqual(readJson(dataDir(scope, 'cache-v2')), {
+			version: 2,
+			items: [
+				{ _bkv_pk: 'greeting', _bkv_value: 'hello' },
+				{ _bkv_pk: 'user', name: 'Ada' },
+			],
+		});
+		assert.equal(readFileSync(join(oldDir, 'store.json'), 'utf8'), oldFile);
+
+		// A later load keeps the data of the new store: it does not copy again.
+		await store.put('greeting', 'changed');
+		const again = new KVStore<unknown>(scope, 'cache-v2', { migrateFrom: { id: 'cache' } });
+		assert.equal(await again.get('greeting'), 'changed');
+	});
+
+	test('a file of the old store that cannot be read is copied once, not on every start', () => {
+		const scope = testScope();
+		writeFileSync(join(dataDir(scope, 'broken'), 'store.json'), 'not json');
+		new KVStore(scope, 'broken-v2', { migrateFrom: { id: 'broken' } });
+		new KVStore(scope, 'broken-v2', { migrateFrom: { id: 'broken' } });
+		assert.deepEqual(readdirSync(dataDir(scope, 'broken-v2')), ['store.json.bak']);
+	});
+
+	test('does nothing when the old store has no data file', async () => {
+		const scope = testScope();
+		const store = new KVStore(scope, 'fresh-v2', { migrateFrom: { id: 'fresh' } });
+		assert.deepEqual(await Array.fromAsync(store.scan()), []);
+	});
+});

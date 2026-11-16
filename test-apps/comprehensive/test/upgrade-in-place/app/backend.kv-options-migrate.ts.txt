@@ -1,0 +1,41 @@
+// Fixture of `upgrade-kv-store.ts --mode options`. One store for each option combination of release 0.4.0.
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('upgrade');
+new KVStore(scope, 's0-v2', {
+	migrateFrom: { id: 's0' }, // migrateFrom
+});
+new KVStore(scope, 's1-v2', {
+	migrateFrom: { id: 's1', ttl: true }, // migrateFrom
+});
+new KVStore(scope, 's2-v2', {
+	migrateFrom: { id: 's2', removalPolicy: 'retain' }, // migrateFrom
+});
+new KVStore(scope, 's3-v2', {
+	migrateFrom: { id: 's3', removalPolicy: 'destroy' }, // migrateFrom
+});
+new KVStore(scope, 's4-v2', {
+	migrateFrom: { id: 's4', deletionProtection: true }, // migrateFrom
+});
+new KVStore(scope, 's5-v2', {
+	migrateFrom: { id: 's5', pointInTimeRecovery: true }, // migrateFrom
+});
+new KVStore(scope, 's6-v2', {
+	migrateFrom: { id: 's6', pointInTimeRecovery: { retentionDays: 7 } }, // migrateFrom
+});
+new KVStore(scope, 's7-v2', {
+	migrateFrom: { id: 's7', encryption: 'customer-managed' }, // migrateFrom
+});
+new KVStore(scope, 's8-v2', {
+	migrateFrom: { id: 's8', encryption: KVStore.fromKmsKey('arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab') }, // migrateFrom
+});
+new KVStore(scope, 's9-v2', {
+	migrateFrom: { id: 's9', ttl: true, removalPolicy: 'retain', deletionProtection: true, pointInTimeRecovery: true }, // migrateFrom
+});
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async ping() {
+		return 'pong';
+	},
+}));

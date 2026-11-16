@@ -1,0 +1,21 @@
+// Fixture of `upgrade-kv-store.ts --mode options`. One store for each option combination of release 0.4.0.
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('upgrade');
+new KVStore(scope, 's0');
+new KVStore(scope, 's1', { ttl: true });
+new KVStore(scope, 's2', { removalPolicy: 'retain' });
+new KVStore(scope, 's3', { removalPolicy: 'destroy' });
+new KVStore(scope, 's4', { deletionProtection: true });
+new KVStore(scope, 's5', { pointInTimeRecovery: true });
+new KVStore(scope, 's6', { pointInTimeRecovery: { retentionDays: 7 } });
+new KVStore(scope, 's7', { encryption: 'customer-managed' });
+new KVStore(scope, 's8', { encryption: KVStore.fromKmsKey('arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab') });
+new KVStore(scope, 's9', { ttl: true, removalPolicy: 'retain', deletionProtection: true, pointInTimeRecovery: true });
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async ping() {
+		return 'pong';
+	},
+}));
