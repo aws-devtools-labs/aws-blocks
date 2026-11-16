@@ -7,7 +7,7 @@ import { nitroAdapter } from './nitro.js';
 import { nuxtAdapter } from './nuxt.js';
 import { astroAdapter } from './astro.js';
 import { sveltekitAdapter } from './sveltekit.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 
 export { spaAdapter } from './spa.js';
 export {
