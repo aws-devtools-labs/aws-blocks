@@ -4,6 +4,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { BlocksContext } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors } from './errors.js';
 import {
 	resolveCookieSecurity,
 	buildCookieSecurityAttrs,
@@ -29,6 +31,19 @@ function withDeployedEnv(fn: () => void): void {
 			if (previous[i] === undefined) delete process.env[k];
 			else process.env[k] = previous[i];
 		});
+	}
+}
+
+/** Run `fn` with `BLOCKS_DEPLOYMENT_TYPE` set (how synth and local processes read the deployment type). */
+function withDeploymentType(value: string | undefined, fn: () => void): void {
+	const previous = process.env.BLOCKS_DEPLOYMENT_TYPE;
+	if (value === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+	else process.env.BLOCKS_DEPLOYMENT_TYPE = value;
+	try {
+		fn();
+	} finally {
+		if (previous === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+		else process.env.BLOCKS_DEPLOYMENT_TYPE = previous;
 	}
 }
 
@@ -80,6 +95,48 @@ describe('resolveCookieSecurity', () => {
 			resolveCookieSecurity({ crossDomain: true, isLocalhost: false, plainHttpOrigin: true }),
 			{ sameSite: 'None', secure: true, partitioned: true },
 		);
+	});
+
+	test('same-origin HTTP front door outside a sandbox → refuses to issue the cookie (InsecureTransportException)', () => {
+		const plain: CookieSecurityInput = { crossDomain: false, isLocalhost: false, plainHttpOrigin: true };
+		const refused = (e: unknown): boolean => {
+			assert.ok(isBlocksError(e, AuthErrors.InsecureTransport), String(e));
+			assert.match(e.message, /refuses to issue a session cookie over a plain-HTTP front door outside a sandbox deploy/);
+			return true;
+		};
+		// A production deploy (synth / a process that reads the env var)…
+		withDeploymentType('production', () => {
+			assert.throws(() => resolveCookieSecurity(plain), refused);
+			assert.throws(() => buildCookieSecurityAttrs(plain), refused);
+		});
+		// …and deployed compute whose config says nothing (fails closed as production).
+		withDeploymentType(undefined, () => withDeployedEnv(() => assert.throws(() => resolveCookieSecurity(plain), refused)));
+	});
+
+	test('same-origin HTTP front door in a sandbox → Lax; no Secure (unchanged)', () => {
+		withDeploymentType('sandbox', () => {
+			assert.deepStrictEqual(
+				resolveCookieSecurity({ crossDomain: false, isLocalhost: false, plainHttpOrigin: true }),
+				{ sameSite: 'Lax', secure: false, partitioned: false },
+			);
+		});
+	});
+
+	test('outside a sandbox, HTTPS, cross-domain and localhost cookies are issued as before', () => {
+		withDeploymentType('production', () => {
+			assert.deepStrictEqual(
+				resolveCookieSecurity({ crossDomain: false, isLocalhost: false, plainHttpOrigin: false }),
+				{ sameSite: 'Lax', secure: true, partitioned: false },
+			);
+			assert.deepStrictEqual(
+				resolveCookieSecurity({ crossDomain: true, isLocalhost: false, plainHttpOrigin: true }),
+				{ sameSite: 'None', secure: true, partitioned: true },
+			);
+			assert.deepStrictEqual(
+				resolveCookieSecurity({ crossDomain: false, isLocalhost: true, plainHttpOrigin: true }),
+				{ sameSite: 'Lax', secure: false, partitioned: false },
+			);
+		});
 	});
 
 	test('an explicit HTTPS front door (plainHttpOrigin: false) keeps Secure', () => {

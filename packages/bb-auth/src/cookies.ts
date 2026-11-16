@@ -43,6 +43,11 @@ import { sessionCookieName } from './cdk/contract.js';
  * behind an ALB with no TLS listener a `Secure` cookie would be dropped by the
  * browser, and the session with it. Every cookie this block sets (session,
  * auto-sign-in bridge, pending federated sign-in) is built here.
+ *
+ * Dropping `Secure` that way happens only in a sandbox deploy: outside one, a
+ * same-origin cookie over a plain-HTTP front door throws
+ * `AuthErrors.InsecureTransport` before any `Set-Cookie` line is written, so no
+ * session is issued.
  */
 function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean): string {
 	const security = buildCookieSecurityAttrs({

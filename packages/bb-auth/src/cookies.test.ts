@@ -5,6 +5,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
+import { isBlocksError } from '@aws-blocks/core';
 import {
 	clearAutoSignInCookie,
 	clearPendingAuthCookie,
@@ -20,6 +21,7 @@ import {
 	signSessionId,
 	verifySessionId,
 } from './cookies.js';
+import { AuthErrors } from './errors.js';
 import { makeContext } from './test-helpers.js';
 
 describe('session id signing', () => {
@@ -169,8 +171,37 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 		return ctx.response.headers.getSetCookie();
 	}
 
-	test('every cookie drops Secure: a browser discards a Secure cookie set over HTTP (an ALB without TLS)', () => {
-		withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
+	/** Run `fn` with `BLOCKS_DEPLOYMENT_TYPE` set to `value`, then restore it. */
+	function withDeploymentType(value: string, fn: () => void): void {
+		const before = process.env.BLOCKS_DEPLOYMENT_TYPE;
+		process.env.BLOCKS_DEPLOYMENT_TYPE = value;
+		try {
+			fn();
+		} finally {
+			if (before === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+			else process.env.BLOCKS_DEPLOYMENT_TYPE = before;
+		}
+	}
+
+	test('outside a sandbox, no session cookie is issued over plain HTTP: every setter throws InsecureTransportException', () => {
+		withDeploymentType('production', () =>
+			withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
+				const ctx = makeContext(undefined, 'app.example.com');
+				const refused = (e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport);
+				assert.throws(() => setSessionCookie(ctx, 'app-auth', 'sid.sig', 100), refused);
+				assert.throws(() => setAutoSignInCookie(ctx, 'app-auth', 'bridge', 60), refused);
+				assert.throws(() => setPendingAuthCookie(ctx, 'app-auth', 'pending', 60), refused);
+				assert.deepStrictEqual(ctx.response.headers.getSetCookie(), [], 'no Set-Cookie line was written');
+				// A cross-domain cookie is set by the API's own (HTTPS) response: still issued, Secure.
+				const cross = makeContext(undefined, 'api.example.com');
+				setSessionCookie(cross, 'a', 'v.s', 1, true);
+				assert.match(cross.response.headers.getSetCookie()[0] ?? '', /SameSite=None; Secure; Partitioned/);
+			}),
+		);
+	});
+
+	test('in a sandbox, every cookie drops Secure: a browser discards a Secure cookie set over HTTP (an ALB without TLS)', () => {
+		withDeploymentType('sandbox', () => withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
 			const lines = everyCookie();
 			assert.strictEqual(lines.length, 3);
 			for (const line of lines) {
@@ -181,7 +212,7 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 			const cross = makeContext(undefined, 'api.example.com');
 			setSessionCookie(cross, 'a', 'v.s', 1, true);
 			assert.match(cross.response.headers.getSetCookie()[0] ?? '', /SameSite=None; Secure; Partitioned/);
-		});
+		}));
 	});
 
 	test('an https:// front door, or none set, keeps Secure on every cookie', () => {
