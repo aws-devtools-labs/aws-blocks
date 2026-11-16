@@ -59,13 +59,10 @@ public final class FileUploadHandle: Sendable {
         )
     }
 
-    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
-    /// `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`.
+    /// Always throws `EncodingError.invalidValue`: transferables are read-only. The conformance exists so a
+    /// generated `Codable` model that holds a handle compiles.
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DescriptorKeys.self)
-        try container.encode("file-bucket/upload", forKey: .blocksType)
-        try container.encode(url, forKey: .url)
-        try container.encodeIfPresent(contentType, forKey: .contentType)
+        throw TransferableDescriptor.readOnly(self, tag: "file-bucket/upload", encoder: encoder)
     }
 
     /// Returns the presigned upload URL.

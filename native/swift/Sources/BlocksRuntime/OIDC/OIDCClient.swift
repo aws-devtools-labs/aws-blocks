@@ -53,10 +53,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
 
-    /// The descriptor this client was hydrated from, as the server sent it. `nil` for a client built with `init`.
-    /// `encode(to:)` writes it back unchanged.
-    nonisolated let wireDescriptor: [String: JSONValue]?
-
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
@@ -82,7 +78,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             providerConfigs: providerConfigs,
             baseUrl: baseUrl,
             client: client,
-            wireDescriptor: nil
+            callbackPath: nil
         )
     }
 
@@ -94,8 +90,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         providerConfigs: [String: OIDCProviderConfig],
         baseUrl: String,
         client: BlocksClient,
-        wireDescriptor: [String: JSONValue]?,
-        callbackPath: String? = nil,
+        callbackPath: String?,
         authorizeParamsBasePath: String? = nil,
         sessionPath: String? = nil
     ) {
@@ -106,7 +101,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.providerConfigs = providerConfigs
         self.baseUrl = baseUrl
         self.client = client
-        self.wireDescriptor = wireDescriptor
         // A descriptor without these fields predates them: derive them from `exchangePath`, as before.
         self.callbackPath = callbackPath ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
         self.authorizeParamsBasePath = authorizeParamsBasePath
@@ -541,10 +535,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             providerConfigs: providerConfigs,
             baseUrl: baseUrl,
             client: client,
-            wireDescriptor: JSONValue(serialized: descriptor).flatMap { value in
-                if case .dictionary(let entries) = value { return entries }
-                return nil
-            },
             callbackPath: descriptor["callbackPath"] as? String,
             authorizeParamsBasePath: descriptor["authorizeParamsBasePath"] as? String,
             sessionPath: descriptor["sessionPath"] as? String
@@ -613,11 +603,6 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 extension OIDCClient: Codable {
     private enum DescriptorKeys: String, CodingKey {
         case blocksType = "__blocks"
-        case exchangePath
-        case refreshPath
-        case signOutPath
-        case providers
-        case providerConfigs
     }
 
     // Spelled `nonisolated`: an app module with MainActor default isolation that names `OIDCClient<Provider>`
@@ -659,27 +644,16 @@ extension OIDCClient: Codable {
             providerConfigs: hydrated.providerConfigs,
             baseUrl: hydrated.baseUrl,
             client: client,
-            wireDescriptor: descriptor,
             callbackPath: hydrated.callbackPath,
             authorizeParamsBasePath: hydrated.authorizeParamsBasePath,
             sessionPath: hydrated.sessionPath
         )
     }
 
-    /// Encodes the descriptor this client was hydrated from, unchanged. A client built with `init` encodes
-    /// `{ "__blocks": "oidc/client", "exchangePath", "refreshPath", "signOutPath", "providers", "providerConfigs" }`.
+    /// Always throws `EncodingError.invalidValue`: transferables are read-only. The conformance exists so a
+    /// generated `Codable` model that holds a client compiles.
     public nonisolated func encode(to encoder: Encoder) throws {
-        if let wireDescriptor {
-            try wireDescriptor.encode(to: encoder)
-            return
-        }
-        var container = encoder.container(keyedBy: DescriptorKeys.self)
-        try container.encode("oidc/client", forKey: .blocksType)
-        try container.encode(exchangePath, forKey: .exchangePath)
-        try container.encode(refreshPath, forKey: .refreshPath)
-        try container.encode(signOutPath, forKey: .signOutPath)
-        try container.encode(providers, forKey: .providers)
-        try container.encode(providerConfigs, forKey: .providerConfigs)
+        throw TransferableDescriptor.readOnly(self, tag: "oidc/client", encoder: encoder)
     }
 }
 
