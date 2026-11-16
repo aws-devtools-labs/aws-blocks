@@ -33,7 +33,7 @@ export function isSensitive(path) {
 const ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 /** HTML-escapes text, and shows control characters as escapes so a name cannot span rows. */
-function escape(text) {
+function escapeHtml(text) {
 	return String(text).replace(/[&<>"']|[\u0000-\u001f\u007f]/g, (c) => {
 		if (ENTITIES[c]) return ENTITIES[c];
 		if (c === '\n') return '\\n';
@@ -42,7 +42,7 @@ function escape(text) {
 	});
 }
 
-const code = (path) => `<code>${escape(path)}</code>`;
+const code = (path) => `<code>${escapeHtml(path)}</code>`;
 
 /**
  * The changed-file table for the approval summary.
@@ -68,7 +68,7 @@ export function changedFilesSummary(files, { total = files.length, limit = MAX_R
 		code(file.filename),
 		file.previous_filename !== undefined && file.status === 'renamed'
 			? `renamed from ${code(file.previous_filename)}`
-			: escape(file.status),
+			: escapeHtml(file.status),
 		String(file.additions ?? 0),
 		String(file.deletions ?? 0),
 	]);
