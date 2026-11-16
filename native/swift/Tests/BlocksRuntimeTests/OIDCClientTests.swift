@@ -607,34 +607,214 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(event, .signedOut)
     }
 
-    func testSignOutFailureClearsTokensAndKeepsTheState() async throws {
+    /// The `SignOutIncompleteException` name only counts on a 503: on another status it is a failed
+    /// sign-out, which also signs out locally and throws.
+    func testSignOutIncompleteNameOnAnotherStatusIsAFailure() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body = ["error": "Something else broke.", "name": "SignOutIncompleteException"]
+            return (errorResponse(for: request.url!, status: 500), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            do {
+                _ = try await client.signOut()
+                XCTFail("Expected RawRouteError")
+            } catch let error as RawRouteError {
+                XCTAssertEqual(error.statusCode, 500)
+                XCTAssertEqual(error.errorName, "SignOutIncompleteException")
+            } catch {
+                XCTFail("Expected RawRouteError, got \(error)")
+            }
+        }
+
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(refresh)
+        XCTAssertEqual(events, [.signedOut])
+    }
+
+    /// A failed sign-out signs out locally: the tokens go, `.signedOut` is emitted, then the error is thrown.
+    func testSignOutFailureSignsOutLocallyAndThrows() async throws {
         OIDCMockURLProtocol.handler = { request in
             (errorResponse(for: request.url!, status: 500), Data("{}".utf8))
         }
         let client = makeClient(session: makeMockSession())
         let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "at")
         await store.set(tokenKey("refresh_token"), value: "rt")
-        let stream = await client.authStateChanges().dropFirst()
-        let collector = Task<[OIDCAuthState], Never> {
-            var events: [OIDCAuthState] = []
-            for await event in stream {
-                events.append(event)
+
+        let events = await states(of: client) {
+            do {
+                _ = try await client.signOut()
+                XCTFail("Expected RawRouteError")
+            } catch let error as RawRouteError {
+                XCTAssertEqual(error.statusCode, 500)
+            } catch {
+                XCTFail("Expected RawRouteError, got \(error)")
             }
-            return events
         }
 
-        do {
-            _ = try await client.signOut()
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertEqual(error.statusCode, 500)
-        }
+        let access = await store.get(tokenKey("access_token"))
         let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertNil(access)
         XCTAssertNil(refresh)
-        try await Task.sleep(for: .milliseconds(50))
-        collector.cancel()
-        let events = await collector.value
-        XCTAssertEqual(events, [], "a failed sign-out emits no state")
+        XCTAssertEqual(events, [.signedOut])
+    }
+
+    func testASignOutTransportErrorRemovesOnlyThisBlocksSessionCookie() async throws {
+        try await assertAFailedSignOutSignsOutLocally { _ in throw URLError(.cannotConnectToHost) }
+    }
+
+    func testASignOut500RemovesOnlyThisBlocksSessionCookie() async throws {
+        try await assertAFailedSignOutSignsOutLocally { request in
+            let body = try JSONSerialization.data(withJSONObject: ["error": "Internal error", "name": "InternalError"])
+            return (errorResponse(for: request.url!, status: 500), body)
+        }
+    }
+
+    func testACancelledSignOutRemovesOnlyThisBlocksSessionCookie() async throws {
+        try await assertAFailedSignOutSignsOutLocally(cancelled: true) { request in
+            (okResponse(for: request.url!), Data("{}".utf8))
+        }
+    }
+
+    /// After a relaunch the token store no longer holds the cookie names the sign-in recorded, so a failed
+    /// sign-out finds this block's session cookie by the descriptor's `sessionCookieName`.
+    func testAFailedSignOutAfterARelaunchRemovesTheDescriptorsSessionCookie() async throws {
+        BlocksClient.clearCookies()
+        defer { BlocksClient.clearCookies() }
+        stubSessionCookieRoutes(mainCookies: "auth_main=a1; Path=/; Secure; HttpOnly")
+        let launched = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let sso = "/aws-blocks/auth/sso"
+        _ = try await Self.authClient(on: launched, sessionCookieName: "auth_main")
+            .exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
+        _ = try await Self.authClient(on: launched, base: sso, providers: ["corp"], sessionCookieName: "auth_sso")
+            .exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
+
+        // A fresh in-memory token store: the recorded names are gone, the cookies are still in the jar.
+        let relaunched = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let main = try Self.authClient(on: relaunched, sessionCookieName: "auth_main")
+        let other = try Self.authClient(on: relaunched, base: sso, providers: ["corp"], sessionCookieName: "auth_sso")
+        do {
+            _ = try await main.signOut()
+            XCTFail("Expected the sign-out to fail")
+        } catch {}
+
+        let cookies = try await cookieHeaderOfARestore(by: other)
+        XCTAssertTrue(cookies.contains("auth_sso=b1"), cookies)
+        XCTAssertFalse(cookies.contains("auth_main"), cookies)
+    }
+
+    /// With a `sessionCookieName`, a failed sign-out removes exactly that cookie, not every cookie the
+    /// sign-in response set.
+    func testAFailedSignOutRemovesOnlyTheDescriptorsSessionCookie() async throws {
+        BlocksClient.clearCookies()
+        defer { BlocksClient.clearCookies() }
+        stubSessionCookieRoutes(mainCookies: "auth_main=a1; Path=/; Secure; HttpOnly, prefs=p1; Path=/")
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let main = try Self.authClient(on: blocksClient, sessionCookieName: "auth_main")
+        let other = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", providers: ["corp"])
+        _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
+        _ = try await other.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
+
+        do {
+            _ = try await main.signOut()
+            XCTFail("Expected the sign-out to fail")
+        } catch {}
+
+        let cookies = try await cookieHeaderOfARestore(by: other)
+        XCTAssertTrue(cookies.contains("prefs=p1"), cookies)
+        XCTAssertTrue(cookies.contains("auth_sso=b1"), cookies)
+        XCTAssertFalse(cookies.contains("auth_main"), cookies)
+    }
+
+    /// Answers the two blocks' exchanges with their session cookies (`mainCookies` for the first block,
+    /// `auth_sso` for the second), fails the sign-out with no response, and answers a session read.
+    private func stubSessionCookieRoutes(mainCookies: String) {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/aws-blocks/auth/signout" {
+                throw URLError(.cannotConnectToHost)
+            }
+            let (cookie, body): (String?, [String: Any]) = if url.path == "/aws-blocks/auth/exchange" {
+                (mainCookies, ["user": ["userId": "a", "username": "a"]])
+            } else if url.path == "/aws-blocks/auth/sso/exchange" {
+                ("auth_sso=b1; Path=/; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
+            } else {
+                (nil, ["user": ["userId": "b", "username": "b"]])
+            }
+            let headers = cookie.map { ["Set-Cookie": $0] } ?? [:]
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
+            return (response, try JSONSerialization.data(withJSONObject: body))
+        }
+    }
+
+    /// The `Cookie` header of a `restore()` by `client`.
+    private func cookieHeaderOfARestore(by client: OIDCClient<String>) async throws -> String {
+        _ = try await client.restore()
+        let request = try XCTUnwrap(OIDCMockURLProtocol.requests.last)
+        XCTAssertEqual(request.url?.path, "/aws-blocks/auth/sso/session")
+        return request.value(forHTTPHeaderField: "Cookie") ?? ""
+    }
+
+    /// Signs two `Auth` blocks in, with bb-auth's `Path=/` session cookies, fails the first block's
+    /// sign-out with `signOutResponse` (or by cancelling it), and checks that the first block signed out
+    /// locally and threw, and that the second block's session cookie is still sent.
+    private func assertAFailedSignOutSignsOutLocally(
+        cancelled: Bool = false,
+        signOutResponse: @escaping (URLRequest) throws -> (HTTPURLResponse, Data),
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        BlocksClient.clearCookies()
+        defer { BlocksClient.clearCookies() }
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/aws-blocks/auth/signout" {
+                return try signOutResponse(request)
+            }
+            let (cookie, body): (String?, [String: Any]) = if url.path == "/aws-blocks/auth/exchange" {
+                ("auth_main=a1; Path=/; Secure; HttpOnly", ["user": ["userId": "a", "username": "a"]])
+            } else if url.path == "/aws-blocks/auth/sso/exchange" {
+                ("auth_sso=b1; Path=/; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
+            } else {
+                (nil, ["user": ["userId": "b", "username": "b"]])
+            }
+            let headers = cookie.map { ["Set-Cookie": $0] } ?? [:]
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
+            return (response, try JSONSerialization.data(withJSONObject: body))
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let main = try Self.authClient(on: blocksClient)
+        let sso = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", providers: ["corp"])
+        _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
+        _ = try await sso.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
+        let store = blocksClient.tokenStore
+        let refreshKey = tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/exchange")
+        await store.set(refreshKey, value: "rt")
+
+        let events = try await states(of: main) {
+            let signOut = Task {
+                if cancelled {
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+                return try await main.signOut()
+            }
+            let result = await signOut.result
+            XCTAssertThrowsError(try result.get(), "a failed sign-out throws", file: file, line: line)
+        }
+
+        let refresh = await store.get(refreshKey)
+        XCTAssertNil(refresh, "this block's tokens are cleared", file: file, line: line)
+        XCTAssertEqual(events, [.signedOut], file: file, line: line)
+        _ = try await sso.restore()
+        let session = try XCTUnwrap(OIDCMockURLProtocol.requests.last, file: file, line: line)
+        XCTAssertEqual(session.url?.path, "/aws-blocks/auth/sso/session", file: file, line: line)
+        let cookies = session.value(forHTTPHeaderField: "Cookie") ?? ""
+        XCTAssertTrue(cookies.contains("auth_sso=b1"), cookies, file: file, line: line)
+        XCTAssertFalse(cookies.contains("auth_main"), cookies, file: file, line: line)
     }
 
     /// Two `Auth` blocks on one app keep their cookies in the one jar. Signing out of one clears only
@@ -1316,9 +1496,10 @@ final class OIDCClientTests: XCTestCase {
     static func authDescriptor(
         base: String = "/aws-blocks/auth",
         callback: String? = nil,
-        providers: [String] = ["google"]
+        providers: [String] = ["google"],
+        sessionCookieName: String? = nil
     ) -> [String: Any] {
-        [
+        var descriptor: [String: Any] = [
             "__blocks": "oidc/client",
             "providers": providers,
             "providerConfigs": [String: Any](),
@@ -1328,6 +1509,8 @@ final class OIDCClientTests: XCTestCase {
             "signInBasePath": "\(base)/signin",
             "authorizeParamsBasePath": "\(base)/authorize-params"
         ]
+        if let sessionCookieName { descriptor["sessionCookieName"] = sessionCookieName }
+        return descriptor
     }
 
     /// A client hydrated from `authDescriptor`, as `blocks.<ns>.getClient()` returns it.
@@ -1335,10 +1518,11 @@ final class OIDCClientTests: XCTestCase {
         on blocksClient: BlocksClient,
         base: String = "/aws-blocks/auth",
         callback: String? = nil,
-        providers: [String] = ["google"]
+        providers: [String] = ["google"],
+        sessionCookieName: String? = nil
     ) throws -> OIDCClient<String> {
         try OIDCClient<String>.fromJSON(
-            authDescriptor(base: base, callback: callback, providers: providers),
+            authDescriptor(base: base, callback: callback, providers: providers, sessionCookieName: sessionCookieName),
             baseUrl: blocksClient.baseUrl,
             client: blocksClient
         )
@@ -1544,6 +1728,14 @@ final class OIDCClientTests: XCTestCase {
         for (url, origin) in cases {
             XCTAssertEqual(BlocksClient(url: url).rawRouteBase, origin, url)
         }
+    }
+
+    func testFromJSONReadsTheSessionCookieName() throws {
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api")
+        let named = try Self.authClient(on: blocksClient, sessionCookieName: "auth_app")
+        XCTAssertEqual(named.sessionCookieName, "auth_app")
+        let older = try Self.authClient(on: blocksClient)
+        XCTAssertNil(older.sessionCookieName, "an older backend sends no sessionCookieName")
     }
 
     func testFromJSONThrowsOnMissingExchangePath() {

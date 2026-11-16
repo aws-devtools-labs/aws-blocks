@@ -50,6 +50,18 @@ struct CookieJar: Sendable {
             .joined(separator: "; ")
     }
 
+    /// Removes the stored cookies named in `names` that a request to `url` would send.
+    func remove(named names: Set<String>, sentTo url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        for (account, value) in items.loadAll() {
+            guard let stored = StoredCookie.decode(account: account, value: value) else { continue }
+            if names.contains(stored.name), stored.matches(url) {
+                items.remove(name: account)
+            }
+        }
+    }
+
     /// Stores one `Set-Cookie` header value received in response to `requestURL`.
     func save(setCookie: String, requestURL: URL, now: Date = Date()) {
         guard let cookie = StoredCookie(setCookie: setCookie, requestURL: requestURL, now: now) else { return }

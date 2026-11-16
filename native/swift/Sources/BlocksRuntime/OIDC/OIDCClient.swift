@@ -49,6 +49,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// The session route `restore()` reads: the descriptor's `sessionPath`, or `<base>/session` when
     /// the descriptor has none, where `<base>` is the directory of `callbackPath`.
     public nonisolated let sessionPath: String
+    /// The name of this block's session cookie, from the descriptor's `sessionCookieName`, or `nil` from a
+    /// backend that doesn't send it. A failed sign-out removes this cookie, and only this one.
+    nonisolated let sessionCookieName: String?
 
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
@@ -96,7 +99,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         client: BlocksClient,
         callbackPath: String?,
         authorizeParamsBasePath: String? = nil,
-        sessionPath: String? = nil
+        sessionPath: String? = nil,
+        sessionCookieName: String? = nil
     ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
@@ -111,6 +115,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params")
         let callback = self.callbackPath
         self.sessionPath = sessionPath ?? "\(callback[..<(callback.lastIndex(of: "/") ?? callback.endIndex)])/session"
+        self.sessionCookieName = sessionCookieName
     }
 
     /// Returns a fresh stream of auth states. It yields the current ``authState`` first, then every state
@@ -310,13 +315,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         ]
         if let iss { body["iss"] = iss }
 
-        let json = try await client.postRawRoute(path: exchangePath, body: body)
+        let (json, cookieNames) = try await client.postRawRouteRecordingCookies(path: exchangePath, body: body)
 
         guard let userJSON = json["user"] as? [String: Any] else {
             throw OIDCError.malformedExchangeResponse
         }
 
         sessionGeneration += 1
+        // The cookies this block's exchange set: a failed sign-out removes only these when the
+        // descriptor names no `sessionCookieName`.
+        if !cookieNames.isEmpty {
+            await storeToken(Self.sessionCookiesKey, cookieNames.joined(separator: ","))
+        }
         if let accessToken = json["accessToken"] as? String {
             await storeToken("access_token", accessToken)
             if let refreshToken = json["refreshToken"] as? String {
@@ -385,10 +395,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
     ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
     ///   own session, so the next sign-in asks which account to use.
-    /// - Throws: A `RawRouteError` named `SignOutIncompleteException` (HTTP 503) when the server
-    ///   cleared the cookie but could not remove its session; the client is signed out locally
-    ///   first. Any other failure is thrown after clearing the stored tokens, with the state left
-    ///   as it was. `ClientClosedError` leaves the tokens too: the request was never sent.
+    /// - Throws: Any failure, after signing out locally: the stored tokens are cleared and `.signedOut`
+    ///   is emitted first. That covers a `RawRouteError` named `SignOutIncompleteException` (HTTP 503),
+    ///   when the server cleared the cookie but could not remove its session, and every other failure
+    ///   (a transport error, a cancellation, another non-2xx), for which the client also removes this
+    ///   block's session cookie, and only this block's. The client knows that cookie by the
+    ///   descriptor's `sessionCookieName`. From a backend that doesn't send it, the client falls back
+    ///   to the names this block's sign-in response set, kept in the token store with the tokens, so
+    ///   after a relaunch with an in-memory token store it can't remove the cookie.
+    ///   `ClientClosedError` changes nothing: the request was never sent.
     @discardableResult
     public func signOut() async throws -> URL? {
         // The server ends the session from its cookie and reads no body, so no token is sent.
@@ -398,14 +413,17 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             // A custom block's route may ignore `format=json` and answer an empty 204.
             json = try await client.postRawRoute(path: signOutPath + "?format=json", body: body, emptyBodyIsEmptyObject: true)
         } catch let error as ClientClosedError {
-            throw error
-        } catch where Self.isSignOutIncomplete(error) {
-            sessionGeneration += 1
-            await clearTokens()
-            emit(.signedOut)
+            // The request was never sent, so the session is untouched.
             throw error
         } catch {
+            // The server didn't end the session (or, for `SignOutIncompleteException`, only cleared the
+            // cookie), so sign out locally: this block's tokens and session cookie go, then the error.
+            sessionGeneration += 1
+            if !Self.isSignOutIncomplete(error) {
+                await removeSessionCookies()
+            }
             await clearTokens()
+            emit(.signedOut)
             throw error
         }
         sessionGeneration += 1
@@ -414,10 +432,22 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
     }
 
-    /// Whether `error` is the server's `SignOutIncompleteException`: the session cookie was cleared but the
-    /// server-side session was not removed. Matched by error name only.
+    /// Removes this block's session cookie, and no other block's: the descriptor's `sessionCookieName`, or,
+    /// from a backend that doesn't send it, the cookies this block's exchange set.
+    private func removeSessionCookies() async {
+        if let sessionCookieName {
+            client.removeCookies(named: [sessionCookieName], sentTo: signOutPath)
+            return
+        }
+        guard let names = await storedToken(Self.sessionCookiesKey) else { return }
+        client.removeCookies(named: names.split(separator: ",").map(String.init), sentTo: signOutPath)
+    }
+
+    /// Whether `error` is the server's `SignOutIncompleteException` (HTTP 503): the session cookie was cleared
+    /// but the server-side session was not removed.
     private static func isSignOutIncomplete(_ error: Error) -> Bool {
-        (error as? RawRouteError)?.errorName == "SignOutIncompleteException"
+        guard let error = error as? RawRouteError else { return false }
+        return error.statusCode == 503 && error.errorName == "SignOutIncompleteException"
     }
 
     // MARK: - Restore session
@@ -556,7 +586,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             client: client,
             callbackPath: descriptor["callbackPath"] as? String,
             authorizeParamsBasePath: descriptor["authorizeParamsBasePath"] as? String,
-            sessionPath: descriptor["sessionPath"] as? String
+            sessionPath: descriptor["sessionPath"] as? String,
+            sessionCookieName: (descriptor["sessionCookieName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -574,7 +605,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         for name in Self.tokenNames {
             await tokenStore.delete(tokenKey(name))
         }
+        await tokenStore.delete(tokenKey(Self.sessionCookiesKey))
     }
+
+    /// Where the names of the cookies this block's exchange set are kept.
+    private static var sessionCookiesKey: String { "session_cookies" }
 
     // Computed: a generic type can't store a static property.
     private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at"] }
@@ -671,7 +706,8 @@ extension OIDCClient: Codable {
             client: client,
             callbackPath: hydrated.callbackPath,
             authorizeParamsBasePath: hydrated.authorizeParamsBasePath,
-            sessionPath: hydrated.sessionPath
+            sessionPath: hydrated.sessionPath,
+            sessionCookieName: hydrated.sessionCookieName
         )
     }
 

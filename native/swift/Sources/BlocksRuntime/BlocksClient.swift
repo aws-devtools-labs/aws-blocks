@@ -245,12 +245,23 @@ public final class BlocksClient: Sendable {
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
     /// With `emptyBodyIsEmptyObject`, an empty 2xx body reads as `{}` instead of failing to parse.
     func postRawRoute(path: String, body: [String: Any], emptyBodyIsEmptyObject: Bool = false) async throws -> [String: Any] {
-        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:], emptyBodyIsEmptyObject: emptyBodyIsEmptyObject)
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:], emptyBodyIsEmptyObject: emptyBodyIsEmptyObject).json
+    }
+
+    /// POST to a raw route, and also return the names of the cookies its response set.
+    func postRawRouteRecordingCookies(path: String, body: [String: Any]) async throws -> (json: [String: Any], cookieNames: [String]) {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:])
+    }
+
+    /// Removes the stored cookies named `names` that a request to the raw route `path` would send.
+    func removeCookies(named names: [String], sentTo path: String) {
+        guard !names.isEmpty, let url = URL(string: rawRouteBase + path) else { return }
+        BlocksClient.cookieJar.remove(named: Set(names), sentTo: url)
     }
 
     /// GET a raw route (not JSON-RPC). Handles cookies automatically.
     func getRawRoute(path: String, headers: [String: String] = [:]) async throws -> [String: Any] {
-        try await sendRawRoute(method: "GET", path: path, body: nil, headers: headers)
+        try await sendRawRoute(method: "GET", path: path, body: nil, headers: headers).json
     }
 
     private func sendRawRoute(
@@ -259,7 +270,7 @@ public final class BlocksClient: Sendable {
         body: [String: Any]?,
         headers: [String: String],
         emptyBodyIsEmptyObject: Bool = false
-    ) async throws -> [String: Any] {
+    ) async throws -> (json: [String: Any], cookieNames: [String]) {
         guard let requestURL = URL(string: rawRouteBase + path) else {
             throw RawRouteError(message: "Invalid URL: \(rawRouteBase + path)")
         }
@@ -284,8 +295,9 @@ public final class BlocksClient: Sendable {
         let (data, response) = try await gate.send(urlRequest)
 
         // Store Set-Cookie headers
+        var cookieNames: [String] = []
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse, requestURL: requestURL)
+            cookieNames = processCookies(from: httpResponse, requestURL: requestURL)
             // An error response is the server refusing the request, not a malformed success:
             // surface its status and error name instead of handing the error body to the caller.
             if !(200 ..< 300).contains(httpResponse.statusCode) {
@@ -314,17 +326,20 @@ public final class BlocksClient: Sendable {
         }
 
         if emptyBodyIsEmptyObject, data.isEmpty {
-            return [:]
+            return ([:], cookieNames)
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RawRouteError(message: "Invalid JSON response from \(path)")
         }
-        return json
+        return (json, cookieNames)
     }
 
     // MARK: - Cookie Handling
 
-    private func processCookies(from response: HTTPURLResponse, requestURL: URL) {
+    /// Stores the response's cookies and returns the names of those it set to a value.
+    @discardableResult
+    private func processCookies(from response: HTTPURLResponse, requestURL: URL) -> [String] {
+        var names: [String] = []
         for (key, value) in response.allHeaderFields {
             guard "\(key)".caseInsensitiveCompare("Set-Cookie") == .orderedSame else { continue }
 
@@ -334,8 +349,12 @@ public final class BlocksClient: Sendable {
             let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
                 BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
+                if let cookie = StoredCookie(setCookie: rawCookie, requestURL: responseURL), !cookie.value.isEmpty {
+                    names.append(cookie.name)
+                }
             }
         }
+        return names
     }
 
     private func splitSetCookieHeader(_ header: String) -> [String] {
