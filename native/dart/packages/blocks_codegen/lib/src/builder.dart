@@ -60,6 +60,7 @@ const blocksRuntimeTypeNames = {
   'BlocksRpcException',
   'BrowserLauncher',
   'FileDownloadHandle',
+  'FileTokenStore',
   'FileUploadHandle',
   'InMemorySessionStore',
   'InMemoryTokenStore',

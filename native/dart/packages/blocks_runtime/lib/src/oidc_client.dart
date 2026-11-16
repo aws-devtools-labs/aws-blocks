@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'browser_launcher.dart';
+import 'default_session_store.dart';
 import 'loopback_session.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
@@ -189,7 +190,7 @@ class OidcClient implements AuthProvider {
   }) : sessionPath =
            sessionPath ??
            '${exchangePath.contains('/') ? exchangePath.substring(0, exchangePath.lastIndexOf('/')) : ''}/session',
-       sessionStore = sessionStore ?? InMemorySessionStore(),
+       sessionStore = sessionStore ?? defaultSessionStore(),
        _httpClient = httpClient ?? http.Client();
 
   /// API origin that the server-relay auth routes resolve against.

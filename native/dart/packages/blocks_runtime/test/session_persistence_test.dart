@@ -674,4 +674,109 @@ void main() {
       expect(store.cookies, hasLength(2), reason: 'a separate instance');
     });
   });
+
+  group('defaultSessionStore', () {
+    tearDown(() => registerDefaultSessionStore(null));
+
+    test('without a registration, each client gets its own memory store', () {
+      final a = BlocksClient(baseUrl: _api.toString());
+      final b = BlocksClient(baseUrl: _api.toString());
+      expect(a.sessionStore, isA<InMemorySessionStore>());
+      expect(identical(a.sessionStore, b.sessionStore), isFalse);
+    });
+
+    test('a registered store is created once and shared', () {
+      var created = 0;
+      registerDefaultSessionStore(() {
+        created++;
+        return PersistentSessionStore(store: InMemoryTokenStore());
+      });
+      final a = BlocksClient(baseUrl: _api.toString());
+      final b = BlocksClient(baseUrl: _api.toString());
+      final oidc = OidcClient.fromJson(
+        const {
+          'providers': <String>[],
+          'providerConfigs': <String, dynamic>{},
+          'exchangePath': '/x',
+          'signOutPath': '/y',
+        },
+        baseUrl: _api.toString(),
+        tokenStore: InMemoryTokenStore(),
+      );
+      expect(a.sessionStore, isA<PersistentSessionStore>());
+      expect(identical(a.sessionStore, b.sessionStore), isTrue);
+      expect(identical(a.sessionStore, oidc.sessionStore), isTrue);
+      expect(created, 1);
+    });
+
+    test('an explicit store opts a client out', () {
+      registerDefaultSessionStore(
+        () => PersistentSessionStore(store: InMemoryTokenStore()),
+      );
+      final client = BlocksClient(
+        baseUrl: _api.toString(),
+        sessionStore: InMemorySessionStore(),
+      );
+      expect(client.sessionStore, isA<InMemorySessionStore>());
+    });
+
+    test('a different store registered after a client got one throws', () {
+      registerDefaultSessionStore(
+        () => PersistentSessionStore(store: InMemoryTokenStore()),
+      );
+      final first = BlocksClient(baseUrl: _api.toString()).sessionStore;
+      expect(
+        () => registerDefaultSessionStore(
+          () => PersistentSessionStore(store: InMemoryTokenStore()),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('before creating any'),
+          ),
+        ),
+      );
+      // The shared store is unchanged.
+      expect(
+        identical(BlocksClient(baseUrl: _api.toString()).sessionStore, first),
+        isTrue,
+      );
+    });
+
+    test('registering the same function again is a no-op, even late', () {
+      registerDefaultSessionStore(_sharedFactory);
+      final first = BlocksClient(baseUrl: _api.toString()).sessionStore;
+      registerDefaultSessionStore(_sharedFactory);
+      expect(
+        identical(BlocksClient(baseUrl: _api.toString()).sessionStore, first),
+        isTrue,
+      );
+    });
+
+    test('a store registered before any client exists replaces the last', () {
+      registerDefaultSessionStore(
+        () => PersistentSessionStore(store: InMemoryTokenStore()),
+      );
+      registerDefaultSessionStore(_OwnStore.new);
+      expect(
+        BlocksClient(baseUrl: _api.toString()).sessionStore,
+        isA<_OwnStore>(),
+      );
+    });
+
+    test('registering null restores the memory default', () {
+      registerDefaultSessionStore(
+        () => PersistentSessionStore(store: InMemoryTokenStore()),
+      );
+      registerDefaultSessionStore(null);
+      expect(
+        BlocksClient(baseUrl: _api.toString()).sessionStore,
+        isA<InMemorySessionStore>(),
+      );
+    });
+  });
 }
+
+SessionStore _sharedFactory() =>
+    PersistentSessionStore(store: InMemoryTokenStore());

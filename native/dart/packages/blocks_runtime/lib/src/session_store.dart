@@ -375,7 +375,7 @@ final class InMemorySessionStore implements SessionStore {
 ///
 /// Use one instance per [storageKey] and [TokenStore]: each instance writes
 /// its whole cookie set, so two of them over the same storage overwrite each
-/// other's cookies. The default store (see `defaultSessionStore`) is already
+/// other's cookies. The default store (see `registerDefaultSessionStore`) is already
 /// shared by every client that is not given one.
 ///
 /// The class is `final`, so it can gain members in a later release without
