@@ -33,6 +33,7 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
 import { authTestHelpersTests } from './auth-test-helpers.test.js';
 import { authProtectTests, type ProtectApis } from './auth-protect.test.js';
+import { withAuthAnonymousTests } from './with-auth-anonymous.test.js';
 import { authTotpEnrolmentTests, type AuthTotpApis } from './auth-totp-enrolment.test.js';
 import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
@@ -314,6 +315,9 @@ authTestHelpersTests(() => appModule);
 
 // Auth protect(): a deny-by-default namespace (separate file)
 authProtectTests(() => protectApis);
+
+// withAuth allowAnonymous: server rendering signed out (separate file)
+withAuthAnonymousTests(() => protectApis);
 
 // Auth createApi() TOTP enrolment: set up, verify, challenged sign-in (separate file)
 authTotpEnrolmentTests(() => authTotpApis);
