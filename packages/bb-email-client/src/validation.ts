@@ -142,6 +142,10 @@ const RESERVED_TLDS = ['test', 'example', 'invalid', 'localhost'];
  * `.localhost`) are never delegated, so they can't be verified as an SES
  * identity and mail to them can't be delivered. Accepts a bare addr-spec or a
  * name-addr; matching ignores case and a trailing dot.
+ *
+ * Synth-time only: the CDK entry uses it to raise a warning. It is not part of
+ * the caller-input validation shared by the mock and AWS entries, so a reserved
+ * address still passes `send()` validation and local dev keeps working.
  */
 export function reservedDomainOf(address: string): string | undefined {
 	const addrSpec = NAME_ADDR_REGEX.exec(address)?.[1] ?? address;
