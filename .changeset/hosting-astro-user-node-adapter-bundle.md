@@ -10,5 +10,7 @@ An app with any other adapter is built from its config as written, as before. A 
 
 Synth now fails instead of deploying a server that can't start in two more cases:
 
-- `AstroBuildConfigNotAppliedError`: the build exited 0 without using the config the Astro adapter passed with `--config`. `npm run build -- --config` reaches Astro when the `build` script ends with `astro build`; `npx astro build -- --config`, used when `package.json` has no `build` script, doesn't, because Astro ignores options after `--`. An app that configures `@astrojs/node` and sets `vite.ssr.noExternal: true` itself is exempt.
+- `AstroBuildConfigNotAppliedError`: the build exited 0 without using the config the Astro adapter passed with `--config`. With a `build` script, the adapter runs `npm run build -- --config <file>`, which reaches Astro only when that script ends with `astro build`. An app that configures `@astrojs/node` and sets `vite.ssr.noExternal: true` itself is exempt.
 - `AstroNodeMiddlewareModeError`: `astro.config` sets `adapter: node({ mode: 'middleware' })`, whose server entry exports a handler and starts no server. Use `mode: 'standalone'`.
+
+An app with no `build` script is now built with `npx astro build --config <file>`. Before, the adapter ran `npx astro build -- --config <file>`, and Astro ignores options after `--`, so neither the transparent build nor the bundling took effect on that path.

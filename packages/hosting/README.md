@@ -363,10 +363,11 @@ the app's dependencies into the server output. What it does depends on the
   nothing is bundled for you. With `output: 'server'`, a build that doesn't
   emit `dist/server/entry.mjs` fails synth with `AstroBuildOutputMissingError`.
 
-In the first two cases, the build runs `npm run build -- --config <file>`, so
-the `build` script in your `package.json` must end with `astro build`. With no
-`build` script, the build runs `npx astro build -- --config <file>`, and Astro
-ignores options after `--`: add `"build": "astro build"` to your scripts. If
+In the first two cases, the build passes a build-only config to Astro with
+`--config <file>`. With a `build` script in your `package.json`, it runs
+`npm run build -- --config <file>`, so that script must end with
+`astro build`. With no `build` script, it runs
+`npx astro build --config <file>`. If
 the build doesn't use that config (for example, a `build` script that runs
 another command after `astro build`), synth fails with
 `AstroBuildConfigNotAppliedError` instead of deploying a server that can't

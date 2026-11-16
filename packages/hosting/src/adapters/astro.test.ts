@@ -454,8 +454,8 @@ void describe('astroAdapter — build of an app that configures its own adapter'
   /** `ssr.noExternal` the stand-in build resolved from `builtConfig`. */
   let builtNoExternal: unknown;
   /**
-   * How the stand-in build behaves: `ignoreConfig` drops `--config` like
-   * `npx astro build -- --config`; `nodeOptionsModule` is the source of
+   * How the stand-in build behaves: `ignoreConfig` drops `--config` like a
+   * `build` script that runs another command last; `nodeOptionsModule` is the source of
    * `@astrojs/node` 10+'s options module; `fail` makes the build exit non-zero.
    */
   let buildBehavior: { ignoreConfig?: boolean; nodeOptionsModule?: string; fail?: boolean };
@@ -619,12 +619,30 @@ void describe('astroAdapter — build of an app that configures its own adapter'
       (error: HostingError) => {
         assert.strictEqual(error.code, 'AstroBuildConfigNotAppliedError');
         assert.match(error.message, /npm run build -- --config \.hosting\/astro\/config-bridge\.mjs/);
-        assert.match(error.resolution, /`npm run build -- --config <file>` passes it/);
-        assert.match(error.resolution, /`npx astro build -- --config <file>`.*does not/);
+        assert.match(error.resolution, /`npm run build -- --config <file>` passes it only when the `build` script/);
+        assert.match(error.resolution, /`npx astro build --config <file>`/);
         return true;
       },
     );
     assert.strictEqual(fs.existsSync(path.join(tmp, '.hosting')), false, 'the bridge is still removed');
+  });
+
+  it('passes --config to the npx astro build fallback without --, which Astro ignores', () => {
+    writeConfig('@astrojs/node');
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'app' }));
+
+    astroAdapter({ projectDir: tmp, skipBuild: false });
+
+    assert.deepStrictEqual(commands, [['npx', 'astro', 'build', '--config', '.hosting/astro/config-bridge.mjs']]);
+    assert.ok(builtConfig, 'the build loaded the bridge config');
+  });
+
+  it('keeps -- before --config for a build command the caller sets', () => {
+    writeConfig('@astrojs/node');
+
+    astroAdapter({ projectDir: tmp, skipBuild: false, buildCommand: ['pnpm', 'build'] });
+
+    assert.deepStrictEqual(commands, [['pnpm', 'build', '--', '--config', '.hosting/astro/config-bridge.mjs']]);
   });
 
   it('accepts a build without the config when the app sets vite.ssr.noExternal: true itself', () => {

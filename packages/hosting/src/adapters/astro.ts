@@ -64,6 +64,12 @@ export type AstroAdapterOptions = {
    * Override the build command. Defaults to `npm run build` when the
    * user's `package.json` defines a `build` script, falling back to
    * `npx astro build`.
+   *
+   * When the build runs through a config bridge, `-- --config <bridge>` is
+   * appended to this command and to `npm run build`, so a command given here
+   * must pass arguments after `--` on to `astro build`. The `npx astro build`
+   * fallback gets `--config <bridge>` without `--`, because Astro ignores
+   * options after `--`.
    */
   buildCommand?: string[];
   /**
@@ -790,16 +796,17 @@ const runAstroBuild = (
   buildCommand: string[] | undefined,
   bridge: AstroBridgeMode['adapter'] | undefined,
 ): string[] => {
-  const baseCmd =
-    buildCommand && buildCommand.length > 0
-      ? buildCommand
-      : projectHasBuildScript(projectDir)
-        ? ['npm', 'run', 'build']
-        : ['npx', 'astro', 'build'];
+  const userCommand = buildCommand && buildCommand.length > 0 ? buildCommand : undefined;
+  const viaBuildScript = !userCommand && projectHasBuildScript(projectDir);
+  const baseCmd = userCommand ?? (viaBuildScript ? ['npm', 'run', 'build'] : ['npx', 'astro', 'build']);
+  // `npm run build -- <args>` hands the args to the script, and so does a
+  // user command that wraps one. The fallback runs `astro build` directly,
+  // and Astro ignores options after `--`, so it takes `--config` as is.
+  const separator = userCommand || viaBuildScript ? ['--'] : [];
   const cmd = bridge
     ? [
         ...baseCmd,
-        '--',
+        ...separator,
         '--config',
         path.posix.join(BRIDGE_DIR_REL, BRIDGE_CONFIG_FILE),
       ]
@@ -852,11 +859,9 @@ const bridgeNotAppliedError = (cmd: string[]): HostingError =>
       'so its server output would import packages from node_modules, which is not deployed.',
     resolution:
       'The build command did not pass `--config` through to `astro build`. ' +
-      '`npm run build -- --config <file>` passes it when the `build` script in package.json ' +
-      'ends with `astro build`. `npx astro build -- --config <file>`, which runs when ' +
-      'package.json has no `build` script, does not: Astro ignores options after `--`. ' +
-      'Add `"build": "astro build"` to the scripts in package.json, or make your `build` ' +
-      'script end with `astro build`.',
+      '`npm run build -- --config <file>` passes it only when the `build` script in package.json ' +
+      'ends with `astro build`. Make your `build` script end with `astro build`, or remove it ' +
+      'to let Hosting run `npx astro build --config <file>`.',
   });
 
 /**
