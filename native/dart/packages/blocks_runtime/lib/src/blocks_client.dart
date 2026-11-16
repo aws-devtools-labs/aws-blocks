@@ -127,14 +127,25 @@ class BlocksClient {
       requestUri: result.url,
     );
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    if (json.containsKey('error')) {
-      final error = json['error'] as Map<String, dynamic>;
+    Object? json;
+    try {
+      json = jsonDecode(response.body);
+    } on FormatException {
+      json = null;
+    }
+    if (json is Map && json['error'] is Map) {
+      final error = json['error'] as Map;
+      final code = error['code'];
+      final message = error['message'];
       throw BlocksRpcException(
-        code: error['code'] as int,
-        message: error['message'] as String,
+        code: code is int ? code : -1,
+        message: message is String ? message : 'Unknown error',
         data: error['data'],
       );
+    }
+    final statusCode = response.statusCode;
+    if (statusCode < 200 || statusCode > 299 || json is! Map) {
+      throw FormatException('HTTP $statusCode: not a JSON-RPC response');
     }
     return json['result'];
   }

@@ -67,6 +67,14 @@
   sent to any host; the Swift runtime instead recovers the host from its
   earlier storage key. This applies only to cookies written before the upgrade
   and ends once the server sets each cookie again.
+- `BlocksClient.call` now throws an `Exception` for a response that isn't
+  JSON-RPC, such as a gateway error. A non-2xx response, or a body that isn't
+  a JSON object, throws a `FormatException` naming the HTTP status. It used to
+  throw a `TypeError` for bodies like `{"error":"Not Found"}` or `[1]`, which
+  `on Exception` does not catch, and to return `null` for an API Gateway
+  `{"message":"Forbidden"}`. A JSON-RPC error whose `code` isn't an integer or
+  whose `message` isn't a string is still a `BlocksRpcException`, with code
+  `-1` or message `Unknown error`.
 
 ## 0.1.4
 
