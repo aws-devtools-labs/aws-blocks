@@ -151,6 +151,40 @@ const crud = db.crud({
 //   crud.listPosts(), crud.getPost(id), ...
 ```
 
+**Row-level security is the only thing that scopes these handlers to the calling user.** Every CRUD call runs inside `withRLS()` as the `authenticated` role, and Postgres filters rows only on a table with RLS enabled and policies defined. On a table without RLS, every signed-in user can read, change and delete every row through CRUD.
+
+Turn on enforcement so CRUD refuses such tables instead of serving them:
+
+```typescript
+const db = new Database(scope, 'db', {
+  migrationsPath: './migrations',
+  schema: tableMeta,
+  rlsPolicy: 'enforce',
+});
+```
+
+With `rlsPolicy: 'enforce'`, each CRUD handler checks the live table before its first read or write. If RLS isn't enabled, or the `authenticated` role is exempt from it (it owns the table, directly or through role membership, without `FORCE ROW LEVEL SECURITY`, or has `BYPASSRLS`), the call fails with `DatabaseErrors.RowLevelSecurityRequired` and runs no query. The server log names the table and the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` to run. A refused table is checked again on the next call, so the fix takes effect without a restart. A table that passed is cached for the life of the database connection: if you later disable RLS on it, warm instances keep serving it until they recycle. `bb-data pull` sets `rlsPolicy: 'enforce'` for you.
+
+The table metadata can also record RLS per table with `rowLevelSecurity` (`bb-data pull` writes it):
+
+| `rowLevelSecurity` | CRUD behavior |
+|---|---|
+| `true` | The live table is checked as with `rlsPolicy: 'enforce'`, so a table whose RLS was disabled after the metadata was generated is refused. |
+| `false` | Refused. |
+| omitted | Runs, and logs a warning if the live table has no RLS. Set `rlsPolicy: 'enforce'` to refuse instead. |
+
+To serve a table to every signed-in user on purpose, prefer an explicit policy (`CREATE POLICY "shared" ON <table> FOR ALL TO authenticated USING (true) WITH CHECK (true);`). If the table must stay without RLS, acknowledge it per call, which skips the check for the listed tables only:
+
+```typescript
+const crud = db.crud({
+  tables: ['users', 'countries'],
+  auth: async () => ({ userId: (await auth.requireAuth(context)).userId }),
+  dangerouslyAllowWithoutRowLevelSecurity: ['countries'],
+});
+```
+
+`rlsPolicy` applies only to `db.crud()`. Raw `db.query()`, `db.execute()` and `db.transaction()` don't use RLS unless you call them on `db.withRLS({ userId })`.
+
 ## Connecting to an Existing Database
 
 ```typescript
@@ -491,6 +525,11 @@ interface DatabaseOptions {
   connection?: ExternalDatabaseRef;
   /** Schema metadata for crud() support. */
   schema?: TableSchema;
+  /**
+   * 'enforce' makes db.crud() refuse, before any query, a table that has no
+   * row-level security in effect for the `authenticated` role. See "CRUD Handlers".
+   */
+  rlsPolicy?: 'enforce';
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
   /**

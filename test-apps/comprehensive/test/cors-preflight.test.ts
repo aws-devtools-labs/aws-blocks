@@ -3,14 +3,10 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 import type { api as apiType } from 'aws-blocks';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** The dev server and API Gateway are separate responders; CI runs this per env. */
 export function corsPreflightTests(_getApi: () => typeof apiType) {

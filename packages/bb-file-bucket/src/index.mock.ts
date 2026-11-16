@@ -192,6 +192,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	/**
 	 * Download a file.
 	 *
+	 * Reads the whole body. There is no metadata-only read: this is the only call
+	 * that returns `contentType` and `metadata`. `scan()` returns `size` and
+	 * `lastModified` without the body.
+	 *
 	 * @param path - The object key.
 	 * @param options - Optional. On versioned buckets, pass `{ versionId }` to retrieve a specific version.
 	 * @returns The file content and metadata, or null if the file does not exist.

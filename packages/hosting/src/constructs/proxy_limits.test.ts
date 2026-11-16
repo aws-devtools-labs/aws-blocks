@@ -73,7 +73,8 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
     frontDoor: HostingConstructProps['frontDoor'],
     extra: Partial<HostingConstructProps> = {},
   ): string[] => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
     return Annotations.fromStack(stack)
       .findWarning('*', Match.stringLikeRegexp(WARNING))

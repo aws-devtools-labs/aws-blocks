@@ -22,6 +22,7 @@ import { mintChannelToken } from './utils.js';
 import { hydrate, __resetConnectionsForTest } from './mock-middleware.js';
 import { Realtime } from './index.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { RealtimeChannelClient } from './mock-middleware.js';
 
 // The mock middleware uses the browser `WebSocket` global. Provide it from `ws`.
 (globalThis as any).WebSocket = (globalThis as any).WebSocket ?? WebSocket;
@@ -378,6 +379,60 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 		assert.strictEqual(events[events.length - 1], 'reconnect', 'onReconnect fires after the disconnect');
 
 		sub.unsubscribe();
+		__resetConnectionsForTest();
+	});
+});
+
+describe('Mock middleware: several subscribers on one channel (regression)', () => {
+	/** Type guard so `hydrate`'s `unknown` result can be used without a cast. */
+	function isChannelClient(value: unknown): value is RealtimeChannelClient {
+		return typeof value === 'object' && value !== null && 'subscribe' in value;
+	}
+
+	/** Hydrate a fresh client for CHANNEL on the shared local socket. */
+	function hydrateChannel(): RealtimeChannelClient {
+		const client = hydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: `ws://localhost:${port}/realtime`,
+			token: mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET),
+		});
+		assert.ok(isChannelClient(client), 'hydrate returns a channel client');
+		return client;
+	}
+
+	// The timeout turns a never-settling `established` into a failure instead of a hang.
+	it('confirms a second subscriber to a channel that is already confirmed', { timeout: 5000 }, async () => {
+		let onFirst: (m: unknown) => void = () => {};
+		let onSecond: (m: unknown) => void = () => {};
+		const first = new Promise<unknown>((resolve) => { onFirst = resolve; });
+		const second = new Promise<unknown>((resolve) => { onSecond = resolve; });
+		const sub1 = hydrateChannel().subscribe((m) => onFirst(m));
+		await sub1.established;
+
+		// Before the fix the mock sent a subscribe frame only for a channel it had not
+		// seen yet, so this `established` never resolved (the AWS middleware sends one
+		// frame per subscriber and resolves it).
+		const sub2 = hydrateChannel().subscribe((m) => onSecond(m));
+		await sub2.established;
+		assert.strictEqual(sub2.connection, sub1.connection, 'both subscribers share one socket');
+
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'to both' } });
+		assert.deepStrictEqual(await first, { text: 'to both' });
+		assert.deepStrictEqual(await second, { text: 'to both' });
+
+		sub1.unsubscribe();
+		sub2.unsubscribe();
+		__resetConnectionsForTest();
+	});
+
+	it('confirms every subscriber that joins before the socket opens', { timeout: 5000 }, async () => {
+		const sub1 = hydrateChannel().subscribe(() => {});
+		const sub2 = hydrateChannel().subscribe(() => {});
+		await Promise.all([sub1.established, sub2.established]);
+
+		sub1.unsubscribe();
+		sub2.unsubscribe();
 		__resetConnectionsForTest();
 	});
 });

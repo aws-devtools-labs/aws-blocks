@@ -22,6 +22,7 @@
  */
 
 import { ApiError } from '@aws-blocks/core';
+import { markServerOnlyFunction } from '@aws-blocks/core/internal';
 import { assertAdminUserFilter } from './admin-filter.js';
 import type { NativeAdminUser, NativeAdminUserPage, NativeEngine } from './engines/types.js';
 import { AuthErrors } from './errors.js';
@@ -32,6 +33,7 @@ import type {
 	AdminSurface,
 	AdminUser,
 	AdminUserFilter,
+	AttrOf,
 	AuthOptions,
 	GroupOf,
 	ReadAttrOf,
@@ -144,6 +146,18 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 				);
 			});
 		},
+		updateUserAttributes: (
+			username: string,
+			attributes: Partial<Record<AttrOf<O>, string>>,
+			...gate: AdminActionGate<O, 'lifecycle'>
+		): Promise<void> => {
+			void gate;
+			return run('lifecycle', async (n) => {
+				const prefixed = deps.prefixAttributes(attributes);
+				// Nothing to write: no call on either runtime.
+				if (Object.keys(prefixed).length > 0) await n.admin.updateUserAttributes(username, prefixed);
+			});
+		},
 		deleteUser: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;
 			return run('lifecycle', (n) => n.admin.deleteUser(username));
@@ -210,19 +224,25 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 }
 
 /**
- * Keep the `auth.admin` handle off the RPC surface. The RPC dispatcher
- * (`@aws-blocks/core` `rpc-dispatch`) refuses a Building Block instance, as an
- * exported namespace and as the method map a handler returns, and recognises a
- * block structurally by string `id` + `fullId`. The admin surface is a plain
- * object, so it gets its block's identity — non-enumerable, so it never reads as
- * a method — and is refused the same way.
+ * Keep the `auth.admin` handle and its methods off the RPC surface. The RPC
+ * dispatcher (`@aws-blocks/core` `rpc-dispatch`) refuses a Building Block
+ * instance, as an exported namespace and as the method map a handler returns, and
+ * recognises a block structurally by string `id` + `fullId`. The admin surface is
+ * a plain object, so it gets its block's identity — non-enumerable, so it never
+ * reads as a method — and is refused the same way.
  *
- * shortcut: relies on the dispatcher's structural `isScopeLike` check; switch to
- * an explicit server-only brand if core grows one.
+ * That identity does not survive a copy (`{ ...auth.admin }`,
+ * `Object.assign({}, auth.admin)`, a destructured method), so each method is also
+ * registered as server-only: the dispatcher refuses that function by identity
+ * wherever it ends up. Calling the methods from server code is unchanged, and
+ * they stay enumerable.
  *
  * @internal
  */
 export function markServerOnly<T extends object>(block: { id: string; fullId: string }, surface: T): T {
+	for (const method of Object.values(surface)) {
+		if (typeof method === 'function') markServerOnlyFunction(method);
+	}
 	return Object.defineProperties(surface, {
 		id: { value: block.id, enumerable: false },
 		fullId: { value: block.fullId, enumerable: false },

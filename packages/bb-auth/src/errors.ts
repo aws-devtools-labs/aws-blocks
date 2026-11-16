@@ -47,6 +47,8 @@ export function statusForAuthError(name: string): number {
 			return 429;
 		// A service-side fault: report it as the upstream failure it is, not a 400.
 		case AuthErrors.InternalError:
+		// A session refused over a plain-HTTP front door: a deploy misconfiguration.
+		case AuthErrors.InsecureTransport:
 			return 500;
 		// Sign-out could not invalidate the server-side session (a transient store fault).
 		case AuthErrors.SignOutIncomplete:

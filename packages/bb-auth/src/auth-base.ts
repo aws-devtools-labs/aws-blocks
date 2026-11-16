@@ -33,6 +33,7 @@ import { buildAdminSurface, markServerOnly } from './auth-admin.js';
 import { bearerTokenOf, poolBearerIdentity } from './bearer.js';
 import { bearerAuthEnabled, requiresUserPool } from './cdk/contract.js';
 import {
+	assertSessionCookieTransport,
 	clearAutoSignInCookie,
 	clearSessionCookie,
 	decryptAutoSignInPayload,
@@ -1838,13 +1839,22 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	/**
 	 * Validate, persist and cookie a new session, then run `onSignIn` (a throw
 	 * rolls the session back). `validateUser` runs before anything is written, so
-	 * rejecting it prevents the session.
+	 * rejecting it prevents the session. A request that could not carry the
+	 * session cookie (a plain-HTTP front door outside a sandbox deploy) is
+	 * refused first, with `AuthErrors.InsecureTransport`: nothing is stored and
+	 * the engine's upstream tokens are revoked, best-effort.
 	 */
 	private async issueSession(
 		context: BlocksContext,
 		record: SessionRecord,
 		idpClaims?: Record<string, unknown>,
 	): Promise<AuthenticatedUser<O>> {
+		try {
+			assertSessionCookieTransport(context, this.crossDomain);
+		} catch (e) {
+			await this.revokeUpstream(record, context, false).catch(() => undefined);
+			throw e;
+		}
 		const identity = identityOf(record);
 		const claims = idpClaims ?? ('kind' in record ? {} : (decodeJwtPayload(record.idToken) ?? {}));
 		try {

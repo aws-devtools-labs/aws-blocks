@@ -83,6 +83,63 @@ export function mapCustomAttributes(
 }
 
 /**
+ * Cognito's standard attribute names, keyed as CDK's `StandardAttributesMask`.
+ * Every entry is writable by end users except the `*_verified` flags.
+ */
+const STANDARD_ATTRIBUTE_MASK_KEYS: Readonly<Record<string, keyof cognito.StandardAttributesMask>> = {
+	address: 'address',
+	birthdate: 'birthdate',
+	email: 'email',
+	email_verified: 'emailVerified',
+	family_name: 'familyName',
+	gender: 'gender',
+	given_name: 'givenName',
+	locale: 'locale',
+	middle_name: 'middleName',
+	name: 'fullname',
+	nickname: 'nickname',
+	phone_number: 'phoneNumber',
+	phone_number_verified: 'phoneNumberVerified',
+	picture: 'profilePicture',
+	preferred_username: 'preferredUsername',
+	profile: 'profilePage',
+	updated_at: 'lastUpdateTime',
+	website: 'website',
+	zoneinfo: 'timezone',
+};
+const VERIFIED_FLAGS = new Set(['email_verified', 'phone_number_verified']);
+
+/**
+ * An app client's write attributes: every standard attribute except the
+ * `*_verified` flags, plus the declared custom attributes not marked
+ * `userWritable: false`. With no `WriteAttributes` Cognito lets the client
+ * write every standard and custom attribute, so an end user could set an
+ * attribute the app authorizes on. The runtime refuses the same names first
+ * (`checkAttributeValues` in `engines/attribute-write-rules.ts`).
+ *
+ * `mapped` adds the pool attributes a federated provider maps (`email`,
+ * `custom:team`, …): the hosted-UI client writes them at federated sign-in, and
+ * Cognito's `CreateUserPoolClient` reference asks for them in its write attributes. The option validation refuses a
+ * mapping onto a `userWritable: false` attribute, so `mapped` never adds one;
+ * a mapped `email_verified` / `phone_number_verified` is listed.
+ *
+ * @internal
+ */
+export function endUserWriteAttributes(
+	attrs?: readonly UserAttribute[],
+	mapped: Iterable<string> = [],
+): cognito.ClientAttributes {
+	const extra = new Set(mapped);
+	const mask: Partial<Record<keyof cognito.StandardAttributesMask, boolean>> = {};
+	for (const [name, key] of Object.entries(STANDARD_ATTRIBUTE_MASK_KEYS)) {
+		mask[key] = !VERIFIED_FLAGS.has(name) || extra.has(name);
+	}
+	const custom = (attrs ?? []).filter((a) => a.userWritable !== false).map((a) => a.name);
+	for (const name of extra) if (name.startsWith('custom:')) custom.push(name);
+	return new cognito.ClientAttributes().withStandardAttributes(mask).withCustomAttributes(...custom);
+}
+
+/**
  * Resolve `users.signInWith` to Cognito's `signInAliases`. `undefined` falls
  * back to `['username', 'email']` — `AuthCognito`'s default, so the zero-config
  * pool is unchanged (a changed `signInWith` is a rollback-on-update, not a
@@ -196,6 +253,7 @@ export function adminIamActions(actions?: readonly AdminAction[]): string[] {
 		'cognito-idp:AdminDisableUser',
 		'cognito-idp:AdminResetUserPassword',
 		'cognito-idp:AdminSetUserPassword',
+		'cognito-idp:AdminUpdateUserAttributes',
 		'cognito-idp:AdminGetUser',
 		// getUser also reports group memberships (AdminGetUser does not), so the
 		// lifecycle slice must be self-sufficient for that read.

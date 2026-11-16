@@ -290,7 +290,7 @@ describe('parseArgv', () => {
 		usageError(['migrate', '--query', 'scriptsRewritten.dev.too'], /Fields of scriptsRewritten\.dev: from, to\.$/);
 		usageError(
 			['migrate', '--query', 'devConfig.prt'],
-			/Fields of devConfig: port, frontendCommand, frontendPort, frontend\.$/,
+			/Fields of devConfig: port, frontendCommand, frontendPort, frontend, generateClient\.$/,
 		);
 	});
 });

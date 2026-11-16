@@ -167,6 +167,7 @@ export const AuthErrors: {
     readonly InvalidLambdaResponse: "InvalidLambdaResponseException";
     readonly UserLambdaValidation: "UserLambdaValidationException";
     readonly InternalError: "InternalErrorException";
+    readonly InsecureTransport: "InsecureTransportException";
 };
 
 // @public

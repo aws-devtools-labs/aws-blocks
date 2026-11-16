@@ -836,7 +836,9 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
-    blocksConfig: { dev: { port: 3001, frontend: false } },
+    // `"generateClient": false` keeps the overlay's own aws-blocks/client.js (the Cognito token
+    // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
+    blocksConfig: { dev: { port: 3001, frontend: false, generateClient: false } },
     gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
     workspaceRoot,

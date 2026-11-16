@@ -535,7 +535,7 @@ jobs:
         id: url
         working-directory: test-apps/native-bindings
         run: |
-          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
+          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.sandbox.json'))['apiUrl'])")
           # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
           # so emit it as-is. (Appending /aws-blocks/api here previously doubled
           # the path: the non-OIDC suites still worked because API Gateway routes
@@ -577,6 +577,9 @@ jobs:
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
+        # The spec's server is the sandbox just deployed (config.sandbox.json), not the dev server's config.json.
+        env:
+          BLOCKS_SPEC_STAGE: sandbox
         run: npm run spec
 
       - name: Run Dart codegen
@@ -682,12 +685,14 @@ jobs:
         id: url
         working-directory: test-apps/native-bindings
         run: |
-          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
+          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.sandbox.json'))['apiUrl'])")
           # apiUrl is already the full RPC endpoint and the spec's first server, so Blocks() reaches it too.
           echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
+        env:
+          BLOCKS_SPEC_STAGE: sandbox
         run: npm run spec
 
       - name: Run Swift codegen
@@ -831,7 +836,7 @@ jobs:
         id: url
         working-directory: test-apps/native-bindings
         run: |
-          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
+          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.sandbox.json'))['apiUrl'])")
           # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
           # so emit it as-is. Appending /aws-blocks/api here doubled the path;
           # API Gateway still routed /prod/aws-blocks/api/* to the JSON-RPC Lambda
@@ -861,6 +866,8 @@ jobs:
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
+        env:
+          BLOCKS_SPEC_STAGE: sandbox
         run: npm run spec
 
       - name: Download spec

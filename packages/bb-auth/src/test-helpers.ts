@@ -177,6 +177,7 @@ export class FakeNativeEngine implements NativeEngine {
 		removeUserFromGroup: unmodelled('admin.removeUserFromGroup'),
 		listUsersInGroup: unmodelled('admin.listUsersInGroup'),
 		createUser: unmodelled('admin.createUser'),
+		updateUserAttributes: unmodelled('admin.updateUserAttributes'),
 		deleteUser: unmodelled('admin.deleteUser'),
 		disableUser: unmodelled('admin.disableUser'),
 		enableUser: unmodelled('admin.enableUser'),

@@ -379,7 +379,9 @@ const synth = (plan: PlanId, door: DoorId): Template => {
         : door === 'alb'
           ? { kind: 'alb' }
           : { kind: 'apiGateway', api: door === 'apigw-rest' ? 'rest' : 'http' };
-  const stack = new Stack(new App(), `Conf-${plan}-${door}`, { env: { account: '111111111111', region: 'us-west-2' } });
+  // The stacked door here has a public router over plain HTTP: a sandbox-only setup (production fails synth).
+  const app = new App(door === 'stacked' ? { context: { sandboxMode: 'true' } } : {});
+  const stack = new Stack(app, `Conf-${plan}-${door}`, { env: { account: '111111111111', region: 'us-west-2' } });
   const hosting = new HostingConstruct(stack, 'Hosting', {
     manifest,
     frontDoor,

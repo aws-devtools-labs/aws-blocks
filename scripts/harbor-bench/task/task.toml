@@ -14,6 +14,8 @@ build_timeout_sec = 1200.0
 cpus = 2
 memory_mb = 6144
 storage_mb = 15360
+# The agent needs Bedrock Runtime and registry.npmjs.org; README "Security boundaries" says why
+# Harbor's allowlist mode is not used yet.
 network_mode = "public"
 
 [verifier]
