@@ -85,7 +85,7 @@ class OidcClientJsonTest {
     }
 
     @Test
-    fun `OIDC clients are read-only, so encoding a model holding one throws`() {
+    fun `OIDC clients are read-only so encoding a model holding one throws`() {
         // Transferables only come back from the server; nothing sends one.
         val json = OidcClient.json(httpClient, server, "r")
         val decoded = json.decodeFromJsonElement<LoginMenu>(Json.parseToJsonElement(menu))
