@@ -69,7 +69,7 @@ The block doesn't limit how often a caller can send. That is a deliberate design
 What the block does instead:
 
 - It bounds one call: `sendBatch()` takes at most `maxBatchSize` messages (default 100), and each message at most 50 recipients.
-- The README's security section shows the open-relay anti-pattern and the fix: gate the method with `auth.requireAuth(context)`, build the message on the server, and add a per-user limit if a gated method still sends on the caller's behalf.
+- The README's security section shows the open-relay anti-pattern and the fix: gate the method with `auth.requireAuth(context)`, build the message on the server, and add a per-user limit if a gated method still sends on the caller's behalf. It sketches one such limit: a per-user, per-window counter in a `KVStore`, updated with a conditional `put`.
 
 **The consequence of getting it wrong falls on the app's AWS account.** Mail goes out under the app's own verified SES identity. Abuse shows up as bounces and complaints against that identity, which damages the domain's sending reputation, and SES can put the account under review, pause its sending, or suspend it. SES's own limits are no substitute: the sending quota (messages per rolling 24 hours) and the maximum send rate (messages per second) apply to the whole AWS account in a Region, shared by every caller and every app there. One caller can use up the quota or hold the account at its send rate, and the app's legitimate mail (password resets, notifications) then fails until capacity frees up. Every app that sends on a caller's behalf needs its own limit for that reason.
 
