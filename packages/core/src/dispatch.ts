@@ -137,8 +137,12 @@ export interface DispatcherOptions {
  * @internal
  */
 export interface DispatchCorsPolicy {
-  /** Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin. */
-  rejects(origin: string): boolean;
+  /**
+   * Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin.
+   * `request` is the request itself, for a policy that also depends on its method or `Host` (the local
+   * dev server refuses only state-changing requests from a foreign origin).
+   */
+  rejects(origin: string, request: DispatchRequest): boolean;
   /** The CORS headers for a response to a request from `origin` (`''` when absent). */
   headers(origin: string): Record<string, string>;
 }
@@ -252,7 +256,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     const corsHeaders = cors.headers(origin);
 
     // Reject cross-origin requests from disallowed origins
-    if (origin && cors.rejects(origin)) {
+    if (origin && cors.rejects(origin, request)) {
       const rejection = corsRejection();
       return { kind: 'cors-rejected', status: rejection.statusCode, headers: rejection.headers, cookies: [], body: rejection.body };
     }

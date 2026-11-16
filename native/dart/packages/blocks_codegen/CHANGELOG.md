@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - Fix two arms of one union whose discriminator values generate the same
   class name (`Foo` and `foo`) being declared as one class twice, which did not
@@ -10,13 +10,12 @@
   ([dart-lang/build#5223](https://github.com/dart-lang/build/issues/5223)).
   `build` 4 stays accepted, so consumers on `mockito` or other `build <5`
   packages still resolve.
-- **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
+- **Requires `blocks_runtime` 0.2.0.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
   list-typed `BlocksClient.call`), and each generated library's header now
-  names the minimum runtime. Release note: raise the `blocks_runtime`
-  constraint in this package's `pubspec.yaml` to `^0.1.5` in the same change
-  that publishes `blocks_runtime` 0.1.5.
+  names the minimum runtime. The `blocks_runtime` constraint in this
+  package's `pubspec.yaml` is `^0.2.0` to match.
 - Fix two results that each hold a realtime channel with a different message
   type (`{channel: RealtimeChannel<{text}>}` and
   `{channel: RealtimeChannel<{count}>}`) being merged into one model, so the
