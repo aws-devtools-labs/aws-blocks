@@ -453,6 +453,26 @@ describe('E2E credentials session policy', () => {
 			}
 		});
 
+		it('keeps turning off CloudTrail and AWS Config recording out of the broad allow', () => {
+			const broad = allows.find((s) => s.NotAction);
+			assert.ok(broad, 'expected the NotAction allow');
+			const kept = [
+				'cloudtrail:DeleteTrail',
+				'cloudtrail:PutEventSelectors',
+				'cloudtrail:StopLogging',
+				'cloudtrail:UpdateTrail',
+				'cloudtrail:DeleteEventDataStore',
+				'cloudtrail:StopEventDataStoreIngestion',
+				'cloudtrail:UpdateEventDataStore',
+				'cloudtrail:PutInsightSelectors',
+				'config:StopConfigurationRecorder',
+				'config:DeleteConfigurationRecorder',
+			];
+			for (const a of kept) {
+				assert.ok(list(broad.NotAction).includes(a), `expected ${a} in NotAction`);
+			}
+		});
+
 		it('denies changes to the bootstrap roles and to the E2E role itself', () => {
 			const deny = policy.Statement.find((s) => s.Effect === 'Deny' && list(s.Resource).includes(BOOTSTRAP_ROLES));
 			assert.ok(deny, 'expected a Deny on the bootstrap roles');

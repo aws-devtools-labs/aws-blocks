@@ -33,6 +33,12 @@
 				"cloudtrail:PutEventSelectors",
 				"cloudtrail:StopLogging",
 				"cloudtrail:UpdateTrail",
+				"cloudtrail:DeleteEventDataStore",
+				"cloudtrail:StopEventDataStoreIngestion",
+				"cloudtrail:UpdateEventDataStore",
+				"cloudtrail:PutInsightSelectors",
+				"config:StopConfigurationRecorder",
+				"config:DeleteConfigurationRecorder",
 				"sts:AssumeRole",
 				"sts:TagSession"
 			],
