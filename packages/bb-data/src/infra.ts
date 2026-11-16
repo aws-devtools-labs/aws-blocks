@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { VpcContext } from '@aws-blocks/core/cdk';
 import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry } from '@aws-blocks/core/cdk/internal';
+import { copyMigrationsCommand } from '@aws-blocks/data-common/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -408,8 +409,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
 
   // Run migrations on deploy if migrationsPath is provided
   let migrationCR: cdk.CustomResource | undefined;
-  if (options.migrationsPath) {
-    const migrationsHash = hashMigrationsDir(options.migrationsPath);
+  const { migrationsPath } = options;
+  if (migrationsPath) {
+    const migrationsHash = hashMigrationsDir(migrationsPath);
     const migrationFn = new lambda.NodejsFunction(scope, `${name}MigrationFn`, {
       // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
       // Must NOT use ../src/migration-lambda.ts — an installed package runs from dist/. A vendorized
@@ -433,8 +435,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
+          // Single-quoted for `sh`: a project path may contain a space, `"` or `$`.
           afterBundling: (_inputDir: string, outputDir: string) => [
-            `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
+            copyMigrationsCommand(migrationsPath, `${outputDir}/migrations`),
           ],
         },
         externalModules: ['@aws-sdk/*'],

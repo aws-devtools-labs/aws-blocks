@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { DataMode } from '../contract/v1.js';
 import { resolveLocalPort, stackNameCandidates } from './detect.js';
 import { fetchStackDescription, isStackNotFound } from './environments.js';
+import type { DeployStage } from './stage-outputs.js';
 
 /**
  * Where an RPC call goes: the endpoint for a (stage, mode) pair.
@@ -31,9 +32,11 @@ import { fetchStackDescription, isStackNotFound } from './environments.js';
  *   `resolveLocalPort` (which reads `startDevServer({ port })` out of the app's own
  *   server script and falls back to 3000).
  * - Cloud: the deployed stack's `ApiUrl` output, which already includes the RPC
- *   prefix. `.blocks-sandbox/config.json`'s `apiUrl` is the same value written
- *   locally at deploy time and is used ONLY as a fallback: that file can be stale
- *   from a previous sandbox, while the stack output is what is deployed now.
+ *   prefix. `.blocks-sandbox/config.<stage>.json`'s `apiUrl` is the same value
+ *   written locally when that stage was deployed and is used ONLY as a fallback:
+ *   that file can be stale from a previous deploy, while the stack output is what
+ *   is deployed now. `.blocks-sandbox/config.json` is never read here: only a dev
+ *   server writes it, with its own local URL.
  *
  * Resolution answers "where would the call go", not "is anything listening".
  * Local mode deliberately does not probe: a probe here would double the latency of
@@ -53,8 +56,22 @@ const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
 /** Output key the CDK stack publishes its RPC base URL under. */
 const API_URL_OUTPUT_KEY = 'ApiUrl';
 
-/** Written at deploy time; a fallback only, because it can outlive its sandbox. */
-const SANDBOX_CONFIG_FILE = '.blocks-sandbox/config.json';
+/**
+ * Where a deploy of each stage records its `apiUrl`, relative to the project root. A fallback only,
+ * because the file can outlive its stack. The paths are constants picked by a validated stage (see
+ * {@link asDeployStage}): the stage in a request never becomes part of a path.
+ */
+const DEPLOYED_CONFIG_FILE: Readonly<Record<DeployStage, string>> = Object.freeze({
+	sandbox: '.blocks-sandbox/config.sandbox.json',
+	production: '.blocks-sandbox/config.production.json',
+});
+
+/** `stage` as one of the two stages that have a stack, or undefined for any other value. */
+function asDeployStage(stage: string): DeployStage | undefined {
+	if (stage === 'sandbox') return 'sandbox';
+	if (stage === 'production') return 'production';
+	return undefined;
+}
 
 export type EndpointResolution =
 	| { ok: true; endpoint: string; source: 'local-dev-server' | 'stack-output' | 'sandbox-config' }
@@ -67,14 +84,14 @@ export interface ResolveEndpointOptions {
 	region?: string;
 	/** Test seam: stack outputs by key. Defaults to CloudFormation DescribeStacks. */
 	describeStackOutputs?: (stackName: string, region?: string) => Promise<Record<string, string>>;
-	/** Test seam: the deploy-time `apiUrl`. Defaults to reading the sandbox config. */
-	readSandboxConfig?: (projectRoot: string) => string | undefined;
+	/** Test seam: the deploy-time `apiUrl` of `stage`. Defaults to reading that stage's config file. */
+	readSandboxConfig?: (projectRoot: string, stage: DeployStage) => string | undefined;
 }
 
 /**
  * Resolves the endpoint for a stage and mode.
  *
- * Precedence in cloud mode: the stack's `ApiUrl` output first, the sandbox config
+ * Precedence in cloud mode: the stack's `ApiUrl` output first, the stage's config
  * file only when the stack publishes no such output. A stack lookup that throws is
  * reported as `NO_ENDPOINT` and does NOT fall through to the file — a stack that
  * cannot be read is the case where the file is most likely to be stale, and
@@ -95,8 +112,9 @@ export async function resolveRpcEndpoint(options: ResolveEndpointOptions): Promi
 async function resolveCloudEndpoint(options: ResolveEndpointOptions): Promise<EndpointResolution> {
 	const { projectRoot, stage, region } = options;
 
-	const stackName = stackNameForStage(projectRoot, stage);
-	if (!stackName) {
+	const deployStage = asDeployStage(stage);
+	const stackName = deployStage && stackNameForStage(projectRoot, deployStage);
+	if (!deployStage || !stackName) {
 		return noEndpoint(
 			`Could not work out which CloudFormation stack serves stage "${stage}": ${explainMissingStack(stage)}`,
 		);
@@ -119,13 +137,13 @@ async function resolveCloudEndpoint(options: ResolveEndpointOptions): Promise<En
 	}
 
 	const readSandboxConfig = options.readSandboxConfig ?? defaultReadSandboxConfig;
-	const fromFile = readSandboxConfig(projectRoot)?.trim();
+	const fromFile = readSandboxConfig(projectRoot, deployStage)?.trim();
 	if (fromFile) {
-		return validateEndpoint(fromFile, 'sandbox-config', `"apiUrl" in ${SANDBOX_CONFIG_FILE}`);
+		return validateEndpoint(fromFile, 'sandbox-config', `"apiUrl" in ${DEPLOYED_CONFIG_FILE[deployStage]}`);
 	}
 
 	return noEndpoint(
-		`Stack ${stackName} exists but publishes no "${API_URL_OUTPUT_KEY}" output, and ${SANDBOX_CONFIG_FILE} carries no "apiUrl" either, so nothing says where the ${stage} API lives. Deploy the ${stage} stage, or switch to local mode.`,
+		`Stack ${stackName} exists but publishes no "${API_URL_OUTPUT_KEY}" output, and ${DEPLOYED_CONFIG_FILE[deployStage]} carries no "apiUrl" either, so nothing says where the ${stage} API lives. Deploy the ${stage} stage, or switch to local mode.`,
 	);
 }
 
@@ -136,11 +154,9 @@ async function resolveCloudEndpoint(options: ResolveEndpointOptions): Promise<En
  * production, index 1 (when present) is the sandbox — so this reads it rather than
  * re-deriving stack ids and sandbox ids from the same files a second time.
  */
-function stackNameForStage(projectRoot: string, stage: string): string | undefined {
+function stackNameForStage(projectRoot: string, stage: DeployStage): string | undefined {
 	const candidates = stackNameCandidates(projectRoot);
-	if (stage === 'production') return candidates[0];
-	if (stage === 'sandbox') return candidates[1];
-	return undefined;
+	return stage === 'production' ? candidates[0] : candidates[1];
 }
 
 /** Says what was tried and what would fix it — "no endpoint" alone helps nobody. */
@@ -224,10 +240,10 @@ async function defaultDescribeStackOutputs(stackName: string, region?: string): 
 	return outputs;
 }
 
-/** The deploy-time `apiUrl`. Read and parse both guarded; a missing file is normal. */
-function defaultReadSandboxConfig(projectRoot: string): string | undefined {
+/** The deploy-time `apiUrl` of `stage`. Read and parse both guarded; a missing file is normal. */
+function defaultReadSandboxConfig(projectRoot: string, stage: DeployStage): string | undefined {
 	try {
-		const parsed = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'config.json'), 'utf-8'));
+		const parsed = JSON.parse(readFileSync(join(projectRoot, DEPLOYED_CONFIG_FILE[stage]), 'utf-8'));
 		const apiUrl = parsed?.apiUrl;
 		return typeof apiUrl === 'string' && apiUrl.trim() !== '' ? apiUrl.trim() : undefined;
 	} catch {

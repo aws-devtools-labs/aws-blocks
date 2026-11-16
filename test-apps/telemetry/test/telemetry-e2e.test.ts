@@ -243,16 +243,25 @@ function spawnDevServer(options: {
   });
 }
 
-function killProcess(proc: ChildProcess): void {
-  try {
-    // Graceful abort first (SIGINT) so a long-lived dev server can flush its
-    // telemetry before exiting; escalates to SIGKILL after the grace window.
-    // Process is detached (own group), so -pid targets the child's group, not
-    // the test runner's. Note: we intentionally do NOT removeAllListeners here —
-    // gracefulTerminate registers an 'exit' listener it uses to skip the SIGKILL
-    // fallback once the process has exited cleanly.
-    gracefulTerminate(proc);
-  } catch {}
+/**
+ * Stop a detached dev server and wait until its whole process group is gone.
+ * `cdk-blocks dev` allows one dev server per app, so the next case's server in
+ * APP_ROOT is refused while this one, or its tsx watch, still runs.
+ */
+async function killProcess(proc: ChildProcess): Promise<void> {
+  const pid = proc.pid;
+  if (!pid) return;
+  // Graceful abort first (SIGINT) so a long-lived dev server can flush its
+  // telemetry before exiting; escalates to SIGKILL after the grace window.
+  // Process is detached (own group), so -pid targets the child's group, not
+  // the test runner's. Note: we intentionally do NOT removeAllListeners here —
+  // gracefulTerminate registers an 'exit' listener it uses to skip the SIGKILL
+  // fallback once the process has exited cleanly.
+  gracefulTerminate(proc);
+  const groupAlive = () => { try { process.kill(-pid, 0); return true; } catch { return false; } };
+  for (const deadline = Date.now() + TERMINATION_GRACE_MS + 2_000; groupAlive() && Date.now() < deadline;) await sleep(100);
+  // The npx parent can exit before the dev server under it does.
+  try { process.kill(-pid, 'SIGKILL'); } catch {}
 }
 
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean> {
@@ -507,8 +516,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -597,8 +606,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -634,13 +643,12 @@ function localCommandSuites(): void {
       // Run 1
       const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
       assert.ok(await waitForFile(file1, 15_000), `Run 1: telemetry file not written.\nstdout: ${r1.output.stdout.slice(-300)}\nstderr: ${r1.output.stderr.slice(-300)}`);
-      killProcess(r1.process);
-      await sleep(1000);
+      await killProcess(r1.process);
 
       // Run 2
       const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
       assert.ok(await waitForFile(file2, 15_000), `Run 2: telemetry file not written.\nstdout: ${r2.output.stdout.slice(-300)}\nstderr: ${r2.output.stderr.slice(-300)}`);
-      killProcess(r2.process);
+      await killProcess(r2.process);
 
       const body1 = readTelemetryFile(file1);
       const body2 = readTelemetryFile(file2);
@@ -658,10 +666,8 @@ function localCommandSuites(): void {
 
     afterEach(async () => {
       if (devProcess) {
-        // Kill just the npx/tsx parent — NOT the process group.
-        // The dev server (PR #136) has internal process-tree management;
-        // group-killing propagates signals back to the test runner.
-        try { process.kill(devProcess.pid!, 'SIGKILL'); } catch {}
+        // Stop the whole detached group: a dev server left behind would refuse the next case's (one per app).
+        await killProcess(devProcess);
         devProcess.stdout?.destroy();
         devProcess.stderr?.destroy();
         devProcess = null;
@@ -781,8 +787,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -953,8 +959,8 @@ function localCommandSuites(): void {
   describe('network resilience', () => {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1019,8 +1025,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1065,8 +1071,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1147,8 +1153,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1194,12 +1200,11 @@ function localCommandSuites(): void {
 
       const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
       assert.ok(await waitForFile(file1, 15_000));
-      killProcess(r1.process);
-      await sleep(1000);
+      await killProcess(r1.process);
 
       const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
       assert.ok(await waitForFile(file2, 15_000));
-      killProcess(r2.process);
+      await killProcess(r2.process);
 
       const body1 = readTelemetryFile(file1);
       const body2 = readTelemetryFile(file2);
@@ -1213,8 +1218,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
