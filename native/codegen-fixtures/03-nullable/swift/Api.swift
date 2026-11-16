@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getProfile(userId: String) async throws -> GetProfile.Result {
         let request = BlocksRequest(method: "api.getProfile", params: [userId], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getProfile") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getProfile") }
         return try JSONDecoder().decode(GetProfile.Result.self, from: result)
     }
 

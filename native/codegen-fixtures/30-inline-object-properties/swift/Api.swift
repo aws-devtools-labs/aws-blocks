@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getShipment(id: String) async throws -> Shipment {
         let request = BlocksRequest(method: "api.getShipment", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getShipment") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getShipment") }
         return try JSONDecoder().decode(Shipment.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func saveShipment(shipment: Shipment) async throws -> Shipment {
         let request = BlocksRequest(method: "api.saveShipment", params: [shipment], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.saveShipment") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.saveShipment") }
         return try JSONDecoder().decode(Shipment.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func getInvoice() async throws -> Invoice {
         let request = BlocksRequest(method: "api.getInvoice", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getInvoice") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getInvoice") }
         return try JSONDecoder().decode(Invoice.self, from: result)
     }
 
@@ -41,7 +41,7 @@ public final nonisolated class Api: Sendable {
     public func getReceipt() async throws -> Receipt {
         let request = BlocksRequest(method: "api.getReceipt", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getReceipt") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getReceipt") }
         return try JSONDecoder().decode(Receipt.self, from: result)
     }
 }

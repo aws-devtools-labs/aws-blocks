@@ -74,7 +74,9 @@ extension SwiftCodeGenerator {
             [
                 "        \(nullResult)",
                 "        guard let \(descriptor) = try JSONSerialization.jsonObject(with: \(result)) as? [String: Any] else {",
-                "            throw \(runtimePrefix)RPCError(message: \"Invalid \(kind) descriptor for \(methodLiteral)\")",
+                // TODO: moves to `TransferableError` once the runtime has it; an undecodable descriptor is a hydration
+                // failure, not a transport one.
+                "            throw \(runtimePrefix)TransportError(message: \"Invalid \(kind) descriptor for \(methodLiteral)\")",
                 "        }"
             ]
         }
