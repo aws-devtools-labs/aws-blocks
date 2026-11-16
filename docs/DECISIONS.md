@@ -1458,3 +1458,56 @@ A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it
 - vercel/next.js#67372: `next build` does not build referenced projects
 - `docs/guides/upgrading-older-apps.md` ("Keep Node types out of the frontend")
 - `packages/blocks/TROUBLESHOOTING.md`
+
+## D-029: The Harbor agent check runs pull request code next to model credentials, behind one human approval
+
+**Date**: 2026-11-16
+**Authors:** AWS Blocks maintainers
+
+### Context
+The Harbor agent check (`.github/workflows/harbor-agent-check.yml`) is an optional, non-required benchmark dispatched by hand from `main` for an open PR. It builds the PR head and its merge-base in an isolated, credential-free container, then runs Claude Code against the packed packages in an `arm × trial` matrix. In that benchmark job the PR's packages are installed into the task image, so their install and build scripts run in the same container as a Bedrock session that the agent can read. This is not a hostile-code sandbox: until the session expires, PR code can use the credentials and the network.
+
+The repository is public, so anyone can open a PR, and any open PR can be the target of a dispatch. The people who can author code that a run executes are therefore not limited to the team.
+
+The bounds today:
+- The only trigger is `workflow_dispatch` from `main`; no `pull_request` or `pull_request_target` event runs it.
+- The credentials come from a dedicated Bedrock-only role, scoped further by an inline session policy that allows only `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the pinned model.
+- The session lasts `HARBOR_SESSION_SECONDS` (2,700 s, 45 minutes; `scripts/ci/harbor-credentials.test.mjs` keeps it from 900 to 3,600 s). It is assumed directly before the run step, it is no longer than `run.py`'s own Harbor timeout, `run.py` stops Harbor when it expires, and the run step's `timeout-minutes` (47) stops the step at most 180 s later. The run step took at most 1,125 s (p95 882 s) over 284 trials; the rest is room for Bedrock throttling at higher trial counts.
+- Each benchmark job has its own session. The matrix has no `max-parallel`, so a run with `trials=N` holds up to 2N sessions at once (100 at the 50-trial maximum). The concurrency group is per PR with `cancel-in-progress: true`, so a new dispatch for the same PR cancels the previous run, while runs for different PRs can overlap.
+- The task container runs with Harbor's `network_mode = "public"`. At run time it needs Bedrock Runtime in `us-east-1` and `registry.npmjs.org` for the generated app's third-party dependencies, and the app's own install scripts may download more.
+- One `approval` job on the `harbor-bench-approval` environment (required reviewers: blocks-team) gates every job that uses `harbor-bench`. `scripts/ci/harbor-approval-gate.test.mjs` checks on every PR that no other workflow names `harbor-bench`, that the gate cannot fan out, be skipped or succeed on error, and that no credentialed job runs after a rejected approval.
+- The approval summary names the exact candidate and baseline revisions and lists the PR's changed files, with workflows, `scripts/` (including the Harbor harness and task), package manifests, lockfiles and npm config marked and listed first.
+- The approval is enforced by the workflow, not by IAM: both roles trust the `:environment:harbor-bench` subject, and `harbor-bench` has no reviewers of its own.
+
+### Decision
+- Keep running PR code next to the model credentials, with the per-run human approval as the control. The trade-off is re-affirmed with the repository public: a wider population can author a commit that an approver might dispatch, so the approval carries more weight, not less.
+- The approver is responsible for reviewing the listed revisions and changed files before approving. A PR that changes a marked file, or comes from an author the approver does not know, gets a closer look, or is not approved.
+- Bound the blast radius in the credentials rather than the code: Bedrock-only role, model-only session policy, and a 45-minute session tied to the run step's deadline, with a test that fails if the session can outlive that step by more than 180 s or another step is placed between the session and the work.
+- Require an account-level Bedrock spend control on the account that hosts the role: an AWS Budgets budget with an action that denies model invocation to the role (or a service control policy that does the same) when the limit is reached. It lives outside this repository; the CLI's `--max-budget-usd` is not that control.
+- Keep `network_mode = "public"` for now (see Alternatives Considered).
+- Keep the gate's guarantees as tests that run on every PR, since the workflow itself only runs from `main`.
+
+### Rationale
+- The benchmark measures how an agent uses the PR's packages; that needs the packages installed where the agent runs, with the agent's model access in the same place.
+- STS sessions cannot be revoked early without changing IAM, so the session length is the only lever this repository has over how long leaked credentials stay usable. The run step needs most of the 45 minutes only under throttling; a shorter session would turn those runs into infrastructure errors.
+- The trace writer session is used only after the agent's containers are removed, and only to upload two files, so it asks for the STS minimum (900 s).
+
+### Consequences
+- A malicious or compromised PR that an approver lets through can invoke the pinned model for up to 45 minutes per benchmark job (up to 100 jobs in one run) and can reach the network, but cannot deploy, publish, write to the repository or read other secrets.
+- Credentials copied out of the container stay valid until the session expires, even after the run ends early or Harbor is stopped.
+- An approver who does not read the summary removes the only per-run control. The changed-file table makes the risky files visible; it does not decide for the approver.
+- The CLI budget cap does not limit calls the agent or PR code makes with the credentials directly, so without the account-level spend control a let-through PR's cost is bounded only by the session length, the job count and Bedrock's rate quotas.
+- A new workflow that references `harbor-bench` bypasses the per-run approval and relies on PR review of `main` instead (repository admins can bypass that review).
+- Revisit if the check becomes required, runs on an event other than a manual dispatch, the role gains any permission beyond model invocation, or the session needs to grow past 3,600 s.
+
+### Alternatives Considered
+- **A. A credential broker** that keeps the Bedrock credentials outside the container and forwards only model calls from the agent. It is the structural fix, since PR code would never hold a credential, and it is deferred: it needs a proxy service in the runner, a Claude Code configuration that points Bedrock at it, and its own tests.
+- **B. Refresh short sessions during the run** instead of one 45-minute session. The refresh would need the OIDC token request variables, which `run.py` strips from Harbor's environment on purpose, and Claude Code would have to reload credentials mid-session. Not worth it while A is the planned fix.
+- **C. Harbor's `allowlist` network mode** with only Bedrock Runtime and the npm registry reachable. The pinned Harbor revision supports it for Docker through a sidecar transparent proxy and nftables rules. It is not used yet: it adds a third-party proxy image pulled at run time, depends on the runner kernel's nftables support and fails the trial when that is missing, and changes what the agent can install mid-measurement. Revisit with a dispatched run that shows unchanged pass rates.
+- **D. No credentials in the benchmark at all** (a replayed or mocked model). Removes the risk, but no longer measures an agent.
+
+### References
+- `.github/workflows/harbor-agent-check.yml`
+- `scripts/harbor-bench/README.md` ("Security boundaries")
+- `scripts/harbor-bench/task/task.toml`
+- `scripts/ci/harbor-approval-gate.test.mjs`, `scripts/ci/harbor-credentials.test.mjs`, `scripts/ci/harbor-packages-isolation.test.mjs`

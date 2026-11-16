@@ -176,8 +176,11 @@ jobs:
       WORK: run-${{ matrix.arm }}-${{ matrix.trial }}
       # Lifetime of the Bedrock session the agent can read. The run step took at most 1,125 s
       # (p95 882 s) over 284 trials; 2,700 s is three times the p95 and leaves room for Bedrock
-      # throttling at higher trial counts. run.py stops Harbor at the deadline and reports the
-      # trial as an infrastructure error. scripts/ci/harbor-credentials.test.mjs keeps it 900-3600.
+      # throttling at higher trial counts. The session starts right before the run step, and that
+      # step's deadline is the session: run.py stops Harbor at it and reports the trial as an
+      # infrastructure error, and the step's timeout-minutes stops the step at most 180 s later.
+      # Ending early does not revoke the session; it stays valid until it expires.
+      # scripts/ci/harbor-credentials.test.mjs keeps it 900-3600 and tied to the run step.
       HARBOR_SESSION_SECONDS: 2700
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -220,6 +223,8 @@ jobs:
             {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5","arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5"]}]}
       - name: Run three phases in one Harbor container and Claude session
         id: run
+        # HARBOR_SESSION_SECONDS (45 min) plus 2 min for run.py to stop Harbor and write the result.
+        timeout-minutes: 47
         env:
           CREDENTIALS_EXPIRE_AT: ${{ steps.deadline.outputs.expire_at }}
         run: python scripts/harbor-bench/run.py "$WORK" --credentials-expire-at "$CREDENTIALS_EXPIRE_AT"
@@ -281,7 +286,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_TRACES_ROLE_ARN }}
           aws-region: us-east-1
-          role-duration-seconds: 3600
+          # The STS minimum: this session only uploads one trace and one result.
+          role-duration-seconds: 900
           role-session-name: harbor-traces-${{ github.run_id }}-${{ matrix.arm }}-${{ matrix.trial }}
           mask-aws-account-id: true
           unset-current-credentials: true
