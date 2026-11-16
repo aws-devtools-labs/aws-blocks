@@ -278,7 +278,15 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	name?: string;
 	description: string;
 	parameters: TParams;
-	/** When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`. */
+	/**
+	 * When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`.
+	 *
+	 * Set it to `true` on any tool with side effects (one that writes data, sends a message, spends
+	 * money or calls an external system on the user's behalf). With the default, the model can call
+	 * the tool whenever it decides to, including when an instruction injected through a tool result
+	 * or user input tells it to; the tool's `parameters` schema bounds the arguments, not the decision
+	 * to call it. Read-only tools can usually keep the default.
+	 */
 	needsApproval?: boolean;
 	/** When true (and `needsApproval` is true), user can respond "trust" to auto-approve this tool for the rest of the conversation. */
 	trustable?: boolean;
