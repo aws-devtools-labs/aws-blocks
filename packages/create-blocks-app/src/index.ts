@@ -1049,14 +1049,14 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  import { api } from \'aws-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
-  // Only a backend whose Hosting builds the app with Next.js. The templates without a `Hosting`
-  // (api-only, backend, cron, sql, observability, amplify) host no frontend; the others build Next.js
-  // when they set `framework: 'nextjs'` (the nextjs template) or when Hosting detects
-  // it from package.json. Hosting's detection reads only the declarations, so an undeclared `next`
-  // (for example one hoisted from another app of a monorepo) is not built with Next.js.
+  // Only a backend that hosts the app can build its Next.js. Whether it does, and with what, is
+  // Hosting's answer: pass it the `framework` the copied backend gives its `Hosting`, if any.
   const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
-  const buildsNext = backendStack.includes("framework: 'nextjs'") || hostingDetectsNext(existingPkg);
-  if (backendStack.includes('new Hosting(') && buildsNext) await warnIfNextOutsideHostingRange(targetDir, awsBlocksDest);
+  const hostingProps = backendStack.split('new Hosting(')[1];
+  if (hostingProps !== undefined) {
+    const framework = /\bframework:\s*['"]([^'"]+)['"]/.exec(hostingProps)?.[1];
+    await printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
+  }
 }
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
@@ -1072,14 +1072,6 @@ interface PackageDeps {
 /** Whether the project builds with Next.js, whose `next build` ignores project references when it type-checks. */
 function usesNext(pkg: PackageDeps): boolean {
   return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
-}
-
-/**
- * Whether `Hosting`'s framework detection picks Next.js for the project: `next` in any of the
- * dependency maps it reads (`detectFramework` in `@aws-blocks/hosting`).
- */
-function hostingDetectsNext(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): boolean {
-  return [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies].some((deps) => deps !== undefined && 'next' in deps);
 }
 
 /**
@@ -1148,25 +1140,22 @@ function resolveProjectHosting(backendDir: string, subpath: string): string {
   return createRequire(from).resolve(`@aws-blocks/hosting/${subpath}`);
 }
 
-/** `value[key]` when it is a string. */
-function stringField(value: object, key: string): string | undefined {
-  const field: unknown = Reflect.get(value, key);
-  return typeof field === 'string' ? field : undefined;
-}
-
 /**
- * Warns when an existing project's installed `next` is outside the range `Hosting`
- * builds as a server-rendered app, so the project hears of it here and not first from
- * the hosting build of its first deploy. The verdict is the project's own Hosting's:
- * `checkNextjsCompatibility` from the `@aws-blocks/hosting/nextjs-compatibility` its
- * backend resolves (see resolveProjectHosting), the check its Next.js adapter makes
- * before the OpenNext build. This CLI carries no range of its own. Silent when that
- * Hosting is not installed (`--skip-install`), predates the export, throws, or has no
- * verdict (no installed `next`): the hosting build stays the first check then.
- * Printed, never applied: upgrading `next` is the project's step.
+ * Prints the warning the project's own Hosting has for its installed `next`, so the
+ * project hears of it here and not first from the hosting build of its first deploy.
+ * Everything in it is that Hosting's: `checkNextjsCompatibility` from the
+ * `@aws-blocks/hosting/nextjs-compatibility` the backend resolves (see
+ * resolveProjectHosting) decides whether Hosting builds the app with Next.js, whether
+ * its `next` is supported, and what to say. This CLI carries no version range, no
+ * framework detection and no wording of its own for it; it adds only that `next` was
+ * left as it is. Silent when that Hosting is not installed (`--skip-install`),
+ * predates the export, throws, or has no warning: the hosting build stays the first
+ * check then.
+ *
+ * @param framework - The `framework` the copied backend gives its `Hosting`, if any.
  */
-async function warnIfNextOutsideHostingRange(targetDir: string, backendDir: string): Promise<void> {
-  let result: unknown;
+async function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): Promise<void> {
+  let warning: unknown;
   try {
     // A runtime path: the module is the project's installed Hosting, not a dependency of this CLI.
     const compatibility: Record<string, unknown> = await import(
@@ -1174,24 +1163,15 @@ async function warnIfNextOutsideHostingRange(targetDir: string, backendDir: stri
     );
     const check = compatibility.checkNextjsCompatibility;
     if (typeof check !== 'function') return;
-    result = check(targetDir);
+    const result: unknown = check(targetDir, { framework });
+    if (typeof result !== 'object' || result === null) return;
+    warning = Reflect.get(result, 'warning');
   } catch {
     return;
   }
-  if (typeof result !== 'object' || result === null || Reflect.get(result, 'supported') !== false) return;
-  const nextVersion = stringField(result, 'nextVersion');
-  const nextRange = stringField(result, 'nextRange');
-  if (!nextVersion || !nextRange) return;
-  const openNextVersion = stringField(result, 'openNextVersion');
-  const source = stringField(result, 'openNextSource');
-  const origin = source === 'installed' ? ', the one this project installs,'
-    : source === 'fallback' ? ', which Hosting builds with when the project installs none,' : '';
-  const openNext = openNextVersion ? `@opennextjs/aws@${openNextVersion}${origin}` : 'OpenNext';
-  console.log(`⚠️  Next.js: this project has next@${nextVersion}. \`Hosting\` builds a server-rendered Next.js app with OpenNext,`);
-  console.log(`   and ${openNext} supports next ${nextRange}.`);
-  console.log('   Outside that range the hosting build warns and goes on with a combination OpenNext was not released for.');
-  console.log('   Upgrading `next` is up to you: your `next` was not changed.');
-  console.log('   A static export (`output: \'export\'`, hosted with `framework: \'static\'`) has no minimum version.');
+  if (typeof warning !== 'string' || warning === '') return;
+  console.log(`⚠️  ${warning}`);
+  console.log('   Hosting prints this warning when it builds the app. Your `next` was not changed.');
   console.log('');
 }
 
