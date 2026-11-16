@@ -52,9 +52,9 @@ public struct SwiftCodeGenerator {
     /// checks the list against the runtime's sources.
     static let blocksRuntimeTypeNames: Set<String> = [
         "ApiError", "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
-        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileBucketError", "FileDownloadHandle", "FileUploadHandle",
+        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileDownloadHandle", "FileTransferError", "FileUploadHandle",
         "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
-        "RealtimeChannel", "RealtimeError", "TokenStore", "TransportError", "UnknownTransferable",
+        "RealtimeChannel", "RealtimeError", "TokenStore", "TransferableError", "TransportError", "UnknownTransferable",
         "WebSocketConnection", "WebSocketDelegate"
     ]
 

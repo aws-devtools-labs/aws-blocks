@@ -27,7 +27,7 @@ public final nonisolated class Api: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for api.getFile") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid file descriptor for api.getFile")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/download", missingField: "__blocks")
         }
         return try FileDownloadHandle.fromJSON(descriptor)
     }
@@ -38,7 +38,7 @@ public final nonisolated class Api: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for api.getUpload") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid file descriptor for api.getUpload")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/upload", missingField: "__blocks")
         }
         return try FileUploadHandle.fromJSON(descriptor)
     }

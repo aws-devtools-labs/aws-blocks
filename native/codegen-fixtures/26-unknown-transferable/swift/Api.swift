@@ -19,7 +19,7 @@ public final nonisolated class Api: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for api.getDeviceHandle") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid transferable descriptor for api.getDeviceHandle")
+            throw TransferableError.invalidDescriptor(blocksType: "example-iot/device-handle", missingField: "__blocks")
         }
         return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: "example-iot/device-handle")
     }
@@ -30,7 +30,7 @@ public final nonisolated class Api: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for api.connectDevice") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid transferable descriptor for api.connectDevice")
+            throw TransferableError.invalidDescriptor(blocksType: "example-iot/device-link", missingField: "__blocks")
         }
         return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: "example-iot/device-link")
     }

@@ -310,7 +310,7 @@ let blocksMemberNames: Set<String> = ["client", "server", "close", "self", "init
 /// the modules they qualify with, and keywords no class can be named.
 let reservedNamespaceClassNames: Set<String> = [
     "Blocks", "Servers", "BlocksRuntime", "Foundation",
-    "BlocksClient", "BlocksServer", "BlocksRequest", "ApiError", "TransportError", "CodegenError", "JSONValue",
+    "BlocksClient", "BlocksServer", "BlocksRequest", "ApiError", "TransferableError", "TransportError", "CodegenError", "JSONValue",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient", "OIDCProviderName",
     "Sendable", "CaseIterable", "URLSession",
     "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",

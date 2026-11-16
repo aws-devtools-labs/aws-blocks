@@ -72,7 +72,7 @@ final nonisolated class MainActorDefaultTests: XCTestCase {
             _ = try await oidc.signIn(provider: model.provider, relayTo: "app://auth", launcher: RefusedLauncher())
             XCTFail("expected a connection error")
         } catch {
-            XCTAssertTrue(error is URLError, "\(error)")
+            XCTAssertTrue((error as? TransportError)?.underlyingError is URLError, "\(error)")
         }
     }
 

@@ -31,7 +31,7 @@ func swiftCamelCaseCandidate(_ name: String) -> String {
 /// The types every API class spells by name (in its members' signatures and bodies, and in the types nested in its
 /// operations' enums). An operation's enum declared inside the class with one of these names would shadow it.
 let apiClassSpelledTypeNames: Set<String> = nestedShadowingTypeNames.union([
-    "BlocksClient", "BlocksServer", "BlocksRequest", "ApiError", "TransportError", "JSONDecoder", "JSONSerialization",
+    "BlocksClient", "BlocksServer", "BlocksRequest", "ApiError", "TransferableError", "TransportError", "JSONDecoder", "JSONSerialization",
     "Any", "Encodable", "Servers",
     // A provider enum's conformances (`SwiftCodeGenerator+OIDCProviders.swift`).
     "CaseIterable", "OIDCProviderName"
@@ -39,7 +39,7 @@ let apiClassSpelledTypeNames: Set<String> = nestedShadowingTypeNames.union([
 
 /// The types an operation's body spells by name. A parameter with one of these names takes an internal name.
 let operationBodyTypeNames: Set<String> = [
-    "BlocksClient", "BlocksRequest", "ApiError", "TransportError", "JSONDecoder", "JSONSerialization", "String", "Any", "Encodable",
+    "BlocksClient", "BlocksRequest", "ApiError", "TransferableError", "TransportError", "JSONDecoder", "JSONSerialization", "String", "Any", "Encodable",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient", "JSONValue"
 ]
 

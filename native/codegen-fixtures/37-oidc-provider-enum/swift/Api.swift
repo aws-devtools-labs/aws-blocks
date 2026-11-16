@@ -19,7 +19,7 @@ public final nonisolated class Auth: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for auth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid OIDC client descriptor for auth.getClient")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc/client", missingField: "__blocks")
         }
         return try OIDCClient<GetClient.Provider>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }
@@ -54,7 +54,7 @@ public final nonisolated class LegacyAuth: Sendable {
         let result = try await client.execute(request)
         guard let result else { throw TransportError(message: "Unexpected null result for legacyAuth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw TransportError(message: "Invalid OIDC client descriptor for legacyAuth.getClient")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc/client", missingField: "__blocks")
         }
         return try OIDCClient<String>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }

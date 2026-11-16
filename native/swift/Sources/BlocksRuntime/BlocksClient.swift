@@ -280,7 +280,19 @@ public final class BlocksClient: Sendable {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await gate.send(urlRequest)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await gate.send(urlRequest)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch {
+            throw TransportError(
+                message: error.localizedDescription,
+                statusCode: nil,
+                underlyingError: error
+            )
+        }
 
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {

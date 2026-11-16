@@ -311,6 +311,25 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testRawRouteWrapsAConnectionFailureInATransportError() async {
+        OIDCMockURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected TransportError")
+        } catch let error as TransportError {
+            XCTAssertNil(error.statusCode)
+            XCTAssertNotNil(error.underlyingError)
+            XCTAssertEqual((error.underlyingError as? URLError)?.code, .cannotConnectToHost)
+        } catch {
+            XCTFail("Expected TransportError, got \(error)")
+        }
+    }
+
     func testRawRouteKeepsADescriptionWithoutAnErrorCode() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["error_description": "unknown or expired code"]
