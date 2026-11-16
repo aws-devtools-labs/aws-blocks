@@ -1,15 +1,19 @@
 /**
- * A `cdk` export condition in a `NODE_OPTIONS` value, in each spelling Node.js
- * accepts there (`--conditions=cdk`, `--conditions cdk`, `-C cdk`), with the
- * whitespace before it.
+ * A `cdk` export condition in a `NODE_OPTIONS` value, with the whitespace
+ * before it. Matches `--conditions=cdk`, `--conditions cdk` and `-C cdk`, and
+ * the same with double quotes around the value (`--conditions="cdk"`,
+ * `-C "cdk"`) or around the whole entry (`"--conditions=cdk"`), because
+ * Node.js removes those quotes when it parses `NODE_OPTIONS`. Another
+ * condition that starts with `cdk` (`--conditions=cdk-preview`) does not match.
  */
-const CDK_CONDITION = /(^|\s+)(?:--conditions(?:=|\s+)|-C\s+)cdk(?=\s|$)/g;
+const CDK_CONDITION = /(^|\s+)("?)(?:--conditions(?:=|\s+)|-C\s+)("?)cdk\3\2(?=\s|$)/g;
 
 /**
  * The environment for the app's own build command (`npm run build`, a custom
- * `buildCommand`), spawned by a framework adapter.
+ * `buildCommand`), spawned by a framework adapter or by the `@aws-blocks/core`
+ * `Hosting` construct.
  *
- * Adapters run during CDK synth, and a synth runs with
+ * Both run during CDK synth, and a synth runs with
  * `NODE_OPTIONS=--conditions=cdk` so that `@aws-blocks/*` packages resolve to
  * their CDK constructs. A child process inherits `NODE_OPTIONS`, so without
  * this every Node.js process in the app's build (a `prebuild` script, the

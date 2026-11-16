@@ -33,6 +33,16 @@ void describe('appBuildEnv', () => {
     assert.strictEqual(nodeOptionsFor('--conditions=cdk -C cdk'), '');
   });
 
+  void it('removes the cdk condition when its value or the whole entry is in double quotes', () => {
+    assert.strictEqual(nodeOptionsFor('--conditions="cdk"'), '');
+    assert.strictEqual(nodeOptionsFor('"--conditions=cdk"'), '');
+    assert.strictEqual(nodeOptionsFor('-C "cdk"'), '');
+    assert.strictEqual(
+      nodeOptionsFor('--max-old-space-size=4096 --conditions="cdk" --enable-source-maps'),
+      '--max-old-space-size=4096 --enable-source-maps',
+    );
+  });
+
   void it('keeps the other NODE_OPTIONS entries, wherever the cdk condition sits', () => {
     assert.strictEqual(nodeOptionsFor('--max-old-space-size=4096 --conditions=cdk'), '--max-old-space-size=4096');
     assert.strictEqual(nodeOptionsFor('--conditions=cdk --max-old-space-size=4096'), '--max-old-space-size=4096');
@@ -45,6 +55,7 @@ void describe('appBuildEnv', () => {
   void it('keeps conditions other than cdk', () => {
     assert.strictEqual(nodeOptionsFor('--conditions=development'), '--conditions=development');
     assert.strictEqual(nodeOptionsFor('--conditions=cdk-preview'), '--conditions=cdk-preview');
+    assert.strictEqual(nodeOptionsFor('--conditions="cdk-preview"'), '--conditions="cdk-preview"');
     assert.strictEqual(
       nodeOptionsFor('--conditions=development --conditions=cdk'),
       '--conditions=development',
