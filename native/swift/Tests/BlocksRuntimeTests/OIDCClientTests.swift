@@ -1169,22 +1169,46 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertNil(adminToken)
     }
 
+    /// The unscoped tokens a 0.x version stored belong to the `Auth` block's default routes: only the client
+    /// on `/aws-blocks/auth/exchange` takes them, once.
     func testTokensUnderTheUnscopedKeysAreAdoptedOnce() async {
-        let client = makeClient(session: makeMockSession())
-        let store = client.client.tokenStore
+        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let store = shared.tokenStore
         await store.set("access_token", value: "legacy-access")
         await store.set("refresh_token", value: "legacy-refresh")
         await store.set("expires_at", value: "9999999999000")
-        let other = makeClient(named: "admin", on: client.client)
+        let client = makeClient(named: "aws-blocks/auth", on: shared)
+        let second = makeClient(named: "aws-blocks/auth", on: shared)
 
         let token = await client.getAccessToken()
-        let otherToken = await other.getAccessToken()
-        let scoped = await store.get(tokenKey("refresh_token"))
+        let secondToken = await second.getAccessToken()
+        let scoped = await store.get(tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/exchange"))
         let legacy = await store.get("refresh_token")
         XCTAssertEqual(token, "legacy-access")
-        XCTAssertNil(otherToken, "only the first client to use the store adopts the old session")
+        XCTAssertEqual(secondToken, "legacy-access", "a second client for the same block reads the moved session")
         XCTAssertEqual(scoped, "legacy-refresh")
         XCTAssertNil(legacy)
+    }
+
+    /// A client for another block, used first, leaves the unscoped tokens for the default block's client.
+    func testAnotherBlocksClientUsedFirstLeavesTheUnscopedTokens() async {
+        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let store = shared.tokenStore
+        await store.set("access_token", value: "legacy-access")
+        await store.set("refresh_token", value: "legacy-refresh")
+        await store.set("expires_at", value: "9999999999000")
+        let sso = makeClient(named: "aws-blocks/auth/sso", on: shared)
+        let main = makeClient(named: "aws-blocks/auth", on: shared)
+
+        let ssoToken = await sso.getAccessToken()
+        let stillUnscoped = await store.get("refresh_token")
+        let mainToken = await main.getAccessToken()
+
+        XCTAssertNil(ssoToken)
+        XCTAssertEqual(stillUnscoped, "legacy-refresh")
+        XCTAssertEqual(mainToken, "legacy-access")
+        let ssoScoped = await store.get(tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/sso/exchange"))
+        XCTAssertNil(ssoScoped)
     }
 
     func testClientsFirstUsingTheStoreTogetherAdoptTheUnscopedSessionOnce() async {
@@ -1193,16 +1217,16 @@ final class OIDCClientTests: XCTestCase {
             holding: "access_token"
         )
         let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
-        let auth = makeClient(named: "auth", on: shared)
-        let admin = makeClient(named: "admin", on: shared)
+        let auth = makeClient(named: "aws-blocks/auth", on: shared)
+        let sso = makeClient(named: "aws-blocks/auth/sso", on: shared)
 
         async let authToken = auth.getAccessToken()
-        async let adminToken = admin.getAccessToken()
-        let tokens = await [authToken, adminToken]
+        async let ssoToken = sso.getAccessToken()
+        let tokens = await [authToken, ssoToken]
 
         let adopters = await Set(store.writtenKeys.map { $0.components(separatedBy: "#")[0] })
-        XCTAssertEqual(adopters.count, 1, "only one client adopts the old session: \(adopters)")
-        XCTAssertEqual(tokens.compactMap { $0 }, ["legacy-access"])
+        XCTAssertEqual(adopters, ["/aws-blocks/auth/exchange"], "only the default block's client adopts the old session")
+        XCTAssertEqual(tokens, ["legacy-access", nil])
         XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
     }
 
@@ -1213,8 +1237,8 @@ final class OIDCClientTests: XCTestCase {
             holding: "access_token"
         )
         let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
-        let first = makeClient(named: "auth", on: shared)
-        let second = makeClient(named: "auth", on: shared)
+        let first = makeClient(named: "aws-blocks/auth", on: shared)
+        let second = makeClient(named: "aws-blocks/auth", on: shared)
 
         async let firstToken = first.getAccessToken()
         async let secondToken = second.getAccessToken()

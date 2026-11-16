@@ -594,8 +594,14 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         await tokenStore.set(tokenKey(name), value: value)
     }
 
-    /// Once per BlocksClient, the first of its OIDCClients to use the store takes the unscoped tokens, unless it has its own.
+    /// The exchange path of the `Auth` block's default routes, the block 0.x versions wrote unscoped tokens for.
+    private static var legacyExchangePath: String { "/aws-blocks/auth/exchange" }
+
+    /// Moves the unscoped tokens a 0.x version stored into this client's keys, once per `BlocksClient`, unless it
+    /// has its own. Only a client on the default routes (`exchangePath` `/aws-blocks/auth/exchange`) takes them:
+    /// they belong to that block, so a client for another block leaves them in place.
     private func adoptLegacyTokens() async {
+        guard exchangePath == Self.legacyExchangePath else { return }
         await client.adoptLegacyTokensOnce { await self.moveLegacyTokens() }
     }
 
