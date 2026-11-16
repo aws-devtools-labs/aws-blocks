@@ -12,6 +12,8 @@ data class OidcClientConfig(
     val signInBasePath: String,
     val authorizeParamsBasePath: String,
     val callbackPath: String,
+    /** Where [OidcClient.restore] reads the session. Absent, it is derived from [callbackPath]. */
+    val sessionPath: String? = null,
     @Transient val relayTo: String = ""
 )
 
