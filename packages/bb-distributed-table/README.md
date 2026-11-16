@@ -8,6 +8,8 @@ Structured data storage backed by DynamoDB with secondary indexes and rich query
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
+> Production settings (scaling & cost, durability, deletion protection, encryption): [PRODUCTION.md](./PRODUCTION.md)
+
 ## API
 
 ```typescript
@@ -18,7 +20,7 @@ const table = new DistributedTable(scope, id, options)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. Pass `{ consistentRead: true }` for a strongly consistent read. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. The key is an object with every key field (`get({ userId, orderId })`, not `get(userId)`). Pass `{ consistentRead: true }` for a strongly consistent read. |
 | `put(item, options?)` | `Promise<void>` | Store an item. Overwrites unless conditions are set. |
 | `delete(key, options?)` | `Promise<void>` | Remove an item by primary key. |
 | `query(options)` | `AsyncIterable<T>` | Query items by index or primary key. |
@@ -38,7 +40,7 @@ const table = new DistributedTable(scope, id, options)
 |--------|------|----------|-------------|
 | `schema` | `StandardSchemaV1` | Yes | Runtime validation schema (Zod, Valibot, ArkType, etc.). Type `T` is inferred from the schema. |
 | `key` | `TableKeyConfig<T>` | Yes | Primary key configuration: `{ partitionKey, sortKey? }`. Field names must exist in the schema. |
-| `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions. |
+| `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions, as an object keyed by index name (`{ byStatus: { partitionKey: 'status' } }`), not an array. |
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | No | Point-in-Time Recovery (continuous backups). `true` = on with the default 35-day window; `false` = off; `{ retentionDays: n }` = on with an `n`-day window (**1–35**). Defaults to the stack `defaults.pointInTimeRecovery` (on under `BlocksPresets.production`, off under `sandbox`). Bills for backup storage per GB-month; a shorter window trims cost. |
 | `protection` | `'disposable' \| 'retained' \| 'locked'` | No | How hard the table is to destroy (spans removal policy + deletion protection). `'disposable'` = deleted with the stack; `'retained'` = orphaned on stack delete but a direct delete still works; `'locked'` = orphaned **and** deletion-protected. When omitted, removal policy + deletion protection follow the stack `defaults` (`BlocksPresets.production` ≈ `'locked'`, `sandbox` ≈ `'disposable'`). |
@@ -69,6 +71,16 @@ const settings = new DistributedTable(scope, 'settings', {
 
 // Key object requires only the partition key
 await settings.get({ settingId: 'theme' });
+```
+
+**The key is the item's identity.** `get()`, `put()` and `delete()`, and the `ifNotExists` / `ifExists` conditions, match the **whole** primary key: the partition key plus the sort key, if the table has one. With a composite key, the sort key field is unique only within its partition. In `orders` above, `orderId` is unique per `userId`, not across users: `put({ userId: 'bob', orderId: '001', … }, { ifNotExists: true })` succeeds even when `alice` already has an order `'001'`. When a field must be unique across the whole table (an id, an email, a handle), make it the whole key and serve grouped lists from an index:
+
+```typescript
+const members = new DistributedTable(scope, 'members', {
+  schema: memberSchema,
+  key: { partitionKey: 'email' },                                       // unique across the table
+  indexes: { byTeam: { partitionKey: 'teamId', sortKey: 'joinedAt' } }, // list a team's members
+});
 ```
 
 **Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. On AWS every other read (`getBatch()`, `query()`, `scan()`) stays eventually consistent.
@@ -116,14 +128,16 @@ for await (const order of orders.query({
 | `index` | `keyof Indexes` | No | GSI to query. Omit to query the primary key. |
 | `where` | `KeyCondition<T, K>` | Yes | Key conditions. Partition key requires `{ equals }`. Sort key supports `equals`, `greaterThan`, `lessThan`, `between`, `beginsWith`, etc. |
 | `limit` | `number` | No | Maximum number of items to return. |
-| `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`. |
+| `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`; any other value throws `InvalidQuery`. |
+
+**Paging:** `query()` has no cursor or offset option. To page through results, sort on a unique, stable sort key (add a tie-breaker to a timestamp), pass the last key you returned as the bound in `where` (`{ greaterThan: cursor }` ascending, `{ lessThan: cursor }` with `order: 'desc'`), and request `limit: pageSize + 1` to learn whether another page exists.
 
 ### Conditional Operations
 
 Both `put` and `delete` accept optional conditions:
 
 ```typescript
-// Only write if key doesn't exist (idempotent create)
+// Only write if no item has this exact primary key (partition key + sort key)
 await table.put(item, { ifNotExists: true });
 
 // Only write if existing item's field matches (optimistic locking)
@@ -136,7 +150,7 @@ await table.delete(key, { ifExists: true });
 await table.delete(key, { ifFieldEquals: { status: 'archived' } });
 ```
 
-All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically).
+All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed` (the value is `'ConditionalCheckFailedException'`; match the constant, not a string or the message). They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically). Left uncaught, the error reaches the client under that name; when your API promises its own error name, catch it and throw that `ApiError` instead (see [Error Handling](#error-handling)).
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
@@ -187,19 +201,19 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 |----------|--------------|-------------|
 | `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable only for `ifFieldEquals` optimistic-lock conflicts (not `ifNotExists` / `ifExists`). |
 | `DistributedTableErrors.ValidationFailed` | `ValidationFailedException` | An item failed the configured `schema` validation on `put()` / `putBatch()`. |
-| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The query/condition shape is wrong: missing `where`, partition key not given as `{ equals }`, unknown index, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug. |
+| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The call's input shape is wrong: a key that isn't an object with every key field (`get('alice')`, or a composite key without its sort key), an item without its key fields, `indexes` not given as an object, missing `where`, partition key not given as `{ equals }`, unknown index (the message lists the declared ones), an `order` other than `'asc'` / `'desc'`, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug; the mock and the AWS runtime both throw it before calling DynamoDB. |
 | `DistributedTableErrors.ItemTooLarge` | `ItemTooLargeException` | A `put`/`putBatch` item exceeds DynamoDB's 400 KB per-item size limit. |
 | `DistributedTableErrors.BatchIncomplete` | `BatchIncompleteException` | A batch op left entries unprocessed after the retry budget (sustained throttling). AWS runtime only. |
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { ApiError, DistributedTableErrors, isBlocksError } from '@aws-blocks/blocks';
 
 try {
-  await table.put(item, { ifNotExists: true });
+  await orders.put(order, { ifNotExists: true });
 } catch (e: unknown) {
   if (isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)) {
-    // item already exists
+    // an order with this userId + orderId already exists: report it under the API's own error name
+    throw new ApiError('Order already exists', 409, { name: 'OrderExists', cause: e });
   }
   if (isBlocksError(e, DistributedTableErrors.ItemTooLarge)) {
     // item > 400 KB — split it or store a reference instead
@@ -212,7 +226,7 @@ try {
 
 ### Basic CRUD
 
-> The examples use Zod, but `schema` accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). Install your chosen library, e.g. `npm install zod`.
+> The examples use Zod, but `schema` accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). Install your chosen library, e.g. `npm install zod`. A hand-written validator's `~standard.validate` returns `{ value }` on success or `{ issues }` on failure, not Zod's `{ success, data }`.
 
 ```typescript
 import { z } from 'zod';
@@ -322,71 +336,6 @@ const legacy = new DistributedTable(scope, 'legacy', {
 - Use `{ ifNotExists: true }` for idempotent creates
 - Use `{ ifFieldEquals }` for optimistic locking when multiple writers are possible
 - Prefer `query()` over `scan()` — scans read every item and are expensive
-
-## Scaling & Cost (AWS)
-
-- **Billing:** PAY_PER_REQUEST — no provisioned capacity to manage
-- **Latency:** Single-digit ms reads and writes
-- **Throughput:** Scales automatically, no upper limit on table size
-- **Item size limit:** 400 KB per item
-- **GSI limit:** Up to 20 global secondary indexes per table
-- **Cost:** ~$1.25 per million writes, ~$0.25 per million reads
-- **Durability:** 99.999999999% (11 nines) across 3 AZs
-
-## Durability & Security defaults
-
-Durability posture comes from the **stack-wide `BlocksDefaults`** you pass to `BlocksStack.create` / `BlocksBackend.create` (`BlocksPresets.production` or `BlocksPresets.sandbox` from `@aws-blocks/core/cdk`) — the same knobs every Building Block reads, so a table's removal policy, deletion protection, and continuous-backup posture all follow the app's chosen preset. There's no per-block `sandboxMode` guessing.
-
-Under **`BlocksPresets.production`**, every table this block provisions ships with:
-
-- **Point-in-Time Recovery** enabled (`defaults.pointInTimeRecovery`) — restore to any second in the last 35 days.
-- **Retained + deletion-protected** (`defaults.removalPolicy = RETAIN`, `defaults.deletionProtection = true`) — neither a stack teardown nor a stray `cdk destroy`/console delete can wipe the table until you explicitly relax it. (Equivalent to `protection: 'locked'`.)
-- **SSE-KMS** with the AWS-managed `aws/dynamodb` key — encryption-at-rest that's auditable via CloudTrail, at no per-key charge.
-
-Under **`BlocksPresets.sandbox`** these flip the other way — PITR off, `RemovalPolicy.DESTROY`, deletion protection off (equivalent to `protection: 'disposable'`) — so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE-KMS stays on in both (encryption isn't part of `BlocksDefaults` — it's a per-block option defaulting to `aws-managed`).
-
-> **PITR is not free.** Point-in-Time Recovery charges for continuous-backup storage (per GB-month of table size), so a large production table carries an ongoing cost. It's on by default because unrecoverable data loss is usually the worse outcome — but for regenerable data (caches, derived tables) set `pointInTimeRecovery: false`.
-
-> **`protection: 'locked'`/`'retained'` orphans the table on stack delete.** Because the removal policy is `RETAIN`, deleting the stack leaves the table behind (by design — your data survives). But the table name is derived deterministically from the block's id, so **redeploying the same app afterward fails with `Table already exists`** until you delete the orphaned table (`aws dynamodb delete-table`, after disabling deletion protection if `'locked'`) or import it into the new stack. This is inherent to retain-on-delete; use `protection: 'disposable'` for tables you expect to recreate freely.
-
-> **Indexes follow the config while the table is in the stack.** Removing an index (or the whole `indexes` option) from your config and redeploying drops it from the table. When the table itself leaves the stack (you delete the stack, or remove the `DistributedTable` from your app) its indexes are left alone: an orphaned `'locked'`/`'retained'` table keeps all of them, so importing it into a new stack needs no index rebuild. To tell the two apart the GSI manager reads the stack's template. If it cannot read it in the cleanup phase of an update (or of a rolled-back update), it leaves the indexes in place and reports a `DELETE_FAILED` event for the table's GSI custom resource (logical ID containing `gsiresource`) that names the table and the indexes. The deploy itself still succeeds, so check the deploy output (or the stack's events) for that event. To remove an index your config no longer has, run `aws dynamodb update-table --table-name <table> --global-secondary-index-updates '[{"Delete":{"IndexName":"<index>"}}]'`; DynamoDB takes one index change per call, so wait for each delete to finish before the next.
-
-Every stack default is overridable per table (a per-block option always wins over `defaults`):
-
-```typescript
-// Cost-sensitive prod table: keep it protected, skip PITR's backup cost
-const cache = new DistributedTable(scope, 'cache', {
-  schema, key: { partitionKey: 'id' },
-  pointInTimeRecovery: false,
-});
-
-// Long-lived data you still want to be able to delete directly
-const staging = new DistributedTable(scope, 'staging', {
-  schema, key: { partitionKey: 'id' },
-  protection: 'retained',   // survives stack delete, but not deletion-protected
-});
-
-// Compliance-strict table: dedicated customer-managed KMS key
-const ledger = new DistributedTable(scope, 'ledger', {
-  schema, key: { partitionKey: 'id' },
-  encryption: 'customer-managed',
-});
-
-// Share one customer-managed key across several tables (one key, one bill)
-const key = DistributedTable.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
-const orders = new DistributedTable(scope, 'orders', {
-  schema, key: { partitionKey: 'id' },
-  encryption: key,
-});
-const events = new DistributedTable(scope, 'events', {
-  schema, key: { partitionKey: 'id' },
-  encryption: key,
-});
-```
-
-> Overrides always win over the environment default, so you can force a fully durable, protected table in a sandbox (or relax one in prod) explicitly. When you bring your own table via `fromExisting()`, none of these options apply — you own that table's configuration.
-
-> **`customer-managed` provisions a dedicated CMK per table** — an app with a dozen customer-managed tables gets a dozen KMS keys (~$1/month each, plus request charges). To share one key across several tables, create the key once and pass `DistributedTable.fromKmsKey(keyArn)` as the `encryption` option on each table (see below). Use the default `'aws-managed'` unless a table needs its own rotation/key-policy control.
 
 ## Local Development
 

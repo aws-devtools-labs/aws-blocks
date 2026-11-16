@@ -376,15 +376,20 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 		establishedReject = reject;
 	});
 
-	if (!conn.subscriptions.has(channel)) {
+	const isNewChannel = !conn.subscriptions.has(channel);
+	if (isNewChannel) {
 		conn.subscriptions.set(channel, new Set());
 		conn.channelTokens.set(channel, token);
-		const subMsg = JSON.stringify({ action: 'subscribe', channel, token });
-		if (conn.isConnected && conn.ws?.readyState === WebSocket.OPEN) {
-			conn.ws.send(subMsg);
-		} else {
-			conn.pendingSubs.push({ channel, token });
-		}
+	}
+	// Like aws-middleware: on an open socket EVERY subscriber sends its own subscribe
+	// frame, so each `established` gets its own subscribe_success. Sending only for a
+	// new channel left a second subscriber to an already-confirmed channel waiting
+	// forever. Before the socket opens, onopen subscribes each stored channel once and
+	// that reply resolves all of the channel's pending subscribers.
+	if (conn.isConnected && conn.ws?.readyState === WebSocket.OPEN) {
+		conn.ws.send(JSON.stringify({ action: 'subscribe', channel, token }));
+	} else if (isNewChannel) {
+		conn.pendingSubs.push({ channel, token });
 	}
 
 	if (!conn.pendingEstablished.has(channel)) {

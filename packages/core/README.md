@@ -18,6 +18,15 @@ Pass `compute` to place everything created under a scope, and in its child
 scopes, on one `Compute` (`new Scope('reports', { parent: scope, compute })`);
 see the `@aws-blocks/bb-compute` README for what follows it.
 
+A block's resource names (its table, bucket or queue, and its local `.bb-data`
+directory) come from its `fullId`: the scope ids from the root down, joined with
+`-`. Two different scope paths that join to the same string, such as
+`'user-service' > 'sessions'` and `'user' > 'service-sessions'`, share those
+resources and overwrite each other's data. Constructing the second one logs a
+warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
+synth`); rename one of the scopes. A future release will reject the collision.
+Constructing the same path again is accepted.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
@@ -179,7 +188,7 @@ The generated client does not hardcode the API URL; it resolves one at first cal
 
 1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
-3. Node only: the file `.blocks-sandbox/config.json`, read from the **process working directory**.
+3. Node.js 22.3 or later only: the file `.blocks-sandbox/config.json`, read from the **process working directory**. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
 4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
 
 Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and `npm run sandbox` sets `BLOCKS_API_URL` on the dev server it spawns. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
@@ -304,14 +313,22 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 ): state is T & { errorName: N }
 ```
 
-`Auth`'s recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+`Auth`'s state machine (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+
+In browser code, submit the action with `submitAuthAction` from `@aws-blocks/blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
 
 ```typescript
-const next = await authApi.setAuthState({ action: 'signIn', username, password });
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { AuthErrors } from '@aws-blocks/bb-auth';
+
+const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
 if (hasAuthError(next, AuthErrors.NotAuthorized)) {
   // unknown user or wrong password → offer sign-up
 }
 ```
+
+To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `@aws-blocks/blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 

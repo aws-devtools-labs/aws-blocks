@@ -28,7 +28,7 @@ EventBridge Scheduler (AWS)
 
 Local Mock
     └── CronJob class (extends Scope)
-         ├── rate schedules: setInterval
+         ├── rate schedules: setInterval (setTimeout steps above ~24.8 days)
          ├── cron schedules: setTimeout → nextCronTime calculation
          └── handler called with CronJobEvent<T>
 ```
@@ -153,7 +153,7 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## Mock Implementation
 
-- **Rate schedules** — `setInterval` with the computed interval in milliseconds. Timer is `unref()`'d to avoid blocking process exit.
+- **Rate schedules** — `setInterval` with the computed interval in milliseconds when it fits a timer (`MAX_TIMEOUT_MS`, 2^31-1 ms, about 24.8 days); a longer interval waits in `setTimeout` steps toward an absolute fire time, fires, then schedules the first slot still in the future on the same cadence, so slots missed during a clock jump (for example sleep) are not run. Timers on both paths are `unref()`'d to avoid blocking process exit.
 - **Cron schedules** — `setTimeout` to the next fire time, computed via `nextCronTime()`. After each fire, the next timeout is scheduled recursively.
 - **Timezone support** — `Intl.DateTimeFormat` with the specified timezone extracts local time components for cron matching.
 - **Console logging** — logs `[CronJob:{id}] triggered at {timestamp}` on each fire, and `[CronJob:{id}] registered (disabled)` when `enabled: false`.

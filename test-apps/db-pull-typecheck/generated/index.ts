@@ -87,7 +87,8 @@ function resolveDbSsl(): { rejectUnauthorized?: true; ca?: string } | { rejectUn
 /**
  * Database instance connected to your Supabase Postgres.
  *
- * RLS caveat: db.crud() (via supabaseCrud()) always enforces RLS.
+ * RLS caveat: db.crud() (via supabaseCrud()) runs every call through
+ * withRLS(), and rlsPolicy: 'enforce' refuses any table without RLS.
  * Raw db.query() / db.execute() / db.transaction() BYPASS RLS.
  * For hand-written queries, use db.withRLS({ userId }) to enforce
  * row-level security — otherwise all rows are visible.
