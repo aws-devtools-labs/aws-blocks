@@ -63,7 +63,9 @@ function isManagedValue(value: unknown): boolean {
  * method is added). Membership is by function identity, so a copy of the method
  * made by spread, `Object.assign` or destructuring is the same function and is
  * refused too, however it reaches the module's exports. Held on a global-registry
- * key so duplicate `@aws-blocks/core` copies in one bundle share one set.
+ * key so duplicate `@aws-blocks/core` copies in one bundle share one set. Meant
+ * for long-lived, bounded method identities (one admin surface per block), not
+ * per-request closures.
  *
  * shortcut: a new function that wraps or `bind`s an admin method is not in the
  * set; that is an application method and needs its own caller check.
