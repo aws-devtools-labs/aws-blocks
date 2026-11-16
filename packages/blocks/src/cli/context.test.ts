@@ -755,7 +755,7 @@ describe('per-app dev config', () => {
 	it('detects next before vite, and runs the backend only without either', () => {
 		assert.strictEqual(resolveDevConfig(fixtureApp({ devDependencies: { vite: '*', next: '*' } })).source, 'next');
 		assert.deepStrictEqual(resolveDevConfig(fixtureApp({ devDependencies: { vite: '*' } })), {
-			frontendCommand: 'npx vite --port 3100 --strictPort',
+			frontendCommand: 'npx vite --host 127.0.0.1 --port 3100 --strictPort',
 			frontendPort: 3100,
 			source: 'vite',
 		});
@@ -764,23 +764,23 @@ describe('per-app dev config', () => {
 
 	it('detects astro and nuxt, and starts each on the frontend port', () => {
 		assert.deepStrictEqual(resolveDevConfig(fixtureApp({ dependencies: { astro: '*' } })), {
-			frontendCommand: 'npx astro dev --port 3100',
+			frontendCommand: 'npx astro dev --host 127.0.0.1 --port 3100',
 			frontendPort: 3100,
 			source: 'astro',
 		});
 		assert.deepStrictEqual(resolveDevConfig(fixtureApp({ devDependencies: { nuxt: '*' } })), {
-			frontendCommand: 'npx nuxt dev --port 3100',
+			frontendCommand: 'npx nuxt dev --host 127.0.0.1 --port 3100 --strictPort',
 			frontendPort: 3100,
 			source: 'nuxt',
 		});
 		assert.strictEqual(
 			resolveDevConfig(fixtureApp({ dependencies: { astro: '*' } }), { 'frontend-port': '3200' }).frontendCommand,
-			'npx astro dev --port 3200',
+			'npx astro dev --host 127.0.0.1 --port 3200',
 		);
 		assert.strictEqual(
 			resolveDevConfig(fixtureApp({ dependencies: { nuxt: '*' }, blocks: { dev: { frontendPort: 3300 } } }))
 				.frontendCommand,
-			'npx nuxt dev --port 3300',
+			'npx nuxt dev --host 127.0.0.1 --port 3300 --strictPort',
 		);
 	});
 
@@ -874,7 +874,7 @@ describe('per-app dev config', () => {
 	it('starts a detected frontend on the resolved frontend port', () => {
 		const vite = fixtureApp({ devDependencies: { vite: '*' } });
 		const flagged = resolveDevConfig(vite, { 'frontend-port': '3200' });
-		assert.strictEqual(flagged.frontendCommand, 'npx vite --port 3200 --strictPort');
+		assert.strictEqual(flagged.frontendCommand, 'npx vite --host 127.0.0.1 --port 3200 --strictPort');
 		assert.strictEqual(flagged.frontendPort, 3200);
 		assert.strictEqual(flagged.source, 'vite');
 		// "blocks.dev" without a frontendCommand keeps detection on, and its frontendPort applies.

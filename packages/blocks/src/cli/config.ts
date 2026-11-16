@@ -55,16 +55,18 @@ const DEFAULT_FRONTEND_PORT = 3100;
  * which Hosting picks the adapter that builds the app, with `vite` last, because Nuxt and Astro apps can
  * list `vite` too and `npx vite` does not serve their pages. A SvelteKit app lists `vite` and runs it.
  *
- * Each command binds the loopback interface and takes the port the dev server proxies to. `vite` exits
- * when the port is taken (`--strictPort`). `nuxt dev` and `astro dev` have no such flag and move to
- * another port, so the app answers 502 until the frontend port is free; the dev server frees a port
- * that an earlier run left bound before it starts the frontend.
+ * Every command binds `127.0.0.1` explicitly, so neither a `HOST` variable in the environment nor a
+ * `host` setting in the framework's config exposes the frontend to the network: the dev server's own
+ * `host` is the only opt-in. Each command also takes the port the dev server proxies to. `vite` and Nuxt 4
+ * exit when the port is taken (`--strictPort`; the Nuxt 3 CLI accepts the flag and ignores it). Nuxt 3
+ * and `astro dev` move to another port, so the app answers 502 until the frontend port is free; the dev
+ * server frees a port that an earlier run left bound before it starts the frontend.
  */
 const FRONTENDS = [
 	{ dependency: 'next', command: (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}` },
-	{ dependency: 'nuxt', command: (port: number) => `npx nuxt dev --port ${port}` },
-	{ dependency: 'astro', command: (port: number) => `npx astro dev --port ${port}` },
-	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
+	{ dependency: 'nuxt', command: (port: number) => `npx nuxt dev --host 127.0.0.1 --port ${port} --strictPort` },
+	{ dependency: 'astro', command: (port: number) => `npx astro dev --host 127.0.0.1 --port ${port}` },
+	{ dependency: 'vite', command: (port: number) => `npx vite --host 127.0.0.1 --port ${port} --strictPort` },
 ] as const;
 
 /**

@@ -108,22 +108,33 @@ export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand
 };
 
 /**
+ * A generated `server.ts`'s `startDevServer` options, and the dependency from which `cdk-blocks dev`
+ * detects the same frontend dev server (`detectedFrom`). The detected command can differ from the one
+ * the `server.ts` ran only by binding `127.0.0.1` explicitly.
+ */
+interface ServerDevOptions extends MigratedDevConfig {
+	detectedFrom?: 'next' | 'vite';
+}
+
+/**
  * The `startDevServer` options of each generated `server.ts`, as `package.json#blocks.dev`.
  * A backend-only `server.ts` passed no frontend, so it ran none whatever the app installed:
  * `"frontend": false` keeps that. The Amplify overlay's `server.ts` (the first entry) also
  * gets `"generateClient": false`: its app commits its own `aws-blocks/client.js` (the Cognito
  * token and the `amplify_outputs.json` API URL), which the dev server would otherwise replace.
  */
-export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
+export const SERVER_DEV_OPTIONS: Readonly<Record<string, ServerDevOptions>> = {
 	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false, generateClient: false },
 	'08368ac37a213cd51b519c6e36f31b0c278185661c2d72cc7ebe1255f8ac5ec7': { port: 3001, frontend: false },
 	dec68f268cc8295cae77c9a3fa073dff55e429dbfb5aeeee60facf081edb8b21: {
 		frontendCommand: 'npx vite --port 3100 --strictPort',
 		frontendPort: 3100,
+		detectedFrom: 'vite',
 	},
 	'7eff7ae484259a0aa43c0722678bd02ed77d058d82cb3948815015db9b4d157f': {
 		frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
 		frontendPort: 3100,
+		detectedFrom: 'next',
 	},
 	aeec58bfc5630ee29c3c0223acda29ccae381a18afd85c653d3efddcd53500ab: {
 		frontendCommand: 'npx next dev --webpack --port 3100',
@@ -829,18 +840,19 @@ export function planMigration(
 
 	const server = byFile.get('server.ts');
 	if (server?.generated && pkg.blocks?.dev === undefined) {
-		const options = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash) ? SERVER_DEV_OPTIONS[server.hash] : {};
-		// `cdk-blocks dev` detects the same command from the dependencies; leaving it out keeps --frontend-port working.
-		const { frontendCommand, ...rest } = options;
-		const detected =
-			frontendCommand !== undefined && options.frontendPort !== undefined
-				? detectFrontend(root)?.command(options.frontendPort)
-				: undefined;
-		result.devConfig = frontendCommand !== undefined && frontendCommand === detected ? rest : options;
+		const { detectedFrom, ...options }: ServerDevOptions = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash)
+			? SERVER_DEV_OPTIONS[server.hash]
+			: {};
+		// `cdk-blocks dev` detects the same dev server from the dependencies; leaving the command out keeps
+		// --frontend-port working.
+		const { frontendCommand: _, ...rest } = options;
+		result.devConfig =
+			detectedFrom !== undefined && detectFrontend(root)?.dependency === detectedFrom ? rest : options;
 	} else if (server === undefined && pkg.blocks?.dev === undefined && isAmplifyOverlay(root)) {
 		// The overlays from before it shipped a server.ts (0.1.0-0.1.15) need the same config:
 		// without it, `cdk-blocks dev` would replace the overlay's own client.js.
-		result.devConfig = { ...SERVER_DEV_OPTIONS[AMPLIFY_SERVER] };
+		const { detectedFrom: _, ...overlay } = SERVER_DEV_OPTIONS[AMPLIFY_SERVER];
+		result.devConfig = overlay;
 	}
 
 	// Delete generated wrappers that nothing references after the rewrite. A
