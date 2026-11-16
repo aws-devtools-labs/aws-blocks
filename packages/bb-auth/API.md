@@ -887,6 +887,8 @@ export interface OidcClientDescriptor<P extends string = string> {
     exchangePath: string;
     providerConfigs: Record<string, OidcProviderConfig>;
     providers: P[];
+    refreshPath: string;
+    sessionPath: string;
     signInBasePath: string;
     signOutPath: string;
 }
@@ -898,6 +900,8 @@ export interface OidcClientHandle<P extends string = string> {
     readonly exchangePath: string;
     readonly providerConfigs: Record<string, OidcProviderConfig>;
     readonly providers: P[];
+    readonly refreshPath: string;
+    readonly sessionPath: string;
     readonly signInBasePath: string;
     readonly signOutPath: string;
     // @internal

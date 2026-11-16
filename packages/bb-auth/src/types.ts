@@ -2062,6 +2062,10 @@ export interface OidcClientDescriptor<P extends string = string> {
 	signInBasePath: string;
 	/** `<base>/authorize-params`: the relay sign-in's parameters (`<base>/authorize-params/<id>`). */
 	authorizeParamsBasePath: string;
+	/** `<base>/session`: `{ user }` for a valid session cookie, else 401. What a native app restores on launch from. */
+	sessionPath: string;
+	/** `<base>/exchange/refresh`: renews bearer tokens from `{ refreshToken }`. Served only with `allowBearerAuth`. */
+	refreshPath: string;
 }
 
 /**
@@ -2086,6 +2090,10 @@ export interface OidcClientHandle<P extends string = string> {
 	readonly signInBasePath: string;
 	/** See {@link OidcClientDescriptor.authorizeParamsBasePath}. */
 	readonly authorizeParamsBasePath: string;
+	/** See {@link OidcClientDescriptor.sessionPath}. */
+	readonly sessionPath: string;
+	/** See {@link OidcClientDescriptor.refreshPath}. */
+	readonly refreshPath: string;
 	/** @internal Transferable serialization. */
 	toJSON(): OidcClientDescriptor<P>;
 }

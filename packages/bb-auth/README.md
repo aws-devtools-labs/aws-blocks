@@ -790,7 +790,8 @@ let user = try await oidc.signIn(provider: .okta, relayTo: "myapp://auth", launc
 
 - **Return URL.** List the app's scheme in `redirects.allowedRelayOrigins`. Desktop loopback (`http://127.0.0.1:<port>`) is always allowed.
 - **Several blocks.** Each block's client carries that block's own paths, so a second federated block with its own `redirects.callbackPath` and `signOutPath` gets a working client too.
-- **Availability.** A provider that can't sign in here (managed login under `npm run dev`) is left out of `providers` at runtime.
+- **Availability.** A provider that can't sign in here (managed login under `npm run dev`), or whose discovery fails, is left out of `providers` at runtime, so the others stay usable.
+- **Restore on launch.** The client also carries the block's `sessionPath` (`GET` answers `{ user }` for a valid session cookie, 401 otherwise).
 - **Web.** A browser receives the plain descriptor. A web frontend uses the `signIn:<id>` actions of `createApi()`, or `createAuthClient()` on another origin ([above](#frontend-on-a-different-origin)).
 
 ## Planning to use Amplify client libraries?

@@ -64,6 +64,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			'exchangePath',
 			'providerConfigs',
 			'providers',
+			'refreshPath',
+			'sessionPath',
 			'signInBasePath',
 			'signOutPath',
 		]);
@@ -73,6 +75,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		assert.strictEqual(descriptor.exchangePath, '/aws-blocks/auth/exchange');
 		assert.strictEqual(descriptor.signOutPath, '/aws-blocks/auth/signout');
 		assert.strictEqual(descriptor.signInBasePath, '/aws-blocks/auth/signin');
+		assert.strictEqual(descriptor.sessionPath, '/aws-blocks/auth/session');
+		assert.strictEqual(descriptor.refreshPath, '/aws-blocks/auth/exchange/refresh');
 		assert.strictEqual(descriptor.authorizeParamsBasePath, '/aws-blocks/auth/authorize-params');
 		// The handle's own fields are the descriptor's, so a server-side caller reads the same values.
 		assert.deepStrictEqual(handle.providers, ['corp']);
@@ -125,6 +129,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		assert.strictEqual(relayed.status, 302, 'the callback relays the code to relayTo');
 		const code = new URL(location(relayed, server.origin)).searchParams.get('code') ?? '';
 
+		assert.strictEqual((await b.fetch(`${server.origin}${d.sessionPath}`)).status, 401, 'no session yet');
+
 		const exchanged = await b.fetch(`${server.origin}${d.exchangePath}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -140,6 +146,10 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		assert.strictEqual(exchanged.status, 200);
 		assert.strictEqual((await exchanged.json()).user.username, 'Alice');
 		assert.strictEqual((await auth.requireAuth(b.context(server.origin))).username, 'Alice');
+		// What a native app restores on launch from: the session route the descriptor names.
+		const restored = await b.fetch(`${server.origin}${d.sessionPath}`);
+		assert.strictEqual(restored.status, 200);
+		assert.strictEqual((await restored.json()).user.username, 'Alice');
 
 		const out = await b.fetch(`${server.origin}${d.signOutPath}`, {
 			method: 'POST',
@@ -148,6 +158,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		});
 		assert.ok(out.status === 204 || out.status === 200, `sign-out answered ${out.status}`);
 		assert.strictEqual(await auth.getCurrentUser(b.context(server.origin)), null);
+		assert.strictEqual((await b.fetch(`${server.origin}${d.sessionPath}`)).status, 401, 'signed out');
 	});
 
 	test("a block with its own redirects gets its own paths, so two blocks' clients don't collide", async () => {
@@ -171,6 +182,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		assert.strictEqual(b.signOutPath, '/aws-blocks/auth/second/signout');
 		assert.strictEqual(b.authorizeParamsBasePath, '/aws-blocks/auth/second/authorize-params');
 		assert.strictEqual(b.signInBasePath, '/aws-blocks/auth/second/signin');
+		assert.strictEqual(b.sessionPath, '/aws-blocks/auth/second/session');
+		assert.strictEqual(b.refreshPath, '/aws-blocks/auth/second/exchange/refresh');
 		assert.notStrictEqual(a.exchangePath, b.exchangePath);
 
 		// The second block's descriptor names a route that block really serves.
@@ -187,6 +200,70 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		assert.deepStrictEqual(d.providers, []);
 		assert.deepStrictEqual(d.providerConfigs, {});
 		assert.strictEqual(d.exchangePath, '/aws-blocks/auth/exchange');
+	});
+
+	test('a provider whose discovery fails is left out, and the others still sign in', async () => {
+		const auth = new Auth(unique(), 'auth', {
+			store: 'builtin',
+			providers: {
+				// Nothing listens on port 9: discovery fails with a connection error.
+				broken: { type: 'oidc', issuer: 'http://127.0.0.1:9', clientId: 'broken' },
+				corp: stubIdp(),
+			},
+		});
+		const d = wire(await getClient(auth.createOidcApi(), new TestBrowser().context(server.origin)));
+		assert.deepStrictEqual(d.providers, ['corp']);
+		assert.deepStrictEqual(Object.keys(d.providerConfigs), ['corp']);
+	});
+
+	test('every field a native SDK reads is always sent, whatever the block is configured with', async () => {
+		// The union of what the SDKs require: Kotlin's OidcClientConfig and ProviderConfig have no
+		// defaults, Dart reads providers, signOutPath and each provider's kind without a fallback.
+		const PATHS = [
+			'callbackPath',
+			'exchangePath',
+			'signOutPath',
+			'signInBasePath',
+			'authorizeParamsBasePath',
+			'sessionPath',
+			'refreshPath',
+		] as const;
+		const configs = {
+			stub: { store: 'builtin', providers: { corp: stubIdp() } },
+			ownRedirects: {
+				store: 'builtin',
+				providers: { corp: stubIdp() },
+				redirects: {
+					callbackPath: '/aws-blocks/auth/own/callback',
+					signOutPath: '/aws-blocks/auth/own/signout',
+				},
+			},
+			unavailable: { providers: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } } },
+			failingDiscovery: {
+				store: 'builtin',
+				providers: { broken: { type: 'oidc', issuer: 'http://127.0.0.1:9', clientId: 'b' } },
+			},
+			noProviders: {},
+		} as const;
+		for (const [name, options] of Object.entries(configs)) {
+			clearRouteRegistry();
+			const auth = new Auth(unique(), 'auth', options);
+			const d = wire(await getClient(auth.createOidcApi(), new TestBrowser().context(server.origin)));
+			assert.strictEqual(d.__blocks, 'oidc/client', name);
+			assert.ok(Array.isArray(d.providers), `${name}: providers is an array`);
+			assert.ok(d.providerConfigs && typeof d.providerConfigs === 'object', `${name}: providerConfigs`);
+			for (const key of PATHS) {
+				assert.ok(typeof d[key] === 'string' && d[key].startsWith('/aws-blocks/auth/'), `${name}: ${key}`);
+			}
+			for (const id of d.providers) {
+				const c = d.providerConfigs[id];
+				assert.ok(c, `${name}: providerConfigs.${id}`);
+				for (const key of ['authorizeUrl', 'clientId', 'kind'] as const) {
+					assert.ok(typeof c[key] === 'string' && c[key].length > 0, `${name}: ${id}.${key}`);
+				}
+				assert.ok(Array.isArray(c.scopes), `${name}: ${id}.scopes`);
+			}
+		}
 	});
 
 	test('a block with no providers returns an empty client rather than failing', async () => {
