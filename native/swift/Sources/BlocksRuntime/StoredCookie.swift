@@ -75,23 +75,26 @@ struct StoredCookie: Codable, Equatable, Sendable {
         self.expiresAt = maxAge.map { now.addingTimeInterval(TimeInterval($0)) } ?? expires
     }
 
-    /// Reads a Keychain item. A value that is not a record was written by an earlier version under
-    /// `host|name`; it is read as what that version sent: `Path=/`, not `Secure`, no expiry.
+    /// Reads a Keychain item written by this version: a JSON record under `host|path|name`.
+    ///
+    /// An item written by an earlier version (see `isEarlierVersionItem`) is not read: it holds only
+    /// the bare value, so the cookie's `Secure` and `Path` attributes are unknown.
     static func decode(account: String, value: String) -> StoredCookie? {
-        if let cookie = try? JSONDecoder().decode(StoredCookie.self, from: Data(value.utf8)) {
-            return cookie
-        }
-        // An earlier version's account is `host|name`; anything else is not a cookie this can read.
-        guard let separator = account.firstIndex(of: "|"),
-              !account[account.index(after: separator)...].contains("|") else { return nil }
-        return StoredCookie(
-            host: String(account[..<separator]),
-            name: String(account[account.index(after: separator)...]),
-            value: value,
-            path: "/",
-            secure: false,
-            expiresAt: nil
-        )
+        try? JSONDecoder().decode(StoredCookie.self, from: Data(value.utf8))
+    }
+
+    /// Whether a Keychain item was written by an earlier version: keyed by `host|name` and holding the
+    /// bare cookie value, without the attributes the server set.
+    ///
+    /// Such an item is not migrated: the format has no `Secure` flag or `Path`, so the transport and
+    /// paths the cookie belongs to can't be determined. The jar removes it instead, as the Kotlin runtime does with its
+    /// earlier entries, so a signed-in user signs in once more after upgrading and the server sets the cookie again with its real attributes.
+    static func isEarlierVersionItem(account: String, value: String) -> Bool {
+        guard decode(account: account, value: value) == nil else { return false }
+        // An earlier version's account has one `|`; this version's has two, so a record of this version
+        // that fails to decode (a damaged item) is left alone rather than taken for an earlier one.
+        guard let separator = account.firstIndex(of: "|") else { return false }
+        return !account[account.index(after: separator)...].contains("|")
     }
 
     /// The record stored as the Keychain item's value.

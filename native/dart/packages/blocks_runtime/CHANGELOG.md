@@ -1,3 +1,10 @@
+## Unreleased
+
+- `PersistentSessionStore` no longer reads the name → value map written before
+  0.2.0: `load()` deletes it and the cookies it held are not used, so users
+  whose session was stored in that format sign in again. A stored cookie
+  record without a `secure` field is read as `Secure`.
+
 ## 0.2.0
 
 - **Breaking for classes that implement or override `BlocksClient`:**

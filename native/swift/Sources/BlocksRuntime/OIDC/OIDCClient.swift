@@ -240,15 +240,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         }
 
         // Step 5: Verify CSRF inside state envelope
-        if let dotIndex = signedState.firstIndex(of: ".") {
-            let payloadB64 = String(signedState[signedState.startIndex ..< dotIndex])
-            if let payloadData = Data(base64URLDecoded: payloadB64),
-               let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-               let returnedCsrf = payload["csrf"] as? String {
-                if returnedCsrf != csrf {
-                    throw OIDCError.stateMismatch
-                }
-            }
+        // The server signs the state as `base64url(JSON payload).signature` (bb-auth state-envelope.ts).
+        // A state that cannot be read as that envelope, or whose payload carries no `csrf` string, fails
+        // the sign-in like a mismatched value does: the client rejects an unreadable state envelope,
+        // matching the Kotlin client's `verifyCsrf`.
+        guard let dotIndex = signedState.firstIndex(of: "."),
+              let payloadData = Data(base64URLDecoded: String(signedState[signedState.startIndex ..< dotIndex])),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let returnedCsrf = payload["csrf"] as? String else {
+            throw OIDCError.stateMismatch
+        }
+        if returnedCsrf != csrf {
+            throw OIDCError.stateMismatch
         }
 
         // Step 6: Exchange code for tokens
@@ -299,6 +302,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             await storeToken("expires_at", Self.stringifyExpiry(json["expiresIn"]))
         }
 
+        // Taken as the exchange response reports it; see `OIDCUser` for what the values may be used for.
         let user = try OIDCUser.fromJSON(userJSON)
         emit(.signedIn(user))
         return user
@@ -398,6 +402,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             return
         }
 
+        // The claims are read from the stored token's payload without checking its signature, so this
+        // user is for display only (see `OIDCUser`). The server verifies the token on every request.
         let user = OIDCUser(
             userId: payload["sub"] as? String ?? "",
             username: payload["username"] as? String ?? "",
@@ -534,6 +540,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         return "0"
     }
 
+    /// Decodes a JWT's payload segment. The signature is not checked: the result is untrusted and is
+    /// only used to show who is signed in, never to decide what the user may do.
     private static func decodeJWTPayload(_ segment: String) -> [String: Any]? {
         var base64 = segment.replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")

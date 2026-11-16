@@ -706,12 +706,14 @@ final class OIDCClientTests: XCTestCase {
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
             if url.path.hasSuffix("/authorize-params/google") {
+                // The state envelope carries the CSRF value the client sent, as the Auth block signs it.
+                let csrf = try XCTUnwrap(requestJSON(request)["csrf"] as? String)
                 let body = try JSONSerialization.data(withJSONObject: [
                     "authorizeUrl": "https://idp.example.com/authorize",
                     "clientId": "cid",
                     "scopes": ["openid"],
                     "kind": "oidc",
-                    "state": "signed-state"
+                    "state": stateEnvelope(["csrf": csrf])
                 ])
                 return (okResponse(for: url), body)
             }
@@ -728,7 +730,7 @@ final class OIDCClientTests: XCTestCase {
             baseUrl: blocksClient.baseUrl,
             client: blocksClient
         )
-        let launcher = CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=signed-state")
+        let launcher = CapturingRelayLauncher(relay: "nativebindings://auth?code=c")
 
         let user = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
 
@@ -745,6 +747,81 @@ final class OIDCClientTests: XCTestCase {
         let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "redirect_uri" }?.value
         XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+    }
+
+    // MARK: - State envelope
+
+    /// Signs in with the authorize-params response's `state` set to `state(csrf)`, where `csrf` is the
+    /// value the client sent, and returns the error the sign-in ends with (nil when it succeeds).
+    private func signInError(state: @escaping @Sendable (String) -> String) async -> Error? {
+        let session = makeMockSession()
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path.hasSuffix("/authorize-params/google") {
+                let csrf = try XCTUnwrap(requestJSON(request)["csrf"] as? String)
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize",
+                    "clientId": "cid",
+                    "scopes": ["openid"],
+                    "state": state(csrf)
+                ])
+                return (okResponse(for: url), body)
+            }
+            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
+            return (okResponse(for: url), body)
+        }
+        let client = makeClient(session: session)
+        let launcher = CapturingRelayLauncher(relay: "myapp://auth?code=c")
+        do {
+            _ = try await client.signIn(provider: "google", relayTo: "myapp://auth", launcher: launcher)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private func assertStateMismatch(_ error: Error?, file: StaticString = #filePath, line: UInt = #line) {
+        guard let oidc = error as? OIDCError else {
+            return XCTFail("Expected OIDCError.stateMismatch, got \(String(describing: error))", file: file, line: line)
+        }
+        XCTAssertEqual(oidc, .stateMismatch, file: file, line: line)
+        // The code exchange is never reached.
+        XCTAssertFalse(
+            OIDCMockURLProtocol.requests.contains { $0.url?.path.hasSuffix("/exchange") == true },
+            file: file, line: line
+        )
+    }
+
+    func testSignInSucceedsWhenTheStateEnvelopeCarriesTheSentCSRFValue() async throws {
+        let error = await signInError { stateEnvelope(["csrf": $0]) }
+        XCTAssertNil(error)
+    }
+
+    func testSignInRejectsAStateEnvelopeWithADifferentCSRFValue() async throws {
+        let error = await signInError { _ in stateEnvelope(["csrf": "other"]) }
+        assertStateMismatch(error)
+    }
+
+    func testSignInRejectsAStateWithoutAnEnvelopeSeparator() async throws {
+        let error = await signInError { _ in "signed-state" }
+        assertStateMismatch(error)
+    }
+
+    func testSignInRejectsAStateEnvelopeWhosePayloadIsNotBase64URL() async throws {
+        let error = await signInError { _ in "!!!not-base64!!!.signature" }
+        assertStateMismatch(error)
+    }
+
+    func testSignInRejectsAStateEnvelopeWhosePayloadIsNotJSON() async throws {
+        let payload = Data("not json".utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        let error = await signInError { _ in "\(payload).signature" }
+        assertStateMismatch(error)
+    }
+
+    func testSignInRejectsAStateEnvelopeWithoutACSRFValue() async throws {
+        let error = await signInError { _ in stateEnvelope(["relayTo": "myapp://auth"]) }
+        assertStateMismatch(error)
     }
 
     func testFromJSONThrowsOnMissingExchangePath() {
@@ -772,7 +849,19 @@ final class OIDCClientTests: XCTestCase {
     }
 }
 
-/// Returns a fixed relay redirect and records the authorize URL it was launched with.
+/// A state envelope as the Auth block signs it: `base64url(JSON payload).signature`. The client
+/// reads the payload only; the server checks the signature.
+private func stateEnvelope(_ payload: [String: String]) -> String {
+    let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+    let encoded = json.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    return "\(encoded).signature"
+}
+
+/// Returns a fixed relay redirect and records the authorize URL it was launched with. When the relay
+/// carries no `state`, the one in the authorize URL is passed back, as the server's relay does.
 private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable {
     private let relay: String
     private(set) var authorizeURL: URL?
@@ -783,6 +872,14 @@ private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable
 
     func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
         self.authorizeURL = authorizeURL
-        return try XCTUnwrap(URL(string: relay))
+        var components = try XCTUnwrap(URLComponents(string: relay))
+        var items = components.queryItems ?? []
+        if !items.contains(where: { $0.name == "state" }),
+           let state = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+               .queryItems?.first(where: { $0.name == "state" })?.value {
+            items.append(URLQueryItem(name: "state", value: state))
+        }
+        components.queryItems = items
+        return try XCTUnwrap(components.url)
     }
 }

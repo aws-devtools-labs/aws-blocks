@@ -83,7 +83,8 @@ public final class FileDownloadHandle: Sendable {
                 throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Downloaded \(data.count) bytes from \(requestURL)")
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Downloaded \(data.count) bytes from \(requestURL.redactedForLogging)")
             return data
         } catch let error as FileBucketError {
             throw error

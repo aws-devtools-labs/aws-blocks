@@ -28,6 +28,10 @@ Sign-in stores the backend's session cookie, which every generated API client se
 backend gates with `requireAuth` work after it. If the backend moves its routes with
 `redirects.callbackPath`, pass that path's directory as `basePath`.
 
+The returned `OidcUser` (and the one in `OidcAuthState.SignedIn`) is for display only: its `userId`
+and `username` are what the exchange response reports, and this client does not verify them. Make
+authorization decisions on the server, where `requireAuth` verifies the session on each request.
+
 `signIn` suspends until the flow finishes. Bringing your window to the front afterwards is the
 app's job; `signIn` returning is the signal.
 

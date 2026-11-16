@@ -18,6 +18,6 @@ responses that arrive together leave the same cookies as if they had arrived in 
 
 Each Keychain item is now keyed by `host|path|name` and holds a JSON record of the cookie and its
 attributes. Items written by earlier versions, keyed by `host|name` and holding the bare value,
-are still read and sent as before (`Path=/`, not `Secure`, no expiry), so a signed-in session
-survives the upgrade; the old item is replaced the next time the server sets that cookie. Items
-written by this version are not readable by earlier versions.
+do not record the cookie's `Secure` or `Path`, so they are not migrated: they are removed instead
+of being sent, as the Kotlin runtime does with its earlier entries, and a signed-in user signs in
+once more after upgrading. Items written by this version are not readable by earlier versions.
