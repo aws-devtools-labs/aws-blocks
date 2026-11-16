@@ -395,3 +395,124 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     }
   });
 });
+
+describe('dev server Origin and Content-Type checks in sandbox mode (API proxied to BLOCKS_API_URL)', () => {
+  let devProcess: ChildProcess | null = null;
+  let upstream: ReturnType<typeof createServer> | null = null;
+  let upstreamHits = 0;
+  let tempDir = '';
+  let port = 0;
+  let output = '';
+
+  function post(
+    headers: Record<string, string>,
+    body = JSON.stringify({ jsonrpc: '2.0', method: 'testApi.ping', params: [], id: 1 }),
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: '127.0.0.1', port, method: 'POST', path: '/aws-blocks/api', headers: { Host: `localhost:${port}`, ...headers } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }));
+        },
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+  }
+
+  before(async () => {
+    // Stub for the deployed sandbox API: answers every request and counts what reaches it.
+    upstream = createServer((req, res) => {
+      upstreamHits++;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', result: 'pong', id: 1 }));
+      });
+    });
+    await new Promise<void>((resolve) => upstream?.listen(0, '127.0.0.1', resolve));
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    tempDir = join(tmpdir(), `dev-origin-check-sandbox-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(join(tempDir, 'backend.ts'), `export const testApi = { ping: async () => 'pong' };\n`);
+    writeFileSync(join(tempDir, 'run-dev.ts'), `
+import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js'))};
+startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port, typegen: false })});
+`);
+    const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+      BLOCKS_DEV_QUIET: '1',
+      BLOCKS_API_URL: `http://127.0.0.1:${upstreamPort}/aws-blocks/api`,
+    };
+    delete env.BLOCKS_DEV_HOST;
+    devProcess = spawn(tsxBin, [join(tempDir, 'run-dev.ts')], { cwd: tempDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    devProcess.stdout?.on('data', (c: Buffer) => { output += c.toString(); });
+    devProcess.stderr?.on('data', (c: Buffer) => { output += c.toString(); });
+
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      try {
+        if ((await post({ 'Content-Type': 'application/json' })).status === 200) return;
+      } catch { /* not listening yet */ }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.fail(`dev server did not start:\n${output}`);
+  });
+
+  after(async () => {
+    if (devProcess && devProcess.exitCode === null) {
+      const exited = new Promise<void>((resolve) => devProcess?.once('exit', () => resolve()));
+      devProcess.kill('SIGTERM');
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 3_000))]);
+      if (devProcess.exitCode === null) devProcess.kill('SIGKILL');
+    }
+    await new Promise<void>((resolve) => (upstream ? upstream.close(() => resolve()) : resolve()));
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('refuses a POST from a foreign Origin with 403 and never forwards it to the sandbox API', async () => {
+    for (const contentType of ['application/json', 'text/plain;charset=UTF-8']) {
+      for (const origin of ['https://evil.example', 'null']) {
+        const before = upstreamHits;
+        const res = await post({ 'Content-Type': contentType, Origin: origin });
+        assert.strictEqual(res.status, 403, `${contentType} from ${origin} → ${res.status} ${res.body}`);
+        assert.strictEqual(upstreamHits, before, `${contentType} from ${origin}: forwarded to the sandbox API`);
+      }
+    }
+  });
+
+  it('refuses an RPC body that is not declared application/json with 415 and never forwards it', async () => {
+    for (const contentType of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x', undefined]) {
+      const before = upstreamHits;
+      const res = await post(contentType === undefined ? {} : { 'Content-Type': contentType });
+      assert.strictEqual(res.status, 415, `Content-Type: ${contentType} → ${res.status} ${res.body}`);
+      assert.match(res.body, /UnsupportedMediaType/);
+      assert.strictEqual(upstreamHits, before, `Content-Type: ${contentType}: forwarded to the sandbox API`);
+    }
+  });
+
+  it('still forwards an application/json POST from a loopback Origin or with no Origin', async () => {
+    const cases: Record<string, string>[] = [
+      { 'Content-Type': 'application/json', Origin: 'http://localhost:5173' },
+      { 'Content-Type': 'application/json', Origin: `http://localhost:${port}` },
+      { 'Content-Type': 'application/json; charset=utf-8' },
+    ];
+    for (const headers of cases) {
+      const before = upstreamHits;
+      const res = await post(headers);
+      assert.strictEqual(res.status, 200, `${JSON.stringify(headers)} → ${res.status} ${res.body}`);
+      assert.match(res.body, /pong/);
+      assert.strictEqual(upstreamHits, before + 1, `${JSON.stringify(headers)}: not forwarded`);
+    }
+  });
+});

@@ -13,7 +13,7 @@ import { writeClientCode } from './generate-client.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
-import { CORS_MAX_AGE } from '../cors.js';
+import { CORS_MAX_AGE, corsRejection } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import { createDispatcher, rpcResponseHeaders, type Dispatcher } from '../dispatch.js';
 import {
@@ -1154,6 +1154,10 @@ export async function startDevServer(options: DevServerOptions) {
     // ── API/RawRoute requests ──────────────────────────────────────────
     if (isApiRequest(method, url.pathname)) {
       if (isSandbox && apiProxy) {
+        // The dispatcher and handleApiRequest apply the Origin and Content-Type
+        // checks to local requests; a request proxied to the sandbox API gets
+        // the same checks here, before it is forwarded with the browser's cookies.
+        if (refuseProxiedApiRequest(req, res, url, method, host)) return;
         apiProxy.web(req, res);
         return;
       }
@@ -1704,6 +1708,44 @@ function unsupportedMediaTypeResponse(): string {
     null,
     { name: 'UnsupportedMediaType' },
   );
+}
+
+/**
+ * Apply the local dispatcher's request checks to an API request the dev server
+ * proxies to the deployed sandbox API (`BLOCKS_API_URL`): a state-changing
+ * request from a foreign `Origin` gets the dispatcher's 403 (see
+ * {@link rejectsDevRequestOrigin}), and a JSON-RPC `POST` whose body isn't
+ * declared `application/json` gets the 415 envelope (see
+ * {@link isJsonRpcContentType}). Returns `true` when it answered the request,
+ * which then must not be forwarded. The CORS headers are already set on `res`.
+ */
+function refuseProxiedApiRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  method: string,
+  bindHost: string,
+): boolean {
+  const origin = req.headers.origin;
+  let status: number;
+  let headers: Record<string, string>;
+  let body: string;
+  if (origin && rejectsDevRequestOrigin(origin, method, req.headers.host, bindHost)) {
+    ({ statusCode: status, headers, body } = corsRejection());
+  } else if (method === 'POST' && isRpcPath(url.pathname) && !isJsonRpcContentType(req.headers['content-type'])) {
+    status = 415;
+    headers = rpcResponseHeaders({});
+    body = unsupportedMediaTypeResponse();
+  } else {
+    return false;
+  }
+  // Drain the unread body before answering, so the response isn't lost to a reset.
+  void discardRemainingBody(req).then(() => {
+    if (!req.complete) res.setHeader('Connection', 'close');
+    res.writeHead(status, headers);
+    res.end(body);
+  });
+  return true;
 }
 
 function handleApiRequest(
