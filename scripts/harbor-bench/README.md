@@ -96,7 +96,8 @@ took at most 1,125 s, p95 882 s, over 284 trials). `run.py --credentials-expire-
 that deadline and records the trial as an infrastructure error (`outlived_credentials`), since its
 late phases could fail on expired credentials alone. The session is tied to the run step: it is
 assumed directly before that step, it is no longer than `run.py`'s own 6,000 s Harbor timeout, and
-the step's `timeout-minutes` (47) stops it at most 180 s after the session ends.
+the step's `timeout-minutes` (47) stops it about 2 minutes after the session ends (the test
+allows at most 180 s).
 `scripts/ci/harbor-credentials.test.mjs` checks all three. A run that finishes early does not
 revoke the session: it stays valid until it expires.
 
@@ -211,7 +212,8 @@ machine: `calibrate.py` never uploads.
 - Optional environment secret **`AWS_TRACES_ROLE_ARN`** and variable **`HARBOR_TRACES_BUCKET`**:
   a role trusted for the same subject (max session 3600 s; the workflow asks for 900 s) that may
   only `s3:PutObject` under `harbor/v1/*` in a private bucket (Block Public Access,
-  owner-enforced, encrypted, TLS-only, expiring objects). Unset means traces stay on the runner and are discarded.
+  owner-enforced, encrypted, TLS-only, expiring objects). Unset means traces stay on the runner
+  and are discarded.
 
 ```sh
 gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref main -f pr_number=123 -f trials=5

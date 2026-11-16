@@ -178,7 +178,8 @@ jobs:
       # (p95 882 s) over 284 trials; 2,700 s is three times the p95 and leaves room for Bedrock
       # throttling at higher trial counts. The session starts right before the run step, and that
       # step's deadline is the session: run.py stops Harbor at it and reports the trial as an
-      # infrastructure error, and the step's timeout-minutes stops the step at most 180 s later.
+      # infrastructure error, and the step's timeout-minutes stops the step about 2 minutes later
+      # (the test allows at most 180 s).
       # Ending early does not revoke the session; it stays valid until it expires.
       # scripts/ci/harbor-credentials.test.mjs keeps it 900-3600 and tied to the run step.
       HARBOR_SESSION_SECONDS: 2700
