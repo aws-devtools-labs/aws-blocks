@@ -573,7 +573,7 @@ function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
     origin: event.headers?.origin || event.headers?.Origin || '',
     // Extract cookies from the inbound request (both header casings occur).
     cookie: event.headers?.cookie || event.headers?.Cookie || '',
-    clientUserAgent: event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    clientUserAgent: singleEventHeader(event, CLIENT_USER_AGENT_HEADER),
     headers: () => new Headers(event.headers || {}),
     url: () => buildEventUrl(event),
     baseUrl: () => buildEventBaseUrl(event),
