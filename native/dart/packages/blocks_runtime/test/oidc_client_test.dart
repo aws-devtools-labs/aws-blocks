@@ -853,6 +853,120 @@ void main() {
   });
 
   group('OidcClient fromJson', () {
+    Matcher descriptorError(String message) => throwsA(
+      isA<FormatException>().having((e) => e.message, 'message', message),
+    );
+
+    test('names a missing exchangePath', () {
+      expect(
+        () => OidcClient.fromJson(
+          {
+            '__blocks': 'oidc/client',
+            'providers': ['google'],
+            'sessionPath': '/aws-blocks/auth/session',
+            'signOutPath': '/aws-blocks/auth/signout',
+          },
+          baseUrl: 'http://localhost:3001',
+          tokenStore: InMemoryTokenStore(),
+        ),
+        descriptorError(
+          "OidcClient for 'oidc/client' is missing the required field "
+          "'exchangePath'",
+        ),
+      );
+    });
+
+    test('names a null exchangePath', () {
+      expect(
+        () => OidcClient.fromJson(
+          {'__blocks': 'oidc/client', 'exchangePath': null},
+          baseUrl: 'http://localhost:3001',
+          tokenStore: InMemoryTokenStore(),
+        ),
+        descriptorError(
+          "OidcClient for 'oidc/client' is missing the required field "
+          "'exchangePath'",
+        ),
+      );
+    });
+
+    test('names an exchangePath that is not a string', () {
+      expect(
+        () => OidcClient.fromJson(
+          {'__blocks': 'oidc/client', 'exchangePath': 42},
+          baseUrl: 'http://localhost:3001',
+          tokenStore: InMemoryTokenStore(),
+        ),
+        descriptorError(
+          "OidcClient for 'oidc/client' expected 'exchangePath' to be a "
+          'String, got int',
+        ),
+      );
+    });
+
+    test('derives the routes it is not sent from the exchange route', () {
+      final client = OidcClient.fromJson(
+        {
+          '__blocks': 'oidc/client',
+          'exchangePath': '/aws-blocks/auth/sso/exchange',
+        },
+        baseUrl: 'http://localhost:3001',
+        tokenStore: InMemoryTokenStore(),
+      );
+      expect(client.providers, isEmpty);
+      expect(client.providerConfigs, isEmpty);
+      expect(client.refreshPath, '/aws-blocks/auth/sso/exchange/refresh');
+      expect(client.sessionPath, '/aws-blocks/auth/sso/session');
+      expect(client.signOutPath, '/aws-blocks/auth/sso/signout');
+      expect(client.callbackPath, '/aws-blocks/auth/sso/callback');
+      expect(
+        client.authorizeParamsBasePath,
+        '/aws-blocks/auth/sso/authorize-params',
+      );
+    });
+
+    test(
+      'reads sessionPath and refreshPath when the descriptor sends them',
+      () {
+        final client = OidcClient.fromJson(
+          {
+            '__blocks': 'oidc/client',
+            'providers': ['google'],
+            'exchangePath': '/custom/exchange',
+            'sessionPath': '/custom/me',
+            'refreshPath': '/custom/renew',
+            'signOutPath': '/custom/logout',
+          },
+          baseUrl: 'http://localhost:3001',
+          tokenStore: InMemoryTokenStore(),
+        );
+        expect(client.sessionPath, '/custom/me');
+        expect(client.refreshPath, '/custom/renew');
+        expect(client.signOutPath, '/custom/logout');
+      },
+    );
+
+    test('accepts a provider config without a kind', () {
+      final client = OidcClient.fromJson(
+        {
+          '__blocks': 'oidc/client',
+          'providers': ['google'],
+          'providerConfigs': {
+            'google': {
+              'authorizeUrl': 'https://idp.example.com/authorize',
+              'clientId': 'cid',
+              'scopes': ['openid'],
+            },
+          },
+          'exchangePath': '/aws-blocks/auth/exchange',
+          'signOutPath': '/aws-blocks/auth/signout',
+        },
+        baseUrl: 'http://localhost:3001',
+        tokenStore: InMemoryTokenStore(),
+      );
+      expect(client.providerConfigs['google']!.kind, '');
+    });
+
     test('parses descriptor correctly', () {
       final descriptor = {
         'exchangePath': '/auth/exchange',

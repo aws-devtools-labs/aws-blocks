@@ -22,6 +22,16 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- `OidcClient.fromJson` reads the descriptor's `sessionPath` and
+  `refreshPath` when it sends them, and otherwise derives them, and a missing
+  `signOutPath`, `callbackPath` or `authorizeParamsBasePath`, from the
+  directory of `exchangePath`, as `Auth` mounts them. The last two used to
+  fall back to the default block's routes, so a block mounted elsewhere
+  signed in against the wrong ones.
+  A descriptor without `providers` or `providerConfigs`, or with a provider
+  config that has no `kind`, now hydrates instead of throwing a `TypeError`.
+  One without `exchangePath`, which every route is found from, throws a
+  `FormatException` naming the field.
 - Add `OidcClient.authState`, the current sign-in state: the state most
   recently added to `authStateChanges`, or `OidcLoading` before the first one.
   An app can read it once, such as on launch after `restore()`, without

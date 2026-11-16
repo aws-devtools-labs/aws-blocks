@@ -27,3 +27,29 @@ Map<String, dynamic> validateTransferableDescriptor(
   }
   return json;
 }
+
+/// The [field] of a transferable [descriptor] for [tag] that the client
+/// can't work without. Throws a [FormatException] naming [field] when it is
+/// missing or is not a [T], as [validateTransferableDescriptor] does for the
+/// tag, instead of the `TypeError` of a cast.
+///
+/// Not exported: the package's descriptor errors are raised here and in
+/// [validateTransferableDescriptor].
+T requireDescriptorField<T extends Object>(
+  Map<String, dynamic> descriptor,
+  String field, {
+  required String tag,
+  String subject = 'Transferable',
+}) {
+  final value = descriptor[field];
+  if (value is T) return value;
+  if (value == null) {
+    throw FormatException(
+      "$subject for '$tag' is missing the required field '$field'",
+    );
+  }
+  throw FormatException(
+    "$subject for '$tag' expected '$field' to be a $T, got "
+    '${value.runtimeType}',
+  );
+}

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:blocks_runtime/src/transferable_descriptor.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
@@ -741,6 +742,15 @@ class OidcClient implements AuthProvider {
   /// keys prefixed with the directory of the descriptor's `exchangePath`
   /// (such as `/aws-blocks/auth/access_token`), so the clients of several
   /// blocks can share one token store.
+  ///
+  /// Only `exchangePath` is required: a descriptor without it, or with a
+  /// non-string one, throws a [FormatException] naming the field. The session
+  /// and refresh routes come from the descriptor's `sessionPath` and
+  /// `refreshPath` when it sends them, and otherwise from the directory of
+  /// `exchangePath`, as `Auth` mounts them; so do `signOutPath`,
+  /// `callbackPath` and `authorizeParamsBasePath`. Missing `providers` or
+  /// `providerConfigs` mean none, and a provider config without a `kind` gets
+  /// an empty one.
   static OidcClient fromJson(
     Map<String, dynamic> descriptor, {
     required String baseUrl,
@@ -748,29 +758,44 @@ class OidcClient implements AuthProvider {
     SessionStore? sessionStore,
     http.Client? httpClient,
   }) {
-    final providers = (descriptor['providers'] as List<dynamic>).cast<String>();
-    final configsJson = descriptor['providerConfigs'] as Map<String, dynamic>;
+    // Every route is found from the exchange route, so without it the
+    // client can't work. A field the runtime can derive or do without falls
+    // back to the `Auth` block's own value instead of failing the call that
+    // returned it. Missing provider configs only fail `signIn` for that
+    // provider; `signInRelay` reads the provider's authorize params from the
+    // server.
+    final exchangePath = requireDescriptorField<String>(
+      descriptor,
+      'exchangePath',
+      tag: 'oidc/client',
+      subject: 'OidcClient',
+    );
+    final base = _directoryOf(exchangePath);
+    final providers =
+        (descriptor['providers'] as List<dynamic>?)?.cast<String>() ??
+        const <String>[];
+    final configsJson =
+        descriptor['providerConfigs'] as Map<String, dynamic>? ?? const {};
     final providerConfigs = configsJson.map(
       (k, v) => MapEntry(k, ProviderConfig.fromJson(v as Map<String, dynamic>)),
     );
     return OidcClient(
-      exchangePath: descriptor['exchangePath'] as String,
+      exchangePath: exchangePath,
       refreshPath:
-          descriptor['refreshPath'] as String? ??
-          '${descriptor['exchangePath'] as String}/refresh',
-      signOutPath: descriptor['signOutPath'] as String,
+          descriptor['refreshPath'] as String? ?? '$exchangePath/refresh',
+      sessionPath: descriptor['sessionPath'] as String? ?? '$base/session',
+      signOutPath: descriptor['signOutPath'] as String? ?? '$base/signout',
       authorizeParamsBasePath:
           descriptor['authorizeParamsBasePath'] as String? ??
-          defaultAuthorizeParamsBasePath,
-      callbackPath:
-          descriptor['callbackPath'] as String? ?? defaultCallbackPath,
+          '$base/authorize-params',
+      callbackPath: descriptor['callbackPath'] as String? ?? '$base/callback',
       providers: providers,
       providerConfigs: providerConfigs,
       baseUrl: baseUrl,
       tokenStore: tokenStore,
       sessionStore: sessionStore,
       httpClient: httpClient,
-    ).._keyPrefix = '${_directoryOf(descriptor['exchangePath'] as String)}/';
+    ).._keyPrefix = '$base/';
   }
 
   /// [path] up to its last `/`, or `''` when it has none.

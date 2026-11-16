@@ -78,7 +78,8 @@ class ProviderConfig {
       authorizeUrl: json['authorizeUrl'] as String,
       clientId: json['clientId'] as String,
       scopes: (json['scopes'] as List<dynamic>).cast<String>(),
-      kind: json['kind'] as String,
+      // A descriptor from an older backend may leave `kind` out.
+      kind: json['kind'] as String? ?? '',
     );
   }
 }
