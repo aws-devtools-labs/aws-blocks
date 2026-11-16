@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
-import semver from 'semver';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1051,7 +1051,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   printTypeScriptSteps(existingPkg);
   // Only a backend that hosts the app builds its Next.js; the backend-only templates define no `Hosting`.
   const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
-  if (backendStack.includes('new Hosting(')) await warnIfNextOutsideHostingRange(targetDir, existingPkg);
+  if (backendStack.includes('new Hosting(')) await warnIfNextOutsideHostingRange(targetDir, awsBlocksDest);
 }
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
@@ -1108,45 +1108,76 @@ function printTypeScriptSteps(pkg: PackageDeps): void {
   console.log('');
 }
 
-/**
- * The `next` versions `Hosting` builds as a server-rendered app when the project
- * installs no `@opennextjs/aws`: the `next` peer range of the OpenNext version its
- * Next.js adapter then builds with. A copy of `OPENNEXT_FALLBACK_NEXT_PEER_RANGE`
- * in `@aws-blocks/hosting` (`src/adapters/nextjs.ts`), which create-blocks-app does
- * not depend on at runtime; `cli.test.ts` checks that the two are equal.
- */
-export const HOSTING_NEXT_RANGE = '>=15.5.28 <16 || >=16.4.1';
+/** The root directory of the installed package `name` that `file`, one of its files, belongs to. */
+function packageRootOf(file: string, name: string): string {
+  for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+    try {
+      if (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).name === name) return dir;
+    } catch {
+      // No readable package.json here: keep walking up.
+    }
+  }
+  throw new Error(`Cannot find the package root of ${name} from ${file}`);
+}
 
 /**
- * Warns when an existing project's `next` is outside the range `Hosting` builds as a
- * server-rendered app, so the project hears of it here and not first from the
- * hosting build of its first deploy. It is the check the Next.js adapter of
- * `@aws-blocks/hosting` makes before its OpenNext build: the range is the `next` peer
- * range of the installed `@opennextjs/aws`, else {@link HOSTING_NEXT_RANGE}. The
- * version is the installed `next`, else the range package.json declares, which is
- * outside only when no version it allows is inside (a tag or a path says nothing).
+ * The file of `@aws-blocks/hosting/<subpath>` that the project's backend builds with,
+ * resolved as Node resolves the backend's own imports: from `aws-blocks/` to
+ * `@aws-blocks/blocks`, then the `@aws-blocks/core` that it imports `Hosting` from,
+ * then that core's `@aws-blocks/hosting`. Never this CLI's own copy, which can be
+ * another release. Throws when any of them is not installed or `subpath` is not exported.
+ */
+function resolveProjectHosting(backendDir: string, subpath: string): string {
+  let from = join(backendDir, 'index.cdk.ts');
+  for (const name of ['@aws-blocks/blocks', '@aws-blocks/core']) {
+    from = join(packageRootOf(createRequire(from).resolve(name), name), 'package.json');
+  }
+  return createRequire(from).resolve(`@aws-blocks/hosting/${subpath}`);
+}
+
+/** `value[key]` when it is a string. */
+function stringField(value: object, key: string): string | undefined {
+  const field: unknown = Reflect.get(value, key);
+  return typeof field === 'string' ? field : undefined;
+}
+
+/**
+ * Warns when an existing project's installed `next` is outside the range `Hosting`
+ * builds as a server-rendered app, so the project hears of it here and not first from
+ * the hosting build of its first deploy. The verdict is the project's own Hosting's:
+ * `checkNextjsCompatibility` from the `@aws-blocks/hosting/nextjs-compatibility` its
+ * backend resolves (see resolveProjectHosting), the check its Next.js adapter makes
+ * before the OpenNext build. This CLI carries no range of its own. Silent when that
+ * Hosting is not installed (`--skip-install`), predates the export, throws, or has no
+ * verdict (no installed `next`): the hosting build stays the first check then.
  * Printed, never applied: upgrading `next` is the project's step.
  */
-async function warnIfNextOutsideHostingRange(targetDir: string, pkg: PackageDeps): Promise<void> {
-  const declared = pkg.dependencies?.next ?? pkg.devDependencies?.next;
-  if (typeof declared !== 'string') return;
-  // What the project's own node_modules holds of each package: its package.json, or `undefined`.
-  const [openNext, next] = await Promise.all(
-    ['@opennextjs/aws', 'next'].map((name) =>
-      readFile(join(targetDir, 'node_modules', name, 'package.json'), 'utf-8').then((text) => JSON.parse(text), () => undefined),
-    ),
-  );
-  const range: unknown = openNext ? openNext.peerDependencies?.next : HOSTING_NEXT_RANGE;
-  if (typeof range !== 'string' || !semver.validRange(range)) return;
-  const version: string | undefined = typeof next?.version === 'string' && semver.valid(next.version) ? next.version : undefined;
-  // `includePrerelease`, as in the adapter: a canary inside the range is not a mismatch.
-  const inside = version
-    ? semver.satisfies(version, range, { includePrerelease: true })
-    : !semver.validRange(declared) || semver.intersects(declared, range, { includePrerelease: true });
-  if (inside) return;
-  console.log(`⚠️  Next.js: this project has next@${version ?? declared}. \`Hosting\` builds a server-rendered Next.js app with OpenNext,`);
-  console.log(`   which supports next ${range}. Outside that range the hosting build warns and goes on`);
-  console.log('   with a combination OpenNext was not released for. Upgrading `next` is up to you: nothing was changed.');
+async function warnIfNextOutsideHostingRange(targetDir: string, backendDir: string): Promise<void> {
+  let result: unknown;
+  try {
+    // A runtime path: the module is the project's installed Hosting, not a dependency of this CLI.
+    const compatibility: Record<string, unknown> = await import(
+      pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href
+    );
+    const check = compatibility.checkNextjsCompatibility;
+    if (typeof check !== 'function') return;
+    result = check(targetDir);
+  } catch {
+    return;
+  }
+  if (typeof result !== 'object' || result === null || Reflect.get(result, 'supported') !== false) return;
+  const nextVersion = stringField(result, 'nextVersion');
+  const nextRange = stringField(result, 'nextRange');
+  if (!nextVersion || !nextRange) return;
+  const openNextVersion = stringField(result, 'openNextVersion');
+  const source = stringField(result, 'openNextSource');
+  const origin = source === 'installed' ? ', the one this project installs,'
+    : source === 'fallback' ? ', which Hosting builds with when the project installs none,' : '';
+  const openNext = openNextVersion ? `@opennextjs/aws@${openNextVersion}${origin}` : 'OpenNext';
+  console.log(`⚠️  Next.js: this project has next@${nextVersion}. \`Hosting\` builds a server-rendered Next.js app with OpenNext,`);
+  console.log(`   and ${openNext} supports next ${nextRange}.`);
+  console.log('   Outside that range the hosting build warns and goes on with a combination OpenNext was not released for.');
+  console.log('   Upgrading `next` is up to you: nothing was changed.');
   console.log('   A static export (`output: \'export\'`, hosted with `framework: \'static\'`) has no minimum version.');
   console.log('');
 }
