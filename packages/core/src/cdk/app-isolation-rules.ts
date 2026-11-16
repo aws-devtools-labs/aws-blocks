@@ -144,10 +144,17 @@ export interface AppViolation {
 	path?: string;
 }
 
-/** Whether `name` belongs to app `id` (see the module doc). */
-export function isUnderAppPrefix(name: string, id: string): boolean {
+/**
+ * Whether `name` belongs to app `id` (see the module doc), for a resource of
+ * `service`. Every service's names start with `<id>-`; only SSM parameters may
+ * also be `<id>` or `<id>/…`, as in the boundary (`OwnParameters`). A table,
+ * queue, bucket or function named `<id>` or `<id>/…` is outside the app: the
+ * boundary allows only `<id>-*` there, so the grant would be denied at runtime.
+ */
+export function isUnderAppPrefix(name: string, id: string, service?: string): boolean {
 	const n = name.startsWith('/') ? name.slice(1) : name;
-	return n === id || n.startsWith(`${id}-`) || n.startsWith(`${id}/`);
+	if (n.startsWith(`${id}-`)) return true;
+	return service === 'ssm' && (n === id || n.startsWith(`${id}/`));
 }
 
 /**
@@ -556,8 +563,8 @@ export function checkStatement(
 		const within = hostingStore
 			? bare.startsWith(`blocks/${id}/`)
 			: name.includes(TOKEN)
-				? isUnderAppPrefix(bare, id) || `${id}-`.startsWith(bare)
-				: isUnderAppPrefix(bare, id);
+				? isUnderAppPrefix(bare, id, parsed.service) || `${id}-`.startsWith(bare)
+				: isUnderAppPrefix(bare, id, parsed.service);
 		if (!within) {
 			const asset = parsed.service === 's3' && /^cdk-[^-]+-assets-/.test(bare);
 			const api = parsed.service === 'execute-api' || parsed.service === 'apigateway';
@@ -715,7 +722,7 @@ export function checkRole(
 
 /** `stack-name-outside-app` when a stack name doesn't start with the app's prefix. */
 export function checkStackName(stackName: string, id: string): AppViolation[] {
-	if (isUnderAppPrefix(stackName, id) && !stackName.startsWith(`${id}/`)) return [];
+	if (stackName === id || stackName.startsWith(`${id}-`)) return [];
 	return [
 		{
 			rule: 'stack-name-outside-app',

@@ -11,6 +11,7 @@ import {
 	checkApiChild,
 	checkResourcePolicy,
 	checkRole,
+	checkStackName,
 	checkStatement,
 } from './app-isolation-rules.js';
 
@@ -116,6 +117,28 @@ describe('app-isolation rules — statements fail closed', () => {
 			const s = { Effect: 'Allow', Action: action, Resource: 'arn:aws:lambda:us-east-1:111111111111:function:appb-Handler' };
 			assert.deepStrictEqual(rules(checkStatement(s, 'appa', 'p')), ['grant-outside-app'], action);
 		}
+	});
+
+	test('the bare <id> and <id>/… forms are the app\'s own only for SSM parameters, as in the boundary', () => {
+		const grant = (action: string, resource: string) => checkStatement({ Effect: 'Allow', Action: action, Resource: resource }, 'appa', 'p');
+		const arn = 'arn:aws:%s:us-east-1:111111111111:';
+		for (const [action, resource] of [
+			['dynamodb:GetItem', `${arn.replace('%s', 'dynamodb')}table/appa`],
+			['dynamodb:GetItem', `${arn.replace('%s', 'dynamodb')}table/appa/index/x`],
+			['sqs:SendMessage', `${arn.replace('%s', 'sqs')}appa`],
+			['s3:GetObject', 'arn:aws:s3:::appa/x'],
+			['lambda:InvokeFunction', `${arn.replace('%s', 'lambda')}function:appa`],
+			['logs:PutLogEvents', `${arn.replace('%s', 'logs')}log-group:/aws/lambda/appa:*`],
+		]) {
+			assert.deepStrictEqual(rules(grant(action, resource)), ['grant-outside-app'], resource);
+		}
+		for (const name of ['appa', 'appa/x', 'appa-x']) {
+			assert.deepStrictEqual(grant('ssm:GetParameter', `${arn.replace('%s', 'ssm')}parameter/${name}`), [], name);
+		}
+		assert.deepStrictEqual(grant('dynamodb:GetItem', `${arn.replace('%s', 'dynamodb')}table/appa-items`), []);
+		assert.deepStrictEqual(checkStackName('appa', 'appa'), []);
+		assert.deepStrictEqual(checkStackName('appa-web', 'appa'), []);
+		assert.deepStrictEqual(rules(checkStackName('appa/x', 'appa')), ['stack-name-outside-app']);
 	});
 
 	test("another app's CDK asset bucket is outside; the app's own is inside", () => {
