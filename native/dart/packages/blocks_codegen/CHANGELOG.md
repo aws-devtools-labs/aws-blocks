@@ -1,14 +1,15 @@
 ## Unreleased
 
 - **Breaking:** generated clients no longer send a realtime channel, a file
-  handle or an OIDC client back to the server, which 0.2.0 added. One passed as
-  a parameter, or inside a model, list, map, tuple or union variant a call
-  sends, fails again when the call is encoded (`JsonUnsupportedObjectError`), as
-  before 0.2.0, because `blocks_runtime`'s transferables no longer have
-  `toJson()`. The server never turns such a value back into a live object, so
-  pass the plain values the method needs instead. Decoding transferables,
-  including inside models, lists, maps and realtime messages, is unchanged.
-  Requires `blocks_runtime` with the matching change.
+  handle or an OIDC client back to the server, which 0.2.0 added. A method
+  with a transferable parameter (direct, optional, nullable, in a list, map
+  or tuple, or held by a model at any depth) is a generation error naming the
+  method and parameter, as in Kotlin, because `blocks_runtime`'s
+  transferables no longer have `toJson()` and the server never turns such a
+  value back into a live object. Pass the plain values the method needs
+  instead. Decoding transferables, including inside models, lists, maps and
+  realtime messages, is unchanged. Requires `blocks_runtime` with the
+  matching change.
 - **Breaking for apps whose spec names an OIDC client's providers:** a method
   whose direct or optional result is an `oidc/client` with a string enum in
   `x-blocks-type-args[0]` now generates an enum of those providers,
