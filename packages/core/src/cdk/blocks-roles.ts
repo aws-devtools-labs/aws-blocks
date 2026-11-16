@@ -309,6 +309,9 @@ export function snapshotForHosting(hosting: Construct): HostingSnapshot {
 	return { stack: snapshotChildren(cdk.Stack.of(hosting)), stage: stage ? snapshotChildren(stage) : new Set() };
 }
 
+/** CDK's Lambda@Edge stack (`edge-lambda-stack-<hash>`), or the `<app id>-edge` one under `defaults.appIdentity`. */
+const isEdgeStackName = (id: string): boolean => id.startsWith('edge-lambda-stack-') || id.endsWith('-edge');
+
 /**
  * Cover a `Hosting` construct's roles on behalf of the backend it fronts
  * (`owner`): its subtree, the stack-level singletons and the helper stacks it
@@ -344,8 +347,9 @@ export function coverHosting(
 	// The edge stack is CDK's `edge-lambda-stack-<hash>`, or `<app id>-edge` under
 	// `defaults.appIdentity`. `EdgeFunction` keeps the real function in its private
 	// `_edgeFunction`, so that function's own stack is the edge stack exactly;
-	// if a CDK version drops the field, fall back to a dependency holding a child
-	// with the edge function's id.
+	// if a CDK version drops the field, fall back to a dependency that is named as
+	// an edge stack (`edge-lambda-stack-…` or `…-edge`) and holds a child with the
+	// edge function's id, so an unrelated stack's same-named child never counts.
 	const edgeStacks: cdk.Stack[] = [];
 	const addEdge = (edgeStack: cdk.Stack, scope: IConstruct) => {
 		coverScope(coverage, scope);
@@ -359,6 +363,7 @@ export function coverHosting(
 			continue;
 		}
 		for (const dependency of stack.dependencies) {
+			if (!isEdgeStackName(dependency.node.id)) continue;
 			const peer = dependency.node.tryFindChild(fn.node.id);
 			if (peer) addEdge(dependency, peer);
 		}

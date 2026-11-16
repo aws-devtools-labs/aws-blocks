@@ -32,7 +32,7 @@ import {
 } from './cdk/api-front-door.js';
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksKmsKey, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, coverHosting, forEachBlocksKmsKey, forEachBlocksRole, snapshotForHosting } from './cdk/blocks-roles.js';
 import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
@@ -2686,6 +2686,28 @@ describe('Hosting', () => {
           (r.Properties?.Tags as { Key: string; Value: string }[] | undefined)?.some((t) => t.Key === 'app' && t.Value === 'appa'),
           'edge role tagged app=appa',
         );
+      }
+    });
+
+    it('without EdgeFunction._edgeFunction, only a CDK- or app-named dependency stack is the edge stack (no appIdentity)', () => {
+      for (const edgeId of ['edge-lambda-stack-c8abc123', 'appa-edge']) {
+        const app = new App();
+        const env = { account: '123456789012' };
+        const stack = new Stack(app, 'appa', { env: { ...env, region: 'eu-west-1' } });
+        const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+        // A real edge stack, and an unrelated dependency that happens to hold a child with the same id.
+        const edge = new Stack(app, edgeId, { env: { ...env, region: 'us-east-1' } });
+        const decoy = new Stack(app, 'unrelated', { env: { ...env, region: 'us-east-1' } });
+        new Construct(edge, 'EdgeFn');
+        new Construct(decoy, 'EdgeFn');
+        stack.addDependency(edge);
+        stack.addDependency(decoy);
+        const hosting = new Construct(stack, 'Hosting');
+        const before = snapshotForHosting(hosting);
+        // Stands in for an EdgeFunction from a CDK version without the private `_edgeFunction`.
+        const fn = new Construct(hosting, 'EdgeFn');
+        const covered = coverHosting(hosting, backend as unknown as Construct, before, [fn]);
+        assert.deepStrictEqual(covered.map((s) => s.node.id), [edgeId], edgeId);
       }
     });
 
