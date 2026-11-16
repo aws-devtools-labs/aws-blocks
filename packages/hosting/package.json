@@ -47,6 +47,10 @@
     "./scripts": {
       "types": "./dist/scripts.d.ts",
       "default": "./dist/scripts.js"
+    },
+    "./nextjs-compatibility": {
+      "types": "./dist/nextjs_compatibility.d.ts",
+      "default": "./dist/nextjs_compatibility.js"
     }
   },
   "main": "dist/index.js",

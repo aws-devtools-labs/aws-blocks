@@ -316,6 +316,21 @@ npm install --save-dev @opennextjs/aws@~4.1.14
   (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
   it, the build prints a warning. Upgrade `next` within its major version to
   one that range accepts.
+- The same check is available without a build, for tools such as
+  `create-blocks-app`: `checkNextjsCompatibility(projectDir)` from
+  `@aws-blocks/hosting/nextjs-compatibility` returns the installed `next`, the
+  OpenNext that would build it (installed, or the fallback) with its `next`
+  peer range, and whether the version is inside it (`undefined` when there is
+  no installed `next` or no usable range). It loads none of the build tooling.
+
+  ```ts
+  import { checkNextjsCompatibility } from '@aws-blocks/hosting/nextjs-compatibility';
+
+  const result = checkNextjsCompatibility(process.cwd());
+  if (result && !result.supported) {
+  	console.warn(`next@${result.nextVersion} is outside next ${result.nextRange}`);
+  }
+  ```
 - A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
   stack's region at synth time. Set `env` on the stack that holds `Hosting`:
 
