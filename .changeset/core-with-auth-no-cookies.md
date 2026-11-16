@@ -1,5 +1,8 @@
 ---
-'@aws-blocks/core': patch
+'@aws-blocks/core': minor
+'@aws-blocks/blocks': minor
 ---
 
-`withAuth(fn, cookies)` accepts a request that carries no cookies. With an explicit `null` or empty `cookies` argument, which is what `request.headers.get('cookie')` returns for a visitor without a session, `withAuth` runs `fn` without cookies when it detects none, instead of throwing a `401`. Public API methods now work during server rendering for signed-out visitors, and protected methods answer their own `401`. Cookies from an existing request context or a registered provider are still used when present, and `withAuth(fn)` with the argument omitted still throws a `401` when it finds none.
+`withAuth(fn, cookies, { allowAnonymous: true })` runs `fn` signed out when no cookies are found, instead of throwing a `401`. Use it for server-rendered pages that signed-out visitors can see: public API methods work, and methods gated with `auth.requireAuth` still answer `401`. A missing, `null`, empty or blank `cookies` argument all count as "no cookies", so the option works with Fetch `headers.get('cookie')`, Node `req.headers.cookie`, and the built-in Next.js detection (`withAuth(fn, undefined, { allowAnonymous: true })`). Explicit cookies, an existing request context, and registered providers still take precedence. Without the option, `withAuth` behaves as before. The `WithAuthOptions` type is exported from `@aws-blocks/core/server` and `@aws-blocks/blocks/server`.
+
+With the option, pages that answered an error for signed-out visitors now render with a `200`. Responses to requests without cookies can be edge-cached, so check that the anonymous HTML of these pages is safe to cache.

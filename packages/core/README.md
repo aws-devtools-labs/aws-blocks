@@ -581,7 +581,7 @@ const posts = await withAuth(() => api.listMyPosts(), request.headers.get('cooki
 // …or register a provider once via registerCookieProvider.
 ```
 
-**Note:** with the second argument omitted, `withAuth` throws a `401` `ApiError` when no cookies are found. With an explicit `null` or empty second argument (a request that carries no cookies), the callback runs without any instead, as a signed-out browser call would: public methods work and protected ones answer their own `401`. Full reference lives in the source JSDoc.
+**Note:** `withAuth` throws a `401` `ApiError` when no cookies are found. For pages that signed-out visitors can see, pass `{ allowAnonymous: true }` as the third argument: the callback then runs without cookies, as a signed-out browser call would. Public methods work, and methods gated with `auth.requireAuth` still answer `401`. This works whatever the header value is for a request without cookies (`null`, `undefined` or `''`), and with built-in detection: `withAuth(fn, undefined, { allowAnonymous: true })`. Full reference lives in the source JSDoc.
 
 ## Local Development
 
