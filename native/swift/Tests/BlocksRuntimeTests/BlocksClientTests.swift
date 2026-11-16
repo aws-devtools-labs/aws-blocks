@@ -395,26 +395,29 @@ final class BlocksClientTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: config)
+        let cases: [(body: String, message: String)] = [
+            ("{\"jsonrpc\":\"2.0\",\"error\":{},\"id\":1}", "Error occured with code: -1 message: Unknown error"),
+            ("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":\"abc\",\"message\":\"Odd code\"},\"id\":1}", "Error occured with code: -1 message: Odd code")
+        ]
 
-        MockURLProtocol.handler = { _ in
-            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = Data("""
-            {"jsonrpc":"2.0","error":{},"id":1}
-            """.utf8)
-            return (response, data)
-        }
+        for (body, message) in cases {
+            MockURLProtocol.handler = { _ in
+                let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Data(body.utf8))
+            }
 
-        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
-        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
+            let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+            let request = BlocksRequest(method: "api.fail", params: [], id: 1)
 
-        do {
-            _ = try await client.execute(request)
-            XCTFail("Expected error")
-        } catch let error as RPCError {
-            XCTAssertEqual(error.code, -1)
-            XCTAssertEqual(error.message, "Error occured with code: -1 message: Unknown error")
-        } catch {
-            XCTFail("Expected RPCError, got \(error)")
+            do {
+                _ = try await client.execute(request)
+                XCTFail("\(body): expected an RPCError")
+            } catch let error as RPCError {
+                XCTAssertEqual(error.code, -1, body)
+                XCTAssertEqual(error.message, message, body)
+            } catch {
+                XCTFail("\(body): expected RPCError, got \(error)")
+            }
         }
     }
 

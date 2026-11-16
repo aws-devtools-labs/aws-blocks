@@ -7,7 +7,7 @@ feat(swift): expose `retriable` and the raw `data` on `RPCError`, add `isBlocksE
 `RPCError` now has `retriable` (`true` only when the server marked the failure
 retriable, else `false`) and `data`, the `error.data` object as
 `[String: JSONValue]` (`nil` when absent or not a JSON object). Kotlin and Dart
-keep the raw `data` too; neither exposes `retriable`. `Error.isBlocksError(name:)`
+runtimes keep the raw `data` too; neither exposes `retriable`. `Error.isBlocksError(name:)`
 matches an `RPCError` by its server error name or a `RawRouteError` by its
 `errorName`; like Kotlin's `Throwable.isBlocksError` it is offered on any error.
 

@@ -356,7 +356,7 @@ public struct RPCError: BlocksError {
     public let underlyingError: Error?
 
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
-    /// status (e.g. `401`); `-1` when `code` is absent or not an integer. For a non-2xx response
+    /// status (e.g. `401`); `-1` when `code` is absent or not readable as an `Int`. For a non-2xx response
     /// with no JSON-RPC error (a gateway or route error), the HTTP status, with `name` and `data`
     /// nil and `retriable` false. `nil` for other transport and decoding failures.
     public let code: Int?
