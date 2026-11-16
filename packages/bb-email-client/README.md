@@ -10,7 +10,7 @@ Transactional email sending via Amazon SES.
 import { EmailClient } from '@aws-blocks/bb-email-client';
 
 const emailClient = new EmailClient(scope, 'notifications', {
-  fromAddress: 'noreply@example.com',
+  fromAddress: 'noreply@your-verified-domain.com', // an address on a domain verified in SES
   configurationSet: 'my-tracking-set', // optional
 });
 
@@ -67,7 +67,8 @@ const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
 // App-owned profile data, keyed by the user's `userSub`. The app writes each user's address here.
 const profiles = new KVStore<{ email: string }>(scope, 'profiles');
-const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@example.com' });
+// fromAddress must be on a domain verified in SES (see "Reserved sender domains" below).
+const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@your-verified-domain.com' });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async sendMeASummary() {
@@ -99,6 +100,24 @@ bounds what a single request can send but not how many requests a caller makes.
 | `replyTo` | `string[]` | ❌ | Reply-to addresses |
 | `configurationSet` | `string` | ❌ | SES configuration set name |
 | `maxBatchSize` | `number` | ❌ | Most messages one `sendBatch()` call accepts (positive integer, default `100`). An invalid value throws `InvalidInputException` from the constructor, and at synth |
+
+#### Reserved sender domains
+
+`fromAddress` must be on a domain SES can verify. A sender on a reserved domain
+(`example.com`, `example.net`, `example.org` and their subdomains, or anything under
+`.test`, `.example`, `.invalid` or `.localhost`, per RFC 2606 and RFC 6761) can never be
+verified, so every send from it fails with `DomainNotVerifiedException` once deployed.
+Synth flags it with the warning `@aws-blocks/bb-email-client:UnverifiableSender`, in
+sandbox and production alike; a `replyTo` address on such a domain gets
+`@aws-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
+app still synthesizes and deploys, and the local mock still accepts the address. If the
+sender is deliberate (for example a stack that never sends), acknowledge it:
+
+```typescript
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-email-client:UnverifiableSender');
+```
 
 ### `emailClient.send(message): Promise<SendResult>`
 
