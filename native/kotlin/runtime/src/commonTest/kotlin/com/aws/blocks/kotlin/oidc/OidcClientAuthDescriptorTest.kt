@@ -222,6 +222,44 @@ class OidcClientAuthDescriptorTest {
     }
 
     @Test
+    fun `a callback the backend names other than callback is used exactly`() = runTest {
+        var exchangeBody: String? = null
+        val recording = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requests += "${request.method.value} ${request.url.encodedPath}"
+                    val text = (request.body as? TextContent)?.text
+                    val body = if (request.url.encodedPath.endsWith("/exchange")) {
+                        exchangeBody = text
+                        """{"user":{"userId":"u","username":"alice"}}"""
+                    } else {
+                        val csrf = Json.parseToJsonElement(text!!).jsonObject["csrf"]!!.jsonPrimitive.content
+                        val state = Base64.UrlSafe.encode("""{"v":1,"csrf":"$csrf"}""".encodeToByteArray()).trimEnd('=')
+                        """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                            """"scopes":["openid"],"kind":"oidc","state":"$state.sig"}"""
+                    }
+                    respond(ByteReadChannel(body), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+        }
+        val launcher = RelayingLauncher()
+        val client = OidcClient.fromJson<AnyProvider>(
+            authBlockDescriptor(listOf("corp"), base = "/aws-blocks/auth/sso", callbackPath = "/aws-blocks/auth/sso/return"),
+            recording, fixtureServer, "myapp://auth",
+        ).also { it.platformLauncher = launcher }
+
+        client.signIn("corp")
+
+        requests shouldBe listOf(
+            "POST /aws-blocks/auth/sso/authorize-params/corp",
+            "POST /aws-blocks/auth/sso/exchange",
+        )
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe "http://localhost:3001/aws-blocks/auth/sso/return"
+        Json.parseToJsonElement(exchangeBody!!).jsonObject["callbackUrl"]!!.jsonPrimitive.content shouldBe
+            "http://localhost:3001/aws-blocks/auth/sso/return"
+    }
+
+    @Test
     fun `signIn encodes the provider id as the backend mounts it`() = runTest {
         val client = authClient(backend(), listOf("corp+eu", "a/b"))
             .also { it.platformLauncher = RelayingLauncher() }

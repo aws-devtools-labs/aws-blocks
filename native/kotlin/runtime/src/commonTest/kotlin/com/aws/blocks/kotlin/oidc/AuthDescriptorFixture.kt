@@ -22,6 +22,7 @@ internal fun authBlockDescriptor(
     base: String = "/aws-blocks/auth",
     signOutPath: String = "$base/signout",
     sessionPath: String? = "$base/session",
+    callbackPath: String = "$base/callback",
 ): JsonElement = buildJsonObject {
     put("__blocks", "oidc/client")
     putJsonArray("providers") { providers.forEach { add(it) } }
@@ -35,7 +36,7 @@ internal fun authBlockDescriptor(
             }
         }
     }
-    put("callbackPath", "$base/callback")
+    put("callbackPath", callbackPath)
     put("exchangePath", "$base/exchange")
     put("signOutPath", signOutPath)
     put("signInBasePath", "$base/signin")
