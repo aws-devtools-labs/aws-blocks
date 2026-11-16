@@ -131,8 +131,8 @@ Each chunk published to the Realtime channel has a `type` and type-specific fiel
 | Type | Fields | Description |
 |------|--------|-------------|
 | `text-delta` | `text: string` | Incremental text token (in `'token'` streaming mode) or full block (in `'block'` mode). |
-| `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. |
-| `tool-result` | `toolName: string`, `text: string` | Tool returned a result. |
+| `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. Published only for a call that runs: not for a tool the user denied, nor for one stopped by `maxToolIterations`. A tool that needs approval publishes it after the approval, once the turn resumes. |
+| `tool-result` | `toolName: string`, `text: string` | Tool returned a result. Always follows the call's `tool-call` chunk, so a denied or cap-stopped call publishes neither. |
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
 | `error` | `error: string`, `errorName?: string` | Agent encountered an error. `errorName` is set when the failure was classified — e.g. `ModelUnavailableException` when Bedrock refuses to invoke the model for this account. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
@@ -175,7 +175,7 @@ user → interrupt → approval → tool-call → tool-result → assistant
 ```
 
 - `interrupt` is written when the agent pauses for approval; `approval` records the user's approve/deny response from `resume()`.
-- A denied tool still persists `tool-call` and `tool-result` rows (the result records the denial) — the tool does not execute, but the paired records are kept for audit. Assert on the agent's observable outcome, not on the absence of a tool-call row.
+- A denied tool still persists `tool-call` and `tool-result` rows (the result records the denial) — the tool does not execute, but the paired records are kept for audit. Assert on the agent's observable outcome, not on the absence of a tool-call row. The live stream differs: a denied tool publishes no `tool-call` or `tool-result` chunk.
 - A turn that invokes no tool at all collapses to `user → assistant`. An autonomous (non-approval) tool still persists its own `tool-call`/`tool-result` rows — it just omits the `interrupt`/`approval` pair.
 
 #### Reading conversation history

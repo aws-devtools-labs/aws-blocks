@@ -486,6 +486,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		let usage: TokenUsage | undefined;
 		let blockBuffer = '';
 		let interrupted = false;
+		// toolUseIds of calls a hook cancelled before they ran (see the BeforeToolCallEvent branch).
+		const cancelledToolUseIds = new Set<string>();
 		const isBlockMode = this.config.streamingMode !== 'token';
 
 		// Determine input: resume with responses or initial message
@@ -512,12 +514,26 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						blockBuffer = '';
 					}
 				} else if (event instanceof BeforeToolCallEvent) {
-					await this.rt.publish('chunks', channelId, { type: 'tool-call', toolName: event.toolUse.name, input: event.toolUse.input });
+					// Strands runs every BeforeToolCallEvent hook before it yields the event here, so
+					// `event.cancel` already holds the decision of the HITL hook (a denied approval) and
+					// the cap hook. A cancelled call never runs: publish no tool-call chunk for it, and
+					// no tool-result chunk for the cancellation result that follows. (A call that pauses
+					// for approval isn't yielded at all; it is yielded once the turn resumes.)
+					if (event.cancel) {
+						cancelledToolUseIds.add(event.toolUse.toolUseId);
+					} else {
+						cancelledToolUseIds.delete(event.toolUse.toolUseId);
+						await this.rt.publish('chunks', channelId, { type: 'tool-call', toolName: event.toolUse.name, input: event.toolUse.input });
+					}
+					// History keeps the paired tool-call/tool-result rows for a cancelled call too: the
+					// tool-result row records the denial for audit (see the README's HITL row sequence).
 					if (conversationId && this.messages) {
 						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-call' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolInput: event.toolUse.input }) });
 					}
 				} else if (event instanceof AfterToolCallEvent) {
-					await this.rt.publish('chunks', channelId, { type: 'tool-result', toolName: event.toolUse.name });
+					if (!cancelledToolUseIds.has(event.toolUse.toolUseId)) {
+						await this.rt.publish('chunks', channelId, { type: 'tool-result', toolName: event.toolUse.name });
+					}
 					if (conversationId && this.messages) {
 						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-result' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolOutput: event.result?.content }) });
 					}

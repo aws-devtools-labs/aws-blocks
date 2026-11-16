@@ -357,7 +357,7 @@ test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
   const sent = outbox.find((mail) => mail.messageId === messageId);
   assert.ok(sent, `expected ${messageId} in ${outboxPath}`);
   assert.deepStrictEqual(sent.to, to);
-  assert.strictEqual(sent.from, 'noreply@example.com');
+  assert.strictEqual(sent.from, 'noreply@replace-with-your-verified-domain.invalid');
   assert.strictEqual(sent.subject, 'Welcome');
   assert.strictEqual(sent.body, 'Thanks for trying the demo app.');
 });

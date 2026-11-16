@@ -42,6 +42,7 @@ export class Database extends Scope {
    */
   private startMigrations?: () => Promise<void>;
   private schema?: TableSchema;
+  private rlsPolicy?: 'enforce';
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -101,6 +102,7 @@ export class Database extends Scope {
     if (options?.schema) {
       this.schema = options.schema;
     }
+    this.rlsPolicy = options?.rlsPolicy;
 
     if (options?.migrationsPath && options?.connection) {
       throw new Error(
@@ -200,7 +202,7 @@ export class Database extends Scope {
     if (!this.schema) {
       throw new Error('crud() requires schema metadata. Pass `schema: tableMeta` to the Database constructor.');
     }
-    return createCrudHandlers(this.base, this.schema, options, () => this.ensureMigrations()) as any;
+    return createCrudHandlers(this.base, this.schema, options, () => this.ensureMigrations(), { rlsPolicy: this.rlsPolicy }) as any;
   }
 
   /** @internal Get the underlying DatabaseEngine. Used by createKyselyAdapter(). */
