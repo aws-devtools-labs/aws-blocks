@@ -51,6 +51,34 @@ final _leadingUnderscoreSpec = jsonEncode({
   ],
 });
 
+/// A schema named like `BlocksConfig`, a runtime type the generated `Blocks`
+/// refers to.
+final _runtimeNameSchemaSpec = jsonEncode({
+  'openrpc': '1.3.2',
+  'info': {'title': 'test', 'version': '1.0.0'},
+  'methods': [
+    {
+      'name': 'api.get',
+      'params': <Object>[],
+      'result': {
+        'name': 'GetResult',
+        'schema': {r'$ref': '#/components/schemas/BlocksConfig'},
+      },
+    },
+  ],
+  'components': {
+    'schemas': {
+      'BlocksConfig': {
+        'type': 'object',
+        'properties': {
+          'id': {'type': 'string'},
+        },
+        'required': ['id'],
+      },
+    },
+  },
+});
+
 /// Decodes and re-encodes every key fixture 29 spells outside an identifier,
 /// exiting non-zero when a key does not survive.
 const _roundTrip = r'''
@@ -94,6 +122,50 @@ void main() {
 }
 ''';
 
+/// Builds fixture 01's generated `Blocks` from a `BlocksConfig` and calls a
+/// server that answers with a JSON-RPC error, exiting non-zero unless the call
+/// reached the config's URL.
+const _fromConfig = r'''
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:scratch/primitives.dart';
+
+Future<void> main() async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  String? path;
+  server.listen((request) async {
+    path = request.uri.path;
+    await request.drain<void>();
+    request.response
+      ..headers.contentType = ContentType.json
+      ..write(jsonEncode({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'error': {'code': -32601, 'message': 'no'},
+      }));
+    await request.response.close();
+  });
+  final blocks = Blocks.fromConfig(
+    BlocksConfig(baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api'),
+  );
+  var code = 1;
+  try {
+    await blocks.api.echo(text: 'x', count: 1, score: 1, enabled: true);
+    stderr.writeln('the call returned');
+  } on BlocksRpcException {
+    if (path == '/aws-blocks/api/api') {
+      code = 0;
+    } else {
+      stderr.writeln('called $path');
+    }
+  }
+  await server.close(force: true);
+  exit(code);
+}
+''';
+
 Future<ProcessResult> _dart(List<String> args, String dir) =>
     Process.run(Platform.resolvedExecutable, args, workingDirectory: dir);
 
@@ -106,6 +178,9 @@ void main() {
   final runtimeDir = Directory('$root/../blocks_runtime');
   final fixtureGolden = File(
     '$root/../../../codegen-fixtures/43-non-identifier-names/dart/client.dart',
+  );
+  final primitivesGolden = File(
+    '$root/../../../codegen-fixtures/01-primitives/dart/client.dart',
   );
 
   late Directory scratch;
@@ -127,7 +202,12 @@ dependencies:
     File(
       '${scratch.path}/lib/leading_underscore.dart',
     ).writeAsStringSync(_generate(_leadingUnderscoreSpec));
+    File(
+      '${scratch.path}/lib/runtime_name_schema.dart',
+    ).writeAsStringSync(_generate(_runtimeNameSchemaSpec));
     File('${scratch.path}/bin/round_trip.dart').writeAsStringSync(_roundTrip);
+    primitivesGolden.copySync('${scratch.path}/lib/primitives.dart');
+    File('${scratch.path}/bin/from_config.dart').writeAsStringSync(_fromConfig);
 
     // blocks_runtime's dependencies are already in the pub cache from this
     // package's own `pub get`; resolve online only when they are not.
@@ -151,6 +231,13 @@ dependencies:
     _expectSuccess(
       await _dart(['run', 'bin/round_trip.dart'], scratch.path),
       'round trip',
+    );
+  });
+
+  test('generated Blocks calls the URL in a BlocksConfig', () async {
+    _expectSuccess(
+      await _dart(['run', 'bin/from_config.dart'], scratch.path),
+      'from config',
     );
   });
 }

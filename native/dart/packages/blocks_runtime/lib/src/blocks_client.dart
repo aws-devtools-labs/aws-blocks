@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
+import 'blocks_config.dart';
 import 'blocks_rpc_exception.dart';
 import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
@@ -31,6 +32,22 @@ class BlocksClient {
   }) : _httpClient = client ?? newBlocksHttpClient(),
        sessionStore = sessionStore ?? InMemorySessionStore(),
        tokenStore = tokenStore ?? InMemoryTokenStore();
+
+  /// Creates a client configured by [config]. The other arguments are the
+  /// same as the default constructor's.
+  BlocksClient.fromConfig(
+    BlocksConfig config, {
+    http.Client? client,
+    SessionStore? sessionStore,
+    TokenStore? tokenStore,
+    AuthProvider? authProvider,
+  }) : this(
+         baseUrl: config.baseUrl,
+         client: client,
+         sessionStore: sessionStore,
+         tokenStore: tokenStore,
+         authProvider: authProvider,
+       );
 
   /// Calls a JSON-RPC method with the given params and returns the result.
   ///

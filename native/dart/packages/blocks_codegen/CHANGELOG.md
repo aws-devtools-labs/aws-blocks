@@ -1,5 +1,14 @@
 ## Unreleased
 
+- The generated `Blocks` gains a `Blocks.fromConfig(BlocksConfig config)`
+  constructor, which takes the URL from a `BlocksConfig`.
+  `Blocks(baseUrl: ...)` is unchanged and now forwards to it. A namespace
+  named `fromConfig` is generated as `fromConfig$`, since a field cannot share
+  a name with the constructor. It needs `BlocksClient.fromConfig`, which is
+  in `blocks_runtime` 0.1.5, the version generated clients already require.
+  The generated client also re-exports `BlocksConfig` and `rewriteLocalhost`,
+  and a schema named `BlocksConfig` is generated as `BlocksConfig$`, as a
+  schema named `BlocksClient` already is.
 - Fix two arms of one union whose discriminator values generate the same
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as

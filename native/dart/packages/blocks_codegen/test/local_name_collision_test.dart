@@ -1,14 +1,17 @@
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
+import 'package:blocks_codegen/src/parser.dart';
 import 'package:test/test.dart';
 
 /// The generated code declares its own names next to user-chosen ones: an
 /// operation's `params` array and `result`, the `==` parameter `other`, the
 /// `Blocks` constructor's `client` local and its `baseUrl` / `sessionStore`
-/// parameters, and closure parameters (`e`, `k`, `v`, `value`, `json`,
-/// `payload`). A user name never changes; a generated name that a user name
-/// would shadow yields instead (`$result`), and a public generated name
-/// (`baseUrl`) is kept and the user's field reached through `this.`.
+/// parameters (`config` / `sessionStore` on `Blocks.fromConfig`), and closure
+/// parameters (`e`, `k`, `v`, `value`, `json`, `payload`). A user name never
+/// changes; a generated name that a user name would shadow yields instead
+/// (`$result`), and a public generated name (`config`) is kept and the user's
+/// field reached through `this.`. A namespace named `fromConfig`, which a
+/// field cannot share with the constructor, is `fromConfig$`.
 void main() {
   const gen = DartCodeGenerator();
 
@@ -335,31 +338,46 @@ void main() {
     String facade(String output) =>
         output.substring(output.indexOf('class Blocks {'));
 
-    test('`client`, `baseUrl` and `sessionStore` namespaces are assigned', () {
+    test('`client`, `baseUrl`, `config` and `sessionStore` namespaces are '
+        'assigned', () {
       final out = facade(
         gen.generate(
-          model(namespaces: ['client', 'baseUrl', 'sessionStore', 'api']),
+          model(
+            namespaces: ['client', 'baseUrl', 'config', 'sessionStore', 'api'],
+          ),
         ),
       );
       expect(out, contains('  late final ClientApi client;'));
       expect(out, contains('  late final BaseUrlApi baseUrl;'));
+      expect(out, contains('  late final ConfigApi config;'));
       expect(out, contains('  late final SessionStoreApi sessionStore;'));
-      // The constructor's parameters are public API and keep their names.
+      // The constructors' parameters are public API and keep their names.
       expect(
         out,
         contains(
-          '  Blocks({required String baseUrl, SessionStore? sessionStore}) {',
+          '  Blocks({required String baseUrl, SessionStore? sessionStore})\n'
+          '    : this.fromConfig(BlocksConfig(baseUrl: baseUrl), '
+          'sessionStore: sessionStore);',
         ),
       );
       expect(
         out,
         contains(
-          r'    final $client = BlocksClient(baseUrl: baseUrl, '
+          '  Blocks.fromConfig(BlocksConfig config, '
+          '{SessionStore? sessionStore}) {',
+        ),
+      );
+      expect(
+        out,
+        contains(
+          r'    final $client = BlocksClient.fromConfig(config, '
           'sessionStore: sessionStore);',
         ),
       );
       expect(out, contains(r'    client = ClientApi($client);'));
-      expect(out, contains(r'    this.baseUrl = BaseUrlApi($client);'));
+      // `baseUrl` is no parameter of the constructor that assigns the fields.
+      expect(out, contains(r'    baseUrl = BaseUrlApi($client);'));
+      expect(out, contains(r'    this.config = ConfigApi($client);'));
       expect(
         out,
         contains(r'    this.sessionStore = SessionStoreApi($client);'),
@@ -367,12 +385,44 @@ void main() {
       expect(out, contains(r'    api = ApiApi($client);'));
     });
 
+    test('a schema named `BlocksConfig` does not shadow the runtime type', () {
+      const spec = '''
+{
+  "openrpc": "1.3.2",
+  "info": {"title": "t", "version": "1"},
+  "methods": [
+    {
+      "name": "api.get",
+      "params": [],
+      "result": {"name": "r", "schema": {"\$ref": "#/components/schemas/BlocksConfig"}}
+    }
+  ],
+  "components": {"schemas": {"BlocksConfig": {
+    "type": "object",
+    "properties": {"id": {"type": "string"}},
+    "required": ["id"]
+  }}}
+}''';
+      final out = gen.generate(
+        CodegenModelBuilder().build(const OpenRpcParser().parse(spec)),
+      );
+      expect(out, contains(r'class BlocksConfig$ {'));
+      expect(out, contains(r'Future<BlocksConfig$> get$()'));
+      expect(out, contains('this.fromConfig(BlocksConfig(baseUrl: baseUrl)'));
+    });
+
+    test('a `fromConfig` namespace does not clash with the constructor', () {
+      final out = facade(gen.generate(model(namespaces: ['fromConfig'])));
+      expect(out, contains(r'  late final FromConfigApi fromConfig$;'));
+      expect(out, contains(r'    fromConfig$ = FromConfigApi(client);'));
+    });
+
     test('other namespaces are unchanged', () {
       final out = facade(gen.generate(model(namespaces: ['api', 'todos'])));
       expect(
         out,
         contains(
-          '    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);\n'
+          '    final client = BlocksClient.fromConfig(config, sessionStore: sessionStore);\n'
           '    api = ApiApi(client);\n'
           '    todos = TodosApi(client);\n',
         ),

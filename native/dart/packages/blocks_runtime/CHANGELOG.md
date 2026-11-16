@@ -13,6 +13,15 @@
   `BlocksClient` or `OidcClient` is used as is. The `OidcClient` a generated
   client decodes, and file uploads and downloads, always use the runtime's
   own client with the default timeouts. Requires `http` 1.5.0 or later.
+- Add `BlocksConfig` as a configuration object holding `baseUrl`, with
+  `copyWith` and value equality. Further settings may be added later. It is
+  a `final class`, so it can't be implemented or extended, which lets a
+  later release add a value without breaking anyone (code that extended or
+  implemented the old static-only `BlocksConfig` no longer compiles). Add
+  `BlocksClient.fromConfig`, which builds a client from one with the default
+  timeouts. `BlocksClient(baseUrl: ...)` is unchanged.
+- Add the top-level `rewriteLocalhost` function. `BlocksConfig.rewriteLocalhost`
+  is deprecated and forwards to it.
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers

@@ -7,7 +7,7 @@
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:example_iot_native/example_iot_native.dart' show APILink, DeviceHandle;
 import 'package:example_sensor_native/example_sensor_native.dart' show SensorStream;
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksConfig, BlocksRpcException, SessionStore, InMemorySessionStore, rewriteLocalhost;
 export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
 export 'package:blocks_runtime/blocks_runtime.dart' show UnknownTransferable;
 
@@ -147,8 +147,11 @@ class ApiApi {
 class Blocks {
   late final ApiApi api;
 
-  Blocks({required String baseUrl, SessionStore? sessionStore}) {
-    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+  Blocks({required String baseUrl, SessionStore? sessionStore})
+    : this.fromConfig(BlocksConfig(baseUrl: baseUrl), sessionStore: sessionStore);
+
+  Blocks.fromConfig(BlocksConfig config, {SessionStore? sessionStore}) {
+    final client = BlocksClient.fromConfig(config, sessionStore: sessionStore);
     api = ApiApi(client);
   }
 }

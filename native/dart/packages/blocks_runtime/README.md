@@ -10,6 +10,24 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 
 This package is used by generated client code produced by `blocks_codegen`. You typically don't interact with it directly.
 
+## Configuration
+
+`BlocksConfig` holds the values a client is configured with. Today that is the backend URL; further settings may be added later. It is immutable and compares by value, so vary one value across environments with `copyWith`:
+
+```dart
+const prod = BlocksConfig(baseUrl: 'https://api.example.com/aws-blocks/api');
+final staging = prod.copyWith(
+  baseUrl: 'https://staging.example.com/aws-blocks/api',
+);
+
+final blocks = Blocks.fromConfig(staging); // generated client
+final client = BlocksClient.fromConfig(prod); // runtime client
+```
+
+A client built from a config uses the default timeouts described in [Timeouts](#timeouts). `Blocks(baseUrl: ...)` and `BlocksClient(baseUrl: ...)` still work.
+
+To reach a dev server on the host machine from an Android emulator, rewrite its URL with `rewriteLocalhost(url, host: '10.0.2.2')`. `BlocksConfig.rewriteLocalhost` is deprecated and forwards to it.
+
 ## User-agent attribution
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
