@@ -117,8 +117,9 @@ the failure mode that two applications can be pointed at one directory by mistak
 ### What desktop storage protects
 
 The key that encrypts those files is held by the host operating system — the Keychain on macOS, the
-Data Protection API on Windows — rather than written beside them. Entries copied off the machine in
-a backup, a disk image or a synced folder therefore cannot be decrypted elsewhere.
+Secret Service on Linux, the Data Protection API on Windows — rather than written beside them.
+Entries copied off the machine in a backup, a disk image or a synced folder therefore cannot be
+decrypted elsewhere.
 
 **This is not a boundary against other software on the machine.** A desktop OS gives an application
 no private storage, and its secret stores are reachable by anything running as the same user, so
@@ -133,8 +134,9 @@ applications bundling the same runtime share one identity, and an application th
 bundled runtime prompts its user once.
 
 Where no OS secret store can be used, the key is kept beside the entries instead and the at-rest
-protection above is simply absent. Linux is in that position today. So is any application packaged
-as a standalone installer without the declarations native access needs:
+protection above is simply absent. On Linux that is the normal case outside a desktop session: a
+server, a container or a CI runner has no keyring daemon to hold the key, so the file is used. So is
+any application packaged as a standalone installer without the declarations native access needs:
 
 ```kotlin
 compose.desktop {
