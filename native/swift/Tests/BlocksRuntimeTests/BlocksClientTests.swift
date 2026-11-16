@@ -10,6 +10,11 @@ import XCTest
 
 final class BlocksClientTests: XCTestCase {
 
+    override func tearDown() {
+        MockURLProtocol.handler = nil
+        super.tearDown()
+    }
+
     // MARK: - Request Encoding
 
     func testExecuteEncodesCorrectJSONRPCRequest() async throws {
@@ -294,8 +299,6 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
-    /// `data` keeps every value of `error.data` as sent: numbers, `null`, arrays and nested
-    /// objects as well as strings and booleans.
     func testExecuteKeepsTypedAndNestedErrorData() async {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
@@ -366,7 +369,6 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertFalse(URLError(.notConnectedToInternet).isBlocksError(name: "NotAuthenticatedException"))
     }
 
-    /// A raw route (non-RPC) refusal carries the server's error name as `RawRouteError.errorName`.
     func testIsBlocksErrorMatchesARawRouteErrorByName() {
         let error = RawRouteError(message: "The sign-in provider refused the sign-in.", statusCode: 400, errorName: "IdpErrorException")
         XCTAssertTrue(error.isBlocksError(name: "IdpErrorException"))
@@ -374,8 +376,7 @@ final class BlocksClientTests: XCTestCase {
     }
 
     /// The server collapses an unbranded exception to a nameless JSON-RPC 500 with no `data`; a
-    /// gateway 500 has no JSON-RPC body at all. Both are an `RPCError` with `code == 500`, no `name`,
-    /// no `data` and `retriable == false`; only `message` tells them apart.
+    /// gateway 500 has no JSON-RPC body at all.
     func testNamelessJSONRPC500AndGateway500DifferOnlyInMessage() async {
         let cases: [(body: String, message: String)] = [
             (#"{"jsonrpc":"2.0","error":{"code":500,"message":"Internal error"},"id":1}"#, "Error occured with code: 500 message: Internal error"),
@@ -434,29 +435,32 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
-    func testExecuteKeepsTheHTTPStatusWhenTheBodyIsNotJSON() async {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
-
-        MockURLProtocol.handler = { _ in
-            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 502, httpVersion: nil, headerFields: nil)!
-            return (response, Data("<html>Bad Gateway</html>".utf8))
-        }
-
-        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
-        let request = BlocksRequest(method: "api.fail", params: [], id: 1)
-
-        do {
-            _ = try await client.execute(request)
-            XCTFail("Expected error")
-        } catch let error as RPCError {
-            XCTAssertEqual(error.message, "HTTP Error: 502")
-            XCTAssertEqual(error.code, 502)
-            XCTAssertNil(error.name)
-            XCTAssertNil(error.data)
-        } catch {
-            XCTFail("Expected RPCError, got \(error)")
+    func testExecuteKeepsTheHTTPStatusWhenTheBodyIsNotAJSONObject() async {
+        let cases: [(body: String, status: Int)] = [
+            ("<html>Bad Gateway</html>", 502),
+            ("[1,2,3]", 500),
+            ("42", 500)
+        ]
+        for (body, status) in cases {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MockURLProtocol.self]
+            let session = URLSession(configuration: config)
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+                return (response, Data(body.utf8))
+            }
+            let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+            do {
+                _ = try await client.execute(BlocksRequest(method: "api.fail", params: [], id: 1))
+                XCTFail("\(body): expected an RPCError")
+            } catch let error as RPCError {
+                XCTAssertEqual(error.message, "HTTP Error: \(status)", body)
+                XCTAssertEqual(error.code, status, body)
+                XCTAssertNil(error.name, body)
+                XCTAssertNil(error.data, body)
+            } catch {
+                XCTFail("\(body): expected RPCError, got \(error)")
+            }
         }
     }
 

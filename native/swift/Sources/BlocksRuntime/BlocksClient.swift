@@ -154,9 +154,8 @@ public final class BlocksClient: Sendable {
         // Parse response to check for errors (minimal parsing)
         let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        // Order: decode a JSON-RPC `error` body, then check the HTTP status. The "Invalid JSON
-        // response" guard now runs after both (it was first at base), so a non-2xx whose body is
-        // not a JSON object is reported by its status below, not as "Invalid JSON".
+        // Decode a JSON-RPC `error` body first, then check the HTTP status, and only then reject a
+        // body that is not a JSON object, so a non-2xx with such a body is reported by its status.
         if let errorObj = responseJson?["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
@@ -359,19 +358,21 @@ public struct RPCError: BlocksError {
     /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
     /// HTTP status (e.g. `401`). For a non-2xx response that carries no JSON-RPC error
     /// (a gateway or route error), the HTTP status. `nil` for other transport and decoding failures.
-    /// A transport-origin status always comes with `name == nil`, `retriable == false`, and
-    /// `data == nil`, which tells it apart from an application error that uses the same status.
+    /// A transport-origin status always comes with `name == nil`, `retriable == false` and
+    /// `data == nil`; so does a nameless server 500 (an unbranded exception), which then differs
+    /// only in `message`.
     public let code: Int?
 
     /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
     /// Errors cross the wire by name, so match on this rather than on `message`.
-    /// `nil` when the server sent none, and for transport and decoding failures.
+    /// `nil` when the server sent none or sent a non-string, and for transport and decoding failures.
     public let name: String?
 
     /// Whether the caller can retry the same action without restarting the broader flow
-    /// (`error.data.retriable`, e.g. a wrong MFA code on a sign-in challenge). `false` when
-    /// the server sent none, and for transport and decoding failures. Marks whether the kind
-    /// of failure is retriable in principle, not a guarantee that a given retry will succeed.
+    /// (`error.data.retriable`, e.g. a wrong MFA code on a sign-in challenge). `true` only when
+    /// the server sent the JSON boolean `true`; `false` when it sent none, and for transport and
+    /// decoding failures. Marks whether the kind of failure is retriable in principle, not a
+    /// guarantee that a given retry will succeed.
     public let retriable: Bool
 
     /// The server's raw `error.data` object. `nil` when the server sent none or sent `error.data`
