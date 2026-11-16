@@ -674,6 +674,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 					});
 					return;
 				}
+				// `state` is required for wire compatibility but not verified here: PKCE binds the code, and the client checks the CSRF.
 				const iss = str(body, 'iss');
 				const { user, identity } = await host.completeExchange(ctx, providerId, {
 					code,
