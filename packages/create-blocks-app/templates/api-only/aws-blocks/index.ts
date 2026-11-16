@@ -78,13 +78,11 @@ const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(
 // can't speak JSON-RPC, so the probe is a RawRoute (full HTTP control) rather
 // than an API method. It touches no data. See RawRoute in
 // node_modules/@aws-blocks/blocks/README.md for path parameters and wildcards.
+// RawRoute responses are JSON and `no-store` by default, so a probe never sees a cached "ok".
 new RawRoute(scope, 'healthz', {
   method: 'GET',
   path: '/healthz',
   handler: async (context) => {
-    context.response.headers.set('Content-Type', 'application/json');
-    // A cached "ok" would hide an outage from the probe.
-    context.response.headers.set('Cache-Control', 'no-store');
     context.response.send({ status: 'ok', timestamp: Date.now() });
   },
 });

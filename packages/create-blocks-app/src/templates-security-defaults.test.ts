@@ -538,14 +538,22 @@ function rawRoutes(file: string): TemplateRoute[] {
   return routes;
 }
 
+/** Every `.ts` file under a template's `aws-blocks/` directory, skipping `node_modules`. */
+function templateBackendFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+    .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
+    .map((f) => join(dir, f));
+}
+
 describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
-    if (!existsSync(backend)) continue;
+    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    if (!existsSync(dir)) continue;
 
     it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
       const allowed = PUBLIC_ROUTES[name] ?? {};
-      const ungated = rawRoutes(backend)
+      const ungated = templateBackendFiles(dir)
+        .flatMap(rawRoutes)
         .filter((r) => !r.body || !gatesFirst(r.body))
         .map((r) => r.name);
       assert.deepStrictEqual(
@@ -620,9 +628,7 @@ describe('create-blocks-app template methods that return a presigned URL require
   for (const name of templateNames) {
     const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
     if (!existsSync(dir)) continue;
-    const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
-      .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
-      .map((f) => join(dir, f));
+    const files = templateBackendFiles(dir);
     callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
 
     it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
@@ -672,6 +678,34 @@ describe('ungatedPresignedUrlCalls', () => {
         'api.publicSigner → files.putUrl (listed in UNGATED)',
         "api.indexed → files['getFileHandle'] (does not start with requireAuth/requireRole)",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('rawRoutes', () => {
+  it('passes a gated handler and flags ungated, concise-arrow and referenced handlers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-rawroutes-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `const probe = async (context) => context.response.send({});
+      new RawRoute(scope, 'gated', { method: 'GET', path: '/gated', handler: async (context) => { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'open', { method: 'POST', path: '/open', handler: async (context) => { context.response.send({}); } });
+      new RawRoute(scope, 'concise', { method: 'GET', path: '/concise', handler: async (context) => context.response.send({}) });
+      new RawRoute(scope, 'referenced', { method: 'GET', path: '/referenced', handler: probe });`,
+    );
+    try {
+      const routes = rawRoutes(file);
+      assert.deepStrictEqual(
+        routes.map((r) => r.name),
+        ['GET /gated', 'POST /open', 'GET /concise', 'GET /referenced'],
+      );
+      assert.deepStrictEqual(
+        routes.filter((r) => !r.body || !gatesFirst(r.body)).map((r) => r.name),
+        ['POST /open', 'GET /concise', 'GET /referenced'],
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

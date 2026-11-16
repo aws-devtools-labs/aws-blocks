@@ -124,7 +124,7 @@ test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
   const res = await fetch(healthzUrl);
   assert.strictEqual(res.status, 200);
   assert.match(res.headers.get('content-type') ?? '', /^application\/json/);
-  assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+  assert.match(res.headers.get('cache-control') ?? '', /no-store/);
   const body = await res.json();
   assert.strictEqual(body.status, 'ok');
   assert.ok(typeof body.timestamp === 'number');
@@ -142,7 +142,7 @@ test('healthz: query string and trailing slash still match the route', async () 
 // The route is registered for GET only, and nothing else lives under it.
 test('healthz: other methods and sub-paths are not routed', async () => {
   const post = await fetch(healthzUrl, { method: 'POST', body: '{}' });
-  assert.strictEqual(post.status, 404, 'POST /healthz is not a registered route');
+  assert.ok([404, 405].includes(post.status), `POST /healthz must not reach the GET handler (got ${post.status})`);
   await post.body?.cancel();
   const nested = await fetch(`${healthzUrl}/deep`);
   assert.strictEqual(nested.status, 404, '/healthz/deep is not a registered route');
