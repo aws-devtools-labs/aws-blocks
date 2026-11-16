@@ -81,6 +81,44 @@ class OidcClient implements AuthProvider {
   /// The [tokenStore] key for [name].
   String _key(String name) => '$_keyPrefix$name';
 
+  /// The token names an earlier version stored without a block prefix.
+  static const _legacyTokenNames = [
+    'access_token',
+    'refresh_token',
+    'expires_at',
+    'provider',
+  ];
+
+  /// Completes once tokens an earlier version stored under the unprefixed
+  /// keys have been moved to this client's keys. Every method that reads or
+  /// writes [tokenStore] waits for it.
+  late final Future<void> _ready = _migrateLegacyTokens();
+
+  /// The exchange route of the `Auth` block version 0.2.0 stored the
+  /// unprefixed tokens for.
+  static const _legacyExchangePath = '/aws-blocks/auth/exchange';
+
+  /// Moves tokens stored under the unprefixed keys, by version 0.2.0 or
+  /// earlier, to this client's prefixed keys, so an upgrade doesn't sign a
+  /// bearer session out. Version 0.2.0 only signed in against the default
+  /// `Auth` block, so it moves them only into a [fromJson] client whose
+  /// [exchangePath] is that block's, `/aws-blocks/auth/exchange`, and only
+  /// when it has no tokens of its own yet, whatever other clients share
+  /// [tokenStore] and in whatever order they are used. Otherwise it leaves
+  /// them where they are.
+  Future<void> _migrateLegacyTokens() async {
+    if (_keyPrefix.isEmpty || exchangePath != _legacyExchangePath) return;
+    for (final name in _legacyTokenNames) {
+      if (await tokenStore.get(_key(name)) != null) return;
+    }
+    for (final name in _legacyTokenNames) {
+      final value = await tokenStore.get(name);
+      if (value == null) continue;
+      await tokenStore.set(_key(name), value);
+      await tokenStore.delete(name);
+    }
+  }
+
   final _controller = StreamController<OidcAuthState>.broadcast();
   OidcAuthState _authState = OidcLoading();
   Completer<void>? _refreshCompleter;
@@ -200,6 +238,7 @@ class OidcClient implements AuthProvider {
     required BrowserLauncher launcher,
     required String redirectUri,
   }) async {
+    await _ready;
     final config = providerConfigs[provider];
     if (!providers.contains(provider) || config == null) {
       throw OidcUnknownProviderException(provider);
@@ -282,6 +321,7 @@ class OidcClient implements AuthProvider {
     required BrowserLauncher launcher,
     required String relayTo,
   }) async {
+    await _ready;
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
@@ -423,6 +463,7 @@ class OidcClient implements AuthProvider {
     required String nonce,
     String? iss,
   }) async {
+    await _ready;
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
@@ -494,6 +535,7 @@ class OidcClient implements AuthProvider {
   // --- Token refresh ---
 
   Future<void> refresh() async {
+    await _ready;
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
@@ -557,6 +599,7 @@ class OidcClient implements AuthProvider {
   /// other `Auth` blocks on the same app. This block's cookie is removed by
   /// the `Set-Cookie` the server sends on the response.
   Future<Uri?> signOut() async {
+    await _ready;
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
     final http.Response response;
     try {
@@ -633,6 +676,7 @@ class OidcClient implements AuthProvider {
   /// - Any other status throws an [OidcRequestException], and a transport
   ///   failure throws the HTTP client's error. Neither changes the state.
   Future<OidcUser?> restore() async {
+    await _ready;
     final url = Uri.parse('$_authBaseUrl$sessionPath');
     final storedToken = await tokenStore.get(_key('access_token'));
     final accessToken = storedToken != null && !await _isExpired()
@@ -716,6 +760,7 @@ class OidcClient implements AuthProvider {
 
   @override
   Future<String?> getAccessToken() async {
+    await _ready;
     final token = await tokenStore.get(_key('access_token'));
     if (token == null) return null;
     if (await _isExpired()) {
@@ -727,6 +772,7 @@ class OidcClient implements AuthProvider {
 
   @override
   Future<void> onAuthFailure() async {
+    await _ready;
     try {
       await refresh();
     } catch (_) {

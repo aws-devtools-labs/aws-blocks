@@ -101,4 +101,98 @@ void main() {
       expect(await store.get('refresh_token'), 'main-rt');
     });
   });
+
+  group('OidcClient token key migration', () {
+    /// A store holding the tokens an earlier version wrote, unprefixed.
+    Future<InMemoryTokenStore> legacyStore() async {
+      final store = InMemoryTokenStore();
+      await store.set('access_token', 'old-at');
+      await store.set('refresh_token', 'old-rt');
+      final inAnHour = DateTime.now().add(const Duration(hours: 1));
+      await store.set('expires_at', '${inAnHour.millisecondsSinceEpoch}');
+      return store;
+    }
+
+    OidcClient client(TokenStore store, String base, String provider) =>
+        OidcClient.fromJson(
+          _descriptor(base, provider),
+          baseUrl: 'http://localhost:3001/aws-blocks/api',
+          tokenStore: store,
+          httpClient: _server(),
+        );
+
+    test('moves unprefixed tokens to the default block', () async {
+      final store = await legacyStore();
+      final main = client(store, '/aws-blocks/auth', 'google');
+
+      expect(await main.getAccessToken(), 'old-at');
+      expect(await store.get('/aws-blocks/auth/refresh_token'), 'old-rt');
+      expect(await store.get('access_token'), isNull);
+      expect(await store.get('refresh_token'), isNull);
+      expect(await store.get('expires_at'), isNull);
+    });
+
+    test('a block used first leaves them for the default block', () async {
+      final store = await legacyStore();
+      final sso = client(store, '/aws-blocks/auth/sso', 'corp');
+      expect(await sso.getAccessToken(), isNull);
+      expect(await store.get('access_token'), 'old-at');
+
+      final main = client(store, '/aws-blocks/auth', 'google');
+      expect(await main.getAccessToken(), 'old-at');
+      expect(await sso.getAccessToken(), isNull);
+      expect(await store.get('access_token'), isNull);
+    });
+
+    test('with both blocks built first, the default block gets them', () async {
+      final store = await legacyStore();
+      final main = client(store, '/aws-blocks/auth', 'google');
+      final sso = client(store, '/aws-blocks/auth/sso', 'corp');
+
+      expect(await sso.getAccessToken(), isNull);
+      expect(await main.getAccessToken(), 'old-at');
+      expect(await store.get('/aws-blocks/auth/sso/access_token'), isNull);
+      expect(await store.get('access_token'), isNull);
+    });
+
+    test('a store with no default block keeps them where they are', () async {
+      final store = await legacyStore();
+      final sso = client(store, '/aws-blocks/auth/sso', 'corp');
+
+      expect(await sso.getAccessToken(), isNull);
+      expect(await store.get('access_token'), 'old-at');
+      expect(await store.get('refresh_token'), 'old-rt');
+    });
+
+    test('never overwrites tokens the block already has', () async {
+      final store = await legacyStore();
+      await store.set('/aws-blocks/auth/refresh_token', 'new-rt');
+      final main = client(store, '/aws-blocks/auth', 'google');
+
+      await main.signOut();
+
+      expect(await store.get('refresh_token'), 'old-rt');
+      expect(await store.get('/aws-blocks/auth/refresh_token'), isNull);
+    });
+
+    test(
+      'a client built with the constructor reads them where they are',
+      () async {
+        final store = await legacyStore();
+        final legacy = OidcClient(
+          exchangePath: '/aws-blocks/auth/exchange',
+          refreshPath: '/aws-blocks/auth/exchange/refresh',
+          signOutPath: '/aws-blocks/auth/signout',
+          providers: ['google'],
+          providerConfigs: const {},
+          baseUrl: 'http://localhost:3001/aws-blocks/api',
+          tokenStore: store,
+          httpClient: _server(),
+        );
+
+        expect(await legacy.getAccessToken(), 'old-at');
+        expect(await store.get('access_token'), 'old-at');
+      },
+    );
+  });
 }

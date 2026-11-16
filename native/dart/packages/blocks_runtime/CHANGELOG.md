@@ -57,6 +57,13 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   can share one token store. They used to share the unprefixed keys and
   overwrite each other's tokens. A client built with the constructor keeps
   the unprefixed keys.
+- An `OidcClient` from `fromJson` moves the tokens version 0.2.0 or earlier
+  stored under the unprefixed keys to its own keys the first time it reads
+  or writes them, so upgrading doesn't sign a bearer session out. Only the
+  client of the default block (`exchangePath` `/aws-blocks/auth/exchange`,
+  the one 0.2.0 signed in against) takes them, and only when it has no
+  tokens of its own, whatever other blocks share the store and in whatever
+  order they are used.
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
