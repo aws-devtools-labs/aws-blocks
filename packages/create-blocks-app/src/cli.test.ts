@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -719,6 +719,39 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('a stackId derived from a name that starts with "aws" gets the app- prefix, in any letter case', () => {
+    // AWS Resource Groups refuses a group name that starts with "aws" in any letter case, and the
+    // stack's two groups are named after the stack, so such a stack id fails the deploy.
+    const names: [name: string, expected: RegExp][] = [
+      ['aws-blocks-wt-cmp-bbdata', /^app-aws-blocks-w-[0-9a-f]{6}$/],
+      ['AWS-Thing', /^app-AWS-Thing-[0-9a-f]{6}$/],
+      ['Awsome', /^app-Awsome-[0-9a-f]{6}$/],
+      ['@aws/shop', /^app-aws-shop-[0-9a-f]{6}$/],
+      // Unchanged: the name does not start with "aws".
+      ['awesome-app', /^awesome-app-[0-9a-f]{6}$/],
+      ['my-aws-app', /^my-aws-app-[0-9a-f]{6}$/],
+      ['my-cool-app', /^my-cool-app-[0-9a-f]{6}$/],
+    ];
+    for (const [name, expected] of names) {
+      const stackId = generateStackId(name);
+      assert.match(stackId, expected, `${name} -> ${stackId}`);
+      assert.doesNotMatch(stackId, /^aws/i, `${name} -> ${stackId}`);
+    }
+  });
+
+  it('a fresh app in a directory whose name starts with "aws" gets a stackId that does not', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'create-blocks-app-aws-name-'));
+    const appDir = join(parent, 'aws-blocks-wt-cmp-bbdata');
+    try {
+      const result = run([appDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(appDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.match(config.stackId, /^app-aws-blocks-w-[0-9a-f]{6}$/);
+    } finally {
+      rmSync(parent, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
