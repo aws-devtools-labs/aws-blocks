@@ -37,9 +37,9 @@ export function conflictRetryDelayMs(retry: number, random: () => number = Math.
 
 interface DatabaseCoreOptions {
 	engine: () => Promise<RowCountingEngine>;
-	/** Tests only: stands in for the wait between `transaction()` conflict retries. */
+	/** Tests only: stands in for the wait between conflict retries. */
 	sleep?: (ms: number) => Promise<void>;
-	/** Tests only: the random source of that wait, a number in [0, 1). */
+	/** Tests only: the random source of the `transaction()` wait, a number in [0, 1). */
 	random?: () => number;
 }
 
@@ -47,6 +47,10 @@ export class DatabaseCore {
 	private engine: Promise<RowCountingEngine> | null = null;
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
+
+	private wait(ms: number): Promise<void> {
+		return (this.options.sleep ?? sleep)(ms);
+	}
 
 	/** @internal */
 	getEngine(): Promise<RowCountingEngine> {
@@ -82,7 +86,7 @@ export class DatabaseCore {
 				return await fn();
 			} catch (e) {
 				if (!isSerializationConflict(e) || attempt >= AUTOCOMMIT_CONFLICT_BACKOFF_MS.length) throw e;
-				await sleep(AUTOCOMMIT_CONFLICT_BACKOFF_MS[attempt]);
+				await this.wait(AUTOCOMMIT_CONFLICT_BACKOFF_MS[attempt]);
 			}
 		}
 	}
@@ -120,8 +124,7 @@ export class DatabaseCore {
 		return this.withConflictRetry(() => engine.execute(sql, params));
 	}
 
-	// The failed attempt has rolled back and freed its connection before the wait, so a waiting retry holds
-	// nothing. The mock and the Lambda runtime both run this method; the wait is the same on both.
+	// The failed attempt has rolled back and freed its connection before the wait.
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		const engine = await this.getEngine();
 		const maxRetries = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) : 0;
@@ -129,9 +132,11 @@ export class DatabaseCore {
 			try {
 				return await runTransaction(this, engine, fn);
 			} catch (e) {
-				// `retry < maxRetries`, not its negation: a `maxRetries` that is not a number retries nothing.
-				if (!(isSerializationConflict(e) && retry < maxRetries)) throw e;
-				await (this.options.sleep ?? sleep)(conflictRetryDelayMs(retry, this.options.random));
+				if (isSerializationConflict(e) && retry < maxRetries) {
+					await this.wait(conflictRetryDelayMs(retry, this.options.random));
+					continue;
+				}
+				throw e;
 			}
 		}
 	}

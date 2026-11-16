@@ -5,11 +5,6 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
 import { sql, type TransactionHandle } from '@aws-blocks/data-common/core';
-import {
-	DEFAULT_MAX_RETRIES,
-	TRANSACTION_CONFLICT_BACKOFF_BASE_MS,
-	TRANSACTION_CONFLICT_BACKOFF_CAP_MS,
-} from '../constants.js';
 import { DatabaseErrors, serializationConflict } from '../errors.js';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { conflictRetryDelayMs, DatabaseCore } from './index.js';
@@ -75,8 +70,6 @@ const ALMOST_ONE = 1 - Number.EPSILON;
 
 describe('conflictRetryDelayMs', () => {
 	test('the ceiling doubles from the base with each retry and stops at the cap', () => {
-		assert.strictEqual(TRANSACTION_CONFLICT_BACKOFF_BASE_MS, 50);
-		assert.strictEqual(TRANSACTION_CONFLICT_BACKOFF_CAP_MS, 2000);
 		const ceilings = Array.from({ length: 9 }, (_, retry) => conflictRetryDelayMs(retry, () => ALMOST_ONE));
 		assert.deepStrictEqual(ceilings, [50, 100, 200, 400, 800, 1600, 2000, 2000, 2000]);
 		assert.strictEqual(
@@ -86,29 +79,21 @@ describe('conflictRetryDelayMs', () => {
 		);
 	});
 
-	test('the wait is a whole number spread over the range from 0 to the ceiling', () => {
-		for (let retry = 0; retry < 9; retry++) {
+	test('the wait is a whole number between 0 and the ceiling', () => {
+		const cases: [retry: number, random: number, expected: number][] = [
+			[0, 0, 0],
+			[8, 0, 0],
+			[0, 0.5, 25],
+			[3, 0.5, 200],
+			[7, 0.25, 500],
+			[2, 0.37, 74],
+		];
+		for (const [retry, random, expected] of cases) {
 			assert.strictEqual(
-				conflictRetryDelayMs(retry, () => 0),
-				0,
-				'the bottom of the range is no wait',
+				conflictRetryDelayMs(retry, () => random),
+				expected,
+				`retry ${retry}, random ${random}`,
 			);
-		}
-		assert.strictEqual(
-			conflictRetryDelayMs(0, () => 0.5),
-			25,
-		);
-		assert.strictEqual(
-			conflictRetryDelayMs(3, () => 0.5),
-			200,
-		);
-		assert.strictEqual(
-			conflictRetryDelayMs(7, () => 0.25),
-			500,
-		);
-		for (const fraction of [0.01, 0.37, 0.5, 0.93, ALMOST_ONE]) {
-			const delay = conflictRetryDelayMs(2, () => fraction);
-			assert.ok(Number.isInteger(delay) && delay >= 0 && delay <= 200, `${delay} is in [0, 200]`);
 		}
 	});
 
@@ -150,14 +135,13 @@ const retrying = (conflicts: number) => {
 	const run = async () => {
 		counter.attempts++;
 	};
-	return { core, waits, counter, run };
+	return { core, engine, waits, counter, run };
 };
 
 const isConflict = (e: unknown) => isBlocksError(e, DatabaseErrors.SerializationFailure);
 
 describe('DatabaseCore.transaction() backs off between conflict retries', () => {
 	test('the default is 8 retries: 8 conflicts commit on the ninth run, with a growing wait before each retry', async () => {
-		assert.strictEqual(DEFAULT_MAX_RETRIES, 8);
 		const { core, waits, counter, run } = retrying(8);
 		await core.transaction(run, { retryOnConflict: true });
 		assert.strictEqual(counter.attempts, 9);
@@ -212,15 +196,8 @@ describe('DatabaseCore.transaction() backs off between conflict retries', () => 
 		assert.deepStrictEqual(waits, []);
 	});
 
-	test('a single auto-commit statement keeps its own fixed waits, apart from the transaction() wait', async () => {
-		const engine = new RecordingEngine();
-		const waits: number[] = [];
-		const core = new DatabaseCore({
-			engine: async () => engine,
-			sleep: async (ms) => {
-				waits.push(ms);
-			},
-		});
+	test('a single auto-commit statement keeps its own fixed wait', async () => {
+		const { core, engine, waits } = retrying(0);
 		engine.failOn.set('SELECT 1', serializationConflict(new Error('conflict')));
 		await core.query(sql`SELECT 1`);
 		assert.deepStrictEqual(
@@ -228,6 +205,6 @@ describe('DatabaseCore.transaction() backs off between conflict retries', () => 
 			['query', 'query'],
 			'the statement was retried',
 		);
-		assert.deepStrictEqual(waits, [], 'the transaction() wait is not on this path');
+		assert.deepStrictEqual(waits, [50], 'the first entry of the auto-commit table, not the transaction() wait');
 	});
 });

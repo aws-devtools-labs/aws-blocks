@@ -723,8 +723,6 @@ describe('create-blocks-app auto-detection', () => {
   });
 
   it('a stackId derived from a name that starts with "aws" gets the app- prefix, in any letter case', () => {
-    // AWS Resource Groups refuses a group name that starts with "aws" in any letter case, and the
-    // stack's two groups are named after the stack, so such a stack id fails the deploy.
     const names: [name: string, expected: RegExp][] = [
       ['aws-blocks-wt-cmp-bbdata', /^app-aws-blocks-w-[0-9a-f]{6}$/],
       ['AWS-Thing', /^app-AWS-Thing-[0-9a-f]{6}$/],
@@ -738,7 +736,6 @@ describe('create-blocks-app auto-detection', () => {
     for (const [name, expected] of names) {
       const stackId = generateStackId(name);
       assert.match(stackId, expected, `${name} -> ${stackId}`);
-      assert.doesNotMatch(stackId, /^aws/i, `${name} -> ${stackId}`);
     }
   });
 

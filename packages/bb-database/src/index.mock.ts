@@ -225,8 +225,8 @@ export class Database extends Scope {
 	 * Run `fn` inside a transaction. Commits when it resolves, rolls back when it
 	 * throws. Pass `{ retryOnConflict: true }` to re-run a side-effect-free
 	 * callback when the commit hits a serialization conflict. The block waits a
-	 * random time before each re-run, up to a ceiling that doubles from 50 ms to
-	 * 2,000 ms, and re-runs the callback up to `maxRetries` times (default 8).
+	 * random time before each re-run; `TransactionOptions` has the wait and the
+	 * number of retries.
 	 *
 	 * An `ApiError` thrown inside `fn` (a 404, or the 401 from `requireAuth`) and
 	 * any branded Blocks error reach the caller unchanged; the transaction still

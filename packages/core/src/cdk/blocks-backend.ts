@@ -220,20 +220,17 @@ export function assertBlocksDefaults(
 	);
 }
 
-// AWS Resource Groups refuses a group name that starts with "aws" in any letter case, and both groups below
-// are named after the root stack. CloudFormation reports that only after it has created other resources, so
-// the name is refused at synth. An error annotation, not a throw: `cdk synth`, `cdk diff` and `cdk deploy` stop
-// on it, while `cdk destroy` and `cdk ls` do not check annotations, so a stack that a deploy with such a name
-// left behind can still be destroyed.
+// CloudFormation reports such a name only after it has created other resources, so it is refused at synth.
+// An error annotation, not a throw: `cdk synth`, `cdk diff` and `cdk deploy` stop on it, while `cdk destroy`
+// and `cdk ls` do not check annotations, so a stack that such a deploy left behind can still be destroyed.
 function checkStackNameAllowsResourceGroups(scope: Construct, stackName: string, groupPrefix: string): void {
 	if (!/^aws/i.test(stackName)) return;
 	cdk.Annotations.of(scope).addError(
 		`Stack name '${stackName}' starts with 'aws'. AWS Blocks names two AWS Resource Groups after the stack ` +
 			`('${groupPrefix}-resources' and '${groupPrefix}-settings'), and AWS Resource Groups refuses a group name ` +
 			"that starts with 'AWS' in any letter case, so the deploy would fail in CloudFormation. " +
-			"Use a stack name that does not start with 'aws'. In an app made by create-blocks-app, the name comes " +
-			'from "stackId" in .blocks/config.json: change it to a value that does not start with \'aws\', ' +
-			"for example with the prefix 'app-'.",
+			"Use a stack name that does not start with 'aws'. In an app made by create-blocks-app, change " +
+			'"stackId" in .blocks/config.json, for example with the prefix \'app-\'.',
 	);
 }
 

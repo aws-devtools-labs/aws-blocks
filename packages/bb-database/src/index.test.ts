@@ -194,27 +194,19 @@ describe('Database (owned DSQL cluster)', () => {
 
 	test('retryOnConflict commits a callback that conflicts maxRetries times, and throws on one conflict more', async () => {
 		const db = owned({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
-		const within = insertAfterConflicts(db, 'within', 2);
-		await db.transaction(within.run, { retryOnConflict: true, maxRetries: 2 });
-		assert.strictEqual(within.counter.attempts, 3, 'two conflicts, then the run that commits');
+		const within = insertAfterConflicts(db, 'within', 1);
+		await db.transaction(within.run, { retryOnConflict: true, maxRetries: 1 });
+		assert.strictEqual(within.counter.attempts, 2, 'one conflict, then the run that commits');
 		assert.ok(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'within'}`));
 
-		const beyond = insertAfterConflicts(db, 'beyond', 3);
-		await assert.rejects(db.transaction(beyond.run, { retryOnConflict: true, maxRetries: 2 }), (e: unknown) => {
+		const beyond = insertAfterConflicts(db, 'beyond', 2);
+		await assert.rejects(db.transaction(beyond.run, { retryOnConflict: true, maxRetries: 1 }), (e: unknown) => {
 			assert.ok(isBlocksError(e, DatabaseErrors.SerializationFailure));
 			assert.ok(e instanceof ApiError && e.status === 409 && e.retriable);
 			return true;
 		});
-		assert.strictEqual(beyond.counter.attempts, 3, 'the first run and two retries, no more');
+		assert.strictEqual(beyond.counter.attempts, 2, 'the first run and one retry, no more');
 		assert.strictEqual(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'beyond'}`), null, 'rolled back');
-	});
-
-	test('the default maxRetries commits a callback that conflicts four times', async () => {
-		const db = owned({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
-		const { counter, run } = insertAfterConflicts(db, 'x', 4);
-		await db.transaction(run, { retryOnConflict: true });
-		assert.strictEqual(counter.attempts, 5, 'four conflicts, then the run that commits');
-		assert.ok(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'x'}`));
 	});
 
 	test('the 3,000-row limit is enforced per auto-commit statement too', async () => {

@@ -276,7 +276,7 @@ Query and transaction failures carry a `DatabaseErrors` name. Match them with `i
 | `ConnectionFailed` | The connection to the cluster failed or was lost (SQLSTATE class `08`) | A single `query` or `execute`: once, on a fresh connection. Inside a transaction: no |
 | `TransactionFailed` | The callback threw an error that is not an `ApiError`, a Blocks error or a database error, or a statement reached the transaction after it ended (a promise the callback did not await) | No |
 | `UniqueConstraintViolation` | SQLSTATE `23505` (HTTP 409) | No |
-| `SerializationFailure` | SQLSTATE `40001`, usually at commit (HTTP 409, retriable) | A single `query` or `execute`: three times. A `transaction()` callback: only with `retryOnConflict: true`, then up to `maxRetries` times (default 8) with a random wait before each (see [Transactions](#transactions)) |
+| `SerializationFailure` | SQLSTATE `40001`, usually at commit (HTTP 409, retriable) | A single `query` or `execute`: three times. A `transaction()` callback: only with `retryOnConflict: true` (see [Transactions](#transactions)) |
 | `TransactionRowLimitExceeded` | More than 3,000 rows changed (cascades included) or more than 10 MiB written in one transaction, locally and on DSQL (SQLSTATE `54000`) | No; split the work |
 | `ResultValidationFailed` | A row did not match the `schema` passed to `query()` or `queryOne()`. The message, which reaches the client, names the row index and the first issue's path; the library's issue messages stay on the server-side `cause` | No; fix the schema or the query |
 

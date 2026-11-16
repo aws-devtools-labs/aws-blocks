@@ -25,7 +25,7 @@ export function generateStackId(name: string): string {
     .replace(/^[^A-Za-z]+/, 'app-')
     // AWS Resource Groups refuses a group name that starts with "aws" in any letter case, and the
     // stack's two groups are named after the stack, so such an id would fail the deploy.
-    .replace(/^(?=aws)/i, 'app-')
+    .replace(/^aws/i, 'app-$&')
     .replace(/-+/g, '-')
     .replace(/-$/, '')
     .slice(0, 16)

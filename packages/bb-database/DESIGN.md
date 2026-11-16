@@ -141,7 +141,6 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | `ASYNC` DDL (`CREATE INDEX ASYNC`, `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`) | Runs synchronously: the mock strips `ASYNC`; the job wait is a no-op. `sys.wait_for_job()` returns `true` at once and `sys.jobs` is empty, so a wait written into a file runs unchanged | DSQL returns a job id; the runner polls `sys.jobs` every 30 seconds for up to 55 minutes |
 | 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` (`@aws-blocks/bb-database/testing`) | Available | Throws |
-| The wait before a `transaction()` conflict retry (`retryOnConflict`) | Applied: `DatabaseCore` waits after a simulated conflict | Same |
 | `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `pg-engine.ts` installs a parser that matches PGlite |
 | An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 | `db.query()` / `db.execute()` on the block inside its own `transaction()` callback | Runs in the transaction (`DatabaseCore`) | Same |
