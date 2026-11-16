@@ -25,7 +25,7 @@
   "dependencies": {
     "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
-    "nuxt": "^4.6.3",
+    "nuxt": "^4.6.4",
     "vue": "^3.5.44"
   },
   "devDependencies": {
