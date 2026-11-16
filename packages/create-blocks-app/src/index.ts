@@ -7,7 +7,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFileSync, execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
@@ -1142,14 +1142,18 @@ function resolveProjectHosting(backendDir: string, subpath: string): string {
 
 /**
  * What the process that asks the project's Hosting runs. Its one argument is JSON:
- * the module's URL, the project directory and the `framework`. It ends its output
- * with a line of JSON holding the `warning`, if any.
+ * the module's URL, the project directory and the `framework`. It writes the
+ * `warning`, if any, as JSON to file descriptor 3, a pipe of its own, so nothing the
+ * module prints can be read as the answer; then it exits, so a timer or a socket the
+ * module left open does not keep it alive.
  */
 const HOSTING_WARNING_SCRIPT = [
+  "import { writeSync } from 'node:fs';",
   'const { url, projectDir, framework } = JSON.parse(process.argv[1]);',
   'const { checkNextjsCompatibility } = await import(url);',
   'const result = checkNextjsCompatibility(projectDir, { framework });',
-  "process.stdout.write('\\n' + JSON.stringify({ warning: result?.warning }));",
+  'writeSync(3, JSON.stringify({ warning: result?.warning }));',
+  'process.exit(0);',
 ].join('\n');
 
 /**
@@ -1161,10 +1165,12 @@ const HOSTING_WARNING_SCRIPT = [
  * wording of its own for it; it adds only where the warning is from and that `next`
  * was left as it is.
  *
- * Hosting is asked in a process of its own, whose error output is dropped: the module
- * is the project's code, and whatever it does (throw, print, exit, hang) must neither
- * show nor fail this command. Silent when that Hosting is not installed
- * (`--skip-install`), predates the export, fails in any of those ways, or has no warning.
+ * Hosting is asked in a process of its own, whose output is dropped: the module is the
+ * project's code, and whatever it does (throw, print, exit, hang) must neither show
+ * nor fail this command. The process is killed with SIGKILL after ten seconds: a
+ * process can handle the default SIGTERM and stay, and this command would then wait
+ * for it forever. Silent when that Hosting is not installed (`--skip-install`),
+ * predates the export, fails in any of those ways, or has no warning.
  *
  * @param framework - The `framework` the copied backend gives its `Hosting`, if any.
  */
@@ -1172,12 +1178,13 @@ function printHostingNextjsWarning(targetDir: string, backendDir: string, framew
   let warning: unknown;
   try {
     const url = pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href;
-    const output = execFileSync(
+    const child = spawnSync(
       process.execPath,
       ['--input-type=module', '-e', HOSTING_WARNING_SCRIPT, JSON.stringify({ url, projectDir: targetDir, framework })],
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 },
+      { encoding: 'utf-8', stdio: ['ignore', 'ignore', 'ignore', 'pipe'], timeout: 10_000, killSignal: 'SIGKILL' },
     );
-    const answer: unknown = JSON.parse(output.slice(output.lastIndexOf('\n') + 1));
+    // Empty unless the script got as far as its answer.
+    const answer: unknown = JSON.parse(child.output[3] ?? '');
     if (typeof answer !== 'object' || answer === null) return;
     warning = Reflect.get(answer, 'warning');
   } catch {
