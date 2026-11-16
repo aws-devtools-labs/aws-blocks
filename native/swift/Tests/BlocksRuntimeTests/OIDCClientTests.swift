@@ -124,6 +124,50 @@ private actor RendezvousTokenStore: TokenStore {
     }
 }
 
+/// Suspends the first read of an armed key, value already taken, until `release()`, so a test can run
+/// another call while the reader is suspended.
+private actor HoldingTokenStore: TokenStore {
+    private var storage: [String: String] = [:]
+    private var armedKey: String?
+    private var held: CheckedContinuation<Void, Never>?
+    private var arrived = false
+    private var arrivalWaiter: CheckedContinuation<Void, Never>?
+
+    func arm(_ key: String) {
+        armedKey = key
+    }
+
+    func waitUntilHeld() async {
+        if arrived { return }
+        await withCheckedContinuation { arrivalWaiter = $0 }
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
+    }
+
+    func get(_ key: String) async -> String? {
+        let value = storage[key]
+        if key == armedKey {
+            armedKey = nil
+            arrived = true
+            arrivalWaiter?.resume()
+            arrivalWaiter = nil
+            await withCheckedContinuation { held = $0 }
+        }
+        return value
+    }
+
+    func set(_ key: String, value: String) async {
+        storage[key] = value
+    }
+
+    func delete(_ key: String) async {
+        storage[key] = nil
+    }
+}
+
 // MARK: - Tests
 
 final class OIDCClientTests: XCTestCase {
@@ -723,6 +767,72 @@ final class OIDCClientTests: XCTestCase {
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
             ["http://localhost:3001/aws-blocks/auth/sso/current", "http://localhost:3001/aws-blocks/auth/sso/session"]
         )
+    }
+
+    /// A client on the default routes over a `HoldingTokenStore`, warmed so the 0.x token move has run.
+    private func holdingClient() async throws -> (OIDCClient<String>, HoldingTokenStore) {
+        let store = HoldingTokenStore()
+        let blocksClient = BlocksClient(
+            url: "https://api.example.com/aws-blocks/api",
+            session: makeMockSession(),
+            ownsSession: true,
+            tokenStore: store
+        )
+        let client = try Self.authClient(on: blocksClient)
+        _ = await client.getAccessToken()
+        return (client, store)
+    }
+
+    /// A sign-in that finishes while `restore()` waits wins: the restore's 401 neither signs the user
+    /// out nor clears the new tokens.
+    func testARestoreThatFinishesAfterASignInLeavesTheSignIn() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path.hasSuffix("/session") {
+                return (errorResponse(for: url, status: 401), Data("{}".utf8))
+            }
+            let body: [String: Any] = [
+                "user": ["userId": "u1", "username": "alice"],
+                "accessToken": "at-new", "refreshToken": "rt-new", "expiresIn": 3_600
+            ]
+            return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
+        }
+        let (client, store) = try await holdingClient()
+        await store.arm(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+
+        let restoring = Task { try await client.restore() }
+        await store.waitUntilHeld()
+        let user = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
+        await store.release()
+        let restored = try await restoring.value
+
+        XCTAssertEqual(restored, user)
+        let state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+        let access = await store.get(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+        XCTAssertEqual(access, "at-new")
+    }
+
+    /// A sign-out that finishes while `restore()` waits wins: the restore's stale user isn't applied.
+    func testARestoreThatFinishesAfterASignOutLeavesTheSignOut() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let body: [String: Any] = url.path.hasSuffix("/signout") ? [:] : ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
+        }
+        let (client, store) = try await holdingClient()
+        _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
+        await store.arm(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+
+        let restoring = Task { try await client.restore() }
+        await store.waitUntilHeld()
+        _ = try await client.signOut()
+        await store.release()
+        let restored = try await restoring.value
+
+        XCTAssertNil(restored)
+        let state = await client.authState
+        XCTAssertEqual(state, .signedOut)
     }
 
     func testRestoreSendsAStoredAccessToken() async throws {

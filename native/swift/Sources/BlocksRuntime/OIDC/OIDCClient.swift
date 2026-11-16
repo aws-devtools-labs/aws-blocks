@@ -54,6 +54,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private var tokenStore: TokenStore { client.tokenStore }
 
     private var inflightRefresh: Task<Void, Error>?
+    /// Counts the sign-ins and sign-outs this client has applied. `restore()` reads it before it suspends
+    /// and applies its result only if it is unchanged, so a late result can't overwrite a sign-in or
+    /// sign-out that finished meanwhile.
+    private var sessionGeneration = 0
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
     /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
@@ -312,6 +316,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw OIDCError.malformedExchangeResponse
         }
 
+        sessionGeneration += 1
         if let accessToken = json["accessToken"] as? String {
             await storeToken("access_token", accessToken)
             if let refreshToken = json["refreshToken"] as? String {
@@ -395,6 +400,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         } catch let error as ClientClosedError {
             throw error
         } catch where Self.isSignOutIncomplete(error) {
+            sessionGeneration += 1
             await clearTokens()
             emit(.signedOut)
             throw error
@@ -402,6 +408,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             await clearTokens()
             throw error
         }
+        sessionGeneration += 1
         await clearTokens()
         emit(.signedOut)
         return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
@@ -421,13 +428,17 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// any and not expired). The user is the server's, never one decoded from a token.
     ///
     /// - Returns: The signed-in user, after emitting `.signedIn`. `nil` when the server has no
-    ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`.
+    ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`. If a
+    ///   sign-in or sign-out on this client finished while the request was in flight, the response is
+    ///   out of date: it is ignored, nothing is emitted or cleared, and the current ``authState``'s user
+    ///   (or `nil`) is returned.
     /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route: an
     ///   `Auth` block without federated providers, or a custom block that doesn't serve
     ///   `sessionPath`. Any other failure, including a transport error or `ClientClosedError`, is
     ///   thrown and leaves the state and stored tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
+        let generation = sessionGeneration
         var headers: [String: String] = [:]
         // An expired token would only get a 401 that clears the refresh token with it. It isn't
         // refreshed here either: a failed refresh signs out, and a failed restore changes nothing.
@@ -438,6 +449,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         do {
             json = try await client.getRawRoute(path: sessionPath, headers: headers)
         } catch let error as RawRouteError where error.statusCode == 401 {
+            guard generation == sessionGeneration else { return currentUser }
             await clearTokens()
             emit(.signedOut)
             return nil
@@ -454,8 +466,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw OIDCError.invalidResponse
         }
         let user = try OIDCUser.fromJSON(userJSON)
+        guard generation == sessionGeneration else { return currentUser }
         emit(.signedIn(user))
         return user
+    }
+
+    /// The user `authState` is signed in as, or `nil`.
+    private var currentUser: OIDCUser? {
+        if case .signedIn(let user) = authState { return user }
+        return nil
     }
 
     // MARK: - AuthProvider
