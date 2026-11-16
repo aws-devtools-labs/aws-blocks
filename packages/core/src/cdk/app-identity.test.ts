@@ -49,6 +49,16 @@ const appDefaults = (extra: Partial<BlocksDefaults> = {}): BlocksDefaults => ({
 	...extra,
 });
 
+/** A resolved `Fn::Join` name rendered as deployed in `region` (`Ref: AWS::Region` substituted). */
+const renderJoin = (value: unknown, region: string): string => {
+	if (typeof value === 'string') return value;
+	const join = (value as { 'Fn::Join'?: [string, unknown[]] })['Fn::Join'];
+	assert.ok(join, `not a string or Fn::Join: ${JSON.stringify(value)}`);
+	return join[1]
+		.map((part) => (typeof part === 'string' ? part : (part as { Ref?: string }).Ref === 'AWS::Region' ? region : `?${JSON.stringify(part)}`))
+		.join(join[0]);
+};
+
 const makeStack = (scope: Construct, id: string, defaults: BlocksDefaults, backend = cleanBackend) =>
 	BlocksStack.create(scope, id, {
 		backendHandlerPath: handlerPath,
@@ -128,6 +138,10 @@ describe('defaults.appIdentity — tags', () => {
 			const text = JSON.stringify(name);
 			assert.match(text, /"appa-"/, text);
 			assert.match(text, /AWS::Region/, text);
+			// The length budget holds for the longest Region name (14 characters), within CloudFront's 64.
+			const longest = renderJoin(name, 'ap-southeast-4');
+			assert.ok(longest.startsWith('appa-ap-southeast-4-'), longest);
+			assert.ok(longest.length <= 64, `${longest} (${longest.length})`);
 		}
 		assert.ok(names.includes('my-own-function'), 'an explicit name is kept');
 	});
