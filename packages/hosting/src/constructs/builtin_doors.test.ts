@@ -102,7 +102,8 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     frontDoor: HostingConstructProps['frontDoor'],
     extra: Partial<HostingConstructProps> = {},
   ) => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     const hosting = new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
     return { t: Template.fromStack(stack), hosting };
   };
@@ -418,15 +419,67 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.equal(synth(spaManifest(), { kind: 'apiGateway' }).hosting.loadBalancerDnsName, undefined);
     });
 
-    it('a plain-HTTP door with an API warns that sign-in and cookies travel unencrypted', () => {
-      const warn = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
+    /** A custom door that serves the app at a plain-HTTP URL. */
+    const plainHttpCustom = defineFrontDoor({
+      service: 'my-http-proxy',
+      build(_scope, input: DoorInput) {
+        cf.recordWired(input.origins.assets);
+        return { url: 'http://proxy.example.com' };
+      },
+    });
+
+    it('outside a sandbox, a plain-HTTP door with an API fails synth with PlainHttpFrontDoorError, naming the door and the fix', () => {
+      const build = (frontDoor: HostingConstructProps['frontDoor']) => () => {
         const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, backendApi: { url: API_URL } });
+      };
+      assert.throws(build({ kind: 'alb' }), (e: Error & { resolution?: string }) => {
+        assert.equal(e.name, 'PlainHttpFrontDoorError');
+        assert.match(e.message, /The 'alb' front door serves the app over plain HTTP \(no certificate\)/);
+        assert.match(e.message, /session cookies/);
+        assert.match(e.resolution ?? '', /`certificate` and `features\.domain`/);
+        assert.match(e.resolution ?? '', /CloudFront or stacked door/);
+        assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
+        return true;
+      });
+      assert.throws(build({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }), (e: Error & { resolution?: string }) => {
+        assert.equal(e.name, 'PlainHttpFrontDoorError');
+        assert.match(e.message, /The 'custom' front door's URL is `http:\/\/`, so the pages/);
+        assert.doesNotMatch(e.message, /no certificate/);
+        assert.match(e.resolution ?? '', /Serve the custom door over HTTPS \(return an `https:\/\/` url\), or use the CloudFront or stacked door/);
+        assert.doesNotMatch(e.resolution ?? '', /ALB door/);
+        assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
+        return true;
+      });
+      // HTTPS doors, and the ALB door with a certificate, synthesize.
+      const certificate = Certificate.fromCertificateArn(
+        new Stack(new App(), 'CertScope', { env: { account: '111111111111', region: 'us-west-2' } }),
+        'C',
+        'arn:aws:acm:us-west-2:111111111111:certificate/c',
+      );
+      build({ kind: 'alb', certificate, features: { domain: DOMAIN } })();
+      build({ kind: 'apiGateway' })();
+      build(undefined)();
+    });
+
+    it("outside a sandbox, the 'none' door and a plain-HTTP door without an API still synthesize", () => {
+      const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'None', { manifest: spaManifest(), frontDoor: 'none', backendApi: { url: API_URL } });
+      new HostingConstruct(stack, 'Alb', { manifest: spaManifest(), frontDoor: { kind: 'alb' } });
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')).length, 1, "'none' warns");
+    });
+
+    it('a plain-HTTP door with an API warns in a sandbox that sign-in and cookies travel unencrypted', () => {
+      const warn = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
+        const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
         new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, ...extra });
         return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
       };
       const alb = warn({ kind: 'alb' }, { backendApi: { url: API_URL } });
       assert.equal(alb.length, 1);
       assert.match(JSON.stringify(alb[0].entry.data), /`Auth` drops `Secure` from its session cookie/);
+      assert.match(JSON.stringify(alb[0].entry.data), /allowed in a sandbox only; a production deploy fails synth/);
+      assert.equal(warn({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }, { backendApi: { url: API_URL } }).length, 1, 'custom');
       assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
     });

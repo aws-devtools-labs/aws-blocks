@@ -848,7 +848,10 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		mkdirSync(join(root, 'dist'), { recursive: true });
 		writeFileSync(join(root, 'dist', 'index.html'), '<!DOCTYPE html><html><body>app</body></html>');
 		writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'spa', dependencies: { react: '^18' } }));
-		const stack = await BlocksStack.create(new cdk.App(), id, {
+		// The stacked door here has a public router over plain HTTP, a sandbox-only
+		// setup: outside a sandbox the edge refuses to send its origin-verify secret over that hop.
+		const app = new cdk.App(frontDoor ? { context: { sandboxMode: 'true' } } : {});
+		const stack = await BlocksStack.create(app, id, {
 			backendHandlerPath: handlerPath,
 			backendCDKPath: containerBackendPath,
 			defaults: BlocksPresets.production,
