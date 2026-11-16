@@ -47,6 +47,19 @@ function withDeploymentType(value: string | undefined, fn: () => void): void {
 	}
 }
 
+/** Run `fn` with `BLOCKS_ALLOW_PLAIN_HTTP` set (how synth and local processes read the door's opt-out). */
+function withAllowPlainHttp(value: string | undefined, fn: () => void): void {
+	const previous = process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+	if (value === undefined) delete process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+	else process.env.BLOCKS_ALLOW_PLAIN_HTTP = value;
+	try {
+		fn();
+	} finally {
+		if (previous === undefined) delete process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+		else process.env.BLOCKS_ALLOW_PLAIN_HTTP = previous;
+	}
+}
+
 // ─── resolveCookieSecurity ───────────────────────────────────────────────────
 
 describe('resolveCookieSecurity', () => {
@@ -111,6 +124,43 @@ describe('resolveCookieSecurity', () => {
 		});
 		// …and deployed compute whose config says nothing (fails closed as production).
 		withDeploymentType(undefined, () => withDeployedEnv(() => assert.throws(() => resolveCookieSecurity(plain), refused)));
+	});
+
+	test('outside a sandbox, the door\'s `allowPlainHttp` opt-out (BLOCKS_ALLOW_PLAIN_HTTP=true) → Lax; no Secure', () => {
+		const plain: CookieSecurityInput = { crossDomain: false, isLocalhost: false, plainHttpOrigin: true };
+		withDeploymentType('production', () =>
+			withAllowPlainHttp('true', () => {
+				assert.deepStrictEqual(resolveCookieSecurity(plain), { sameSite: 'Lax', secure: false, partitioned: false });
+				assert.strictEqual(buildCookieSecurityAttrs(plain), 'SameSite=Lax');
+				// HTTPS and cross-domain cookies are unaffected by the opt-out.
+				assert.deepStrictEqual(
+					resolveCookieSecurity({ crossDomain: false, isLocalhost: false, plainHttpOrigin: false }),
+					{ sameSite: 'Lax', secure: true, partitioned: false },
+				);
+				assert.deepStrictEqual(
+					resolveCookieSecurity({ crossDomain: true, isLocalhost: false, plainHttpOrigin: true }),
+					{ sameSite: 'None', secure: true, partitioned: true },
+				);
+			}),
+		);
+	});
+
+	test('outside a sandbox, a missing or malformed BLOCKS_ALLOW_PLAIN_HTTP fails closed (refuses the cookie)', () => {
+		const plain: CookieSecurityInput = { crossDomain: false, isLocalhost: false, plainHttpOrigin: true };
+		const refused = (e: unknown): boolean => isBlocksError(e, AuthErrors.InsecureTransport);
+		for (const value of [undefined, '', 'false', 'TRUE', 'True', '1', 'yes', ' true', 'true ']) {
+			withDeploymentType('production', () =>
+				withAllowPlainHttp(value, () => assert.throws(() => resolveCookieSecurity(plain), refused, JSON.stringify(value))),
+			);
+		}
+	});
+
+	test('on deployed compute an env var cannot opt out: only the loaded config entry counts (none loaded → refuses)', () => {
+		const plain: CookieSecurityInput = { crossDomain: false, isLocalhost: false, plainHttpOrigin: true };
+		const refused = (e: unknown): boolean => isBlocksError(e, AuthErrors.InsecureTransport);
+		withDeploymentType('production', () =>
+			withAllowPlainHttp('true', () => withDeployedEnv(() => assert.throws(() => resolveCookieSecurity(plain), refused))),
+		);
 	});
 
 	test('a clearing cookie (Max-Age=0) over a plain-HTTP front door outside a sandbox → Lax; no Secure, never refused', () => {

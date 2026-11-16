@@ -791,6 +791,31 @@ describe('email + password flows through AuthBase', () => {
 		}
 	});
 
+	test("outside a sandbox over a plain-HTTP front door with the door's `allowPlainHttp` opt-out: sign-in issues a cookie without Secure", async () => {
+		const keys = ['BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_PUBLIC_ORIGIN', 'BLOCKS_ALLOW_PLAIN_HTTP'] as const;
+		const before = keys.map((k) => process.env[k]);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'production';
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'http://my-alb-123.us-east-1.elb.amazonaws.com';
+		process.env.BLOCKS_ALLOW_PLAIN_HTTP = 'true';
+		try {
+			const h = makeAuth();
+			h.native.addUser('alice');
+			const ctx = makeContext();
+			const user = await h.auth.signIn('alice', 'Passw0rd!', ctx);
+			assert.ok(user, 'signed in');
+			const line = ctx.response.headers.getSetCookie().find((l) => l.startsWith(`${h.cookieName}=`));
+			assert.ok(line, 'the session cookie is set');
+			assert.match(line, /HttpOnly; SameSite=Lax; Path=\//);
+			assert.doesNotMatch(line, /;\s*Secure/, 'no Secure: the browser would drop it over HTTP');
+		} finally {
+			keys.forEach((k, i) => {
+				const v = before[i];
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			});
+		}
+	});
+
 	test('signOut: clears the cookie even when signed out; global revokes upstream; onSignOut errors never block', async () => {
 		const h = makeAuth({
 			onSignOut: async () => {
