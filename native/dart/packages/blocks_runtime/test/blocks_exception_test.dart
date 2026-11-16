@@ -132,6 +132,16 @@ void main() {
       expect(const FileTransferException('x'), isA<BlocksException>());
     });
 
+    test('a BlocksRpcException has no cause', () {
+      expect(_rpc(null).cause, isNull);
+    });
+
+    test('carries the cause through the root type', () {
+      final cause = StateError('socket gone');
+      final BlocksException e = FileTransferException('x', cause: cause);
+      expect(e.cause, same(cause));
+    });
+
     test('keeps both catchable as Exception', () {
       expect(_rpc(null), isA<Exception>());
       expect(const FileTransferException('x'), isA<Exception>());

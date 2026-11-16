@@ -32,14 +32,17 @@
   yields a different number of bytes than its `contentLength`, now throw a
   `FileTransferException` with the HTTP `statusCode` (null for a byte-count
   mismatch) instead of a plain `Exception`. The message is unchanged, and it
-  is still an `Exception`. Network errors and timeouts are rethrown as
-  before.
+  is still an `Exception`, but `toString()` now starts with
+  `FileTransferException:` instead of `Exception:`. Network errors and
+  timeouts are rethrown as before.
 - Add `BlocksException`, implemented by `BlocksRpcException` and
-  `FileTransferException`, so `on BlocksException` catches either.
-- **Breaking for classes that implement or override `BlocksClient`:**
-  `call(String method, Object params)` takes `Object`, not
-  `Map<String, dynamic>`, so an override must widen its parameter. Callers
-  are unaffected.
+  `FileTransferException`, so `on BlocksException` catches either. It has
+  `message` and `cause`.
+- **Breaking for classes that implement or override `BlocksClient`, or
+  implement `BlocksRpcException`:** `call(String method, Object params)`
+  takes `Object`, not `Map<String, dynamic>`, so an override must widen its
+  parameter. A class that implements `BlocksRpcException` must add the new
+  `name` and `cause` getters. Callers are unaffected.
 - `BlocksClient.call` accepts its `params` as a `List` (positional) as well
   as a `Map`, and throws an `ArgumentError` for anything else before sending.
   Generated clients now send a list: an AWS Blocks server reads params by

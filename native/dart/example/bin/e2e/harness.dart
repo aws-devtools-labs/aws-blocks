@@ -184,8 +184,7 @@ Future<void> expectErrorNamed(
     _failed++;
     print('  ✗ $label — no error thrown (expected $name)');
   } on BlocksRpcException catch (e) {
-    final data = e.data;
-    final actual = data is Map ? data['name'] : null;
+    final actual = e.name;
     check(actual == name, '$label — $name (got $actual: ${e.message})');
   } catch (e) {
     _failed++;

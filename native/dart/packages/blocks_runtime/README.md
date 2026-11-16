@@ -64,9 +64,11 @@ A client you pass to `BlocksClient` or `OidcClient` is used as is, with its own 
 
 ## Errors
 
-A JSON-RPC error from the backend is thrown as a `BlocksRpcException`. Errors cross the wire by name, so match on its `name` (the server's `error.data.name`) rather than on `code` or `message`. `isBlocksError` does the check for any caught value. Here `signUp` stands for a method of your own backend:
+A JSON-RPC error from the backend is thrown as a `BlocksRpcException`. Errors cross the wire by name, so match on its `name` (the server's `error.data.name`) rather than on `code` or `message`. `isBlocksError` does the check for any caught value. Here `signUp` stands for a method of your own backend. The generated client re-exports `BlocksRpcException` but not `isBlocksError`, `BlocksException` or `FileTransferException`, so import the runtime library for them:
 
 ```dart
+import 'package:blocks_runtime/blocks_runtime.dart';
+
 try {
   await blocks.api.signUp(username: username, password: password);
 } catch (e) {
@@ -79,7 +81,7 @@ To read the exception's fields as well, catch the type: `on BlocksRpcException c
 
 A file transfer that gets an HTTP error status, or an upload whose source yields a different number of bytes than its `contentLength`, throws a `FileTransferException`. Its `statusCode` is the HTTP status, or null for a byte-count mismatch.
 
-Both implement `BlocksException`, which every exception type the runtime defines implements, and both are `Exception`s. Errors from Dart and package:http are rethrown as they are: a timeout is a `TimeoutException` (see [Timeouts](#timeouts)), and a network failure is an `http.ClientException`.
+Both implement `BlocksException`, and both are `Exception`s. `BlocksException` has the `message` and the `cause` (the error that caused this one, or null). Errors from Dart and package:http are rethrown as they are: a timeout is a `TimeoutException` (see [Timeouts](#timeouts)), and a network failure is an `http.ClientException`.
 
 `BlocksClient.close()` closes its HTTP client, including one you passed in. A call made after that fails at once with an `http.ClientException` ("Client is already closed") and sends nothing, and a call still waiting for its response fails with an `http.ClientException` too.
 

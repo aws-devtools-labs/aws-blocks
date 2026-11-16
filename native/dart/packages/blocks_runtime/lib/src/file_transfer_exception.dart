@@ -11,7 +11,7 @@ import 'blocks_exception.dart';
 ///
 /// A network failure, a timeout, or an error from the caller's own source or
 /// sink is rethrown as it is, not wrapped in this type.
-class FileTransferException implements BlocksException {
+final class FileTransferException implements BlocksException {
   const FileTransferException(this.message, {this.statusCode, this.cause});
 
   @override
@@ -22,6 +22,7 @@ class FileTransferException implements BlocksException {
   final int? statusCode;
 
   /// The error that caused this one, when there is one.
+  @override
   final Object? cause;
 
   @override

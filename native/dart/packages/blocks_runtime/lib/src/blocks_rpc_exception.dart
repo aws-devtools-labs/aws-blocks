@@ -19,6 +19,11 @@ class BlocksRpcException implements BlocksException {
     _ => null,
   };
 
+  /// Always null: a server error arrives as a response, not from another
+  /// error.
+  @override
+  Object? get cause => null;
+
   @override
   String toString() => 'BlocksRpcException($code): $message';
 }
