@@ -72,6 +72,7 @@ jobs:
           git add -A
           git commit -m "revert: roll back release ${LAST_RELEASE}"
           git push -u origin "$BRANCH"
+          printf '\n%s\n' "This PR was opened by github-actions[bot], so its checks wait for approval. Approve the workflow runs at the bottom of this PR, and merge once they pass." >> "$BODY_FILE"
           gh pr create --base main --head "$BRANCH" \
             --title "Revert release ${LAST_RELEASE}" \
             --body-file "$BODY_FILE"

@@ -39,8 +39,8 @@ jobs:
       - name: Run unit tests on iOS
         run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
-  create-release-prs:
-    name: Create Release PRs
+  create-release-pr:
+    name: Create Release PR
     needs: build-and-test
     runs-on: ubuntu-latest
     defaults:
@@ -62,9 +62,10 @@ jobs:
         # Registers `gh auth git-credential` as the credential helper in the
         # global git config. It stores no secret on disk and only returns the
         # token to processes that already carry GH_TOKEN or GITHUB_TOKEN in
-        # their environment, so steps without either stay unauthenticated. This keeps the
-        # `origin` remote usable (so the remote-tracking ref `gh pr create`
-        # needs still gets written) without persisting credentials.
+        # their environment, so steps without either stay unauthenticated.
+        # This keeps the `origin` remote usable (so the remote-tracking ref
+        # `gh pr create` needs still gets written) without persisting
+        # credentials.
         run: gh auth setup-git
 
       - name: Setup Node.js
