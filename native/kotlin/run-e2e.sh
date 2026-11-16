@@ -43,6 +43,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fail before the spec, codegen and server steps rather than after them.
+ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
+if [ "$TARGET" = "android" ] && ! "$ADB" devices | grep -q "device$"; then
+  echo "No Android device or emulator is attached. Boot one, then re-run."
+  exit 1
+fi
+
 echo "Step 1: Generate OpenRPC spec from test-apps/native-bindings"
 cd "$BACKEND"
 npm run spec
@@ -100,11 +107,6 @@ case $TARGET in
     ./gradlew iosSimulatorArm64Test -DBLOCKS_URL="$BLOCKS_URL"
     ;;
   android)
-    ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
-    if ! "$ADB" devices | grep -q "device$"; then
-      echo "   No Android device or emulator is attached. Boot one, then re-run."
-      exit 1
-    fi
     # The suite runs on the device, where localhost is the device itself. Forward
     # the device's port 3001 to this machine's so BLOCKS_URL resolves the same on
     # every target. Harmless when BLOCKS_URL points at a deployed backend.

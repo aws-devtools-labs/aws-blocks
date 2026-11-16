@@ -4,14 +4,13 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.AssumptionViolatedException
 
 /**
- * Instrumented tests run in a process Gradle does not launch, so there is no environment to read.
- * The values arrive as instrumentation arguments instead
- * (`-Pandroid.testInstrumentationRunnerArguments.BLOCKS_URL=…`, wired in `build.gradle.kts`).
- * `System.getenv` is still consulted so an `adb shell am instrument` run can set either.
+ * Instrumented tests run in a process forked from zygote, not from a shell, so no environment
+ * variable set alongside the test command can reach it. The values arrive as instrumentation
+ * arguments instead (`-Pandroid.testInstrumentationRunnerArguments.BLOCKS_URL=…`, wired in
+ * `build.gradle.kts`, or `-e BLOCKS_URL …` for a hand-run `am instrument`).
  */
 actual fun getEnv(name: String): String? =
     InstrumentationRegistry.getArguments().getString(name)?.takeIf { it.isNotBlank() }
-        ?: System.getenv(name)
 
 actual fun markSkipped(reason: String) {
     throw AssumptionViolatedException(reason)

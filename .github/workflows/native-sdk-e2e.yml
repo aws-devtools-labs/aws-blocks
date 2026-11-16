@@ -819,9 +819,11 @@ jobs:
       # with the run id the derived bucket name
       # `bb-test-nb-<suffix>-native-bindings-files` would exceed S3's 63-character
       # limit on the Kotlin legs and fall back to FileBucket's hashed short form.
-      # The Android leg's longer `suffix` can still cross the limit on a
-      # high-numbered run; the hashed name works, it is only harder to read.
-      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
+      # The leg prefix is `nk-` rather than `native-kotlin-` for the same reason:
+      # that bucket name spends 33 characters either side of the suffix, leaving
+      # it 30. `native-kotlin-android-1497-6440-1` is 33, and `native-kotlin-jvm-`
+      # crosses too once PR numbers reach five digits; every `nk-` leg fits.
+      BLOCKS_STACK_SUFFIX: nk-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
       # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
       # the sandbox" above. Empty unless the repository sets both variables.
       NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
