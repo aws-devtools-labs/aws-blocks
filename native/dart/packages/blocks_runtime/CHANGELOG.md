@@ -24,6 +24,18 @@
   file and renames it into place, so a failed download leaves the path
   unchanged. The file-path methods throw `UnsupportedError` on the web.
   `upload` and `download` are unchanged.
+- Add `BlocksRpcException.name`, the server's error name (`error.data.name`),
+  and `isBlocksError(error, name)`, which is true when `error` is a
+  `BlocksRpcException` with that name. Errors cross the wire by name, so
+  match on it rather than on `code` or `message`.
+- File transfers that get an HTTP error status, or an upload whose source
+  yields a different number of bytes than its `contentLength`, now throw a
+  `FileTransferException` with the HTTP `statusCode` (null for a byte-count
+  mismatch) instead of a plain `Exception`. The message is unchanged, and it
+  is still an `Exception`. Network errors and timeouts are rethrown as
+  before.
+- Add `BlocksException`, implemented by `BlocksRpcException` and
+  `FileTransferException`, so `on BlocksException` catches either.
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers

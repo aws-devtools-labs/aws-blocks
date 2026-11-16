@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'file_transfer_exception.dart';
 import 'local_file.dart';
 import 'timeout_client.dart';
 import 'transferable_descriptor.dart';
@@ -34,12 +35,19 @@ class FileDownloadHandle {
 
   String getUrl() => url;
 
+  /// Downloads the whole file into memory.
+  ///
+  /// Throws a [FileTransferException] on an HTTP error status, and rethrows a
+  /// network error.
   Future<Uint8List> download() async {
     final client = UserAgentClient(newBlocksHttpClient());
     try {
       final response = await client.get(Uri.parse(url));
       if (response.statusCode != 200) {
-        throw Exception('Download failed: HTTP ${response.statusCode}');
+        throw FileTransferException(
+          'Download failed: HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+        );
       }
       return response.bodyBytes;
     } finally {
@@ -55,15 +63,17 @@ class FileDownloadHandle {
   /// [sink] if the download fails partway, so a caller that needs all or
   /// nothing should write somewhere it can discard, or use [downloadToFile].
   ///
-  /// Throws an [Exception] on an HTTP error status (before anything is
-  /// written), and rethrows a network error.
+  /// Throws a [FileTransferException] on an HTTP error status (before
+  /// anything is written), and rethrows a network error.
   Future<void> downloadTo(StreamConsumer<List<int>> sink) async {
     final client = UserAgentClient(newBlocksHttpClient());
     try {
       final response = await client.send(http.Request('GET', Uri.parse(url)));
       if (response.statusCode != 200) {
-        // TODO(error-taxonomy): use the shared file-transfer error type.
-        throw Exception('Download failed: HTTP ${response.statusCode}');
+        throw FileTransferException(
+          'Download failed: HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+        );
       }
       // A StreamController's addStream forwards an error to its listener and
       // completes normally, so catch it here and throw it from this call

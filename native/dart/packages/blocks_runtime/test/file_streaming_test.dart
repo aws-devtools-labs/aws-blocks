@@ -134,11 +134,13 @@ void main() {
           'url': _url(server, '/put'),
         }).uploadFrom(_chunked(_payload(10), 4), contentLength: 8),
         throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('Upload failed: source yielded more than the 8 bytes'),
-          ),
+          isA<FileTransferException>()
+              .having((e) => e.statusCode, 'statusCode', isNull)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('Upload failed: source yielded more than the 8 bytes'),
+              ),
         ),
       );
     });
@@ -155,11 +157,13 @@ void main() {
           'url': _url(server, '/put'),
         }).uploadFrom(_chunked(_payload(5), 2), contentLength: 8),
         throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('Upload failed: source yielded 5 of the 8 bytes'),
-          ),
+          isA<FileTransferException>()
+              .having((e) => e.statusCode, 'statusCode', isNull)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('Upload failed: source yielded 5 of the 8 bytes'),
+              ),
         ),
       );
     });
@@ -189,7 +193,7 @@ void main() {
         source.add([0]);
         await source.close();
 
-        await expectLater(upload, throwsA(isA<Exception>()));
+        await expectLater(upload, throwsA(isA<FileTransferException>()));
         expect(stored, isFalse);
       },
     );
@@ -215,11 +219,9 @@ void main() {
           'url': _url(server, '/put'),
         }).uploadFrom(Stream.value([1, 2, 3]), contentLength: 3),
         throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('Upload failed: HTTP 403'),
-          ),
+          isA<FileTransferException>()
+              .having((e) => e.statusCode, 'statusCode', 403)
+              .having((e) => e.message, 'message', 'Upload failed: HTTP 403'),
         ),
       );
     });
@@ -317,11 +319,9 @@ void main() {
           'url': _url(server, '/get'),
         }).downloadTo(sink.sink),
         throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('Download failed: HTTP 404'),
-          ),
+          isA<FileTransferException>()
+              .having((e) => e.statusCode, 'statusCode', 404)
+              .having((e) => e.message, 'message', 'Download failed: HTTP 404'),
         ),
       );
       await sink.close();
@@ -382,7 +382,13 @@ void main() {
         FileDownloadHandle.fromJson({
           'url': _url(server, '/get'),
         }).downloadToFile(file.path),
-        throwsA(isA<Exception>()),
+        throwsA(
+          isA<FileTransferException>().having(
+            (e) => e.statusCode,
+            'statusCode',
+            500,
+          ),
+        ),
       );
 
       expect(await file.readAsString(), 'old contents');

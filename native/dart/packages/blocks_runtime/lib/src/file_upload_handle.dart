@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'file_transfer_exception.dart';
 import 'local_file.dart';
 import 'timeout_client.dart';
 import 'transferable_descriptor.dart';
@@ -39,6 +40,10 @@ class FileUploadHandle {
 
   String getUrl() => url;
 
+  /// Uploads [bytes] to the presigned upload URL.
+  ///
+  /// Throws a [FileTransferException] on an HTTP error status, and rethrows a
+  /// network error.
   Future<void> upload(Uint8List bytes) async {
     final headers = <String, String>{};
     if (contentType != null) headers['Content-Type'] = contentType!;
@@ -50,7 +55,10 @@ class FileUploadHandle {
         body: bytes,
       );
       if (response.statusCode != 200 && response.statusCode != 204) {
-        throw Exception('Upload failed: HTTP ${response.statusCode}');
+        throw FileTransferException(
+          'Upload failed: HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+        );
       }
     } finally {
       client.close();
@@ -75,8 +83,8 @@ class FileUploadHandle {
   /// On the web, package:http's browser client reads the whole body into
   /// memory before it sends the request.
   ///
-  /// Throws an [Exception] on an HTTP error status or a byte-count mismatch,
-  /// and rethrows an error from [source] or the network.
+  /// Throws a [FileTransferException] on an HTTP error status or a byte-count
+  /// mismatch, and rethrows an error from [source] or the network.
   Future<void> uploadFrom(
     Stream<List<int>> source, {
     required int contentLength,
@@ -94,8 +102,10 @@ class FileUploadHandle {
       final response = await client.send(request);
       await response.stream.drain<void>();
       if (response.statusCode != 200 && response.statusCode != 204) {
-        // TODO(error-taxonomy): use the shared file-transfer error type.
-        throw Exception('Upload failed: HTTP ${response.statusCode}');
+        throw FileTransferException(
+          'Upload failed: HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+        );
       }
     } finally {
       client.close();
@@ -125,8 +135,7 @@ class FileUploadHandle {
       if (chunk.isEmpty) continue;
       sent += chunk.length;
       if (sent > expected) {
-        // TODO(error-taxonomy): use the shared file-transfer error type.
-        throw Exception(
+        throw FileTransferException(
           'Upload failed: source yielded more than the $expected bytes '
           'given as contentLength',
         );
@@ -138,8 +147,7 @@ class FileUploadHandle {
       }
     }
     if (sent < expected) {
-      // TODO(error-taxonomy): use the shared file-transfer error type.
-      throw Exception(
+      throw FileTransferException(
         'Upload failed: source yielded $sent of the $expected bytes '
         'given as contentLength',
       );

@@ -25,5 +25,25 @@ void main() {
 
       expect(userAgent, blocksUserAgentToken);
     });
+
+    test('throws a FileTransferException with the HTTP status', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) async {
+        req.response.statusCode = 404;
+        await req.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+
+      await expectLater(
+        FileDownloadHandle.fromJson({
+          'url': 'http://127.0.0.1:${server.port}/get',
+        }).download(),
+        throwsA(
+          isA<FileTransferException>()
+              .having((e) => e.statusCode, 'statusCode', 404)
+              .having((e) => e.message, 'message', 'Download failed: HTTP 404'),
+        ),
+      );
+    });
   });
 }

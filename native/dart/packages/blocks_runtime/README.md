@@ -62,6 +62,27 @@ The connect timeout applies only to the default dart:io client. Other clients (t
 
 A client you pass to `BlocksClient` or `OidcClient` is used as is, with its own timeout behavior. The `OidcClient` a generated client decodes, and file uploads and downloads, always use the runtime's own client with the default timeouts. Realtime WebSocket connections are not covered.
 
+## Errors
+
+A JSON-RPC error from the backend is thrown as a `BlocksRpcException`. Errors cross the wire by name, so match on its `name` (the server's `error.data.name`) rather than on `code` or `message`. `isBlocksError` does the check for any caught value. Here `signUp` stands for a method of your own backend:
+
+```dart
+try {
+  await blocks.api.signUp(username: username, password: password);
+} catch (e) {
+  if (!isBlocksError(e, 'UsernameExistsException')) rethrow;
+  // The user already exists: offer to sign in instead.
+}
+```
+
+To read the exception's fields as well, catch the type: `on BlocksRpcException catch (e)`, then check `e.name`.
+
+A file transfer that gets an HTTP error status, or an upload whose source yields a different number of bytes than its `contentLength`, throws a `FileTransferException`. Its `statusCode` is the HTTP status, or null for a byte-count mismatch.
+
+Both implement `BlocksException`, which every exception type the runtime defines implements, and both are `Exception`s. Errors from Dart and package:http are rethrown as they are: a timeout is a `TimeoutException` (see [Timeouts](#timeouts)), and a network failure is an `http.ClientException`.
+
+`BlocksClient.close()` closes its HTTP client, including one you passed in. A call made after that fails at once with an `http.ClientException` ("Client is already closed") and sends nothing, and a call still waiting for its response fails with an `http.ClientException` too.
+
 ## License
 
 Apache 2.0
