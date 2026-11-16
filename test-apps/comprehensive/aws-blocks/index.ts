@@ -2926,9 +2926,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { deleted: true };
   },
 
-  async agentInferenceOnly(message: string) {
-    const result = await inferenceAgent.stream(message);
+  async agentInferenceOnly(message: string, conversationId?: string) {
+    // An inferenceOnly agent scopes its sessions and channels to the caller by default
+    // (sessionScope: 'user'), so it takes the session user's id like a persistent agent.
+    const user = await auth.getCurrentUser(context);
+    const result = await inferenceAgent.stream(message, { conversationId, userId: user?.userSub ?? 'anonymous' });
     return { channelId: result.channelId };
+  },
+
+  async agentInferenceOnlyGetChannel(channelId: string) {
+    const user = await auth.getCurrentUser(context);
+    return { channel: await inferenceAgent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
@@ -2973,7 +2981,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async agentPresetStream(presetName: string, message: string) {
     const presetAgent = presetAgents[presetName];
     if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
-    const result = await presetAgent.stream(message);
+    const result = await presetAgent.stream(message, { userId: 'test-user' });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },
@@ -3189,7 +3197,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbAgentToolSearch(message: string) {
     // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
     // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
-    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const result = await kbToolAgent.stream(message, { userId: 'test-user', context: { folder: 'faq' } });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },

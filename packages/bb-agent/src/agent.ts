@@ -239,6 +239,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, `sessionScope must be 'shared' or 'user', got ${JSON.stringify(config.sessionScope)}.`);
 		}
 		this.toolMap = resolveTools<TContext>(config.tools);
+		// resume() refuses an inferenceOnly agent with sessionScope: 'shared' (its sessions have no
+		// owner to approve a pending tool call), so a tool that declares an approval step could only
+		// ever pause on a prompt nobody can answer. Reject that configuration up front.
+		if (config.inferenceOnly && config.sessionScope === 'shared') {
+			const approvalTools = [...this.toolMap.values()].filter(t => t.needsApproval || t.interrupt).map(t => t.name);
+			if (approvalTools.length) {
+				throw blocksAgentError(AgentErrors.InvalidModelConfig, `Tools ${approvalTools.map(n => `'${n}'`).join(', ')} set 'needsApproval' or 'interrupt', but an inferenceOnly agent with sessionScope: 'shared' can't resume() a paused turn, so their approval prompts could never be answered. Use sessionScope: 'user' (the default) and pass the caller's userId, or enable persistence.`);
+			}
+		}
 		this.modelConfig = modelConfig;
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
@@ -290,7 +299,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * be scoped to its user (stream()/resume() reject that before dispatching; the bare
 	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
 	 * itself fails to publish (e.g. a channel path over Realtime's size limit). A turn without a
-	 * `userId` on an `inferenceOnly` agent with `sessionScope: 'user'` falls in the first case:
+	 * `userId` on an `inferenceOnly` agent with `sessionScope: 'user'` (the default) falls in the first case:
 	 * it is refused and logged, never run in a shared `'anonymous'` scope.
 	 *
 	 * The `error` chunk and the persisted `metadata.error` are client-visible, so they carry the
@@ -774,7 +783,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
-	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` (the default) and
+	 *   `options.userId` is missing.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
@@ -787,7 +797,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
-		const channel = this.rt.getChannel('chunks', rtChannel);
+		// Exact scope: the handle may reach the client, and must not open sub-channels of this one.
+		const channel = this.rt.getChannel('chunks', rtChannel, { scope: 'exact' });
 		// Most callers never await `channel`; don't let a rejection go unhandled.
 		channel.catch(() => {});
 		return {
@@ -830,24 +841,34 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
-	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` (the default) and
+	 *   `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'shared'`: its sessions have no
+	 *   owner, so anyone who knows the conversationId could approve the pending tool calls. Checked first,
+	 *   before any approval is persisted or the turn is dispatched.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
 		this.log.info('Resuming agent', { channelId, responseCount: responses.length, conversationId: options?.conversationId });
 		const conversationId = options?.conversationId;
+		// An inferenceOnly agent with sessionScope: 'shared' keys its session by the
+		// conversationId alone and has no record of who started it, so any caller who knows
+		// (or picks) the id could approve, or `trust`, the pending tool calls. Refuse.
+		if (this.config.inferenceOnly && !this.scopesSessionsToUser) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, "resume() is not available on an inferenceOnly agent with sessionScope: 'shared': its sessions have no owner, so anyone who knows the conversationId could approve the pending tool calls. Use sessionScope: 'user' (the default) and pass the caller's userId, or enable persistence.");
+		}
 		// Resuming an interrupted agent requires restoring its paused state, which
 		// only the SessionManager (keyed by conversationId) holds. Without a
 		// conversationId there is no session to restore, so the resume job would run
 		// with a fresh agent and the interrupt responses would have nothing to apply
 		// to. Fail fast with a clear error instead of silently submitting a job that
-		// can't honor the responses. For inferenceOnly agents this is a fundamental
-		// limitation (they never persist a session), not a missing parameter — call
-		// that out explicitly so developers don't go looking for a workaround.
+		// can't honor the responses. An inferenceOnly agent only keeps a session for a
+		// turn that passed a conversationId, so call that out explicitly: the fix is to
+		// pass the same conversationId to stream() and resume().
 		if (!conversationId) {
 			const reason = this.config.inferenceOnly
-				? 'Agents with inferenceOnly: true cannot be resumed because they have no persistent session to restore.'
+				? 'An agent with inferenceOnly: true keeps a session only for a turn that passed a conversationId: pass the same options.conversationId to stream() and resume().'
 				: 'Pass options.conversationId so the interrupted session can be restored.';
 			throw blocksAgentError(AgentErrors.InterruptRequired, `resume() requires a conversationId to restore the interrupted session. ${reason}`);
 		}
@@ -887,8 +908,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
 	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
 	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
-	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId,
-	 * unless they set `sessionScope: 'user'`, which scopes their channels the same way.
+	 * dispatching. inferenceOnly agents have no owner record; with `sessionScope: 'user'` (the
+	 * default) their channels are scoped the same way, and with `sessionScope: 'shared'` they
+	 * keep the bare channelId.
 	 *
 	 * The result must also be a valid Realtime channel name (no empty, `.` or `..` segment,
 	 * no leading or trailing `/`). Realtime rejects any other name on publish and getChannel(),
@@ -915,16 +937,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Whether turns, sessions and channels are scoped to the caller's userId: always with
 	 * persistence (ownership is checked against the conversation record), and for an
-	 * `inferenceOnly` agent only with `sessionScope: 'user'` (the session key and channel
+	 * `inferenceOnly` agent with `sessionScope: 'user'`, the default (the session key and channel
 	 * carry the userId, since there is no record to check against).
 	 */
 	private get isUserScoped(): boolean {
 		return !!this.conversations || this.scopesSessionsToUser;
 	}
 
-	/** An `inferenceOnly` agent with `sessionScope: 'user'`. */
+	/** An `inferenceOnly` agent with `sessionScope: 'user'` (the default; only `'shared'` opts out). */
 	private get scopesSessionsToUser(): boolean {
-		return !this.conversations && this.config.sessionScope === 'user';
+		return !this.conversations && this.config.sessionScope !== 'shared';
 	}
 
 	/**
@@ -943,14 +965,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	/**
-	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` is called
-	 * without a userId: the default 'anonymous' would put every such caller in one shared scope.
+	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` (the default)
+	 * is called without a userId: the default 'anonymous' would put every such caller in one
+	 * shared scope. The message names the `'shared'` opt-out, since this is what an existing
+	 * inferenceOnly agent hits first after upgrading.
 	 */
 	private assertUserIdForUserScope(userId: unknown, method: string): void {
 		// Same test as requireUserId: an untyped RPC caller's `123` would otherwise get the
 		// channel of '123' but the session hash of the number, a different session.
 		if (this.scopesSessionsToUser && (typeof userId !== 'string' || !userId)) {
-			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId when sessionScope is 'user'. Take it from the authenticated session.`);
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId: an inferenceOnly agent scopes its sessions and channels to the caller (sessionScope: 'user', the default). Take the userId from the authenticated session. To key sessions by the conversationId alone instead, set sessionScope: 'shared' on the agent, but only if callers can never choose the conversationId or channelId.`);
 		}
 	}
 
@@ -985,7 +1009,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Throws ConversationNotFound unless `userId` owns `conversationId`. A no-op for
 	 * inferenceOnly agents, which keep no conversation records to check against
-	 * (`sessionScope: 'user'` isolates their sessions by keying them with the userId instead).
+	 * (`sessionScope: 'user'`, the default, isolates their sessions by keying them with the
+	 * userId instead; `sessionScope: 'shared'` opts out, and resume() refuses it).
 	 * "Not found" covers both a missing and a foreign conversation so the error
 	 * doesn't confirm that another user's conversation exists.
 	 */
@@ -1025,16 +1050,19 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * stream()/resume(), taken from the authenticated session. The channel only
 	 * carries that user's turns, so a caller who knows another user's conversation
 	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
-	 * agent has no owner to scope by, so its channels are not user-scoped and the
-	 * `userId` is not used, unless it sets `sessionScope: 'user'`: then its channels are
-	 * scoped to the `userId` like a persistent agent's, and a `userId` is required.
+	 * agent has no owner record, but with `sessionScope: 'user'` (the default) its channels
+	 * are scoped to the `userId` like a persistent agent's, and a `userId` is required. Only
+	 * with `sessionScope: 'shared'` are its channels not user-scoped and the `userId` not used.
+	 *
+	 * The handle's token authorizes this one channel only (Realtime's `scope: 'exact'`), not
+	 * sub-channels under it, which may be another turn's or another caller's.
 	 *
 	 * @param options.userId - The caller's user id (the same one passed to stream()/resume()).
 	 */
 	async getChannel(channelId: string, options: { userId: string }) {
-		if (!this.isUserScoped) return this.rt.getChannel('chunks', channelId);
+		if (!this.isUserScoped) return this.rt.getChannel('chunks', channelId, { scope: 'exact' });
 		const userId = this.requireUserId(options, 'getChannel', 'getChannel(channelId, { userId })');
-		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
+		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId), { scope: 'exact' });
 	}
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
