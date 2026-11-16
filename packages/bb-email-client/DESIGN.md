@@ -56,7 +56,22 @@ The mock and the AWS entry point run the same checks from `src/validation.ts` be
 
 `maxBatchSize` must be a positive integer. The mock, AWS and CDK constructors all check it, so a bad value fails at synth and at startup, not on the first `sendBatch()`.
 
-The cap counts messages, not recipients: each message can still have up to 50 recipients. It bounds a single call, not a caller; the block has no per-caller rate limit, so an app that exposes sending must gate it (see the README's security section).
+The cap counts messages, not recipients: each message can still have up to 50 recipients. It bounds a single call, not a caller (see [Rate Limiting Is the Application's Job](#rate-limiting-is-the-applications-job) below).
+
+## Rate Limiting Is the Application's Job
+
+The block doesn't limit how often a caller can send. That is a deliberate design decision:
+
+- **The block can't see the caller.** `send()` and `sendBatch()` take a message, not a request context. Who the caller is (a signed-in user, an API key, an IP address, an internal job) is known only to the app method that calls the block, so only the app can choose what a limit is keyed on.
+- **A limit needs shared state and a policy.** A per-caller ceiling has to count across every compute and every request, which means a store, a window and a default that suits every app. The app already has those choices to make for its own methods, and a limit inside the block would duplicate them or disagree with them.
+- **The build can't detect an exposed send.** Any `ApiNamespace` method can call any block, so synth can't tell which methods reach `send()` or whether they are gated. A synth-time refusal would either miss real open relays or reject safe apps.
+
+What the block does instead:
+
+- It bounds one call: `sendBatch()` takes at most `maxBatchSize` messages (default 100), and each message at most 50 recipients.
+- The README's security section shows the open-relay anti-pattern and the fix: gate the method with `auth.requireAuth(context)`, build the message on the server, and add a per-user limit if a gated method still sends on the caller's behalf. It sketches one such limit: a per-user, per-window counter in a `KVStore`, updated with a conditional `put`.
+
+**The consequence of getting it wrong falls on the app's AWS account.** Mail goes out under the app's own verified SES identity. Abuse shows up as bounces and complaints against that identity, which damages the domain's sending reputation, and SES can put the account under review, pause its sending, or suspend it. SES's own limits are no substitute: the sending quota (messages per rolling 24 hours) and the maximum send rate (messages per second) apply to the whole AWS account in a Region, shared by every caller and every app there. One caller can use up the quota or hold the account at its send rate, and the app's legitimate mail (password resets, notifications) then fails until capacity frees up. Every app that sends on a caller's behalf needs its own limit for that reason.
 
 ## HTML Part
 
