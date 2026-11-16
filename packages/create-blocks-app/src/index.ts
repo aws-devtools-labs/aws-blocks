@@ -1049,8 +1049,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  import { api } from \'aws-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
-  // Only a backend whose Hosting builds the app with Next.js: the backend-only templates define no
-  // `Hosting`, and the others build Next.js when they set `framework: 'nextjs'` or when Hosting detects
+  // Only a backend whose Hosting builds the app with Next.js. The templates without a `Hosting`
+  // (api-only, backend, cron, sql, observability, amplify) host no frontend; the others build Next.js
+  // when they set `framework: 'nextjs'` (the nextjs template) or when Hosting detects
   // it from package.json. Hosting's detection reads only the declarations, so an undeclared `next`
   // (for example one hoisted from another app of a monorepo) is not built with Next.js.
   const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
@@ -1189,7 +1190,7 @@ async function warnIfNextOutsideHostingRange(targetDir: string, backendDir: stri
   console.log(`⚠️  Next.js: this project has next@${nextVersion}. \`Hosting\` builds a server-rendered Next.js app with OpenNext,`);
   console.log(`   and ${openNext} supports next ${nextRange}.`);
   console.log('   Outside that range the hosting build warns and goes on with a combination OpenNext was not released for.');
-  console.log('   Upgrading `next` is up to you: nothing was changed.');
+  console.log('   Upgrading `next` is up to you: your `next` was not changed.');
   console.log('   A static export (`output: \'export\'`, hosted with `framework: \'static\'`) has no minimum version.');
   console.log('');
 }

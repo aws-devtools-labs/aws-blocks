@@ -948,7 +948,7 @@ describe('create-blocks-app auto-detection', () => {
       'its Hosting rejects next': {
         next: '16.4.2',
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
-        warns: ['next@16.4.2', 'and @opennextjs/aws@9.9.9, the one this project installs, supports next >=99.0.0.', 'Upgrading `next` is up to you: nothing was changed.', "output: 'export'"],
+        warns: ['next@16.4.2', 'and @opennextjs/aws@9.9.9, the one this project installs, supports next >=99.0.0.', 'Upgrading `next` is up to you: your `next` was not changed.', "output: 'export'"],
       },
       // The repository's Hosting would warn about 14.2.35.
       'its Hosting accepts next': { next: '14.2.35', install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(true)); } },
@@ -992,6 +992,13 @@ describe('create-blocks-app auto-detection', () => {
         next: '16.4.2',
         template: 'default',
         declares: { peerDependencies: { next: '^16.0.0' } },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
+        warns: ['next@16.4.2', 'next >=99.0.0'],
+      },
+      'a template detects the next the project declares as a devDependency': {
+        next: '16.4.2',
+        template: 'react',
+        declares: { devDependencies: { next: '^16.0.0' } },
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, verdict(false)); },
         warns: ['next@16.4.2', 'next >=99.0.0'],
       },
