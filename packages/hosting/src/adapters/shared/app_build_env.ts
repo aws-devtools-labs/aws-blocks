@@ -1,12 +1,16 @@
 /**
  * A `cdk` export condition in a `NODE_OPTIONS` value, with the whitespace
- * before it. Matches `--conditions=cdk`, `--conditions cdk` and `-C cdk`, and
+ * after it. Matches `--conditions=cdk`, `--conditions cdk` and `-C cdk`, and
  * the same with double quotes around the value (`--conditions="cdk"`,
  * `-C "cdk"`) or around the whole entry (`"--conditions=cdk"`), because
  * Node.js removes those quotes when it parses `NODE_OPTIONS`. Another
  * condition that starts with `cdk` (`--conditions=cdk-preview`) does not match.
+ *
+ * The entry start is a lookbehind rather than a leading `\s+`, so matching
+ * stays linear in the length of the value (no backtracking over runs of
+ * whitespace).
  */
-const CDK_CONDITION = /(^|\s+)("?)(?:--conditions(?:=|\s+)|-C\s+)("?)cdk\3\2(?=\s|$)/g;
+const CDK_CONDITION = /(?<!\S)("?)(?:--conditions(?:=|\s+)|-C\s+)("?)cdk\2\1(?!\S)\s*/g;
 
 /**
  * The environment for the app's own build command (`npm run build`, a custom
