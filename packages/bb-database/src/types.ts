@@ -181,8 +181,17 @@ export interface TransactionOptions {
 	/**
 	 * Maximum retry attempts on conflict. Only applies when `retryOnConflict` is true.
 	 * The callback runs at most `maxRetries + 1` times. With the default, the waits
-	 * before the retries add up to 7.15 seconds at most.
+	 * before the retries add up to 7.15 seconds at most. A value that is not a
+	 * whole number of 0 or more throws `DatabaseConfigurationError`.
 	 * @default 8
 	 */
 	maxRetries?: number;
+	/**
+	 * Stops the retries. When the signal is aborted, the block does not wait or
+	 * re-run the callback again, and the conflict is thrown. It does not cancel a
+	 * run that is in progress. In an API method, pass `context.request.signal`:
+	 * it aborts at the request deadline, so a retry cannot commit after the
+	 * caller received a timeout.
+	 */
+	signal?: AbortSignal;
 }

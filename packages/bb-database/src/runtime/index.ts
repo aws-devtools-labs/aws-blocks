@@ -13,6 +13,7 @@ import {
 import { type RowCountingEngine, withTransaction } from '../engines/handle.js';
 import {
 	asError,
+	configError,
 	DatabaseErrors,
 	isKnownDatabaseErrorName,
 	isSerializationConflict,
@@ -48,8 +49,20 @@ export class DatabaseCore {
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
 
-	private wait(ms: number): Promise<void> {
-		return (this.options.sleep ?? sleep)(ms);
+	/** Resolves after `ms`, or as soon as `signal` aborts. */
+	private async wait(ms: number, signal?: AbortSignal): Promise<void> {
+		const slept = (this.options.sleep ?? sleep)(ms);
+		if (!signal) return slept;
+		let onAbort = () => {};
+		const aborted = new Promise<void>((resolve) => {
+			onAbort = resolve;
+		});
+		signal.addEventListener('abort', onAbort, { once: true });
+		try {
+			await Promise.race([slept, aborted]);
+		} finally {
+			signal.removeEventListener('abort', onAbort);
+		}
 	}
 
 	/** @internal */
@@ -128,15 +141,18 @@ export class DatabaseCore {
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		const engine = await this.getEngine();
 		const maxRetries = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) : 0;
+		if (!Number.isInteger(maxRetries) || maxRetries < 0) {
+			throw configError(`transaction(): 'maxRetries' must be a whole number of 0 or more, got ${maxRetries}.`);
+		}
+		const signal = options?.signal;
 		for (let retry = 0; ; retry++) {
 			try {
 				return await runTransaction(this, engine, fn);
 			} catch (e) {
-				if (isSerializationConflict(e) && retry < maxRetries) {
-					await this.wait(conflictRetryDelayMs(retry, this.options.random));
-					continue;
-				}
-				throw e;
+				if (!isSerializationConflict(e) || retry >= maxRetries || signal?.aborted) throw e;
+				await this.wait(conflictRetryDelayMs(retry, this.options.random), signal);
+				// The caller gave up during the wait: a re-run now would commit work that nobody waits for.
+				if (signal?.aborted) throw e;
 			}
 		}
 	}

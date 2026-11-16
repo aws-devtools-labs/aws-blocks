@@ -121,13 +121,14 @@ class ConflictingEngine extends RecordingEngine {
 }
 
 // The waits are recorded, not slept, so the suite asserts on what was asked for and never on the clock.
-const retrying = (conflicts: number) => {
+const retrying = (conflicts: number, onWait?: () => void) => {
 	const engine = new ConflictingEngine(conflicts);
 	const waits: number[] = [];
 	const core = new DatabaseCore({
 		engine: async () => engine,
 		sleep: async (ms) => {
 			waits.push(ms);
+			onWait?.();
 		},
 		random: () => ALMOST_ONE,
 	});
@@ -178,6 +179,37 @@ describe('DatabaseCore.transaction() backs off between conflict retries', () => 
 		await assert.rejects(core.transaction(run, { maxRetries: 5 }), isConflict);
 		assert.strictEqual(counter.attempts, 2, 'one run per call');
 		assert.deepStrictEqual(waits, []);
+	});
+
+	test('maxRetries that is not a whole number of 0 or more is a configuration error, before any run', async () => {
+		for (const maxRetries of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+			const { core, counter, run } = retrying(1);
+			await assert.rejects(core.transaction(run, { retryOnConflict: true, maxRetries }), (e: unknown) =>
+				isBlocksError(e, 'DatabaseConfigurationError'),
+			);
+			assert.strictEqual(counter.attempts, 0, `${maxRetries}`);
+		}
+	});
+
+	test('an aborted signal stops the retries: no wait and no re-run', async () => {
+		const { core, waits, counter, run } = retrying(2);
+		await assert.rejects(core.transaction(run, { retryOnConflict: true, signal: AbortSignal.abort() }), isConflict);
+		assert.strictEqual(counter.attempts, 1);
+		assert.deepStrictEqual(waits, []);
+	});
+
+	test('a signal that aborts during the wait stops the retry that would follow', async () => {
+		const controller = new AbortController();
+		const { core, waits, counter, run } = retrying(2, () => controller.abort());
+		await assert.rejects(core.transaction(run, { retryOnConflict: true, signal: controller.signal }), isConflict);
+		assert.strictEqual(counter.attempts, 1, 'the run after the wait did not start');
+		assert.deepStrictEqual(waits, [50]);
+	});
+
+	test('a signal that does not abort changes nothing', async () => {
+		const { core, counter, run } = retrying(2);
+		await core.transaction(run, { retryOnConflict: true, signal: new AbortController().signal });
+		assert.strictEqual(counter.attempts, 3);
 	});
 
 	test('an error that is not a conflict is not retried', async () => {

@@ -239,7 +239,7 @@ export class Database extends Scope {
 	 * await db.transaction(async (tx) => {
 	 *   const row = await tx.queryOne<{ balance: number }>(sql`SELECT balance FROM accounts WHERE id = ${id} FOR UPDATE`);
 	 *   await tx.execute(sql`UPDATE accounts SET balance = ${row.balance - amount} WHERE id = ${id}`);
-	 * }, { retryOnConflict: true, maxRetries: 3 });
+	 * }, { retryOnConflict: true });
 	 */
 	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		return this.core.transaction(fn, options);
