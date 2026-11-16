@@ -318,7 +318,10 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         {"action":"subscribe","channel":"\(channelName)","token":"\(channelToken)"}
         """
         // The subscribe message carries the channel token, so the log names the channel only.
-        logger.debug("WS opened, subscribing to channel \(self.channelName)")
+        // Bound locally: os.Logger interpolation is an escaping autoclosure, and SwiftFormat
+        // (`--self init-only`) removes an explicit `self.` outside initializers.
+        let channel = channelName
+        logger.debug("WS opened, subscribing to channel \(channel)")
         webSocket.send(.string(subscribeMsg)) { error in
             if let error {
                 logger.error("Failed to send subscribe: \(error.localizedDescription)")
