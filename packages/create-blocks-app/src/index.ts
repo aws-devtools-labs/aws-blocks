@@ -7,7 +7,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
@@ -1055,7 +1055,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const hostingProps = backendStack.split('new Hosting(')[1];
   if (hostingProps !== undefined) {
     const framework = /\bframework:\s*['"]([^'"]+)['"]/.exec(hostingProps)?.[1];
-    await printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
+    printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
   }
 }
 
@@ -1141,37 +1141,51 @@ function resolveProjectHosting(backendDir: string, subpath: string): string {
 }
 
 /**
+ * What the process that asks the project's Hosting runs. Its one argument is JSON:
+ * the module's URL, the project directory and the `framework`. It ends its output
+ * with a line of JSON holding the `warning`, if any.
+ */
+const HOSTING_WARNING_SCRIPT = [
+  'const { url, projectDir, framework } = JSON.parse(process.argv[1]);',
+  'const { checkNextjsCompatibility } = await import(url);',
+  'const result = checkNextjsCompatibility(projectDir, { framework });',
+  "process.stdout.write('\\n' + JSON.stringify({ warning: result?.warning }));",
+].join('\n');
+
+/**
  * Prints the warning the project's own Hosting has for its installed `next`, so the
- * project hears of it here and not first from the hosting build of its first deploy.
- * Everything in it is that Hosting's: `checkNextjsCompatibility` from the
- * `@aws-blocks/hosting/nextjs-compatibility` the backend resolves (see
- * resolveProjectHosting) decides whether Hosting builds the app with Next.js, whether
- * its `next` is supported, and what to say. This CLI carries no version range, no
- * framework detection and no wording of its own for it; it adds only that `next` was
- * left as it is. Silent when that Hosting is not installed (`--skip-install`),
- * predates the export, throws, or has no warning: the hosting build stays the first
- * check then.
+ * project hears of it while it is being set up. Everything in it is that Hosting's:
+ * `checkNextjsCompatibility` from the `@aws-blocks/hosting/nextjs-compatibility` the
+ * backend resolves (see resolveProjectHosting) decides whether there is anything to
+ * say and what. This CLI carries no version range, no framework detection and no
+ * wording of its own for it; it adds only where the warning is from and that `next`
+ * was left as it is.
+ *
+ * Hosting is asked in a process of its own, whose error output is dropped: the module
+ * is the project's code, and whatever it does (throw, print, exit, hang) must neither
+ * show nor fail this command. Silent when that Hosting is not installed
+ * (`--skip-install`), predates the export, fails in any of those ways, or has no warning.
  *
  * @param framework - The `framework` the copied backend gives its `Hosting`, if any.
  */
-async function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): Promise<void> {
+function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): void {
   let warning: unknown;
   try {
-    // A runtime path: the module is the project's installed Hosting, not a dependency of this CLI.
-    const compatibility: Record<string, unknown> = await import(
-      pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href
+    const url = pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href;
+    const output = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', HOSTING_WARNING_SCRIPT, JSON.stringify({ url, projectDir: targetDir, framework })],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 },
     );
-    const check = compatibility.checkNextjsCompatibility;
-    if (typeof check !== 'function') return;
-    const result: unknown = check(targetDir, { framework });
-    if (typeof result !== 'object' || result === null) return;
-    warning = Reflect.get(result, 'warning');
+    const answer: unknown = JSON.parse(output.slice(output.lastIndexOf('\n') + 1));
+    if (typeof answer !== 'object' || answer === null) return;
+    warning = Reflect.get(answer, 'warning');
   } catch {
     return;
   }
   if (typeof warning !== 'string' || warning === '') return;
   console.log(`⚠️  ${warning}`);
-  console.log('   Hosting prints this warning when it builds the app. Your `next` was not changed.');
+  console.log('   This is from the @aws-blocks/hosting this project installs. Your `next` was not changed.');
   console.log('');
 }
 

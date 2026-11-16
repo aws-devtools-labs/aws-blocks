@@ -913,16 +913,18 @@ describe('create-blocks-app auto-detection', () => {
     const writeHosting = (dir: string, source: string) =>
       writePackage(dir, '@aws-blocks/hosting', { exports: { './nextjs-compatibility': './nextjs-compatibility.js' } }, { 'nextjs-compatibility.js': source });
     /**
-     * A `checkNextjsCompatibility` with its own answer, unlike the repository's Hosting: a CLI
-     * that asked its own copy, or decided anything itself, would print something else. Its
-     * warning names the `next` in the directory and the `framework` it was given, so it
-     * also proves what the CLI passes.
+     * A `checkNextjsCompatibility` with an answer of its own: a CLI that asked its own copy of
+     * Hosting, or decided anything itself, would print something else. Its warning names the
+     * `next` in the directory and the `framework` it was given, which proves what the CLI
+     * passes, and it prints on both streams, which must not reach the CLI's output.
      */
     const WARNS = [
       "import { readFileSync } from 'node:fs';",
       "import { join } from 'node:path';",
       'export function checkNextjsCompatibility(projectDir, options) {',
       "  const { version } = JSON.parse(readFileSync(join(projectDir, 'node_modules', 'next', 'package.json'), 'utf-8'));",
+      "  console.log('fixture noise');",
+      "  console.error(new Error('fixture noise'));",
       '  return { supported: false, warning: `fixture Hosting on next@${version}, framework ${options.framework}` };',
       '}',
     ].join('\n');
@@ -932,12 +934,12 @@ describe('create-blocks-app auto-detection', () => {
       writePackage(dir, '@aws-blocks/blocks', { main: 'index.js' }, { 'index.js': '' });
       writePackage(dir, '@aws-blocks/core', { main: 'index.js' }, { 'index.js': '' });
     };
-    /** The one line of the warning that is the CLI's own. */
+    /** The part of the warning that is the CLI's own. */
     const NOTE = 'Your `next` was not changed.';
+    /** The `next` the fixture projects install. The fixtures decide; no version rule of Hosting's is involved. */
+    const NEXT = '1.2.3';
 
     type Project = {
-      /** The installed `next`. */
-      next: string;
       /** Installs Blocks, Core and Hosting in the project (what the scaffold's install would). */
       install?: (app: string) => void;
       template?: string;
@@ -945,52 +947,46 @@ describe('create-blocks-app auto-detection', () => {
       warns?: string;
     };
     const projects: Record<string, Project> = {
-      // The repository's Hosting has no warning for 16.4.2.
       'its Hosting has one': {
-        next: '16.4.2',
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, WARNS); },
-        warns: 'fixture Hosting on next@16.4.2, framework nextjs',
+        warns: `fixture Hosting on next@${NEXT}, framework nextjs`,
       },
-      // The repository's Hosting has a warning for 14.2.35.
-      'its Hosting has none': { next: '14.2.35', install: (app) => { writeBlocksAndCore(app); writeHosting(app, ACCEPTS); } },
+      'its Hosting has none': { install: (app) => { writeBlocksAndCore(app); writeHosting(app, ACCEPTS); } },
       // Core's own Hosting builds the app, not another release hoisted next to it.
       'the Hosting nested under its Core has one': {
-        next: '16.4.2',
         install: (app) => {
           writeBlocksAndCore(app);
           writeHosting(app, ACCEPTS);
           writeHosting(join(app, 'node_modules', '@aws-blocks', 'core'), WARNS);
         },
-        warns: 'fixture Hosting on next@16.4.2, framework nextjs',
+        warns: `fixture Hosting on next@${NEXT}, framework nextjs`,
       },
-      // The `default` template gives its Hosting no framework: the CLI passes none, and Hosting detects it.
+      // The `default` template gives its Hosting no framework, so the CLI passes none.
       'its Hosting has one and the template sets no framework': {
-        next: '16.4.2',
         template: 'default',
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, WARNS); },
-        warns: 'fixture Hosting on next@16.4.2, framework undefined',
+        warns: `fixture Hosting on next@${NEXT}, framework undefined`,
       },
       'its Hosting predates the export': {
-        next: '14.2.35',
         install: (app) => { writeBlocksAndCore(app); writePackage(app, '@aws-blocks/hosting', { exports: { './adapters': './adapters.js' } }, { 'adapters.js': '' }); },
       },
       // `--skip-install` on a project without Blocks.
-      'Hosting is not installed': { next: '14.2.35' },
+      'Hosting is not installed': {},
       'the module throws on load': {
-        next: '14.2.35',
-        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "throw new Error('compatibility module broke');"); },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "throw new Error('fixture noise');"); },
+      },
+      'the module exits': {
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, 'process.exit(3);'); },
       },
       'the check throws': {
-        next: '14.2.35',
-        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "export function checkNextjsCompatibility() { throw new Error('compatibility module broke'); }"); },
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "export function checkNextjsCompatibility() { throw new Error('fixture noise'); }"); },
       },
-      'the check has no verdict': {
-        next: '14.2.35',
-        install: (app) => { writeBlocksAndCore(app); writeHosting(app, 'export function checkNextjsCompatibility() { return undefined; }'); },
+      // What a lookup of a broken installed package does: it prints the error and gives no verdict.
+      'the check prints an error and has no verdict': {
+        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "export function checkNextjsCompatibility() { console.error(new Error('fixture noise')); }"); },
       },
-      // The `backend` template adds no Hosting, so nothing it adds builds the project's Next.js.
+      // The `backend` template adds no Hosting, so there is nothing to ask.
       'the template adds no Hosting': {
-        next: '16.4.2',
         template: 'backend',
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, WARNS); },
       },
@@ -1006,7 +1002,7 @@ describe('create-blocks-app auto-detection', () => {
       });
 
     /** An existing project with `next` installed, outside this repository so nothing resolves the repository's packages. */
-    const withExistingProject = (next: string, test: (app: string) => void, declares: Record<string, Record<string, string>> = { dependencies: { next: '^14.2.0' } }) => {
+    const withExistingProject = (next: string, test: (app: string) => void, declares: Record<string, Record<string, string>> = { dependencies: { next: `^${next}` } }) => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-next-compat-'));
       try {
         const app = join(tmpDir, 'app');
@@ -1022,14 +1018,16 @@ describe('create-blocks-app auto-detection', () => {
       }
     };
 
-    for (const [name, { next, install, template = 'nextjs', warns }] of Object.entries(projects)) {
+    for (const [name, { install, template = 'nextjs', warns }] of Object.entries(projects)) {
       it(`${warns ? 'prints it' : 'says nothing'} when ${name}, exits 0 and leaves next alone`, () => {
-        withExistingProject(next, (app) => {
+        withExistingProject(NEXT, (app) => {
           install?.(app);
           const result = runExisting(app, template);
           assert.strictEqual(result.status, 0, result.stderr);
           assert.ok(existsSync(join(app, 'aws-blocks', 'index.ts')), 'the backend is still added');
-          assert.doesNotMatch(`${result.stdout}${result.stderr}`, /compatibility module broke|\n\s+at /, 'no error or stack trace');
+          // Whatever the project's Hosting printed or threw stays out of the command's output.
+          assert.strictEqual(result.stderr, '');
+          assert.ok(!result.stdout.includes('fixture noise'), result.stdout);
           if (warns) {
             assert.ok(result.stdout.includes(`⚠️  ${warns}\n`), `expected "${warns}"; stdout was: ${result.stdout}`);
             assert.ok(result.stdout.includes(NOTE), result.stdout);
@@ -1040,35 +1038,35 @@ describe('create-blocks-app auto-detection', () => {
       });
     }
 
-    it('prints what this repository\'s Hosting says, and nothing for an app that Hosting does not build with Next.js', async () => {
-      // A runtime path, as in resolvedDevConfig: the expected warning comes from the sibling Hosting build.
+    it('prints exactly what this repository\'s Hosting answers when that is the one the project installs', async () => {
+      // A runtime path, as in resolvedDevConfig: the expected answers come from the sibling Hosting build.
       const hosting = pathToFileURL(join(__dirname, '../../hosting/dist/nextjs_compatibility.js')).href;
       const { checkNextjsCompatibility } = await import(hosting);
-      /** The project installs this repository's Blocks, whose Core and Hosting resolve from there. */
-      const installBlocks = (app: string) => {
-        mkdirSync(join(app, 'node_modules', '@aws-blocks'), { recursive: true });
-        symlinkSync(join(__dirname, '../../blocks'), join(app, 'node_modules', '@aws-blocks', 'blocks'), 'dir');
-      };
-      withExistingProject('14.2.35', (app) => {
-        installBlocks(app);
-        const expected = checkNextjsCompatibility(app, { framework: 'nextjs' });
-        assert.ok(expected?.warning, 'this repository\'s Hosting should warn about next@14.2.35');
-        const result = runExisting(app, 'nextjs');
-        assert.strictEqual(result.status, 0, result.stderr);
-        // Hosting looks up the OpenNext this project does not install; that prints nothing.
-        assert.strictEqual(result.stderr, '');
-        assert.ok(result.stdout.includes(`⚠️  ${expected.warning}\n`), result.stdout);
-        assert.ok(result.stdout.includes(NOTE), result.stdout);
-      });
-      // A Vite app whose monorepo installs another app's next: the `default` template's Hosting
-      // detects the framework from package.json, so it builds this app without OpenNext.
-      withExistingProject('14.2.35', (app) => {
-        installBlocks(app);
-        const result = runExisting(app, 'default');
-        assert.strictEqual(result.status, 0, result.stderr);
-        assert.strictEqual(result.stderr, '');
-        assert.ok(!result.stdout.includes(NOTE), result.stdout);
-      }, { devDependencies: { vite: '^6.0.0' } });
+      // The template, the `framework` its backend gives Hosting, and what the project's package.json declares.
+      const cases: [string, string | undefined, Record<string, Record<string, string>>][] = [
+        ['nextjs', 'nextjs', { dependencies: { next: '^0.0.1' } }],
+        ['default', undefined, { dependencies: { next: '^0.0.1' } }],
+        ['default', undefined, { devDependencies: { vite: '^6.0.0' } }],
+      ];
+      let printed = 0;
+      for (const [template, framework, declares] of cases) {
+        // next@0.0.1: a version no OpenNext release supports, so some answer below is a warning.
+        withExistingProject('0.0.1', (app) => {
+          // The project installs this repository's Blocks, whose Core and Hosting resolve from there.
+          mkdirSync(join(app, 'node_modules', '@aws-blocks'), { recursive: true });
+          symlinkSync(join(__dirname, '../../blocks'), join(app, 'node_modules', '@aws-blocks', 'blocks'), 'dir');
+          const warning: string | undefined = checkNextjsCompatibility(app, { framework })?.warning;
+          const result = runExisting(app, template);
+          assert.strictEqual(result.status, 0, result.stderr);
+          assert.strictEqual(result.stderr, '');
+          assert.strictEqual(result.stdout.includes(NOTE), warning !== undefined, result.stdout);
+          if (warning !== undefined) {
+            assert.ok(result.stdout.includes(`⚠️  ${warning}\n`), result.stdout);
+            printed++;
+          }
+        }, declares);
+      }
+      assert.ok(printed > 0, 'expected this repository\'s Hosting to have a warning for one of the projects');
     });
   });
 
