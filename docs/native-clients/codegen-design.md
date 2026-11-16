@@ -184,6 +184,19 @@ The unbound fallback is direct-only; a transferable in any other position is unc
 
 A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding reaches a nullable result on Swift and Kotlin, which unwrap the optional and emit the optional declared type, while Dart applies a declared binding to a bare direct result only, so on Dart alone a nullable result keeps the pre-fallback type. A nested or list-wrapped result keeps the pre-fallback type on all three, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
 
+#### Native diagnostic codes
+
+The `AWSBLOCKS-NATIVE-` numbers are one namespace shared by the Dart, Swift and Kotlin generators: a code means the same condition on every platform that emits it, and a retired code is never reused. Every code is a warning that still generates; what refuses a spec is a generation error and carries no code. An opt-out is build configuration that keeps a declared package unbound on that platform.
+
+| Code | Reports | Dart | Swift | Kotlin | Status |
+|---|---|---|---|---|---|
+| `AWSBLOCKS-NATIVE-001` | A bare direct result whose `x-blocks-transferable` tag has no runtime or declared binding; the result is generated as `UnknownTransferable`. Swift appends the cause when a declared binding was dropped (the package is opted out, or declares no `swift` platform). | Yes | Yes | Yes | live |
+| `AWSBLOCKS-NATIVE-002` | A direct or nullable `realtime/channel` result whose message type the Dart runtime's `Map`-only deserializer could not hydrate; the value was returned un-hydrated. Emitted on Dart only. The Dart generator now decodes a non-object message through `RealtimeChannel.fromJsonValue`, so the condition no longer exists. | — | — | — | retired |
+| `AWSBLOCKS-NATIVE-003` | A declared native package that no binding references; nothing is imported for it. Kotlin omits a package that is also opted out; Dart and Swift report it regardless. | Yes | Yes | Yes | live |
+| `AWSBLOCKS-NATIVE-004` | A binding whose `kind` schema 1 does not define; the binding is skipped. | Yes | Yes | Yes | live |
+| `AWSBLOCKS-NATIVE-005` | A binding whose `tag` is a built-in transferable tag (`realtime/channel`, `file-bucket/download`, `file-bucket/upload`, `oidc/client`), which cannot be re-bound; the binding is skipped. | — | Yes | — | live |
+| `AWSBLOCKS-NATIVE-006` | An opt-out that names a package the spec does not declare; nothing is opted out for it. | Yes | Yes | Yes | live |
+
 ---
 
 ## Authoring progression: plain TypeScript → Zod
