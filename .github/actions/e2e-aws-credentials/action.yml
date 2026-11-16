@@ -52,9 +52,19 @@ runs:
           exit 1
         fi
         echo "::add-mask::$arn"
+        # The account field of arn:aws:iam::<account>:role/<name>.
+        account=$(cut -s -d: -f5 <<< "$arn")
+        if ! [[ "$account" =~ ^[0-9]{12}$ ]]; then
+          echo "::error::E2E account $((INDEX + 1)) in AWS_ROLE_ARNS is not a role ARN with an account ID."
+          exit 1
+        fi
+        # The policy pins role assumption to this account, and the step's
+        # inputs are printed in the log.
+        echo "::add-mask::$account"
         echo "role-arn=$arn" >> "$GITHUB_OUTPUT"
-        policy=$(jq -c --arg role "$arn" \
-          '(.Statement[] | select(.Sid == "KeepBootstrapAndE2ERoles") | .Resource) += [$role]' "$POLICY_FILE")
+        policy=$(jq -c --arg role "$arn" --arg account "$account" '
+          (.Statement[] | select(.Sid == "AssumeCdkBootstrapRoles") | .Resource) |= sub("::\\*:"; "::\($account):")
+          | (.Statement[] | select(.Sid == "KeepBootstrapAndE2ERoles") | .Resource) += [$role]' "$POLICY_FILE")
         # STS rejects a session policy longer than 2048 characters.
         if [ "${#policy}" -gt 2048 ]; then
           echo "::error::The E2E session policy is ${#policy} characters; STS allows at most 2048."

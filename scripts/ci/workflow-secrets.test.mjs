@@ -350,6 +350,9 @@ describe('E2E credentials session policy', () => {
 	const MAX_POLICY_CHARS = 2048;
 	// Longer than any E2E role ARN, so the size check leaves room for the real one.
 	const ROLE = `arn:aws:iam::${'0'.repeat(12)}:role/${'e2e/'.repeat(8)}${'r'.repeat(64)}`;
+	// The pick step pins role assumption to the selected role's account.
+	const ACCOUNT = ROLE.split(':')[4];
+	const ACCOUNT_BOOTSTRAP_ROLES = `arn:aws:iam::${ACCOUNT}:role/cdk-hnb659fds-*`;
 
 	/** Runs the pick step with the policy file it reads in the action. */
 	function runPick(roleArns, policyFile = join(ACTION_DIR, 'session-policy.json')) {
@@ -397,6 +400,21 @@ describe('E2E credentials session policy', () => {
 		assert.match(stdout, /::error::.*2048/);
 	});
 
+	it('masks the account ID of the selected role', () => {
+		const { status, stderr, stdout } = runPick([ROLE]);
+		assert.equal(status, 0, stderr);
+		assert.ok(masks(stdout).includes(ACCOUNT), 'expected the account ID to be masked');
+	});
+
+	for (const arn of ['arn:aws:iam:::role/e2e', 'arn:aws:iam::not-an-account:role/e2e', 'e2e-role']) {
+		it(`fails when the role ARN has no account ID: ${arn}`, () => {
+			const { status, stdout, outputs } = runPick([arn]);
+			assert.notEqual(status, 0);
+			assert.match(stdout, /::error::.*account ID/);
+			assert.equal(outputs['session-policy'], undefined);
+		});
+	}
+
 	describe('the policy', () => {
 		const { outputs } = runPick([ROLE]);
 		const policy = JSON.parse(outputs['session-policy'] ?? '{"Statement":[]}');
@@ -413,7 +431,7 @@ describe('E2E credentials session policy', () => {
 			}
 		});
 
-		it('allows role assumption only into the CDK bootstrap roles', () => {
+		it("allows role assumption only into the CDK bootstrap roles of the selected role's account", () => {
 			for (const s of allows) {
 				if (s.NotAction) {
 					for (const a of ['sts:AssumeRole', 'sts:TagSession']) {
@@ -421,7 +439,7 @@ describe('E2E credentials session policy', () => {
 					}
 				}
 				if (list(s.Action).some((a) => a.startsWith('sts:'))) {
-					assert.deepEqual(list(s.Resource), [BOOTSTRAP_ROLES]);
+					assert.deepEqual(list(s.Resource), [ACCOUNT_BOOTSTRAP_ROLES]);
 				}
 			}
 		});
