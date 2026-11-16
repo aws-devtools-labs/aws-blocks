@@ -4,7 +4,12 @@
 import { isWireSafeError } from '@aws-blocks/core';
 import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from '../constants.js';
+import {
+	AUTOCOMMIT_CONFLICT_BACKOFF_MS,
+	DEFAULT_MAX_RETRIES,
+	TRANSACTION_CONFLICT_BACKOFF_BASE_MS,
+	TRANSACTION_CONFLICT_BACKOFF_CAP_MS,
+} from '../constants.js';
 import { type RowCountingEngine, withTransaction } from '../engines/handle.js';
 import {
 	asError,
@@ -20,8 +25,22 @@ import { currentTransactionScope, runInTransactionScope, TransactionScope } from
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * @internal The wait in milliseconds before `transaction()` retry number `retry` (0 for the first retry) after
+ * a conflict: a whole number drawn uniformly from 0 to `min(cap, base * 2^retry)`, both included ("full
+ * jitter"). `random` returns a number in [0, 1), as `Math.random` does.
+ */
+export function conflictRetryDelayMs(retry: number, random: () => number = Math.random): number {
+	const ceiling = Math.min(TRANSACTION_CONFLICT_BACKOFF_CAP_MS, TRANSACTION_CONFLICT_BACKOFF_BASE_MS * 2 ** retry);
+	return Math.floor(random() * (ceiling + 1));
+}
+
 interface DatabaseCoreOptions {
 	engine: () => Promise<RowCountingEngine>;
+	/** Tests only: stands in for the wait between `transaction()` conflict retries. */
+	sleep?: (ms: number) => Promise<void>;
+	/** Tests only: the random source of that wait, a number in [0, 1). */
+	random?: () => number;
 }
 
 export class DatabaseCore {
@@ -101,15 +120,18 @@ export class DatabaseCore {
 		return this.withConflictRetry(() => engine.execute(sql, params));
 	}
 
+	// The failed attempt has rolled back and freed its connection before the wait, so a waiting retry holds
+	// nothing. The mock and the Lambda runtime both run this method; the wait is the same on both.
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		const engine = await this.getEngine();
-		const maxAttempts = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) + 1 : 1;
-		for (let attempt = 1; ; attempt++) {
+		const maxRetries = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) : 0;
+		for (let retry = 0; ; retry++) {
 			try {
 				return await runTransaction(this, engine, fn);
 			} catch (e) {
-				if (isSerializationConflict(e) && attempt < maxAttempts) continue;
-				throw e;
+				// `retry < maxRetries`, not its negation: a `maxRetries` that is not a number retries nothing.
+				if (!(isSerializationConflict(e) && retry < maxRetries)) throw e;
+				await (this.options.sleep ?? sleep)(conflictRetryDelayMs(retry, this.options.random));
 			}
 		}
 	}

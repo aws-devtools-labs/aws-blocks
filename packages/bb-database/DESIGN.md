@@ -45,6 +45,8 @@ A query's row type can come from a value instead of a type argument: `query()` a
 
 `DatabaseCore` (`runtime/index.ts`) tracks the transaction a `transaction()` callback runs in with `AsyncLocalStorage` (`runtime/tx-scope.ts`). A `query`, `queryOne` or `execute` call on the block that opened the transaction, made inside the callback, is routed to the engine's in-transaction methods with that handle, so the rule holds for every engine: on DSQL the statement would otherwise auto-commit on another pooled connection; locally it would wait on the mutex the transaction holds. The scope closes with the transaction, so a statement from a promise the callback did not await runs auto-commit. A call on another block is not joined; it runs on that block's own engine.
 
+`DatabaseCore.transaction()` is also where a conflict is retried, for the mock and the Lambda runtime alike. With `retryOnConflict` it re-runs the callback up to `maxRetries` times (`DEFAULT_MAX_RETRIES`, 8) and waits before each re-run. The wait is `conflictRetryDelayMs()`: a whole number of milliseconds drawn uniformly from 0 to `min(2000, 50 × 2^retry)`, where `retry` is 0 for the first retry. This is full jitter: the ceiling grows so that a busy row gets fewer attempts per second, and the wait is random so that transactions that conflicted together do not re-run together and conflict again. The failed attempt has rolled back and freed its connection before the wait (§4.3), so a waiting retry holds no connection and no mutex. With the default the waits add up to 7,150 ms at most. The retries after a conflict on a single auto-commit statement are a separate path with three fixed waits (`AUTOCOMMIT_CONFLICT_BACKOFF_MS`).
+
 ### 4.1 Local execution
 
 Locally, each cluster is one PGlite instance on disk, whether a block owns it or several share it. The dev server therefore has the same layout as AWS: one database, one schema per block.
@@ -139,6 +141,7 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | `ASYNC` DDL (`CREATE INDEX ASYNC`, `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`) | Runs synchronously: the mock strips `ASYNC`; the job wait is a no-op. `sys.wait_for_job()` returns `true` at once and `sys.jobs` is empty, so a wait written into a file runs unchanged | DSQL returns a job id; the runner polls `sys.jobs` every 30 seconds for up to 55 minutes |
 | 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` (`@aws-blocks/bb-database/testing`) | Available | Throws |
+| The wait before a `transaction()` conflict retry (`retryOnConflict`) | Applied: `DatabaseCore` waits after a simulated conflict | Same |
 | `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `pg-engine.ts` installs a parser that matches PGlite |
 | An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 | `db.query()` / `db.execute()` on the block inside its own `transaction()` callback | Runs in the transaction (`DatabaseCore`) | Same |
