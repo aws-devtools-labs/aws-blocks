@@ -172,7 +172,7 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		const domain = { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' };
 		for (const [label, frontDoor, claims] of [
 			['CloudFront default', undefined, true],
-			['stacked edge', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, true],
+			['stacked edge', { kind: 'stacked', edge: 'cloudfront', router: 'alb', internal: true }, true],
 			['API Gateway (HTTP)', { kind: 'apiGateway' }, false],
 			['API Gateway (REST, domain)', { kind: 'apiGateway', api: 'rest', features: { domain } }, false],
 		] as const) {
