@@ -8,7 +8,7 @@
 import Foundation
 
 /// A type-erased Codable wrapper for arbitrary JSON values.
-public enum JSONValue: Codable {
+public enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
     case int(Int)
     case double(Double)

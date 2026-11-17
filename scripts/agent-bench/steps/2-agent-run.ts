@@ -9,6 +9,7 @@
  * WORKSPACE (containment enforced by the Sandbox); the bash timeout is floored to BASH_MIN_TIMEOUT_SEC.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Agent, type AgentResult, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
@@ -21,20 +22,33 @@ import {
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
-import {
-	BENCH_AGENT_USER,
-	WorkspaceSandbox,
-	describeError,
-	isolationAvailable,
-	prepareWorkspaceIsolation,
-	required,
-} from './lib/run-shell.ts';
+import { beginWorkspaceDiff, finishWorkspaceDiff } from './lib/workspace-diff.mjs';
+import { BENCH_AGENT_USER, enterAgentPhase, reapAgentProcesses } from './lib/isolation.mjs';
+import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
+import { stringifyRedacted } from './lib/secrets.mjs';
 
 const WORKSPACE = required('WORKSPACE', '[bench]');
 const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
 const OUTPUT = required('OUTPUT', '[bench]');
 const TRACE_PATH = process.env.TRACE;
 const METRICS_PATH = process.env.METRICS;
+// Point the sandbox's per-command log at commands.jsonl beside the trace (so the
+// bench-trace upload picks it up; absent on a local run with no TRACE). Set before any invoke() so
+// every cycle is captured. Honour a caller-provided BENCH_CMD_LOG, else derive it beside the trace.
+const CMD_LOG_PATH =
+	process.env.BENCH_CMD_LOG ?? (TRACE_PATH ? join(dirname(TRACE_PATH), 'commands.jsonl') : undefined);
+if (CMD_LOG_PATH) {
+	process.env.BENCH_CMD_LOG = CMD_LOG_PATH;
+	// Truncate once here UNCONDITIONALLY (run-shell only appends) so a reused self-hosted runner —
+	// or a caller that pre-sets BENCH_CMD_LOG — can't carry a prior cell's lines into this artifact.
+	// Best-effort like the append side (run-shell.ts): a bad caller-provided path degrades to
+	// "no command log" rather than crashing the whole agent run at module load.
+	try {
+		writeFileSync(CMD_LOG_PATH, '');
+	} catch (err) {
+		console.warn(`[bench] could not truncate BENCH_CMD_LOG (${CMD_LOG_PATH}): ${err}`);
+	}
+}
 const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-opus-4-8';
 // Opus rejects the `temperature` parameter (like the judge), so only pin temperature=0 for models
 // that accept it (e.g. Sonnet); keyed off the model id so BENCH_MODEL stays self-configuring.
@@ -48,15 +62,42 @@ const BASH_MIN_TIMEOUT_SEC = 600;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
-// Resolve agent-shell UID isolation (issue #184) ONCE (the ACL grant must run a single time, not
-// per invoke-retry). Not a hard failure when unavailable — this line records whether containment was
-// active for the cell. On the GitHub-hosted runner benchagent has passwordless sudo, so expect ACTIVE.
-const ISOLATE = isolationAvailable() && prepareWorkspaceIsolation(WORKSPACE);
+// Enter the agent-user boundary ONCE (the ACL grant must run a single time, not per invoke-retry):
+// reap leftovers, lock down the runner temp dirs and verify the agent user can't reach them or the
+// harness's environ. Fail closed — under CI the agent never runs as the harness uid; the refusal
+// is recorded as `isolation_failure` so scoring classes the cell harness_error (infra), not the agent.
+const phase = enterAgentPhase(WORKSPACE);
+const ISOLATE = phase.isolated;
+if (phase.error) {
+	process.stderr.write(`[bench] REFUSING to run the agent: ${phase.error}\n`);
+	writeFileSync(
+		OUTPUT,
+		JSON.stringify(
+			{
+				model: MODEL_ID,
+				duration_sec: 0,
+				tokens_in: 0,
+				tokens_out: 0,
+				cache_read_tokens: 0,
+				cache_write_tokens: 0,
+				stop_reason: 'error',
+				cycle_count: 0,
+				final_message: '',
+				builder_error: `agent isolation unavailable: ${phase.error}`,
+				isolation_active: false,
+				isolation_failure: phase.error,
+			},
+			null,
+			2,
+		),
+	);
+	process.exit(1);
+}
 process.stderr.write(
 	`[bench] agent shell isolation: ${
 		ISOLATE
-			? `ACTIVE (agent shell runs as ${BENCH_AGENT_USER} — cross-uid EPERM means it cannot signal the harness)`
-			: 'DISABLED (no passwordless sudo+runuser for benchagent or ACL grant failed; falling back to bare bash)'
+			? `ACTIVE (agent shell runs as ${BENCH_AGENT_USER}; runner temp + harness environ verified unreachable)`
+			: 'BARE (local dev opt-in BENCH_ALLOW_BARE_SHELL=1; the shell can read this harness env)'
 	}\n`,
 );
 
@@ -76,6 +117,8 @@ process.stderr.write(
 // envelope from the signal handler. Counters at module scope so they survive invoke retries and the handler.
 let partialTokensIn = 0;
 let partialTokensOut = 0;
+let partialCacheRead = 0;
+let partialCacheWrite = 0;
 let partialCycles = 0;
 
 // Fresh agent per invoke attempt (mirrors the judge): a mid-stream failure can leave a half-built
@@ -99,6 +142,10 @@ function makeBuilderAgent(): Agent {
 		if (inner.type === 'modelMetadataEvent' && inner.usage) {
 			partialTokensIn += inner.usage.inputTokens ?? 0;
 			partialTokensOut += inner.usage.outputTokens ?? 0;
+			// Cache-read/write tokens are DISPLAYED only (never fed into cost/SCORE); accumulated with
+			// the same per-cycle += as tokens_in/out so a mid-run kill still leaves the spend on disk.
+			partialCacheRead += inner.usage.cacheReadInputTokens ?? 0;
+			partialCacheWrite += inner.usage.cacheWriteInputTokens ?? 0;
 			partialCycles += 1;
 			// Checkpoint the moment usage advances, so an UNGRACEFUL kill (a pkill storm tearing down
 			// this harness before the SIGTERM flush) still leaves nonzero tokens + partial cycles on OUTPUT.
@@ -124,6 +171,8 @@ function writeCheckpoint(): void {
 				startedMs: started,
 				tokensIn: partialTokensIn,
 				tokensOut: partialTokensOut,
+				cacheRead: partialCacheRead,
+				cacheWrite: partialCacheWrite,
 				cycles: partialCycles,
 				isolationActive: ISOLATE,
 			}),
@@ -153,6 +202,8 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					duration_sec: Math.round((Date.now() - started) / 1000),
 					tokens_in: partialTokensIn,
 					tokens_out: partialTokensOut,
+					cache_read_tokens: partialCacheRead,
+					cache_write_tokens: partialCacheWrite,
 					stop_reason: stopReason,
 					cycle_count: partialCycles,
 					final_message: '',
@@ -175,6 +226,8 @@ function writePartialEnvelopeAndExit(signal: string): void {
 			`[bench] partial-spend tokens_in=${partialTokensIn} tokens_out=${partialTokensOut} cycles=${partialCycles}\n`,
 		);
 	}
+	// Kill the agent's processes on the way out too (staging reaps and verifies again before upload).
+	reapAgentProcesses();
 	// No trace on the timeout path: the Strands trace/metrics only exist once invoke() RETURNS and the
 	// SDK exposes no mid-run accessor, so a timed-out cell emits only this partial envelope.
 	// Exit 124 = clean timeout with the envelope flushed; 125 = the envelope write itself failed.
@@ -188,6 +241,12 @@ process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 // it such an early death would leave the step-0 baseline with no isolation flag, and scoring.mjs would
 // have to assume isolation was off. A later model cycle (or a terminal exit) overwrites this.
 writeCheckpoint();
+
+// Snapshot the scaffolded workspace NOW (before the agent touches it) so a post-run diff can report
+// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders 🆕 "(new)").
+// Uses a throwaway external git dir, so it never disturbs the workspace/app or the agent's own git.
+const snapshot = beginWorkspaceDiff(WORKSPACE);
+process.stderr.write(`[bench] workspace churn snapshot: ${snapshot ? 'captured' : 'unavailable (loc/files → null)'}\n`);
 
 // Startup stagger: spread each wave's FIRST Bedrock call so N cells don't all hit invoke at once and
 // trip the account TPM ceiling (the burst that failed 6/10 cells in run 28967475174). Keyed to the
@@ -229,6 +288,11 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 	}
 }
 
+// End of the agent phase: kill every agent-user process (setsid dev servers included) before the
+// harness diffs the workspace or writes artifacts. Step 3, the judge and the pre-upload staging reap
+// (and verify) again, so a survivor here is logged rather than fatal.
+if (!reapAgentProcesses()) process.stderr.write(`[bench] WARNING: ${BENCH_AGENT_USER} processes survived the reap\n`);
+
 if (!result) {
 	finished = true;
 	const desc = describeModelError(lastErr);
@@ -242,6 +306,8 @@ if (!result) {
 				duration_sec: Math.round((Date.now() - started) / 1000),
 				tokens_in: partialTokensIn,
 				tokens_out: partialTokensOut,
+				cache_read_tokens: partialCacheRead,
+				cache_write_tokens: partialCacheWrite,
 				stop_reason: 'error',
 				cycle_count: partialCycles,
 				final_message: '',
@@ -266,6 +332,15 @@ const duration_sec = Math.round((Date.now() - started) / 1000);
 const winnerUsage = result.metrics?.accumulatedUsage;
 const tokensIn = Math.max(partialTokensIn, winnerUsage?.inputTokens ?? 0);
 const tokensOut = Math.max(partialTokensOut, winnerUsage?.outputTokens ?? 0);
+// Cache tokens follow the SAME max(hook, winner) rule as tokens_in/out. Displayed only — NOT part of
+// cost/SCORE (see scoring.mjs cellCost); a future net-of-cache cost model could subtract these.
+const cacheRead = Math.max(partialCacheRead, winnerUsage?.cacheReadInputTokens ?? 0);
+const cacheWrite = Math.max(partialCacheWrite, winnerUsage?.cacheWriteInputTokens ?? 0);
+
+// LOC/files churn from the pre-run scaffold snapshot (best-effort; null on any failure — see
+// workspace-diff.mjs). Computed only on the success path: a timed-out/errored cell left the workspace
+// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ 🆕 "(new)").
+const churn = finishWorkspaceDiff(snapshot, WORKSPACE);
 
 writeFileSync(
 	OUTPUT,
@@ -275,8 +350,14 @@ writeFileSync(
 			duration_sec,
 			tokens_in: tokensIn,
 			tokens_out: tokensOut,
+			cache_read_tokens: cacheRead,
+			cache_write_tokens: cacheWrite,
 			stop_reason: result.stopReason,
 			cycle_count: result.metrics?.cycleCount ?? 0,
+			loc_created: churn.loc_created,
+			loc_edited: churn.loc_edited,
+			files_created: churn.files_created,
+			files_edited: churn.files_edited,
 			final_message: messageText(result.lastMessage),
 			isolation_active: ISOLATE,
 		},
@@ -290,16 +371,17 @@ process.stderr.write(
 
 // Persist the trace tree + run metrics as SEPARATE artifacts. NEVER serialize `result` directly:
 // AgentResult.toJSON() strips traces/metrics, so access the properties (traces need per-item toJSON()).
+// Both are uploaded publicly and the trace holds every tool call/result, so every string is redacted.
 if (TRACE_PATH) {
 	try {
-		writeFileSync(TRACE_PATH, JSON.stringify(result.traces?.map((t) => t.toJSON()) ?? [], null, 2));
+		writeFileSync(TRACE_PATH, stringifyRedacted(result.traces?.map((t) => t.toJSON()) ?? []));
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write trace to ${TRACE_PATH}: ${describeError(err)}\n`);
 	}
 }
 if (METRICS_PATH) {
 	try {
-		writeFileSync(METRICS_PATH, JSON.stringify(result.metrics ?? {}, null, 2));
+		writeFileSync(METRICS_PATH, stringifyRedacted(result.metrics ?? {}));
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write metrics to ${METRICS_PATH}: ${describeError(err)}\n`);
 	}

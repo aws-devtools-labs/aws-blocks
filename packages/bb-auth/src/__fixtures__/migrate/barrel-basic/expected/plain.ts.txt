@@ -1,0 +1,11 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthBasic } from './barrel.js';
+
+// No options: AuthBasic's defaults are written out, as for a direct import.
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod
+//   wrote `false` for each one the old policy left unset, so passwords that worked before still do).
+export const plain = new AuthBasic(new Scope('plain'), 'auth', { session: { ttlSeconds: 86_400 }, emailPassword: { passwordPolicy: { requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false } } });

@@ -1,0 +1,95 @@
+# Blocks Next.js App
+
+A Next.js 16 App Router frontend on AWS Blocks. Shows both halves of the App
+Router calling the same Blocks backend: a **Server Component** that fetches on
+the server, and a **Client Component** that calls the API from the browser.
+
+> Created with `npx @aws-blocks/create-blocks-app my-app --template nextjs`
+
+## Getting Started
+
+```bash
+npm run dev          # Start the Next.js dev server (mocks, no AWS needed)
+npm run test:e2e     # Run the e2e test against the dev server
+npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
+```
+
+Open http://localhost:3000 after `npm run dev`.
+
+## Project Structure
+
+| Path | Purpose |
+|------|---------|
+| `aws-blocks/index.ts` | Backend: the `api` namespace (`greet`, `getServerTime`) |
+| `src/app/page.tsx` | Server Component — fetches on the server |
+| `src/app/client.tsx` | Client Component — calls the API from the browser |
+| `src/app/layout.tsx` | Root layout |
+| `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
+| `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
+| `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
+
+## What's Included
+
+- **App Router** — Server + Client Components in `src/app/`.
+- **Blocks API** — a public `api` namespace (`greet`, `getServerTime`); no auth
+  by default. Add an auth block and call `requireAuth(context)` first to gate a
+  method (see the block's README).
+- **Standalone output** — `next.config.ts` sets `output: 'standalone'` so the
+  build packages for Lambda deployment.
+- **One `tsconfig.json`**: it typechecks `src/` and `aws-blocks/` together,
+  with Node types global, so `src/` can use `process` without an error, even in a
+  Client Component. The Vite templates give the backend a TypeScript project of
+  its own instead, but `next build` ignores project references when it
+  type-checks ([vercel/next.js#67372](https://github.com/vercel/next.js/issues/67372)),
+  so it would check `aws-blocks/` with this `tsconfig.json` either way.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Next.js dev server with mock storage |
+| `npm run dev:stop` | Stop the local dev server this app started |
+| `npm run test:e2e` | Boot the dev server and check the home page, Blocks config, and sample API |
+| `npm run typecheck` | TypeScript type checking |
+| `npm run build` | `next build` (standalone output) |
+| `npm run start` | Serve the production build locally |
+| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
+| `npm run deploy` | Full production deploy |
+| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+
+The home-page and Blocks config checks do not depend on the sample page title or API methods.
+A separate `greet` test validates the sample API in a freshly scaffolded app.
+When you replace the sample API, update or delete that test to exercise your own methods.
+Add assertions for your own page content and behavior as you customize the app.
+To test an already-running app, set `TEST_URL` to its base URL; it must serve
+both the home page and `/.blocks-sandbox/config.json`. The sample API test uses
+the API URL from that config, including when it points to a separate backend.
+
+## Stack naming
+
+Your CloudFormation stack names are derived from the `stackId` in
+`.blocks/config.json`, generated at scaffold time from your project name plus a
+random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
+and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
+`aws-blocks/index.cdk.ts` for dynamic naming logic.
+
+## For Agents
+
+Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+
+**Do not use local files or in-memory storage** — use Building Blocks for all
+data persistence and cloud abstractions (they mock locally and deploy to AWS
+automatically). The backend lives in `aws-blocks/index.ts`; the frontend calls
+it from `src/app/`. Test via `npm run test:e2e`.

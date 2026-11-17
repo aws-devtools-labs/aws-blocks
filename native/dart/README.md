@@ -65,6 +65,11 @@ targets:
       blocks_codegen|blocks_codegen:
         options:
           spec: lib/blocks.spec.json
+          # Logical identities from x-blocks-native-packages that keep the
+          # UnknownTransferable fallback instead of a declared type (optional).
+          # An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
+          native_package_opt_out:
+            - example-iot-native
 ```
 
 ### 3. Generate your client
@@ -95,6 +100,12 @@ print(greeting.message); // "Hello, World!"
 **Auth flows** — discriminated unions become sealed classes. The compiler ensures you handle every auth state variant.
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
+
+**Unbound transferables** — a direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of untyped `dynamic`. Only bare direct results are covered.
+
+**Declared native packages** — when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
+
+**Errors and HTTP status** — a JSON-RPC error is thrown as a `BlocksRpcException` (with `code` and `data`) whatever the HTTP status, so a backend namespace created with `httpErrorStatus: true` (which answers a 4xx `ApiError` with that HTTP status) decodes the same. One difference to plan for: when the client has an `authProvider` (bearer tokens), any HTTP 401 makes it call `onAuthFailure()` (a token refresh) and run the method **once more**. Without `httpErrorStatus` an `ApiError` 401 arrives as HTTP 200 and is not retried; with it, a method that rejects with 401 after a side effect runs twice, so put the guard first on the backend: call `auth.requireAuth(context)` before anything else in the method, or wrap the method with `auth.protect` (`Auth`), which runs the guard before any of the method's code. A method that can still answer 401 after a write should be idempotent.
 
 **No Flutter dependency** — `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
 

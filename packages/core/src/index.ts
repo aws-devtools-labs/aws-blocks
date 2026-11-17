@@ -1,22 +1,84 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-export { ApiNamespace, type BlocksContext, type ApiHandler } from './api.js';
-export { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
-export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from './errors.js';
-export { Scope, type ScopeOptions, type ScopeParent, type BuildingBlockMeta } from './common/index.js';
-export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
-export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';
+// secret()/config() declare markers (CDK-free subpath). The runtime getters
+// getSecret()/getConfig() are imported from '@aws-blocks/hosting' directly —
+// core already exports a backend `getConfig` (config loader) under this name.
 export {
-  registerRoute,
-  matchRoute,
-  getRegisteredRoutes,
-  clearRouteRegistry,
-  lockRouteRegistry,
-  unlockRouteRegistry,
-  RawRouteErrors,
-  type RawRouteOptions,
-  type HttpMethod,
-  type RegisteredRoute,
+	type ConfigValue,
+	config,
+	isConfig,
+	isManagedValue,
+	isSecret,
+	type ManagedValue,
+	type SecretValue,
+	secret,
+	type ValueKind,
+} from '@aws-blocks/hosting';
+export { type ApiHandler, ApiNamespace, type ApiNamespaceOptions, type BlocksContext } from './api.js';
+export {
+	type ComputeOptions,
+	type ComputeType,
+	type ContainerComputeOptions,
+	type ContainerScaling,
+	type ContainerSize,
+	LAMBDA_MAX_TIMEOUT_SECONDS,
+	resolvePerInstanceConcurrency,
+	type ScalingSignal,
+	type ServerlessComputeOptions,
+} from './common/compute-capabilities.js';
+export {
+	_resetConfigCache,
+	getCachedConfigValue,
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+} from './common/config.js';
+export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
+export {
+	type BuildingBlockMeta,
+	buildingBlockParent,
+	computeScopeFullId,
+	Scope,
+	type ScopeOptions,
+	type ScopeParent,
+} from './common/index.js';
+export {
+	_resetSdkRegistry,
+	getAllSdkIdentifiers,
+	getSdkIdentifiers,
+	registerSdkIdentifiers,
+} from './common/sdk-registry.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export {
+	type ContainerPollerHandle,
+	type ContainerPollerStarter,
+	type JobDispatchResult,
+	type JobWorkerReply,
+	type JobWorkerRequest,
+	_resetContainerPollers,
+	dispatchJobToWorker,
+	getContainerComputeId,
+	isContainerRuntime,
+	isJobWorker,
+	registerContainerPoller,
+	type RunContainerOptions,
+	runContainer,
+	runJobWorker,
+} from './container-runtime.js';
+export { installClientUserAgent } from './server/client-user-agent.js';
+export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
+export {
+	clearRouteRegistry,
+	getRegisteredRoutes,
+	type HttpMethod,
+	lockRouteRegistry,
+	matchRoute,
+	RawRouteErrors,
+	type RawRouteOptions,
+	type RegisteredRoute,
+	registerRoute,
+	unlockRouteRegistry,
 } from './raw-route.js';
 export { RawRoute } from './raw-route.mock.js';

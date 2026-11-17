@@ -1,0 +1,195 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "alphaApi.setState",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignIn"
+                    ]
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "session"
+                ],
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "code"
+                        ]
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "newPassword"
+                        ]
+                      },
+                      "newPassword": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "newPassword"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "SetStateResult",
+        "schema": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "betaApi.setState",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignIn"
+                    ]
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "session"
+                ],
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "code"
+                        ]
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "newPassword"
+                        ]
+                      },
+                      "newPassword": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "newPassword"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "SetStateResult",
+        "schema": {
+          "type": "boolean"
+        }
+      }
+    }
+  ]
+}

@@ -24,16 +24,20 @@ import {
 	nextBackoffMs,
 	sleep,
 } from './lib/bedrock-retry.ts';
-import { WorkspaceSandbox, describeError, required, shellQuote } from './lib/run-shell.ts';
+import { BENCH_AGENT_USER, enterAgentPhase, reapAgentProcesses, shellQuote } from './lib/isolation.mjs';
+import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
 import { hardCapPlan } from './lib/scoring.mjs';
+import { stringifyRedacted } from './lib/secrets.mjs';
 
 // Physical spec-blinding: the judge grades a SOURCE-ONLY COPY (JUDGE_SRC) with these excluded, so the
 // objective test can't anchor the score — blinding by ABSENCE.
-//   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir, and
-//     `.blocks-sandbox` (a build-time artifact). Also the grep exclude-dirs in collectBlocksImports.
+//   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir,
+//     `.blocks-sandbox` (a build-time artifact), and `.bb-data` (the PGlite/BB mock datadir — runtime
+//     state, not source; copying it across the judge's UID boundary throws EACCES on internal files
+//     like pg_logical/replorigin_checkpoint). Also the grep exclude-dirs in collectBlocksImports.
 //   - EXCLUDED_FILE_RE: the objective *.spec.{js,ts,jsx,tsx,cjs,mjs} test CODE files — deliberately
 //     NOT framework *.spec.json manifests (e.g. blocks.spec.json), which are legit app source.
-const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.blocks-sandbox']);
+const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.blocks-sandbox', '.bb-data']);
 const EXCLUDED_FILE_RE = /\.spec\.[cm]?[jt]sx?$/;
 
 const WORKSPACE = required('WORKSPACE', '[judge]');
@@ -93,6 +97,27 @@ assertNoSpecLeak(JUDGE_SRC);
 // originals. WORKSPACE is only read above (stageFilter/cpSync), never after.
 delete process.env.WORKSPACE;
 
+// The judge's shell runs behind the same agent-user boundary as the builder (it reads agent-written
+// source, which can carry a prompt injection): the shell gets the scrubbed env, and only a distinct
+// uid stops it reading this harness's /proc/<pid>/environ, which holds the job credentials for the
+// Bedrock calls. The ACL grant covers the disposable copy only. Fail closed, like the builder: under
+// CI a judge without isolation records `isolation_failure` (harness_error) and never runs.
+const phase = enterAgentPhase(JUDGE_SRC, { agentDirs: [WORKSPACE] });
+const ISOLATE = phase.isolated;
+if (phase.error) {
+	process.stderr.write(`[judge] REFUSING to run the judge: ${phase.error}\n`);
+	mergeAndWrite(builderResult, {
+		...EVIDENCE,
+		judge_error: `judge isolation unavailable: ${phase.error}`,
+		judge_error_type: 'isolation_unavailable',
+		isolation_failure: phase.error,
+	});
+	process.exit(1);
+}
+process.stderr.write(
+	`[judge] judge shell isolation: ${ISOLATE ? `ACTIVE (runs as ${BENCH_AGENT_USER})` : 'BARE (local dev opt-in)'}\n`,
+);
+
 function assertNoSpecLeak(dir: string): void {
 	// INDEPENDENT re-check (a find, not the JS filter). The -regex MUST mirror EXCLUDED_FILE_RE:
 	// only objective test-spec CODE files count, NOT framework *.spec.json (killed the judge on run
@@ -120,7 +145,7 @@ function makeJudgeAgent(): Agent {
 		}),
 		systemPrompt: JUDGE_SYSTEM,
 		// Vended bash rooted at the spec-blinded copy (JUDGE_SRC); read-only grep use, disposable copy.
-		sandbox: new WorkspaceSandbox(JUDGE_SRC),
+		sandbox: new WorkspaceSandbox(JUDGE_SRC, 0, ISOLATE),
 		tools: [makeBash()],
 	});
 }
@@ -163,6 +188,9 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 		await sleep(delayMs);
 	}
 }
+
+// End of the judge phase: kill every agent-user process the judge's shell left behind.
+if (!reapAgentProcesses()) process.stderr.write(`[judge] WARNING: ${BENCH_AGENT_USER} processes survived the reap\n`);
 
 if (!result) {
 	// Record the failure honestly so the cell lands with a 0 judge term, not the step-0 baseline.
@@ -291,7 +319,9 @@ function mergeAndWrite(builder: Record<string, unknown>, judge: Record<string, u
 	} catch {
 		// baseline missing — proceed with empty
 	}
-	writeFileSync(OUTPUT, JSON.stringify({ ...existing, ...builder, ...judge }, null, 2));
+	// result.json is uploaded publicly and carries agent-influenced text (final_message, the judge's
+	// explanation), so redact every string before it lands on disk.
+	writeFileSync(OUTPUT, stringifyRedacted({ ...existing, ...builder, ...judge }));
 }
 
 function parseJsonEnv(name: string): Record<string, unknown> {

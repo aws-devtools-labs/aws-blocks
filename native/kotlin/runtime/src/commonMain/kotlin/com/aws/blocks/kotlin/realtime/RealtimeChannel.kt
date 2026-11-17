@@ -13,14 +13,18 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 class RealtimeChannel<T>(
     val channel: String,
     val wsUrl: String,
     val token: String,
     private val deserializer: (JsonElement) -> T,
+    // No cookie jar: the connect token on [wsUrl] is this channel's credential, and the jar
+    // belongs to the Blocks instance, which `fromJson` has no path back to.
     private val httpClient: HttpClient = defaultHttpClient(),
     private val pool: WebSocketPool = WebSocketPool.default
 ) {
@@ -32,8 +36,31 @@ class RealtimeChannel<T>(
             val connectToken = obj["connectToken"]?.jsonPrimitive?.content
             val token = obj["token"]!!.jsonPrimitive.content
             val wsUrl = if (connectToken != null) "$baseWsUrl?token=$connectToken" else baseWsUrl
-            return RealtimeChannel(channel = ch, wsUrl = wsUrl, token = token, deserializer = deserializer)
+            return RealtimeChannel(channel = ch, wsUrl = wsUrl, token = token, deserializer = deserializer).also {
+                it.wireWsUrl = baseWsUrl
+                it.wireConnectToken = connectToken
+            }
         }
+    }
+
+    /**
+     * The descriptor's `wsUrl` and `connectToken` as the server sent them, before the connect
+     * token went onto [wsUrl]. `null` for a channel built with the constructor. [toJson] writes these back.
+     */
+    private var wireWsUrl: String? = null
+    private var wireConnectToken: String? = null
+
+    /**
+     * This channel's descriptor, as the server's `toJSON()` sends it and [fromJson] reads it:
+     * `{ "__blocks": "realtime/channel", "channel", "wsUrl", "connectToken"?, "token" }`. A
+     * generated client sends a channel parameter this way.
+     */
+    fun toJson(): JsonObject = buildJsonObject {
+        put("__blocks", "realtime/channel")
+        put("channel", channel)
+        put("wsUrl", wireWsUrl ?: wsUrl)
+        wireConnectToken?.let { put("connectToken", it) }
+        put("token", token)
     }
 
     @Volatile

@@ -10,13 +10,14 @@ export const computeResourceSchema = z
     bundle: z.string().min(1, 'Bundle path must not be empty'),
     handler: z.string().optional(),
     entrypoint: z.string().optional(),
+    serverEntry: z.string().optional(),
     port: z.number().positive().optional(),
     placement: z.enum(['regional', 'global']),
     streaming: z.boolean().optional(),
     runtime: z.string().optional(),
     memorySize: z.number().positive().optional(),
     timeout: z.number().positive().optional(),
-    environment: z.record(z.string()).optional(),
+    environment: z.record(z.string(), z.string()).optional(),
     provisionedConcurrency: z.number().min(1).optional(),
   })
   .superRefine((data, ctx) => {
@@ -50,6 +51,7 @@ export const routeBehaviorSchema = z.object({
   pattern: z.string().min(1, 'Route pattern must not be empty'),
   target: z.string().min(1, 'Route target must not be empty'),
   fallback: z.string().optional(),
+  exact: z.boolean().optional(),
 });
 
 /**
@@ -137,7 +139,7 @@ export const rewriteSchema = z.object({
  */
 export const customHeaderSchema = z.object({
   source: z.string().min(1),
-  headers: z.record(z.string()),
+  headers: z.record(z.string(), z.string()),
 });
 
 /** Reserved route targets that don't need a corresponding compute entry. */
@@ -149,7 +151,7 @@ const RESERVED_TARGETS = new Set(['static', 's3', 'image-optimization']);
 export const deployManifestSchema = z
   .object({
     version: z.literal(1),
-    compute: z.record(computeResourceSchema),
+    compute: z.record(z.string(), computeResourceSchema),
     staticAssets: z.object({
       directory: z.string().min(1, 'Static assets directory must not be empty'),
       cacheControl: z.string().optional(),
@@ -161,6 +163,12 @@ export const deployManifestSchema = z
       .min(1, 'At least one route is required'),
     cache: cacheConfigSchema.optional(),
     imageOptimization: imageConfigSchema.optional(),
+    imageRemoteSources: z
+      .object({
+        domains: z.array(z.string()).optional(),
+        remotePatterns: z.array(remotePatternSchema).optional(),
+      })
+      .optional(),
     middleware: middlewareConfigSchema.optional(),
     redirects: z.array(redirectSchema).optional(),
     rewrites: z.array(rewriteSchema).optional(),

@@ -1,0 +1,102 @@
+# Blocks Demo App
+
+A fuller example app on AWS Blocks. It wires together several Building Blocks in
+one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
+loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
+sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
+
+> Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
+
+## Getting Started
+
+```bash
+npm run dev          # Start local dev server (mocks, no AWS needed)
+npm run test:e2e     # Run API tests
+npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
+```
+
+Open http://localhost:3000 after `npm run dev`.
+
+## Project Structure
+
+| Path | Purpose |
+|------|---------|
+| `aws-blocks/index.ts` | Backend: auth, KVStore, todo table, API methods |
+| `src/index.ts` | Frontend: sign-in, key/value demo, sortable todo UI |
+| `test/e2e.test.ts` | Tests exercising the public and protected API |
+| `index.html` | HTML shell |
+
+## What's Included
+
+- **Auth** — email + password sign-up / sign-in / sign-out with server-side
+  sessions (Amazon Cognito on AWS). Sign-up confirms the email address with a
+  6-digit code; locally the code is printed in the `npm run dev` terminal.
+- **KVStore** — a `getValue` / `setValue` pair gated by `requireAuth`, with
+  keys namespaced per user.
+- **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
+  `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
+  also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
+- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob, KnowledgeBase** —
+  upload/download (paths scoped per user; `getUploadSlot` signs only the
+  content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
+  methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
+  `requireAuth`; `getFlag` and `jobRan` stay public.
+  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  Its placeholder works locally (the mock sends nothing), but replace it with a
+  verified SES identity before deploying to production: the placeholder is on the
+  reserved `.invalid` domain, which SES can never verify, so every send from it
+  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  until you do.
+- **KVStore with a `schema` and a `key`** — per-user todos, stored as records
+  you list or query as a collection (a store fixes its key when you create
+  it); `listTodos(sortBy)` sorts the list in
+  the API (an in-memory sort, no secondary indexes to provision). Every todo
+  method calls `auth.requireAuth(context)`, so data is isolated per user.
+- **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both
+  balance updates commit together or roll back together inside one transaction.
+  Accounts belong to the signed-in user (an `owner` column every query filters
+  on), so a caller can only move money between their own accounts.
+
+The API mixes **public** methods (no auth) and **protected** methods (gated by
+`requireAuth`) in one namespace, showing where the auth boundary sits.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Local dev with mock storage |
+| `npm run dev:stop` | Stop the local dev server this app started |
+| `npm run test:e2e` | Test the API via direct imports |
+| `npm run typecheck` | TypeScript type checking |
+| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
+| `npm run deploy` | Full production deploy |
+| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+
+## Stack naming
+
+Your CloudFormation stack names are derived from the `stackId` in
+`.blocks/config.json`, generated at scaffold time from your project name plus a
+random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
+and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
+`aws-blocks/index.cdk.ts` for dynamic naming logic.
+
+## For Agents
+
+Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+
+**Do not use local files or in-memory storage** — use Building Blocks for all
+data persistence and cloud abstractions (they mock locally and deploy to AWS
+automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+(frontend). Test via `npm run test:e2e`.

@@ -16,11 +16,61 @@ export interface ModelConfig {
 	 */
 	provider: 'bedrock' | 'openai-api' | 'canned';
 	modelId?: string;
+	/**
+	 * Base URL of the OpenAI-compatible API for the `openai-api` provider (e.g. `http://localhost:11434/v1`).
+	 * For Amazon Bedrock Mantle, use `https://bedrock-mantle.<region>.api.aws/v1` (some model lines use `/openai/v1`);
+	 * only models that support the Chat Completions API work with this provider.
+	 */
 	endpoint?: string;
-	/** API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var. */
+	/**
+	 * API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var.
+	 *
+	 * For a Bedrock Mantle `endpoint`, omit it to authenticate with short-term Bedrock API keys minted from the
+	 * AWS credentials the agent runs with, refreshed automatically; `OPENAI_API_KEY` is not used for Mantle. The
+	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An empty string is treated as
+	 * omitted. An explicit key takes precedence.
+	 */
 	apiKey?: string | (() => Promise<string>);
+	/**
+	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.
+	 * Inline dictionaries are validated and copied when the provider is created; Agent creates a provider for each turn.
+	 * A path resolves from the current working directory when the model is created and is read once per text selection; tool calls and summaries do not read it.
+	 * Correct a failed file request and retry the next request. Replace files atomically to avoid exposing partial JSON to a selection.
+	 * Each file-backed text selection reads, parses, and validates the full dictionary; large fixtures increase per-request latency and memory use.
+	 */
+	cannedResponses?: Record<string, string> | string;
 	inferenceConfig?: InferenceConfig;
+	/**
+	 * @deprecated Not applied: no model provider reads this field, so setting it has no effect.
+	 * Use {@link ModelConfig.guardrail} to attach an existing Bedrock guardrail. The agent logs a
+	 * warning when this field is set.
+	 */
 	guardrails?: GuardrailsConfig;
+	/**
+	 * Attach an existing Amazon Bedrock guardrail to every model call (`provider: 'bedrock'` only).
+	 * Bedrock evaluates the conversation, including tool results, against the guardrail's content
+	 * filters, denied topics and prompt-attack filter. The deployed agent is granted
+	 * `bedrock:ApplyGuardrail` on this guardrail.
+	 *
+	 * Create the guardrail outside AWS Blocks (console, CLI or a CDK `CfnGuardrail`) and pass
+	 * its id or ARN and a version.
+	 *
+	 * @example
+	 * ```ts
+	 * model: { deployed: { ...BedrockModels.BALANCED, guardrail: { identifier: 'abc123xyz', version: '1' } } }
+	 * ```
+	 */
+	guardrail?: BedrockGuardrail;
+}
+
+/** An existing Amazon Bedrock guardrail to apply to model calls. See {@link ModelConfig.guardrail}. */
+export interface BedrockGuardrail {
+	/** Guardrail id (e.g. `abc123xyz`) or full guardrail ARN. */
+	identifier: string;
+	/** Guardrail version, e.g. `'1'`, or `'DRAFT'` for the working draft. */
+	version: string;
+	/** Guardrail trace in model responses. Default: Bedrock's (`'enabled'`). */
+	trace?: 'enabled' | 'disabled' | 'enabled_full';
 }
 
 export interface InferenceConfig {
@@ -44,10 +94,38 @@ export type DefaultToolContext = Record<string, any>;
 
 export interface AgentConfig<TContext = DefaultToolContext> {
 	/**
-	 * When true, disables all persistence (no DistributedTable, no SessionManager).
+	 * When true, disables all persistence (no KVStore, no SessionManager).
 	 * The agent does inference + tools only — no conversation history.
 	 */
 	inferenceOnly?: boolean;
+	/**
+	 * How an `inferenceOnly` agent keys the session a `conversationId` selects.
+	 *
+	 * - `'user'` (default): the session is keyed by the `userId` together with the `conversationId`, and the
+	 *   Realtime channel is scoped to the `userId`. A caller who passes another user's
+	 *   `conversationId` gets a separate, empty session of their own and never sees the other
+	 *   user's chunks. `stream()`, `resume()` and `getChannel()` then require `options.userId`
+	 *   (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without it.
+	 * - `'shared'`: the session is keyed by the `conversationId` alone. Anyone who
+	 *   passes the same id continues that session, and anyone who passes the same `channelId`
+	 *   receives its chunks. Only safe when your app never lets a caller choose the
+	 *   `conversationId` or `channelId` (for example, the server generates them and keeps them
+	 *   to itself). `resume()` throws `AgentErrors.InvalidUsage` in this mode: a session with no
+	 *   owner can't tell who may approve its pending tool calls. For the same reason, the
+	 *   constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or
+	 *   `interrupt`.
+	 *
+	 * Switching an existing agent between `'shared'` and `'user'` starts new sessions: sessions stored
+	 * under the other key are not resumed. Earlier releases keyed every `inferenceOnly` session by the
+	 * bare `conversationId`; those sessions are not resumed under `'user'`, and `'shared'` keys
+	 * sessions the same way.
+	 *
+	 * Ignored when persistence is enabled (`inferenceOnly` unset or `false`): those agents always
+	 * check that the `userId` owns the conversation and scope channels to the user.
+	 *
+	 * @default 'user'
+	 */
+	sessionScope?: 'shared' | 'user';
 	model?: {
 		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. Defaults to BedrockModels.BALANCED. */
 		deployed?: ModelConfig | ModelConfig[];
@@ -85,7 +163,39 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 */
 	toolContextSchema?: z.ZodType<TContext>;
 	conversation?: ConversationManagerConfig;
-	structuredOutput?: z.ZodType;
+	/**
+	 * Safety cap on the number of **model (Bedrock) invocations per turn**.
+	 *
+	 * The agent runs a reason→act loop where each iteration is one model call,
+	 * optionally followed by tool calls; a model call that requests no tools ends
+	 * the turn. Model calls are the unit Bedrock bills for, so this is the most
+	 * direct guard against a runaway agent that loops indefinitely — and because
+	 * every tool round needs a model call, it transitively bounds tool loops too.
+	 *
+	 * When the cap is hit the turn is stopped and the client receives an `error`
+	 * chunk instead of `done`. Raise it for agents that legitimately reason over
+	 * many steps, or set it to `false` to disable the cap entirely. This bounds
+	 * call *count*, not tokens or wall-clock — pair it with a billing/CloudWatch
+	 * alarm for defense in depth.
+	 *
+	 * Scope: the count covers the whole turn, including across a human-in-the-loop
+	 * interrupt — it is kept in the agent's session state, so `resume()` continues
+	 * on the same budget rather than starting a fresh one. Must be a positive
+	 * integer or `false`; anything else throws `InvalidModelConfigException`.
+	 */
+	maxLlmCalls?: number | false;
+	/**
+	 * Safety cap on the number of **tool calls per turn**.
+	 *
+	 * Bounds tool-loop runaways specifically (a turn that keeps invoking tools).
+	 * Parallel tool batches count each individual call. Raise it for agents that
+	 * legitimately chain many tools in a single turn, or set it to `false` to
+	 * disable the cap entirely. When the cap is hit the turn is stopped and the
+	 * client receives an `error` chunk instead of `done`. Like `maxLlmCalls`, the
+	 * count covers the whole turn (it survives `resume()` after an interrupt) and
+	 * must be a positive integer or `false`.
+	 */
+	maxToolIterations?: number | false;
 	/** Controls how text chunks are published to the client via Realtime.
 	 * - `'token'`: publish every text delta immediately
 	 * - `'block'` (default): buffer text and publish when a full content block completes
@@ -106,6 +216,12 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * Ignored by the mock and browser runtimes.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * @internal Pre-built AgentCore code-asset directory to use instead of co-bundling the app
+	 * backend at synth. Set by unit tests and apps that pre-bundle; normal apps leave this unset
+	 * and the backend is co-bundled automatically. Ignored by the mock/browser runtimes.
+	 */
+	agentcoreAssetPath?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -162,10 +278,48 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	name?: string;
 	description: string;
 	parameters: TParams;
-	/** When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`. */
+	/**
+	 * When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`.
+	 *
+	 * Set it to `true` on any tool with side effects (one that writes data, sends a message, spends
+	 * money or calls an external system on the user's behalf). With the default, the model can call
+	 * the tool whenever it decides to, including when an instruction in a tool result or other content
+	 * the user didn't write tells it to; the tool's `parameters` schema bounds the arguments, not the
+	 * decision to call it. Read-only tools can usually keep the default.
+	 */
 	needsApproval?: boolean;
 	/** When true (and `needsApproval` is true), user can respond "trust" to auto-approve this tool for the rest of the conversation. */
 	trustable?: boolean;
+	/**
+	 * Set to `true` when this tool returns content you don't control: knowledge-base chunks,
+	 * fetched web pages, user-uploaded files, third-party API text. Defaults to `false`.
+	 *
+	 * The result is wrapped in an `<untrusted-data>` block whose delimiter carries a random
+	 * per-session id, and the agent's system prompt tells the model that content inside it is
+	 * data, never instructions. This is a mitigation for indirect prompt injection (text that
+	 * tries to make the agent call other tools), not a guarantee: also set `needsApproval` on
+	 * tools with side effects, and consider a Bedrock guardrail (`ModelConfig.guardrail`).
+	 *
+	 * The result is serialized to text inside the block: a string is kept as-is, and a
+	 * structured (object or array) result is presented to the model as JSON text rather than
+	 * as a structured tool result.
+	 *
+	 * If the handler throws, the error message reaches the model inside the same block (an error
+	 * can echo upstream content too). The content is NFKC-normalized and stripped of invisible
+	 * characters (zero-width, bidirectional controls, Unicode tags) before delimiter-shaped text
+	 * is neutralized, so lookalike delimiters can't close the block early.
+	 *
+	 * @example
+	 * ```ts
+	 * searchDocs: tool({
+	 *   description: 'Search the product docs',
+	 *   parameters: z.object({ query: z.string() }),
+	 *   untrustedOutput: true,
+	 *   handler: async ({ input }) => (await kb.retrieve(input.query)).map((r) => ({ text: r.text, source: r.source })),
+	 * }),
+	 * ```
+	 */
+	untrustedOutput?: boolean;
 	/** General interrupt logic — called before tool execution with `{ input, context, interrupt }`. Call `interrupt()` to pause the agent. Mutually exclusive with `needsApproval`. */
 	interrupt?: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => void;
 	/**
@@ -175,6 +329,31 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * - `interrupt` — pause the agent for human input
 	 */
 	handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;
+	/**
+	 * Local-dev only. Realistic tool input for the `canned` mock provider. Shallow-merged
+	 * over the generated placeholder input (your fields win; unspecified fields fall back to
+	 * schema defaults / generic placeholders). The merge is one level deep — a nested-object
+	 * example replaces that whole generated sub-object rather than deep-merging into it.
+	 * Ignored by the bedrock/openai providers.
+	 */
+	cannedExamples?: Record<string, JSONValue>;
+	/**
+	 * Local-dev only. Extra keyword phrases that make the `canned` mock provider select this
+	 * tool, in addition to the tool name and its camelCase words. Single and multi-word phrases
+	 * match on word boundaries (so "log in" is not triggered by "backlog in"). Ignored by the
+	 * bedrock/openai providers.
+	 */
+	cannedTriggers?: string[];
+}
+
+/**
+ * Local-dev hints for the `canned` mock provider, keyed by tool name and threaded from
+ * `ToolDefinition.cannedExamples`/`cannedTriggers` into the provider (Strands strips these
+ * fields when converting tools, so they're plumbed explicitly). Ignored by real providers.
+ */
+export interface CannedToolHints {
+	examples?: Record<string, JSONValue>;
+	triggers?: string[];
 }
 
 /**
@@ -250,10 +429,24 @@ export interface ToolCallRecord {
 }
 
 export interface StreamOptions<TContext = DefaultToolContext> {
+	/**
+	 * Conversation to continue. Must have been created by `createConversationId(userId)` for the
+	 * same `userId`, or `stream()` throws ConversationNotFound (not checked for `inferenceOnly` agents).
+	 */
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
+	/**
+	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
+	 * With persistence, and on an `inferenceOnly` agent with the default `sessionScope: 'user'`,
+	 * the chunks are published on this channel scoped to `userId`; subscribe with
+	 * `getChannel(channelId, { userId })`.
+	 */
 	channelId?: string;
-	/** User ID for conversation scoping. Defaults to 'anonymous'. */
+	/**
+	 * User ID for conversation scoping. Required when persistence is enabled, and for an
+	 * `inferenceOnly` agent with the default `sessionScope: 'user'` (take it from the
+	 * authenticated session); defaults to 'anonymous' only for an `inferenceOnly` agent with
+	 * `sessionScope: 'shared'`.
+	 */
 	userId?: string;
 	/**
 	 * Per-call context forwarded to every tool invocation as `context`. Use it to pass
@@ -273,7 +466,10 @@ export interface StreamOptions<TContext = DefaultToolContext> {
  * and the `complete()` helper is dropped (functions don't serialize).
  */
 export interface AgentStreamResult {
-	/** Realtime channel ID where chunks are published. */
+	/**
+	 * Realtime channel ID where chunks are published (the one you passed, or the default). With
+	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, { userId })`.
+	 */
 	channelId: string;
 	/**
 	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
@@ -296,18 +492,38 @@ export interface AgentStreamChunk {
 	toolName?: string;
 	input?: JSONValue;
 	usage?: TokenUsage;
+	/**
+	 * Set on an `error` chunk. The message of a branded Building Block error, or `'Internal error'`
+	 * for any other failure (raw model/SDK/storage text never reaches the client; it is logged
+	 * server-side).
+	 */
 	error?: string;
+	/**
+	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
+	 * `ModelUnavailableException` for a Bedrock model the account cannot invoke). Absent for an
+	 * unclassified failure, which clients surface as `StreamFailed`.
+	 */
+	errorName?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
 
 
 export interface MessageMetadata {
 	toolName?: string;
-	toolInput?: string;
-	toolOutput?: string;
+	toolInput?: JSONValue;
+	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
+	/**
+	 * Why a turn ended early: a cap's stop reason, or a failed turn's client-safe message (a branded
+	 * Building Block error's message, or `'Internal error'`).
+	 */
 	error?: string;
+	/**
+	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for
+	 * example `ModelUnavailableException`). Absent for an unclassified failure.
+	 */
+	errorName?: string;
 }
 
 export interface Message {

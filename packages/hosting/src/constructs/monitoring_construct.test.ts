@@ -23,7 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -33,7 +33,9 @@ import {
   Runtime,
 } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Topic } from 'aws-cdk-lib/aws-sns';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { MonitoringConstruct } from './monitoring_construct.js';
 
 const createStack = (): Stack => {
@@ -107,17 +109,136 @@ void describe('MonitoringConstruct', () => {
       template.resourceCountIs('AWS::SNS::Topic', 1);
     });
 
-    void it('reuses a BYO SNS topic and creates no new one', () => {
+    void it('applies provided subscriptions to the auto-created topic', () => {
       const stack = createStack();
-      const userTopic = new Topic(stack, 'UserTopic');
       new MonitoringConstruct(stack, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
+        subscriptions: [
+          new subs.EmailSubscription('oncall@example.com'),
+        ],
       });
-      // Synthesize once at the end. If the construct created its own
-      // topic, the count would be 2.
       const template = Template.fromStack(stack);
       template.resourceCountIs('AWS::SNS::Topic', 1);
+      template.hasResourceProperties('AWS::SNS::Subscription', {
+        Protocol: 'email',
+        Endpoint: 'oncall@example.com',
+      });
+    });
+
+    void it('warns at synth when enabled with an alarm but no subscriber (silent-delivery gap)', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      // An alarm exists but the topic has no subscriber, so it would deliver
+      // nowhere — warn loudly rather than leaving a green-but-undeliverable
+      // alarm. Anchor on the trailing `[ack: <id>]` tag addWarningV2 appends,
+      // not the message body: the id string also appears inside the message
+      // (the acknowledge remedy), so a body match would stay green even if the
+      // real warning id changed. The `$` pins it to the tag.
+      Annotations.fromStack(stack).hasWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when at least one subscriber is supplied', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+      });
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when a subscriber is added AFTER construction', () => {
+      const stack = createStack();
+      // Subscribing post-construction is a supported path (e.g. a Lambda/SQS
+      // target attached via `monitoring.alarmTopics`, which `subscriptions`
+      // cannot express). The check is deferred to a validation so it sees the
+      // synthesized CfnSubscription rather than only the constructor-time prop.
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      m.topic?.addSubscription(new subs.EmailSubscription('oncall@example.com'));
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when the subscriber lives in another stack', () => {
+      // LambdaSubscription / SqsSubscription synthesize their CfnSubscription
+      // in the TARGET's stack, so a stack-scoped search would miss it and warn
+      // spuriously. The check walks the whole app, so a cross-stack subscriber
+      // counts.
+      const app = new App();
+      const hostingStack = new Stack(app, 'TestStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const opsStack = new Stack(app, 'OpsStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const m = new MonitoringConstruct(hostingStack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(hostingStack, 'Ssr'),
+      });
+      const target = newLambda(opsStack, 'OncallFn');
+      m.topic?.addSubscription(new subs.LambdaSubscription(target));
+      Annotations.fromStack(hostingStack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when every alarm already routes to another action', () => {
+      // A caller who wires alarm actions themselves via `monitoring.alarms`
+      // (e.g. an SnsAction onto a topic they already subscribe) has handled
+      // delivery, so telling them to subscribe THIS topic would be wrong.
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      const otherTopic = new Topic(stack, 'OncallTopic');
+      otherTopic.addSubscription(new subs.EmailSubscription('oncall@x.com'));
+      for (const alarm of m.alarms) {
+        alarm.addAlarmAction(new SnsAction(otherTopic));
+      }
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when no alarm is wired (topic can never enter ALARM)', () => {
+      const stack = createStack();
+      // No distribution/ssrFunction/image/DLQ ⇒ no alarm. A topic with no alarm
+      // can never flip to ALARM, so the "delivers nowhere" warning would be
+      // spurious — the gate suppresses it.
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
     });
 
     void it('creates no alarms when no monitorable resources are supplied', () => {
@@ -164,6 +285,49 @@ void describe('MonitoringConstruct', () => {
 
       // No alarm at all because no distribution / Lambda / DLQ given.
       template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+    });
+
+    // Issue #481: off-region, the CloudFront alarm is deferred to a
+    // us-east-1 support stack by the parent instead of created here.
+    void it('is deferred (not created locally) when createCloudFrontAlarmLocally is false', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // No AWS/CloudFront alarm was created in this (regional) stack.
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
+    });
+
+    void it('still creates the regional alarms (SSR/image/DLQ) when the CF alarm is deferred', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        ssrFunction: newLambda(stack, 'Ssr'),
+        imageFunction: newLambda(stack, 'Img'),
+        revalidationDlq: new Queue(stack, 'Dlq'),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // 4 regional alarms (2 SSR + 1 image + 1 DLQ); the CF alarm is deferred.
+      template.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+      assert.strictEqual(m.alarms.length, 4);
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
     });
   });
 
@@ -335,21 +499,26 @@ void describe('MonitoringConstruct', () => {
       });
     });
 
-    void it('scopes the CloudWatch grant to this account without hard-failing when aws:SourceAccount is absent', () => {
+    void it("scopes the CloudWatch grant to this account's alarms with aws:SourceAccount and aws:SourceArn", () => {
       const stack = createStack();
       new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
       const template = Template.fromStack(stack);
 
-      // `IfExists` matters: aws:SourceAccount is only populated on
-      // direct service-principal calls, and a hard StringEquals would
-      // reintroduce the silent deny this grant exists to prevent.
+      // The conditions Amazon SNS documents for an AWS service publishing
+      // to an encrypted topic. Not the `IfExists` form, which lets a
+      // request without aws:SourceAccount through.
       template.hasResourceProperties('AWS::KMS::Key', {
         KeyPolicy: {
           Statement: Match.arrayWith([
             Match.objectLike({
               Principal: { Service: 'cloudwatch.amazonaws.com' },
               Condition: {
-                StringEqualsIfExists: { 'aws:SourceAccount': '123456789012' },
+                StringEquals: { 'aws:SourceAccount': '123456789012' },
+                ArnLike: {
+                  'aws:SourceArn': {
+                    'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-west-2:123456789012:alarm:*']],
+                  },
+                },
               },
             }),
           ]),
@@ -408,18 +577,6 @@ void describe('MonitoringConstruct', () => {
         (alarm as any)['Properties']['AlarmActions'],
         [{ Ref: encryptedTopicId }],
       );
-    });
-
-    void it('creates no key for a BYO topic — the caller owns its encryption', () => {
-      const stack = createStack();
-      const m = new MonitoringConstruct(stack, 'Monitoring', {
-        enabled: true,
-        snsTopic: new Topic(stack, 'UserTopic'),
-      });
-      const template = Template.fromStack(stack);
-
-      template.resourceCountIs('AWS::KMS::Key', 0);
-      assert.strictEqual(m.encryptionKey, undefined);
     });
 
     void it('creates no key when monitoring is disabled', () => {

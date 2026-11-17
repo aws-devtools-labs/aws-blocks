@@ -7,19 +7,18 @@ import type {
 	CronJobEvent,
 	CronJobOptions,
 } from './types.js';
-import { CronJobErrors } from './errors.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-cron-job');
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
 
-/** Parsed rate expression. */
-interface RateSchedule { type: 'rate'; intervalMs: number }
-/** Parsed cron expression. */
-interface CronSchedule { type: 'cron'; fields: CronFields }
-interface CronFields { minute: number[]; hour: number[]; dayOfMonth: number[]; month: number[]; dayOfWeek: number[] }
+import { parseScheduleForMock, validateTimezone, type CronFields, type RateSchedule, type CronSchedule } from './schedule.js';
 
 /**
  * Scheduled task execution backed by EventBridge Scheduler and Lambda.
@@ -36,13 +35,21 @@ interface CronFields { minute: number[]; hour: number[]; dayOfMonth: number[]; m
  * - Use cron expressions for precise timing (`cron(0 9 * * ? *)`)
  * - Set `enabled: false` for jobs you only want to trigger manually during development
  *
- * **Failure handling (preview):** Handler exceptions are retried by Lambda's
- * built-in async invoke retry policy (2 retries with exponential backoff).
- * Dead-letter queues and configurable retry policies are planned for GA.
+ * **Failure handling (preview):** On a serverless compute, handler exceptions
+ * are retried by Lambda's built-in async invoke retry policy (2 retries with
+ * exponential backoff), with no dead-letter queue yet. On a container compute,
+ * a failed tick is retried by its queue (3 attempts in total), then moved to a
+ * dead-letter queue. Configurable retry policies are planned for GA.
  *
  * **Concurrent executions (preview):** If a handler runs longer than the
  * schedule interval, the next invocation starts while the previous is still
  * running. Design handlers to tolerate concurrent execution.
+ *
+ * **Long-running jobs:** A serverless compute stops a handler after at most 15
+ * minutes. Pass a container `Compute` as `compute` (the same objects `AsyncJob`
+ * accepts) with a `timeoutSeconds` to run longer. Each tick is then delivered
+ * like a container `AsyncJob`: an enforced timeout, up to 3 attempts, then a
+ * dead-letter queue.
  *
  * @example
  * ```typescript
@@ -51,6 +58,14 @@ interface CronFields { minute: number[]; hour: number[]; dayOfMonth: number[]; m
  *   handler: async (event) => {
  *     console.log(`Running cleanup at ${event.scheduledTime}`);
  *   },
+ * });
+ *
+ * const worker = new Compute(scope, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
+ * new CronJob(scope, 'nightly-rebuild', {
+ *   schedule: 'cron(0 3 * * ? *)',
+ *   compute: worker,
+ *   timeoutSeconds: 2 * 60 * 60,
+ *   handler: async () => { await rebuildIndex(); },
  * });
  * ```
  */
@@ -78,7 +93,7 @@ export class CronJob<T = void> extends Scope {
 			validateTimezone(options.timezone);
 		}
 
-		this._schedule = parseSchedule(options.schedule);
+		this._schedule = parseScheduleForMock(options.schedule);
 
 		if (this._enabled) {
 			this._start();
@@ -90,24 +105,70 @@ export class CronJob<T = void> extends Scope {
 	private _start(): void {
 		if (this._schedule.type === 'rate') {
 			console.log(`[CronJob:${this.id}] scheduled: rate(${formatMs(this._schedule.intervalMs)})`);
-			this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
-			(this._timer as NodeJS.Timeout).unref();
+			if (this._schedule.intervalMs > MAX_TIMEOUT_MS) {
+				this._scheduleLongRateTick(Date.now() + this._schedule.intervalMs);
+			} else {
+				this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
+				(this._timer as NodeJS.Timeout).unref();
+			}
 		} else {
 			this._scheduleCronTick();
 		}
+	}
+
+	/**
+	 * Fires a rate schedule longer than `setTimeout`/`setInterval` allow (about 24.8 days). Node
+	 * clamps a longer delay to 1 ms, so wait for `fireAt` in steps, then fire and schedule the next one.
+	 * If the clock jumped past several intervals (for example the machine was asleep), the handler runs
+	 * once and the next run is the first later slot on the same cadence: like EventBridge Scheduler, the
+	 * mock does not run the slots it missed.
+	 */
+	private _scheduleLongRateTick(fireAt: number): void {
+		const delayMs = fireAt - Date.now();
+		if (delayMs > MAX_TIMEOUT_MS) {
+			this._timer = setTimeout(() => this._scheduleLongRateTick(fireAt), MAX_TIMEOUT_MS);
+		} else {
+			this._timer = setTimeout(
+				() => {
+					this._fire();
+					const intervalMs = (this._schedule as RateSchedule).intervalMs;
+					const missedSlots = Math.max(Math.floor((Date.now() - fireAt) / intervalMs), 0);
+					this._scheduleLongRateTick(fireAt + (missedSlots + 1) * intervalMs);
+				},
+				Math.max(delayMs, 0),
+			);
+		}
+		(this._timer as NodeJS.Timeout).unref();
 	}
 
 	private _scheduleCronTick(): void {
 		const now = new Date();
 		const sched = this._schedule as CronSchedule;
 		const next = nextCronTime(sched.fields, now, this._timezone);
+		if (next === null) {
+			// Nothing matches within the search window (e.g. a leap day years away):
+			// search again later instead of firing on a date the schedule doesn't match.
+			if (canNeverMatch(sched.fields)) {
+				console.warn(`[CronJob:${this.id}] schedule can never match a real date (e.g. day 30 of February), so it will never fire. In AWS this would fail, check the day and month fields.`);
+			} else {
+				console.log(`[CronJob:${this.id}] no fire time within a year, checking again later`);
+			}
+			this._timer = setTimeout(() => this._scheduleCronTick(), MAX_TIMEOUT_MS);
+			(this._timer as NodeJS.Timeout).unref();
+			return;
+		}
 		const delayMs = next.getTime() - now.getTime();
 		const tzLabel = this._timezone ?? 'UTC';
 		console.log(`[CronJob:${this.id}] next fire: ${next.toISOString()} ${tzLabel}`);
-		this._timer = setTimeout(() => {
-			this._fire();
-			this._scheduleCronTick();
-		}, Math.max(delayMs, 1000));
+		if (delayMs > MAX_TIMEOUT_MS) {
+			// setTimeout fires right away for delays above its maximum, so wait in steps.
+			this._timer = setTimeout(() => this._scheduleCronTick(), MAX_TIMEOUT_MS);
+		} else {
+			this._timer = setTimeout(() => {
+				this._fire();
+				this._scheduleCronTick();
+			}, Math.max(delayMs, 1000));
+		}
 		(this._timer as NodeJS.Timeout).unref();
 	}
 
@@ -120,132 +181,10 @@ export class CronJob<T = void> extends Scope {
 		console.log(`[CronJob:${this.id}] triggered at ${event.scheduledTime}`);
 		this._handler(event).catch((err: any) => {
 			console.error(`[CronJob:${this.id}] handler error: ${err?.message ?? err}`);
-			console.warn(`[CronJob:${this.id}] In AWS, this invocation would be retried by Lambda's async invoke retry policy.`);
+			console.warn(
+				`[CronJob:${this.id}] In AWS, this invocation would be retried: by Lambda's async invoke retry policy on a serverless compute, or by its queue (then a dead-letter queue) on a container compute.`,
+			);
 		});
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Schedule parsing
-// ---------------------------------------------------------------------------
-
-const RATE_RE = /^rate\((\d+)\s+(minutes?|hours?|days?)\)$/i;
-const CRON_RE = /^cron\((.+)\)$/;
-
-function parseSchedule(expr: string): RateSchedule | CronSchedule {
-	const rateMatch = expr.match(RATE_RE);
-	if (rateMatch) {
-		const value = parseInt(rateMatch[1], 10);
-		const rawUnit = rateMatch[2].toLowerCase();
-		const unit = rawUnit.replace(/s$/, '');
-		const isPlural = rawUnit.endsWith('s');
-		if (value === 1 && isPlural) throw scheduleError(expr);
-		if (value > 1 && !isPlural) throw scheduleError(expr);
-		const multipliers: Record<string, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000 };
-		const ms = multipliers[unit];
-		if (!ms || value <= 0) throw scheduleError(expr);
-		return { type: 'rate', intervalMs: value * ms };
-	}
-
-	const cronMatch = expr.match(CRON_RE);
-	if (cronMatch) {
-		return { type: 'cron', fields: parseCronFields(cronMatch[1], expr) };
-	}
-
-	throw scheduleError(expr);
-}
-
-function parseCronFields(body: string, original: string): CronFields {
-	const parts = body.trim().split(/\s+/);
-	// AWS cron: minute hour day-of-month month day-of-week year
-	if (parts.length !== 6) throw scheduleError(original);
-
-	return {
-		minute: expandField(parts[0], 0, 59, original),
-		hour: expandField(parts[1], 0, 23, original),
-		dayOfMonth: parts[2] === '?' ? [] : expandField(parts[2], 1, 31, original),
-		month: expandField(parts[3], 1, 12, original),
-		dayOfWeek: parts[4] === '?' ? [] : expandDow(parts[4], original),
-	};
-	// parts[5] is year — ignored in mock
-}
-
-function expandField(field: string, min: number, max: number, original: string): number[] {
-	if (field === '*') return range(min, max);
-	const values: number[] = [];
-	for (const part of field.split(',')) {
-		if (part.includes('/')) {
-			const [base, stepStr] = part.split('/');
-			const step = parseInt(stepStr, 10);
-			// `base` may be `*` (whole field), a single value (`15` → from 15 to
-			// max), or a range (`0-30` → bounded by the range's upper end). A
-			// stepped range must stop at the range's `hi`, not run to `max`.
-			let lo: number;
-			let hi = max;
-			if (base === '*') {
-				lo = min;
-			} else if (base.includes('-')) {
-				const [loStr, hiStr] = base.split('-');
-				lo = Number(loStr);
-				hi = Number(hiStr);
-			} else {
-				lo = parseInt(base, 10);
-			}
-			if (isNaN(step) || step <= 0) throw scheduleError(original);
-			assertBounds(lo, hi, min, max, original);
-			for (let i = lo; i <= hi; i += step) values.push(i);
-		} else if (part.includes('-')) {
-			const [lo, hi] = part.split('-').map(Number);
-			assertBounds(lo, hi, min, max, original);
-			for (let i = lo; i <= hi; i++) values.push(i);
-		} else {
-			const n = parseInt(part, 10);
-			assertBounds(n, n, min, max, original);
-			values.push(n);
-		}
-	}
-	return values;
-}
-
-function expandDow(field: string, original: string): number[] {
-	// AWS cron uses 1-7 (1=SUN). Convert named days to AWS numeric equivalents first,
-	// then expand and convert everything from AWS 1-7 to JS 0-6 via (d - 1) % 7.
-	const dayMap: Record<string, number> = { SUN: 1, MON: 2, TUE: 3, WED: 4, THU: 5, FRI: 6, SAT: 7 };
-	const replaced = field.replace(/SUN|MON|TUE|WED|THU|FRI|SAT/gi, m => String(dayMap[m.toUpperCase()]));
-	return expandField(replaced, 1, 7, original).map(d => (d - 1) % 7);
-}
-
-// Reject ranges that are non-numeric, inverted (`30-10`), or fall outside the
-// field's valid `[min, max]` window (e.g. minute `100`). Without this an
-// inverted range silently yields [] and an out-of-bounds upper end (`0-100`)
-// produces values EventBridge would never accept.
-function assertBounds(lo: number, hi: number, min: number, max: number, original: string): void {
-	if (isNaN(lo) || isNaN(hi) || lo > hi || lo < min || hi > max) throw scheduleError(original);
-}
-
-function range(lo: number, hi: number): number[] {
-	const r: number[] = [];
-	for (let i = lo; i <= hi; i++) r.push(i);
-	return r;
-}
-
-function scheduleError(expr: string): Error {
-	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid cron or rate expression`);
-	err.name = CronJobErrors.InvalidSchedule;
-	return err;
-}
-
-// ---------------------------------------------------------------------------
-// Timezone validation
-// ---------------------------------------------------------------------------
-
-function validateTimezone(tz: string): void {
-	try {
-		Intl.DateTimeFormat('en-US', { timeZone: tz });
-	} catch {
-		const err = new Error(`${CronJobErrors.InvalidTimezone}: "${tz}" is not a valid IANA timezone`);
-		err.name = CronJobErrors.InvalidTimezone;
-		throw err;
 	}
 }
 
@@ -253,7 +192,20 @@ function validateTimezone(tz: string): void {
 // Cron next-fire-time calculation
 // ---------------------------------------------------------------------------
 
-function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date {
+/** Largest delay `setTimeout` accepts; longer delays fire immediately. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Longest each month can be, with February at its leap-year length. */
+const MAX_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** True when no listed day of month exists in any listed month, so the schedule can never fire. */
+function canNeverMatch(fields: CronFields): boolean {
+	if (fields.dayOfMonth.length === 0) return false;
+	return !fields.month.some(m => fields.dayOfMonth.some(d => d <= MAX_DAYS_IN_MONTH[m - 1]));
+}
+
+/** Returns the next matching minute within a year after `after`, or `null` if there is none. */
+function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date | null {
 	// Work in the target timezone by converting to local components
 	const candidate = new Date(after.getTime() + 60_000); // start 1 minute ahead
 	candidate.setSeconds(0, 0);
@@ -274,8 +226,7 @@ function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date 
 		candidate.setTime(candidate.getTime() + 60_000);
 	}
 
-	// Fallback: 1 hour from now
-	return new Date(after.getTime() + 3_600_000);
+	return null;
 }
 
 function getComponents(date: Date, timezone?: string): { minute: number; hour: number; day: number; month: number; dow: number } {

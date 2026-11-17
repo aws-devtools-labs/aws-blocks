@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { isBlocksError } from '@aws-blocks/core';
 import { validateFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { assertContainedPath } from './mock-utils.js';
-import { contentRoot, contentPath, metaPath, versionContentPath, versionMetaPath } from './paths.js';
+import { contentRoot, contentPath, deleteMarkerPath, metaPath, versionContentPath, versionMetaPath } from './paths.js';
 
 const PREFIX = '/.bb-file-bucket/';
 
@@ -70,10 +70,19 @@ export function attach(httpServer: Server) {
 
 		// CORS for browser uploads/downloads
 		const origin = req.headers.origin || '*';
+		// Reflecting the request Origin (falling back to '*') is intentional: it
+		// lets a localhost cross-port dev server (e.g. Vite/webpack on a different
+		// port) call this local file-server. This dev file-server is local tooling
+		// only and NEVER deploys to AWS / production.
+		// It is safe because Access-Control-Allow-Credentials is deliberately NOT
+		// set, so the reflected origin carries no ambient credentials: presigned-URL
+		// auth is a query-string token, not a cookie / ambient session. That is what
+		// makes reflecting an arbitrary origin here safe.
+		// WARNING: do not re-add Access-Control-Allow-Credentials and do not
+		// 'tighten' this reflection without understanding the above.
 		res.setHeader('Access-Control-Allow-Origin', origin);
 		res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
 		res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-		res.setHeader('Access-Control-Allow-Credentials', 'true');
 
 		if (req.method === 'OPTIONS') {
 			res.writeHead(200);
@@ -120,14 +129,13 @@ export function attach(httpServer: Server) {
 			let readPath = contentPath(dataDir, path);
 			let metaFilePath = metaPath(dataDir, path);
 			if (versionId) {
-				const vPath = versionContentPath(dataDir, path, versionId);
-				if (existsSync(vPath)) {
-					readPath = vPath;
-					metaFilePath = versionMetaPath(dataDir, path, versionId);
-				}
+				readPath = versionContentPath(dataDir, path, versionId);
+				metaFilePath = versionMetaPath(dataDir, path, versionId);
 			}
 
-			if (!existsSync(readPath)) {
+			// Without a versionId, a delete marker means the current version is
+			// deleted (S3 answers NoSuchKey) even though content/{key} remains.
+			if (!existsSync(readPath) || (!versionId && existsSync(deleteMarkerPath(dataDir, path)))) {
 				sendError(res, 404, 'NoSuchKey');
 				return;
 			}
@@ -149,13 +157,20 @@ export function attach(httpServer: Server) {
 			// `nosniff` stops the browser from MIME-sniffing octet-streams into
 			// HTML, and `Content-Disposition: attachment` forces a download rather
 			// than inline rendering — so an uploaded document can never run as a
-			// page. Real S3 objects served through CloudFront are hardened the same
-			// way; this keeps local dev from being weaker than production.
+			// page. This is dev-server hardening only. Deployed FileBucket content
+			// is served via S3 presigned URLs, where the stored Content-Type is
+			// the one signed into the upload URL (or passed to put()), no nosniff
+			// is applied, and a Content-Disposition is only sent when the URL was
+			// created with the `attachment` option — do not assume this
+			// dev-server behavior reflects the deployed path.
+			// When the URL was created with `attachment`, serve the exact signed
+			// disposition (e.g. with a filename), as S3 does for a signed
+			// `response-content-disposition`.
 			res.writeHead(200, {
 				'Content-Type': contentType,
 				'Content-Length': body.length.toString(),
 				'X-Content-Type-Options': 'nosniff',
-				'Content-Disposition': 'attachment',
+				'Content-Disposition': valid.contentDisposition ?? 'attachment',
 			});
 			res.end(body);
 		} else if (req.method === 'PUT') {
@@ -197,10 +212,36 @@ export function attach(httpServer: Server) {
 				return;
 			}
 
+			// Content-Length parity with real S3: when a presigned PUT URL is
+			// minted with a contentLength, the SDK signs `content-length`, so S3
+			// rejects (403 SignatureDoesNotMatch) an upload whose Content-Length
+			// header is missing or differs. Check the header up front, and the
+			// received body size once it has arrived.
+			const signedLength = valid.contentLength;
+			if (signedLength !== undefined && req.headers['content-length'] !== String(signedLength)) {
+				sendError(
+					res,
+					403,
+					`SignatureDoesNotMatch: request Content-Length does not match the signed Content-Length ${signedLength}. ` +
+						`Upload a body of exactly the size that was used to create the upload URL.`,
+				);
+				return;
+			}
+
 			collectBody(req).then(async (body) => {
+				if (signedLength !== undefined && body.length !== signedLength) {
+					sendError(
+						res,
+						403,
+						`SignatureDoesNotMatch: request body size does not match the signed Content-Length ${signedLength}.`,
+					);
+					return;
+				}
 				// When a contentType was signed, it equals the (now validated)
 				// request header. Otherwise fall back to whatever the request
 				// sent, then octet-stream — matching S3's stored content type.
+				// (Upload URLs always sign a contentType; the fallback only
+				// applies to a token minted without one.)
 				const contentType = valid.contentType || requestContentType || 'application/octet-stream';
 				await (bucket.put as (p: string, b: Buffer, o: { contentType: string }) => Promise<void>)(
 					path, body, { contentType },
@@ -208,6 +249,12 @@ export function attach(httpServer: Server) {
 				res.writeHead(200);
 				res.end();
 			}).catch((err) => {
+				// A rejected input (e.g. a body above maxUploadBytes) is a client
+				// error, answered with its static message and a 400.
+				if (isBlocksError(err, 'ValidationFailed')) {
+					sendError(res, 400, err.message);
+					return;
+				}
 				sendError(res, 500, err instanceof Error ? err.message : String(err));
 			});
 		} else {

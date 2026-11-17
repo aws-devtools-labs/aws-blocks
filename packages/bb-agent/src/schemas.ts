@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 
-/** Schema for conversation metadata stored in DistributedTable (Table 1). */
+/** Schema for conversation metadata stored in a KVStore (Table 1). */
 export const conversationSchema = z.object({
 	userId: z.string(),
 	conversationId: z.string(),
@@ -12,7 +12,7 @@ export const conversationSchema = z.object({
 	updatedAt: z.number(),
 });
 
-/** Schema for messages stored in DistributedTable (Table 2). */
+/** Schema for messages stored in a KVStore (Table 2). */
 export const messageSchema = z.object({
 	conversationId: z.string(),
 	messageId: z.string(),
@@ -31,6 +31,7 @@ export const agentStreamChunkSchema = z.object({
 	toolName: z.string().optional(),
 	input: z.any().optional(),
 	error: z.string().optional(),
+	errorName: z.string().optional(),
 	interrupts: z.array(z.object({ id: z.string(), name: z.string(), reason: z.any().optional() })).optional(),
 	usage: z.object({
 		inputTokens: z.number(),
@@ -38,3 +39,15 @@ export const agentStreamChunkSchema = z.object({
 		totalTokens: z.number(),
 	}).optional(),
 });
+
+/** Options of the conversation metadata store, shared by the runtime and the CDK entry points. */
+export const conversationsTableOptions = {
+	schema: conversationSchema,
+	key: { partitionKey: 'userId', sortKey: 'conversationId' },
+} as const;
+
+/** Options of the message history store, shared by the runtime and the CDK entry points. */
+export const messagesTableOptions = {
+	schema: messageSchema,
+	key: { partitionKey: 'conversationId', sortKey: 'messageId' },
+} as const;

@@ -4,6 +4,9 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { contextFetch } from './fetch-store.js';
+import { fetchWithStaleConnectionRetry } from './stale-connection.js';
+import { legacyDeployedStage } from './legacy-config.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -102,16 +105,46 @@ async function resolveApiUrl(): Promise<string> {
     }
   }
 
-  // 3. Node.js: read config file from filesystem
+  // 3. Node.js: read the config file a local dev server writes (`npm run dev`, or
+  //    the one `npm run sandbox` runs). A deploy never writes it: it records its
+  //    URL in `config.<stage>.json`, so the local loop never targets AWS by accident.
+  //    A file an older deploy wrote is refused, never used (see legacyDeployedStage).
+  // `process.getBuiltinModule` (Node.js 22.3 or later) loads `fs` synchronously
+  // without a dynamic `import()`. This module is also the browser / React
+  // Native entry: a static `node:fs` import breaks those bundles, and a dynamic
+  // `import()` left in place by a bundler (Expo's Metro honors `webpackIgnore`)
+  // fails to compile under Hermes, even though this branch never runs there.
+  // Node.js older than 22.3 has no way to load `fs` here, so it skips the file;
+  // the error below then says so.
+  let configFileNeedsNewerNode = false;
   if (typeof process !== 'undefined' && process.versions?.node) {
-    try {
-      const fs = await import(/* webpackIgnore: true */ 'node:fs');
-      const config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-      const validated = validateAndCache(config.apiUrl, 'config.json file');
-      console.log('[Blocks] Using API (config.json file):', validated);
-      return validated;
-    } catch {
-      // Config doesn't exist or not in Node.js
+    let config: { apiUrl?: unknown } | undefined;
+    if (typeof process.getBuiltinModule === 'function') {
+      try {
+        const fs = process.getBuiltinModule('node:fs');
+        config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+      } catch {
+        // Config doesn't exist or not in Node.js
+      }
+    } else {
+      configFileNeedsNewerNode = true;
+    }
+    if (config) {
+      const stage = legacyDeployedStage(config);
+      if (stage) {
+        throw new Error(
+          `.blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
+            'Start the dev server (`npx --no -- cdk-blocks dev`), which rewrites it, ' +
+            'or set BLOCKS_API_URL to target that stack on purpose.',
+        );
+      }
+      try {
+        const validated = validateAndCache(config.apiUrl, 'config.json file');
+        console.log('[Blocks] Using API (config.json file):', validated);
+        return validated;
+      } catch {
+        // No usable apiUrl in the file — fall through, as before
+      }
     }
   }
   
@@ -131,9 +164,13 @@ async function resolveApiUrl(): Promise<string> {
   // Fallback — no config found
   throw new Error(
     'Blocks API URL not configured. Ensure:\n' +
-    '1. You ran `npm run deploy` (deploys config.json)\n' +
-    '2. SSR Lambda has BLOCKS_API_URL env var, OR\n' +
-    '3. config.json exists at /.blocks-sandbox/config.json'
+    '1. A dev server is running (`npm run dev` writes .blocks-sandbox/config.json), OR\n' +
+    '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
+    '3. config.json is served at /.blocks-sandbox/config.json (the dev server and Hosting serve it)' +
+    (configFileNeedsNewerNode
+      ? `\nNode.js ${process.versions.node} cannot read .blocks-sandbox/config.json from the working directory; ` +
+        'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'
+      : '')
   );
 }
 
@@ -145,7 +182,13 @@ async function resolveApiUrl(): Promise<string> {
  * request is dispatched to the server.
  */
 export interface BlocksRequest {
-  /** The namespace name this call targets (e.g., 'api', 'auth'). Corresponds to the second argument of `new ApiNamespace(scope, name, handler)` in the backend. */
+  /**
+   * The namespace this call targets: the backend **export** name (e.g. `'api'`,
+   * `'authApi'` for `export const authApi = auth.createApi()`), not the
+   * `ApiNamespace` constructor's `label` argument. The request URL's
+   * `/{namespace}` segment is built from this value after middleware runs, so a
+   * middleware that changes it changes both the path and the body.
+   */
   apiNamespace: string;
   /** The method being called on the namespace (e.g., 'getUser', 'kvSet'). */
   method: string;
@@ -231,9 +274,64 @@ function processResponse(data: unknown): unknown {
  * Options for `ApiNamespaceClient`.
  */
 export interface ApiNamespaceClientOptions {
-  /** Explicit API URL. When provided, skips automatic config.json discovery. */
+  /**
+   * Explicit API **base** URL. When provided, skips automatic config.json discovery.
+   *
+   * This replaces only the *discovery* of the base URL, not the request path: the
+   * client still appends `/{namespace}` to it, exactly as it does for a base URL
+   * resolved from config.json. Pass the same value config.json would carry
+   * (for example `https://d123.cloudfront.net/aws-blocks/api`), not a
+   * namespace-qualified URL. A trailing slash is tolerated.
+   */
   url?: string;
+  /**
+   * Resend a call **once** when Node's `fetch` fails before the response headers arrived
+   * because the connection closed: `TypeError: fetch failed` whose cause is an undici
+   * socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or
+   * `EPIPE`. A partial status line followed by a close counts too, since the headers never
+   * arrived. Default `true`.
+   *
+   * The usual cause is a pooled keep-alive socket the server closed while it was idle,
+   * and then the first copy never reached the server. Node's `fetch` can't tell that
+   * apart from a fresh connection that closed, including a server that read the request
+   * and crashed before answering, so the resend makes delivery **at-least-once**: in
+   * that rare case the method runs twice. Set `false` for at-most-once delivery; the
+   * failure then surfaces to the caller instead. Browsers resend on their own, so this
+   * only matters in Node (CLIs, SSR, scripts).
+   *
+   * Generated clients accept it too: `generateClient({ url, retryStaleConnection: false })`.
+   */
+  retryStaleConnection?: boolean;
 }
+
+/**
+ * Build the request URL for a namespace by appending `/{namespace}` to the API
+ * base URL.
+ *
+ * The namespace segment is what lets a gateway route each namespace to the
+ * compute that hosts it — a single-compute backend serves every namespace path
+ * from the same origin, so this is safe there too. The namespace also stays in
+ * the JSON-RPC body, which is what the server dispatches on — the path must name
+ * the same namespace — so raw HTTP callers posting to the bare `/aws-blocks/api`
+ * endpoint keep working.
+ *
+ * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
+ * browser calls), so this does deliberate string concatenation rather than going
+ * through `new URL()`.
+ */
+function namespaceRequestUrl(baseUrl: string, namespace: string): string {
+  // Trim trailing slashes with a loop, not `/\/+$/` — that regex backtracks
+  // quadratically on a long run of '/' that doesn't end the string.
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return `${baseUrl.slice(0, end)}/${namespace}`;
+}
+
+/**
+ * The key under which an {@link ApiNamespaceClient} answers with its namespace (and URL, when
+ * overridden). A `Symbol.for` key, so a package reads it without importing this one.
+ */
+const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
 
 /**
  * Client-side API proxy. Creates a typed proxy that sends method calls
@@ -253,18 +351,43 @@ export interface ApiNamespaceClientOptions {
  * import { api } from 'aws-blocks';
  * const user = await api.getUser('123');
  * ```
+ *
+ * **Closed connections (at-least-once).** In Node (CLIs, SSR, scripts), a call whose
+ * `fetch` fails before the response headers arrived because the connection closed
+ * (`TypeError: fetch failed` whose cause is an undici socket error, `UND_ERR_SOCKET` such as
+ * `other side closed`, or `ECONNRESET` / `EPIPE`) is resent **once** on a new connection. The usual cause is a pooled keep-alive socket the server
+ * closed while idle, and then the first copy never reached the server. Node's `fetch`
+ * doesn't say whether the socket was reused, so the same error on a fresh connection, for
+ * example a server that read the request and crashed before sending a byte, is resent
+ * too, and in that rare case the method runs twice. Behind API Gateway, CloudFront or a
+ * Function URL a crashed backend answers with a 5xx, which is never retried. Keep
+ * state-changing methods idempotent where a duplicate would matter, or pass
+ * `retryStaleConnection: false` for at-most-once delivery. Nothing else is retried: not a
+ * timeout, not an abort, not a failure after the response headers arrived (while reading the
+ * body), not an HTTP or RPC error. Browsers already do this resend themselves.
  */
 export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => any>>(
   name: string,
   options?: ApiNamespaceClientOptions,
 ): AsyncAPI<T> {
   const urlOverride = options?.url;
+  // Look `fetch` up at call time (not when the client is built), as the retrying path does,
+  // so a `fetch` installed later (a polyfill, a test spy) is the one used. A test client's
+  // call brings its own (see ./fetch-store.ts).
+  const send: (url: string, init: RequestInit) => Promise<Response> =
+    options?.retryStaleConnection === false
+      ? (url, init) => (contextFetch() ?? fetch)(url, init)
+      : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
+  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
+  const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {
     get(target, method: string | symbol) {
+      if (method === API_NAMESPACE_ID) return namespaceId;
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
-        const apiUrl = urlOverride ?? await getApiUrl();
-        
+        const baseUrl = urlOverride ?? await getApiUrl();
+
         let request: BlocksRequest = {
           apiNamespace: name,
           method,
@@ -272,6 +395,10 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           headers: { 'Content-Type': 'application/json' },
         };
         request = await processRequest(request);
+        // Built after middleware, from the same `apiNamespace` the body carries,
+        // so a middleware that changes the namespace keeps path and body in step
+        // (the server rejects a mismatch) and the gateway routes the new one.
+        const requestUrl = namespaceRequestUrl(baseUrl, request.apiNamespace);
 
         // SSR cookie forwarding: when running server-side, forward the
         // inbound request cookies so auth sessions propagate to API calls.
@@ -301,20 +428,32 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           }
         }
         
-        const response = await fetch(apiUrl, {
+        // A connection that closes before the response headers arrive (usually a pooled
+        // keep-alive socket the server closed while idle) is resent once, unless
+        // `retryStaleConnection: false` (see stale-connection.ts).
+        const response = await send(requestUrl, {
           method: 'POST',
           headers: request.headers,
           credentials: 'include',
           body: encodeRpcRequest(request.apiNamespace, request.method, request.args),
         });
         
-        const rpcBody = await response.json();
-        const result = decodeRpcResponse(rpcBody); // throws ApiError on RPC error
+        // A non-JSON body (e.g. a gateway's HTML error page) decodes as no
+        // envelope, so it surfaces as an ApiError carrying the HTTP status.
+        const text = await response.text();
+        let rpcBody: unknown;
+        try {
+          rpcBody = JSON.parse(text);
+        } catch {
+          rpcBody = undefined;
+        }
+        // Throws ApiError on an RPC error or a body that is not a JSON-RPC envelope.
+        const result = decodeRpcResponse(rpcBody, response.status);
         return processResponse(result);
       };
     }
   });
 }
 
-export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+export { ApiError, blocksError, brandBlocksError, isBlocksError, hasAuthError, isWireSafeError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 export { Scope, type ScopeOptions } from '../common/index.js';

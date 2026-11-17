@@ -16,9 +16,14 @@ import {
   runStreaming,
   DeployProcessError,
   SIGNAL_COALESCE_MS,
+  parseCdkEventLine,
+  describeConvergingResource,
+  createResourceTracker,
+  extractHostingUrlFromLine,
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 const isWindows = process.platform === 'win32';
 // The end-to-end signal tests below deliver a *process-group* signal
@@ -100,6 +105,15 @@ describe('decideSignalResponse — a converging deploy is not abandoned by one s
     assert.strictEqual(action, 'abort');
     assert.match(message, /Interrupted/);
   });
+
+  it('names a destroy as a destroy, with the same policy', () => {
+    const first = decideSignalResponse('SIGTERM', null, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(first.action, 'defer');
+    assert.match(first.message, /Ignoring SIGTERM: the destroy is still running.*the stack deletion continues server-side/);
+    const second = decideSignalResponse('SIGTERM', SIGNAL_COALESCE_MS + 1, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(second.action, 'abort');
+    assert.match(second.message, /Received SIGTERM while destroying\. .*applying the stack deletion/);
+  });
 });
 
 // ── line assembly ───────────────────────────────────────────────────────────
@@ -149,7 +163,7 @@ describe('formatElapsed', () => {
 // keeps them line-oriented when there is no TTY. Dropping either flag restores
 // the 0-byte stdout, so the argv is pinned here.
 describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
-  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: OUTPUTS_FILE.production });
 
   it('sends CDK logs to stdout instead of stderr', () => {
     assert.ok(args.includes('--ci'), `expected --ci in: ${args.join(' ')}`);
@@ -159,11 +173,24 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[args.indexOf('--progress') + 1], 'events');
   });
 
+  it('selects every stack so multi-stack apps deploy without a stack-selector error', () => {
+    assert.ok(args.includes('--all'), `expected --all in: ${args.join(' ')}`);
+  });
+
+  it('keeps the sandbox-only speedups out of the production deploy', () => {
+    // A production deploy must keep a reviewable change set and full
+    // stabilization with rollback: the sandbox speedups must never appear here,
+    // even if someone later "aligns" the two arg builders.
+    assert.ok(!args.includes('--method'), `production deploy must not use --method: ${args.join(' ')}`);
+    assert.ok(!args.includes('--express'), `production deploy must not use --express: ${args.join(' ')}`);
+    assert.ok(!args.includes('--hotswap'), `production deploy must not use --hotswap: ${args.join(' ')}`);
+  });
+
   it('keeps the existing non-interactive deploy contract', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
     assert.strictEqual(args[args.indexOf('--require-approval') + 1], 'never');
-    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.json');
+    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.production.json');
     assert.strictEqual(args[args.indexOf('--context') + 1], 'projectRoot=/app');
   });
 });
@@ -456,6 +483,54 @@ describe('runStreaming — relays output while the child is still running', () =
     assert.doesNotMatch(stdout.text(), /Resource handler returned message/, 'and must not be duplicated onto stdout');
     assert.match(stdout.text(), /CREATE_IN_PROGRESS/, 'progress still streams to stdout');
   });
+
+  // The pure helpers (parseCdkEventLine / describeConvergingResource /
+  // extractHostingUrlFromLine) are unit-tested above, but their WIRING inside
+  // runStreaming — onHostingUrl firing at most once and the idle heartbeat
+  // naming the converging resource — was previously only exercised by hand.
+  // This drives a real child that emits CDK-event-shaped lines then idles, and
+  // asserts both behaviours end to end.
+  it('fires onHostingUrl once and names the converging resource in the heartbeat', { timeout: 30_000 }, async () => {
+    const stdout = collectingSink();
+    const hostingUrls: string[] = [];
+    // The child prints a hosting-URL Outputs line and an IN_PROGRESS event for a
+    // resource that never COMPLETEs, then goes silent long enough for the
+    // heartbeat to fire while that resource is still "current".
+    const script = [
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+      `console.log('Probe | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | HostingDistribution');`,
+      `setTimeout(() => {}, 900);`,
+    ].join('\n');
+    await runStreaming(process.execPath, ['-e', script], {
+      stdout,
+      stderr: collectingSink(),
+      heartbeatMs: 150,
+      onHostingUrl: (url) => hostingUrls.push(url),
+      signalTarget: new EventEmitter() as unknown as SignalRegistry,
+    });
+
+    // (a) onHostingUrl fired exactly once, with the URL.
+    assert.deepStrictEqual(hostingUrls, ['https://d123.cloudfront.net']);
+    // (b) the heartbeat named the converging resource rather than a bare tick.
+    assert.match(stdout.text(), /waiting on HostingDistribution \(AWS::CloudFront::Distribution\)/);
+  });
+
+  // A second hosting-URL line must NOT re-fire the one-shot callback.
+  it('does not re-fire onHostingUrl when the URL appears again in the stream', { timeout: 30_000 }, async () => {
+    const hostingUrls: string[] = [];
+    const script = [
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+      `console.log('Probe.HostingDistributionUrl = https://d123.cloudfront.net');`,
+    ].join('\n');
+    await runStreaming(process.execPath, ['-e', script], {
+      stdout: collectingSink(),
+      stderr: collectingSink(),
+      heartbeatMs: 0,
+      onHostingUrl: (url) => hostingUrls.push(url),
+      signalTarget: new EventEmitter() as unknown as SignalRegistry,
+    });
+    assert.deepStrictEqual(hostingUrls, ['https://d123.cloudfront.net'], 'the URL is reported at most once');
+  });
 });
 
 // ── the root cause, verified against the real CDK CLI ───────────────────────
@@ -552,7 +627,9 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
   /**
    * argv for one probe deploy. The flag under test *replaces* the `--ci` that
    * {@link buildCdkDeployArgs} already adds instead of being appended after it,
-   * so a probe never argues with itself over two conflicting CI flags.
+   * so a probe never argues with itself over two conflicting CI flags. `--all`
+   * is likewise dropped: the probe selects its own single stack (`ProbeStack`)
+   * explicitly, and the CDK CLI rejects `--all` together with a named stack.
    */
   function probeArgv(assembly: string, ciFlag: '--ci' | '--no-ci'): string[] {
     const deployArgs = buildCdkDeployArgs({
@@ -560,7 +637,7 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
       outputsFile: join(assembly, 'outputs.json'),
     })
       .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
-      .filter((arg) => arg !== '--ci');
+      .filter((arg) => arg !== '--ci' && arg !== '--all');
     return [...deployArgs, ciFlag, 'ProbeStack', '--app', assembly];
   }
 
@@ -1031,5 +1108,217 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
       if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } }
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── Converging-resource attribution (Part A: name what the deploy waits on) ──
+// The heartbeat used to print a bare "CloudFormation is converging"; these cover
+// the pure pieces that let it say WHICH resource instead.
+
+describe('parseCdkEventLine — reads a `cdk deploy --progress events` line', () => {
+  it('parses the STATUS | TYPE | LOGICALID triple from a padded CDK line', (t: TestContext) => {
+    const event = parseCdkEventLine(
+      'ProbeStack | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | HostingDistribution',
+    );
+    t.assert.deepStrictEqual(event, {
+      status: 'CREATE_IN_PROGRESS',
+      resourceType: 'AWS::CloudFront::Distribution',
+      logicalId: 'HostingDistribution',
+    });
+  });
+
+  it('parses a COMPLETE transition too', (t: TestContext) => {
+    const event = parseCdkEventLine('Foo | CREATE_COMPLETE | AWS::Lambda::Function | Handler');
+    t.assert.strictEqual(event?.status, 'CREATE_COMPLETE');
+    t.assert.strictEqual(event?.logicalId, 'Handler');
+  });
+
+  it('parses UPDATE_*, DELETE_* and ROLLBACK statuses', (t: TestContext) => {
+    t.assert.strictEqual(
+      parseCdkEventLine('S | UPDATE_IN_PROGRESS | AWS::DynamoDB::Table | T')?.status,
+      'UPDATE_IN_PROGRESS',
+    );
+    t.assert.strictEqual(
+      parseCdkEventLine('S | DELETE_COMPLETE | AWS::S3::Bucket | B')?.status,
+      'DELETE_COMPLETE',
+    );
+    t.assert.strictEqual(
+      parseCdkEventLine('S | UPDATE_ROLLBACK_COMPLETE | AWS::Lambda::Function | Fn')?.status,
+      'UPDATE_ROLLBACK_COMPLETE',
+    );
+  });
+
+  it('returns null for a non-event line (banner, summary, blank)', (t: TestContext) => {
+    t.assert.strictEqual(parseCdkEventLine('✨  Deployment time: 421s'), null);
+    t.assert.strictEqual(parseCdkEventLine(''), null);
+    t.assert.strictEqual(parseCdkEventLine('🌐 Frontend URL: https://x.cloudfront.net'), null);
+  });
+});
+
+// The single-line cases above are hand-written. The whole feature depends on
+// the exact shape of real `cdk deploy --progress events --ci` stdout (column
+// spacing, timestamp/locale prefix, the Outputs URL line), which is
+// CDK-CLI-version-dependent. This fixture is a transcript captured from an
+// actual `--progress events --ci` deploy of a hosting-enabled stack, run
+// through the parser + tracker + hosting-URL matcher exactly as runStreaming
+// feeds them. If a CDK bump shifts the format, this fails here rather than
+// silently disabling the heartbeat and the early URL in production.
+describe('the real --progress events --ci transcript: parser + tracker + URL over a captured run', () => {
+  // Trimmed from a real `cdk deploy --progress events --ci` run; line shape,
+  // spacing and the Outputs URL line are as CDK emitted them.
+  const TRANSCRIPT = [
+    'ProbeStack: deploying... [1/1]',
+    'ProbeStack | 0/6 | 1:23:45 PM | REVIEW_IN_PROGRESS      | AWS::CloudFormation::Stack | ProbeStack',
+    'ProbeStack | 0/6 | 1:23:47 PM | CREATE_IN_PROGRESS      | AWS::DynamoDB::Table       | DataTable',
+    'ProbeStack | 1/6 | 1:23:58 PM | CREATE_COMPLETE         | AWS::DynamoDB::Table       | DataTable',
+    'ProbeStack | 1/6 | 1:24:01 PM | CREATE_IN_PROGRESS      | AWS::CloudFront::Distribution | HostingDistribution',
+    'ProbeStack | 2/6 | 1:27:44 PM | CREATE_COMPLETE         | AWS::CloudFront::Distribution | HostingDistribution',
+    '',
+    'Outputs:',
+    'ProbeStack.HostingDistributionUrl = https://d111abcdef8.cloudfront.net',
+    'ProbeStack.ApiUrl = https://abc123.execute-api.us-east-1.amazonaws.com/',
+    '',
+    '✨  Deployment time: 241.3s',
+  ];
+
+  it('parses each real CDK event line to its STATUS | TYPE | LOGICALID triple', (t: TestContext) => {
+    const events = TRANSCRIPT.map(parseCdkEventLine).filter((e) => e !== null);
+    // Five event lines in the transcript; the banner/Outputs/blank lines are not events.
+    t.assert.strictEqual(events.length, 5, 'exactly the CloudFormation event lines parse');
+    t.assert.deepStrictEqual(events[events.length - 1], {
+      status: 'CREATE_COMPLETE',
+      resourceType: 'AWS::CloudFront::Distribution',
+      logicalId: 'HostingDistribution',
+    });
+  });
+
+  it('the tracker names the converging resource then clears it when the transcript settles', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    const names: string[] = [];
+    for (const line of TRANSCRIPT) {
+      tracker.observe(line);
+      const cur = tracker.current();
+      if (cur) names.push(describeConvergingResource(cur));
+    }
+    // The DynamoDB table then the CloudFront distribution are each named while
+    // converging; after the final CREATE_COMPLETE nothing is left converging.
+    t.assert.ok(names.some((n) => n.includes('DataTable')), 'the table is named while it converges');
+    t.assert.ok(
+      names.some((n) => n.includes('HostingDistribution (AWS::CloudFront::Distribution)')),
+      'the distribution is named while it converges',
+    );
+    t.assert.strictEqual(tracker.current(), null, 'nothing is converging once the deploy settles');
+  });
+
+  it('extracts the hosting URL from the real Outputs line', (t: TestContext) => {
+    const urls = TRANSCRIPT.map(extractHostingUrlFromLine).filter((u) => u !== null);
+    t.assert.deepStrictEqual(urls, ['https://d111abcdef8.cloudfront.net']);
+  });
+});
+
+describe('describeConvergingResource — the heartbeat name', () => {
+  it('renders `LogicalId (AWS::Type)`', (t: TestContext) => {
+    t.assert.strictEqual(
+      describeConvergingResource({
+        status: 'CREATE_IN_PROGRESS',
+        resourceType: 'AWS::CloudFront::Distribution',
+        logicalId: 'HostingDistribution',
+      }),
+      'HostingDistribution (AWS::CloudFront::Distribution)',
+    );
+  });
+
+  it('flags a rolling-back resource with a warning instead of a neutral name', (t: TestContext) => {
+    t.assert.strictEqual(
+      describeConvergingResource({
+        status: 'UPDATE_ROLLBACK_IN_PROGRESS',
+        resourceType: 'AWS::CloudFront::Distribution',
+        logicalId: 'HostingDistribution',
+      }),
+      '⚠️ HostingDistribution (AWS::CloudFront::Distribution) rolling back',
+    );
+  });
+});
+
+describe('createResourceTracker — what is converging right now', () => {
+  it('reports the resource that entered *_IN_PROGRESS', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('clears the current resource when it reaches *_COMPLETE', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    tracker.observe('S | CREATE_COMPLETE | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('advances to the next in-progress resource (the serialized-GSI case)', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | Custom::GsiManager | gsiresource');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'gsiresource');
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('ignores non-event lines without dropping the current resource', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | CREATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    tracker.observe('some banner line');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+  });
+
+  it('tracks and clears an UPDATE_* transition like a CREATE_*', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_IN_PROGRESS | AWS::DynamoDB::Table | Table');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Table');
+    tracker.observe('S | UPDATE_COMPLETE | AWS::DynamoDB::Table | Table');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('tracks and clears a DELETE_* transition', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | DELETE_IN_PROGRESS | AWS::S3::Bucket | Bucket');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Bucket');
+    tracker.observe('S | DELETE_COMPLETE | AWS::S3::Bucket | Bucket');
+    t.assert.strictEqual(tracker.current(), null);
+  });
+
+  it('does NOT clear on UPDATE_ROLLBACK_COMPLETE — a rollback is not a clean settle', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_IN_PROGRESS | AWS::CloudFront::Distribution | Dist');
+    // Ends in `_COMPLETE`, but it is a rollback: the resource failed and was
+    // reverted. The heartbeat must keep surfacing it, not read it as success.
+    tracker.observe('S | UPDATE_ROLLBACK_COMPLETE | AWS::CloudFront::Distribution | Dist');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Dist');
+    t.assert.strictEqual(tracker.current()?.status, 'UPDATE_ROLLBACK_COMPLETE');
+  });
+
+  it('keeps naming a resource that entered ROLLBACK_IN_PROGRESS', (t: TestContext) => {
+    const tracker = createResourceTracker();
+    tracker.observe('S | UPDATE_ROLLBACK_IN_PROGRESS | AWS::Lambda::Function | Fn');
+    t.assert.strictEqual(tracker.current()?.logicalId, 'Fn');
+  });
+});
+
+describe('extractHostingUrlFromLine — surface the URL early', () => {
+  it('recognizes a CDK Outputs hosting-url line (= form)', (t: TestContext) => {
+    t.assert.strictEqual(
+      extractHostingUrlFromLine('Foo.HostingDistributionUrl = https://d123.cloudfront.net'),
+      'https://d123.cloudfront.net',
+    );
+  });
+
+  it('recognizes the : form and trims trailing punctuation', (t: TestContext) => {
+    t.assert.strictEqual(
+      extractHostingUrlFromLine('HostingCdnDistributionUrl: https://d456.cloudfront.net.'),
+      'https://d456.cloudfront.net',
+    );
+  });
+
+  it('returns null for an unrelated line', (t: TestContext) => {
+    t.assert.strictEqual(extractHostingUrlFromLine('📡 API URL: https://api.example.com'), null);
+    t.assert.strictEqual(extractHostingUrlFromLine('CREATE_COMPLETE'), null);
   });
 });

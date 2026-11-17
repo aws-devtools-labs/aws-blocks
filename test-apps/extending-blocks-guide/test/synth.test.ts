@@ -7,8 +7,8 @@
  * expected resources.
  *
  * Pattern 1: external SQS queue + handler env var EXTERNAL_QUEUE_URL.
- * Pattern 2: legacy DynamoDB table is created by us; KVStore.fromExisting
- *            does NOT add a second table (this asserts the bb-kv-store fix).
+ * Pattern 2: the two legacy DynamoDB tables are created by us; neither
+ *            KVStore.fromExisting adds a third table (this asserts the bb-kv-store fix).
  * Pattern 3: bb-queue creates its own SQS queue, env var WORK_URL on handler.
  */
 import { test, describe, before } from 'node:test';
@@ -47,11 +47,11 @@ describe('extending-blocks-guide synth', () => {
       tables.length,
       2,
       `expected 2 tables (legacy-sessions + legacy-users fixtures); got ${tables.length}. ` +
-        'If >2, KVStore.fromExisting or DistributedTable.fromExisting is provisioning a redundant table on the CDK side.'
+        'If >2, a KVStore.fromExisting is provisioning a redundant table on the CDK side.'
     );
   });
 
-  test('zero CloudFormation custom resources (DistributedTable.fromExisting must skip the GSI provider)', () => {
+  test('zero CloudFormation custom resources (KVStore.fromExisting must skip the GSI provider)', () => {
     const customs = Object.values(template.Resources).filter(
       (r: any) => r.Type === 'AWS::CloudFormation::CustomResource'
     );
@@ -59,7 +59,7 @@ describe('extending-blocks-guide synth', () => {
       customs.length,
       0,
       `expected 0 custom resources; got ${customs.length}. ` +
-        'DistributedTable.fromExisting must not invoke the GSI manager.'
+        'KVStore.fromExisting must not invoke the GSI manager.'
     );
   });
 

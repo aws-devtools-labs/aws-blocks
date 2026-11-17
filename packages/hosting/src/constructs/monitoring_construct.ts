@@ -1,19 +1,25 @@
 import { Construct } from 'constructs';
-import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
+  CfnAlarm,
   ComparisonOperator,
   MathExpression,
   Metric,
   TreatMissingData,
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import type { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
-import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
-import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import type { Queue } from 'aws-cdk-lib/aws-sqs';
+import {
+  CfnSubscription,
+  type ITopic,
+  type ITopicSubscription,
+  Topic,
+} from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
@@ -32,29 +38,27 @@ import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
  *   - SSR Lambda throttles > 0 over 5 min
  *   - SQS DLQ depth >= 1 (any poison message)
  *
- * Alarms are off by default (`enabled: false`) so the construct stays
- * cheap-by-default. When the user opts in we either create an SNS
- * topic and surface its ARN (so the user can subscribe), or attach
- * the user-supplied topic. Cost: pennies/month at idle, scales with
- * alarm-state changes (not requests), plus ~$1/month for the alarm
- * topic's KMS key.
+ * Monitoring defaults to on at the `HostingConstruct` surface
+ * (`monitoring.enabled` is `@default true`). When enabled, the construct
+ * always creates its own SNS topic and surfaces its ARN so the operator
+ * can subscribe; there is no bring-your-own-topic path. Cost: pennies/month
+ * at idle, scales with alarm-state changes (not requests), plus ~$1/month
+ * for the alarm topic's KMS key.
  *
  * The auto-created topic is always encrypted with a dedicated
  * customer-managed KMS key. An AWS-managed key (`alias/aws/sns`)
  * cannot be used: its policy is not editable and does not grant
  * CloudWatch, so every alarm action fails with `KMSAccessDenied` and
  * notifications are dropped silently. See `createAlarmTopicKey`.
- * Callers who need different key management supply their own
- * `snsTopic` (and own its encryption).
  */
 export type MonitoringConstructProps = {
   enabled: boolean;
   /**
-   * BYO SNS topic for alarm actions. When omitted and `enabled: true`,
-   * a topic is created and surfaced via `topic` for the caller to
-   * subscribe to.
+   * Subscriptions to attach to the auto-created alarm topic. The parent
+   * passes the same list to the us-east-1 support stack so a single
+   * entry reaches both topics. Applied via `topic.addSubscription`.
    */
-  snsTopic?: ITopic;
+  subscriptions?: ITopicSubscription[];
   /** CloudFront distribution to alarm on 5xx errors. */
   distribution?: Distribution;
   /** Primary SSR Lambda — error rate + throttle alarms. */
@@ -71,6 +75,18 @@ export type MonitoringConstructProps = {
    * @default 1 (alarm when >=1% of invocations error)
    */
   ssrErrorRatePercent?: number;
+  /**
+   * When `true` (default) the CloudFront 5xx alarm is created in THIS
+   * (regional) construct. `AWS/CloudFront` metrics only publish in
+   * us-east-1 and a CloudWatch alarm can only evaluate a metric in its
+   * own region, so for an off-region hosting stack the parent sets this
+   * to `false` and instead places the alarm in a dedicated us-east-1
+   * support stack (issue #481). When `false` and a `distribution` is
+   * supplied, the CF alarm is skipped here and `cloudFrontAlarmDeferred`
+   * is set to `true`. The regional alarms (SSR/image/DLQ) are unaffected.
+   * @default true
+   */
+  createCloudFrontAlarmLocally?: boolean;
 };
 
 /**
@@ -88,13 +104,19 @@ export type MonitoringConstructProps = {
  *
  * `resources: ['*']` is scoped to *this* key — a resource policy can
  * only speak for the resource it is attached to, and this key is
- * single-purpose (the alarm topic is its only user). The
- * `aws:SourceAccount` guard blocks the cross-account confused-deputy
- * case; it is `IfExists` because that key is only populated on direct
- * service-principal calls, and a hard `StringEquals` would
- * reintroduce the exact silent-deny this grant exists to prevent.
+ * single-purpose (the alarm topic is its only user). The grant carries
+ * `aws:SourceAccount` (`StringEquals`, this account) and `aws:SourceArn`
+ * (`ArnLike`, this account's alarms in this Region): the conditions
+ * Amazon SNS documents for an AWS service that publishes to an encrypted
+ * topic ("Enable compatibility between event sources from AWS services
+ * and encrypted topics",
+ * https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services).
+ * CloudWatch sends both keys when an alarm publishes, so the notification
+ * still arrives, and a request on behalf of another account's alarm is
+ * denied. Not the `StringEqualsIfExists` form, which lets a request that
+ * carries no `aws:SourceAccount` through.
  */
-const createAlarmTopicKey = (scope: Construct): Key => {
+export const createAlarmTopicKey = (scope: Construct): Key => {
   const key = new Key(scope, 'AlarmTopicKey', {
     description:
       'Encrypts CloudWatch alarm notifications published to the hosting alarm topic.',
@@ -104,6 +126,7 @@ const createAlarmTopicKey = (scope: Construct): Key => {
     removalPolicy: RemovalPolicy.DESTROY,
   });
 
+  const stack = Stack.of(scope);
   key.addToResourcePolicy(
     new iam.PolicyStatement({
       sid: 'AllowCloudWatchAlarmsToPublishToEncryptedTopic',
@@ -112,14 +135,123 @@ const createAlarmTopicKey = (scope: Construct): Key => {
       actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
       resources: ['*'],
       conditions: {
-        StringEqualsIfExists: {
-          'aws:SourceAccount': Stack.of(scope).account,
+        StringEquals: { 'aws:SourceAccount': stack.account },
+        ArnLike: {
+          'aws:SourceArn': `arn:${stack.partition}:cloudwatch:${stack.region}:${stack.account}:alarm:*`,
         },
       },
     }),
   );
 
   return key;
+};
+
+/** Stable id of the no-subscriber warning; also the `acknowledgeWarning` id. */
+export const MONITORING_NO_SUBSCRIBER_WARNING_ID =
+  '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers';
+
+/**
+ * Register a synth-time validation that warns when `topic` carries alarm
+ * notifications it can deliver to no one. An alarm topic with no subscriber
+ * can flip to ALARM but drop the notification silently — the gap the "no
+ * silent gap" monitoring principle guards against. The topic ARN is also a
+ * CloudFormation output for out-of-band subscription, but that is easy to
+ * miss, so warn loudly.
+ *
+ * Judged on a single topic's OWN alarms and subscribers, so it is correct for
+ * both the regional construct and the us-east-1 support stack — off-region the
+ * 5xx alarm lives in its own stack with its own topic, and each must be
+ * checked independently or that topic's undeliverable alarm goes unnoticed.
+ *
+ * Deferred to a validation (not an eager check) because delivery can be wired
+ * AFTER construction: a caller may `topic.addSubscription(...)` directly, and
+ * `LambdaSubscription` / `SqsSubscription` place their `CfnSubscription` in the
+ * TARGET's stack (`subscriberScope`), so the whole app is searched, not just
+ * this topic's stack. The topic is also treated as deliverable when every
+ * alarm already routes to some OTHER action (the caller took delivery into
+ * their own hands via `monitoring.alarms`), and skipped entirely when no alarm
+ * is wired (nothing can enter ALARM, so the warning would be spurious).
+ */
+export const warnIfUndeliverable = (
+  scope: Construct,
+  topic: ITopic,
+  alarms: Alarm[],
+): void => {
+  scope.node.addValidation({
+    validate: (): string[] => {
+      if (alarms.length === 0) {
+        return [];
+      }
+      const topicStack = Stack.of(scope);
+
+      // A subscriber anywhere in the app counts, as long as it shares this
+      // topic's environment: `LambdaSubscription` / `SqsSubscription` put their
+      // `CfnSubscription` in the TARGET's stack, so a same-stack-only search
+      // would miss a cross-stack target in the same account/region. A
+      // DIFFERENT-environment stack (e.g. the off-region us-east-1 support
+      // stack) owns its OWN topic and is validated on its own, so skip those
+      // here — resolving a cross-environment token in this stack's scope would
+      // force an unwanted cross-stack reference (`CannotUseCrossEnvironment`).
+      const hasSubscriber = scope.node.root.node.findAll().some((c) => {
+        if (!(c instanceof CfnSubscription)) {
+          return false;
+        }
+        const subStack = Stack.of(c);
+        if (
+          subStack.account !== topicStack.account ||
+          subStack.region !== topicStack.region
+        ) {
+          return false;
+        }
+        // Resolve both arns in the SUBSCRIPTION's own stack so same-stack
+        // subscriptions compare as `{ Ref }` and same-environment cross-stack
+        // ones compare as the same import, without a cross-env resolve.
+        return (
+          JSON.stringify(subStack.resolve(c.topicArn)) ===
+          JSON.stringify(subStack.resolve(topic.topicArn))
+        );
+      });
+      if (hasSubscriber) {
+        return [];
+      }
+
+      const topicArn = JSON.stringify(topicStack.resolve(topic.topicArn));
+
+      // Treat as deliverable when every alarm already has at least one action
+      // OTHER than this topic — the caller routed delivery themselves via
+      // `monitoring.alarms`, so a "subscribe this topic" warning is wrong.
+      // (The construct wires its own topic action onto each alarm it creates,
+      // so the test is "has a non-topic action too", not "has no topic action".)
+      const everyAlarmRoutesElsewhere = alarms.every((alarm) => {
+        const cfnAlarm = alarm.node.defaultChild;
+        if (!(cfnAlarm instanceof CfnAlarm)) {
+          return false;
+        }
+        const actions: unknown[] =
+          topicStack.resolve(cfnAlarm.alarmActions) ?? [];
+        return actions.some(
+          (a) => JSON.stringify(topicStack.resolve(a)) !== topicArn,
+        );
+      });
+      if (everyAlarmRoutesElsewhere) {
+        return [];
+      }
+
+      Annotations.of(scope).addWarningV2(
+        MONITORING_NO_SUBSCRIBER_WARNING_ID,
+        'Hosting monitoring is enabled but an alarm topic has no subscriber, ' +
+          'so an alarm can enter ALARM but deliver to no one. Subscribe an ' +
+          'endpoint via `monitoring.subscriptions` (EmailSubscription / ' +
+          'UrlSubscription), subscribe the topic out-of-band using the ' +
+          'MonitoringTopicArn stack output, or route the alarm actions ' +
+          'elsewhere via `monitoring.alarms`. Set `monitoring: { enabled: ' +
+          'false }` to turn monitoring off deliberately, or call ' +
+          `\`Annotations.of(scope).acknowledgeWarning('${MONITORING_NO_SUBSCRIBER_WARNING_ID}')\` ` +
+          'to accept the gap knowingly.',
+      );
+      return [];
+    },
+  });
 };
 
 /**
@@ -131,12 +263,19 @@ export class MonitoringConstruct extends Construct {
   readonly topic?: ITopic;
   /**
    * KMS key encrypting the auto-created alarm topic. Undefined when
-   * monitoring is disabled or when a BYO `snsTopic` is supplied.
-   * Exposed so callers can grant additional publishers on the key.
+   * monitoring is disabled. Exposed so callers can grant additional
+   * publishers on the key.
    */
   readonly encryptionKey?: IKey;
   /** All CloudWatch alarms created by this construct. */
   readonly alarms: Alarm[] = [];
+  /**
+   * True when a `distribution` was supplied but the CloudFront 5xx
+   * alarm was NOT created here because `createCloudFrontAlarmLocally`
+   * was `false` (off-region). The parent must place the alarm in a
+   * us-east-1 support stack. See issue #481.
+   */
+  readonly cloudFrontAlarmDeferred: boolean = false;
 
   /**
    * Wire the default alarm set to the user-supplied or auto-created
@@ -149,17 +288,21 @@ export class MonitoringConstruct extends Construct {
       return;
     }
 
-    if (props.snsTopic) {
-      this.topic = props.snsTopic;
-    } else {
-      this.encryptionKey = createAlarmTopicKey(this);
-      this.topic = new Topic(this, 'AlarmTopic', {
-        masterKey: this.encryptionKey,
-      });
+    this.encryptionKey = createAlarmTopicKey(this);
+    this.topic = new Topic(this, 'AlarmTopic', {
+      masterKey: this.encryptionKey,
+    });
+    const topic = this.topic;
+    for (const sub of props.subscriptions ?? []) {
+      topic.addSubscription(sub);
     }
+    // Warn at synth if this topic's alarms have nowhere to deliver. The shared
+    // helper reads `this.alarms` (populated below) lazily at validation time,
+    // and the us-east-1 support stack runs the same check on its own topic.
+    warnIfUndeliverable(this, topic, this.alarms);
     const action = new SnsAction(this.topic);
 
-    if (props.distribution) {
+    if (props.distribution && (props.createCloudFrontAlarmLocally ?? true)) {
       const cf5xx = new Alarm(this, 'CloudFront5xxRate', {
         metric: new Metric({
           namespace: 'AWS/CloudFront',
@@ -182,6 +325,11 @@ export class MonitoringConstruct extends Construct {
       });
       cf5xx.addAlarmAction(action);
       this.alarms.push(cf5xx);
+    } else if (props.distribution) {
+      // Off-region: the CloudFront metric only exists in us-east-1 and an
+      // alarm can't watch a metric cross-region, so defer the alarm to a
+      // us-east-1 support stack owned by the parent. See issue #481.
+      this.cloudFrontAlarmDeferred = true;
     }
 
     if (props.ssrFunction) {

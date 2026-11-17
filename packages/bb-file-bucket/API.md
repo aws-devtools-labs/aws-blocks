@@ -24,15 +24,23 @@ export interface CorsRule {
 
 // @public
 export type DeleteOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedDeleteOptions : undefined;
+    versioned: false;
+} ? undefined : VersionedDeleteOptions;
 
-// @public (undocumented)
+// @public
 export interface ExternalBucketRef {
     // (undocumented)
     readonly __brand: 'ExternalBucketRef';
     // (undocumented)
     readonly bucketName: string;
+}
+
+// @public
+export interface ExternalKmsKeyRef {
+    // (undocumented)
+    readonly __brand: 'ExternalKmsKeyRef';
+    // (undocumented)
+    readonly keyArn: string;
 }
 
 // @public
@@ -48,6 +56,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
     deleteBatch(paths: string[]): Promise<void>;
     // (undocumented)
     static fromExisting(bucketName: string): ExternalBucketRef;
+    static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     // (undocumented)
     get(path: string, options?: GetOptionsFor<O>): Promise<FileContent | null>;
     // (undocumented)
@@ -72,14 +81,22 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 export const FileBucketErrors: {
     readonly FileNotFound: "NoSuchKey";
     readonly FileTooLarge: "EntityTooLarge";
+    readonly VersionNotFound: "NoSuchVersion";
+    readonly PresignedUploadUnsupported: "PresignedUploadUnsupported";
 };
 
 // @public (undocumented)
 export interface FileBucketOptions {
+    accessLogging?: boolean;
+    allowedContentTypes?: string[];
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
+    maxUploadBytes?: number;
+    noncurrentVersionExpirationDays?: number;
+    objectLock?: ObjectLockOptions;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }
@@ -127,7 +144,6 @@ export interface FileUploadClient {
 export interface FileUploadDescriptor {
     // (undocumented)
     readonly __blocks: 'file-bucket/upload';
-    // (undocumented)
     readonly contentType?: string;
     // (undocumented)
     readonly url: string;
@@ -143,24 +159,31 @@ export interface FileVersionInfo {
 
 // @public
 export type GetOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedGetOptions : undefined;
+    versioned: false;
+} ? undefined : VersionedGetOptions;
 
 // @public (undocumented)
 export interface GetUrlOptions {
+    attachment?: boolean | string;
     expiresIn?: number;
 }
 
 // @public
 export type GetUrlOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedGetUrlOptions : GetUrlOptions;
+    versioned: false;
+} ? GetUrlOptions : VersionedGetUrlOptions;
 
 // @public (undocumented)
 export interface LifecycleRule {
     expirationDays?: number;
     prefix?: string;
     transitionToIaDays?: number;
+}
+
+// @public
+export interface ObjectLockOptions {
+    mode: 'governance' | 'compliance';
+    retentionDays: number;
 }
 
 // @public (undocumented)
@@ -172,6 +195,7 @@ export interface PutOptions {
 
 // @public (undocumented)
 export interface PutUrlOptions {
+    contentLength?: number;
     contentType?: string;
     expiresIn?: number;
 }

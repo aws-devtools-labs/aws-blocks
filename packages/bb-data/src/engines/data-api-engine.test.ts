@@ -3,6 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { DataApiEngine, toField, fromField } from './data-api-engine.js';
 import { DatabaseErrors } from '../errors.js';
 
@@ -55,6 +56,93 @@ test('fromField handles double', () => {
 
 test('fromField handles boolean', () => {
   assert.strictEqual(fromField({ booleanValue: false }), false);
+});
+
+// --- fromField: array columns (text[], int[], ...) ---
+// The Data API returns array columns as `arrayValue`; without handling, they
+// came back `null` while PGlite / pg returned real JS arrays (issue #996).
+
+test('fromField unmarshals a text[] column to a string array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { stringValues: ['a', 'b'] } }), ['a', 'b']);
+});
+
+test('fromField unmarshals an int[] column to a number array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { longValues: [1, 2, 3] } }), [1, 2, 3]);
+});
+
+test('fromField unmarshals a float[] column to a number array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { doubleValues: [1.5, 2.5] } }), [1.5, 2.5]);
+});
+
+test('fromField unmarshals a bool[] column to a boolean array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { booleanValues: [true, false] } }), [true, false]);
+});
+
+test('fromField unmarshals a nested array column recursively', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { arrayValues: [{ longValues: [1, 2] }, { longValues: [3, 4] }] } }),
+    [[1, 2], [3, 4]],
+  );
+});
+
+test('fromField returns an empty array for an empty array column', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { stringValues: [] } }), []);
+});
+
+test('fromField preserves null elements in an array column (SQL NULL)', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['a', null, 'b'] } as any }),
+    ['a', null, 'b'],
+  );
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { longValues: [1, null, 3] } as any }),
+    [1, null, 3],
+  );
+});
+
+// --- fromField: json / jsonb columns ---
+// jsonb arrives as a stringValue; without the column typeName it was returned
+// unparsed. With the typeName it is parsed to match PGlite / pg (issue #996).
+
+test('fromField parses a jsonb column into an object', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '{"estimate":3}' }, 'jsonb'), { estimate: 3 });
+});
+
+test('fromField parses a json column into an object', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '{"count":2}' }, 'json'), { count: 2 });
+});
+
+test('fromField parses a jsonb array value (scalar in jsonb)', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '[1,2,3]' }, 'jsonb'), [1, 2, 3]);
+});
+
+test('fromField leaves a plain text column unparsed even if it looks like JSON', () => {
+  assert.strictEqual(fromField({ stringValue: '{"x":1}' }, 'text'), '{"x":1}');
+});
+
+test('fromField leaves a jsonb string unchanged when it is not valid JSON', () => {
+  // Defensive: a value the server round-trips as jsonb is always valid JSON, but
+  // a malformed string must not throw and fail the whole query.
+  assert.strictEqual(fromField({ stringValue: 'not json' }, 'jsonb'), 'not json');
+});
+
+test('fromField parses each element of a jsonb[] column', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['{"a":1}', '{"b":2}'] } }, '_jsonb'),
+    [{ a: 1 }, { b: 2 }],
+  );
+});
+
+test('fromField does not JSON-parse elements of a plain text[] column', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['{"a":1}'] } }, '_text'),
+    ['{"a":1}'],
+  );
+});
+
+test('fromField still unmarshals scalars with no typeName (back-compat)', () => {
+  assert.strictEqual(fromField({ stringValue: 'hi' }), 'hi');
+  assert.strictEqual(fromField({ longValue: 99 }), 99);
 });
 
 // --- Mock client helper ---
@@ -148,6 +236,32 @@ test('query returns empty array for no records', async () => {
   assert.deepStrictEqual(rows, []);
 });
 
+test('query maps array and jsonb columns using columnMetadata typeName (issue #996)', async () => {
+  // Mirrors the reproduction in issue #996: a row with a text[] column, a jsonb
+  // column and a scalar. All three must land as native JS values, matching what
+  // the PGlite / pg engines return for the same query.
+  const engine = createEngine({
+    ExecuteStatementCommand: () => ({
+      columnMetadata: [
+        { name: 'tags', typeName: '_text' },
+        { name: 'meta', typeName: 'jsonb' },
+        { name: 'title', typeName: 'text' },
+      ],
+      records: [[
+        { arrayValue: { stringValues: ['a', 'b'] } },
+        { stringValue: '{"estimate":3}' },
+        { stringValue: 'first item' },
+      ]],
+    }),
+  });
+  const rows = await engine.query<{ tags: string[]; meta: { estimate: number }; title: string }>(
+    'SELECT tags, meta, title FROM items',
+  );
+  assert.deepStrictEqual(rows, [{ tags: ['a', 'b'], meta: { estimate: 3 }, title: 'first item' }]);
+  assert.ok(Array.isArray(rows[0].tags), 'tags must be a real array, not null');
+  assert.strictEqual(typeof rows[0].meta, 'object', 'meta must be a parsed object, not a string');
+});
+
 // --- execute ---
 
 test('execute returns rowCount', async () => {
@@ -160,7 +274,7 @@ test('execute returns rowCount', async () => {
 
 // --- error translation ---
 
-test('BadRequestException with unique constraint maps to UniqueConstraintViolation', async () => {
+test('BadRequestException with unique constraint maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('duplicate key value violates unique constraint');
@@ -170,14 +284,17 @@ test('BadRequestException with unique constraint maps to UniqueConstraintViolati
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(err.retriable, false);
       return true;
     }
   );
 });
 
-test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation', async () => {
+test('non-BadRequestException with unique constraint message maps to UniqueConstraintViolation (ApiError 409)', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error('ERROR: duplicate key value violates unique constraint "t_pkey"; SQLState: 23505');
@@ -187,7 +304,9 @@ test('non-BadRequestException with unique constraint message maps to UniqueConst
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES (1)'),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409);
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
       return true;
     }
@@ -330,9 +449,9 @@ test('serialization failure surfaced on CommitTransaction (SQLState 40001) is cl
   );
 });
 
-test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation', async () => {
+test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to UniqueConstraintViolation (ApiError 409)', async () => {
   // Confirms the real exception name is DatabaseErrorException (not BadRequestException),
-  // and code-based classification keeps unique-violation mapping working.
+  // and code-based classification maps unique-violation to a 409 ApiError.
   const engine = createEngine({
     ExecuteStatementCommand: () => {
       const err = new Error(
@@ -344,12 +463,76 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
   });
   await assert.rejects(
     () => engine.execute('INSERT INTO t VALUES ($1)', ['dup']),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(err.retriable, false);
       return true;
     },
   );
 });
+
+const REQUEST_ERROR_CASES = [
+  { code: '42501', driver: 'new row violates row-level security policy for table "notes"', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '42501', driver: 'permission denied for table projects', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '23514', driver: 'new row for relation "projects" violates check constraint "projects_name_check"', status: 400, name: DatabaseErrors.CheckViolation },
+  { code: '23502', driver: 'null value in column "name" of relation "projects" violates not-null constraint', status: 400, name: DatabaseErrors.NotNullViolation },
+  { code: '23503', driver: 'insert or update on table "notes" violates foreign key constraint "notes_project_id_fkey"', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+];
+
+for (const { code, driver, status, name } of REQUEST_ERROR_CASES) {
+  test(`Data API request error (SQLState ${code}: ${driver.slice(0, 40)}…) maps to ${name} (ApiError ${status})`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(`ERROR: ${driver}; SQLState: ${code}`);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError, 'expected an ApiError');
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.name, name);
+        assert.strictEqual(err.retriable, false);
+        assert.ok(!err.message.includes(driver), 'driver text must not reach the message');
+        return true;
+      },
+    );
+  });
+}
+
+// Postgres echoes caller input before the Data API's trailing SQLState, so a
+// caller can plant a decoy "SQLState: <code>" earlier in the message. Only the
+// last one, appended by the Data API, may classify the error.
+const DECOY_CASES = [
+  { message: 'ERROR: invalid input syntax for type uuid: "SQLState: 42501"; SQLState: 22P02', status: undefined, name: DatabaseErrors.QueryFailed },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 42501).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 40001).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+];
+for (const { message, status, name } of DECOY_CASES) {
+  test(`Data API decoy SQLState in caller input is ignored: ${message.slice(-16)} → ${name}`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(message);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.strictEqual((err as Error).name, name);
+        if (status === undefined) assert.ok(!(err instanceof ApiError), 'a 500 QueryFailed carries no 4xx status');
+        else assert.strictEqual((err as ApiError).status, status);
+        assert.notStrictEqual((err as ApiError).retriable, true, 'a decoy 40001 must not make it retriable');
+        return true;
+      },
+    );
+  });
+}
 
 test('a genuine non-serialization query error still maps to QueryFailed', async () => {
   const engine = createEngine({
@@ -366,4 +549,182 @@ test('a genuine non-serialization query error still maps to QueryFailed', async 
       return true;
     },
   );
+});
+
+test('Data API auto-pause resume error (DatabaseResumingException) maps to ConnectionFailed', async () => {
+  // A scale-to-zero cluster (minCapacity: 0) auto-pauses after ~5 minutes idle.
+  // The first Data API call wakes it and fails with DatabaseResumingException —
+  // transient, and retryable. Classifying it as QueryFailed hides that from
+  // callers (notably the migration Lambda's retry helper), so a deploy against a
+  // paused cluster fails outright. The message carries no SQLState.
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      const err = new Error(
+        'The Aurora DB instance db-XXXXXXXXXXXXXXXXXXXXXXXXXX is resuming after being auto-paused. Please wait a few seconds and try again.',
+      );
+      err.name = 'DatabaseResumingException';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => engine.execute('CREATE TABLE IF NOT EXISTS _migrations (id SERIAL PRIMARY KEY)'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.ConnectionFailed);
+      return true;
+    },
+  );
+});
+
+test('Data API credential refusal mid-rotation is retried, then succeeds', async () => {
+  // The rotation function sets the new password on the cluster, then publishes
+  // it; a call that reads the secret in that gap is refused. The statement never
+  // ran, so the engine retries it.
+  let calls = 0;
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      calls++;
+      if (calls === 1) {
+        const err = new Error('ERROR: password authentication failed for user "postgres"; SQLState: 28P01');
+        err.name = 'DatabaseErrorException';
+        throw err;
+      }
+      return { numberOfRecordsUpdated: 1 };
+    },
+  });
+  assert.deepStrictEqual(await engine.execute('UPDATE t SET a = 1'), { rowCount: 1 });
+  assert.strictEqual(calls, 2);
+});
+
+test('a credential refusal that never clears logs what the backoff cost', async () => {
+  // A wrong credential is indistinguishable from a rotation, so it pays the full
+  // backoff. The give-up says so, or the delay looks like an unexplained slow call.
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (m: unknown) => {
+    warnings.push(String(m));
+  };
+  try {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error('ERROR: password authentication failed for user "postgres"; SQLState: 28P01');
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(() => engine.execute('UPDATE t SET a = 1'), () => true);
+  } finally {
+    console.warn = warn;
+  }
+  const gaveUp = warnings.filter((m) => m.includes('still refused'));
+  assert.strictEqual(gaveUp.length, 1, `one give-up line: ${JSON.stringify(warnings)}`);
+  assert.match(gaveUp[0], /3 attempts over 9s/);
+  assert.match(gaveUp[0], /may be wrong rather than mid-rotation/);
+});
+
+test('caller text that looks like an auth failure is not retried', async () => {
+  // Postgres echoes caller input, so a value can carry the auth phrasing. Matching
+  // it would retry a statement error for 9s and report it as a connection failure.
+  let calls = 0;
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      calls++;
+      const err = new Error('ERROR: invalid input syntax for type integer: "password authentication failed for user"');
+      err.name = 'BadRequestException';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => engine.execute("INSERT INTO t VALUES ('password authentication failed for user')"),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed, 'a statement error, not a connection failure');
+      return true;
+    },
+  );
+  assert.strictEqual(calls, 1, 'sent once, not retried');
+});
+
+test('a credential refusal on beginTransaction is retried', async () => {
+  // The begin opens its own connection with nothing applied, so a retry there is
+  // as safe as on query/execute.
+  let calls = 0;
+  const engine = createEngine({
+    BeginTransactionCommand: () => {
+      calls++;
+      if (calls === 1) {
+        const err = new Error('ERROR: password authentication failed for user "postgres"; SQLState: 28P01');
+        err.name = 'DatabaseErrorException';
+        throw err;
+      }
+      return { transactionId: 'txn-1' };
+    },
+  });
+  assert.strictEqual(await engine.beginTransaction(), 'txn-1');
+  assert.strictEqual(calls, 2);
+});
+
+test('a credential refusal inside a transaction is not retried', async () => {
+  // Every attempt would reuse one transaction id, and the backoff can outlive the
+  // transaction, so the refusal surfaces instead and the caller retries the whole
+  // transaction on a fresh one.
+  let calls = 0;
+  const engine = createEngine({
+    BeginTransactionCommand: () => ({ transactionId: 'txn-1' }),
+    ExecuteStatementCommand: () => {
+      calls++;
+      const err = new Error('ERROR: password authentication failed for user "postgres"; SQLState: 28P01');
+      err.name = 'DatabaseErrorException';
+      throw err;
+    },
+  });
+  const handle = await engine.beginTransaction();
+  await assert.rejects(
+    () => engine.executeInTransaction(handle, 'UPDATE t SET a = 1'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.ConnectionFailed);
+      return true;
+    },
+  );
+  assert.strictEqual(calls, 1, 'sent once, not retried');
+  calls = 0;
+  await assert.rejects(() => engine.queryInTransaction(handle, 'SELECT 1'), () => true);
+  assert.strictEqual(calls, 1, 'the query path is not retried either');
+});
+
+test('Data API credential refusal that never clears maps to ConnectionFailed', async () => {
+  // A genuinely wrong credential exhausts the attempts; callers (and the
+  // migration retry helper) see a connection failure, not a query error.
+  let calls = 0;
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      calls++;
+      const err = new Error('ERROR: password authentication failed for user "postgres"; SQLState: 28P01');
+      err.name = 'DatabaseErrorException';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => engine.query('SELECT 1'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.ConnectionFailed);
+      return true;
+    },
+  );
+  assert.strictEqual(calls, 3);
+});
+
+test('Data API credential refusal without a SQLState is still recognised', async () => {
+  let calls = 0;
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      calls++;
+      if (calls === 1) {
+        const err = new Error('Access denied for user; authentication failed for user "postgres"');
+        err.name = 'BadRequestException';
+        throw err;
+      }
+      return { numberOfRecordsUpdated: 0 };
+    },
+  });
+  assert.deepStrictEqual(await engine.execute('UPDATE t SET a = 1'), { rowCount: 0 });
+  assert.strictEqual(calls, 2);
 });

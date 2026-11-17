@@ -72,7 +72,10 @@ function changeset(entries, body = "A change.") {
  */
 function baseRepo(t, files = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "changeset-guard-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	// Retry the removal: a git child process can still be writing into `.git`
+	// when the test ends, and a single pass then fails with ENOTEMPTY / EBUSY
+	// in the hook (failing the test although its assertions passed).
+	t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 	mkdirSync(join(dir, "scripts"), { recursive: true });
 	copyFileSync(GUARD_SRC, join(dir, "scripts", "changeset-guard.ts"));
@@ -405,6 +408,68 @@ describe("verify-coverage", () => {
 		assert.match(output, /Skipping coverage check for the release PR/);
 	});
 
+	it("ignores private packages, which are never published", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, { "packages/bb-private/src/index.ts": "export const a = 1;\n" });
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 0, output);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+	});
+
+	it("still fails for a public package changed alongside a private one", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, {
+			"packages/bb-private/src/index.ts": "export const a = 1;\n",
+			"packages/core/src/index.ts": "export const b = 1;\n",
+		});
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 1, output);
+		assert.match(output, /@aws-blocks\/core/);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+	});
+
+	describe("Dependabot manifest bumps, whose changeset the release job writes", () => {
+		const bump = {
+			"packages/core/package.json": pkgJson(SIBLING, { dependencies: { "aws-cdk-lib": "^2.1.0" } }),
+			"packages/create-blocks-app/templates/react/package.json": pkgJson("template-react"),
+			"package-lock.json": "{}\n",
+		};
+
+		it("skips a Dependabot PR that only changes package.json and package-lock.json files", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, bump);
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "dependabot[bot]" });
+			assert.equal(status, 0, output);
+			assert.match(output, /Skipping coverage check for a Dependabot manifest bump/);
+		});
+
+		it("checks a Dependabot PR once any other file changes", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, { ...bump, "packages/core/src/index.ts": "export const a = 1;\n" });
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "dependabot[bot]" });
+			assert.equal(status, 1, output);
+			assert.match(output, /@aws-blocks\/core/);
+		});
+
+		it("checks the same manifest bump from anyone else", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, bump);
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "octocat" });
+			assert.equal(status, 1, output);
+			assert.match(output, /@aws-blocks\/core/);
+			assert.match(output, /@aws-blocks\/create-blocks-app/);
+		});
+	});
+
 	it("fails loudly when a changed package's package.json cannot be parsed", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, { "packages/core/package.json": "{ not json\n" });
@@ -504,6 +569,144 @@ describe("validate-structure", () => {
 		assert.equal(status, 1, output);
 		assert.match(output, /no "workspaces" array/);
 		assert.doesNotMatch(output, /unknown package/);
+	});
+});
+
+describe("validate-structure: native changesets", () => {
+	// native/<x>/.changeset dirs validate against that native package's own name
+	// (read from native/<x>/package.json), not the JS workspace. The root
+	// workspace stays valid in every case so the native behaviour is isolated.
+	it("passes when a native changeset names its own package", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/config.json": `${JSON.stringify({ changelog: "@changesets/cli/changelog" }, null, 2)}\n`,
+			"native/swift/.changeset/README.md": "# Changesets\n",
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+	});
+
+	it("fails when a native changeset names a package that is not the native package", (t) => {
+		// A JS-workspace name is still "unknown" here: native trees validate only
+		// against their own manifest, not the workspace.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/wrong.md": changeset({ [SIBLING]: "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /native\/swift\/\.changeset\/[^:]*: unknown package/);
+		assert.match(output, /not found in native\/swift/);
+	});
+
+	it("skips a native package that has no .changeset directory", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/dart/package.json": pkgJson("aws-blocks-dart"),
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+		assert.doesNotMatch(output, /native\/dart/);
+	});
+
+	it("fails loudly when an existing native package.json cannot be parsed", (t) => {
+		// The .changeset dir must exist so the native walk enters it and reads the
+		// manifest; an unreadable-but-present manifest fails loudly (a GuardError),
+		// exactly like the workspace-manifest fail-loud case — not a silent empty set.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+			"native/swift/package.json": "{ not json\n",
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /Cannot parse native\/swift\/package\.json/);
+		assert.doesNotMatch(output, /unknown package/);
+	});
+
+	it("flags every entry as unknown when a native package.json is missing", (t) => {
+		// The documented fail-safe: a missing manifest yields an empty name set, so
+		// every native entry flags as unknown rather than passing silently.
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /unknown package "aws-blocks-swift".*not found in native\/swift/s);
+	});
+
+	it("fails on an invalid bump in a native changeset", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/bad-bump.md": changeset({ "aws-blocks-swift": "pathc" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /invalid bump "pathc"/);
+		assert.match(output, /native\/swift\/\.changeset\//);
+	});
+
+	it("fails on malformed frontmatter in a native changeset", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			// No leading '---' frontmatter block.
+			"native/swift/.changeset/no-frontmatter.md": `"aws-blocks-swift": patch\n`,
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /missing or malformed frontmatter/);
+		assert.match(output, /native\/swift\/\.changeset\//);
+	});
+
+	it("collects errors across two native trees that both fail", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			// Names a JS-workspace package, unknown to the swift native tree.
+			"native/swift/.changeset/wrong.md": changeset({ [SIBLING]: "patch" }),
+			"native/kotlin/package.json": pkgJson("aws-blocks-kotlin"),
+			// Names the swift package, unknown to the kotlin native tree.
+			"native/kotlin/.changeset/wrong.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 1, output);
+		assert.match(output, /native\/swift\/\.changeset\/[^:]*: unknown package/);
+		assert.match(output, /native\/kotlin\/\.changeset\/[^:]*: unknown package/);
+	});
+
+	it("counts native changesets in the structurally-valid total", (t) => {
+		// Root has no changesets (config/README only), swift has exactly one valid
+		// changeset, so the count must be 1 — proving native files are validated,
+		// not skipped past the count.
+		const dir = baseRepo(t, {
+			".changeset/config.json": null,
+			".changeset/README.md": null,
+		});
+		commitPr(dir, {
+			"native/swift/package.json": pkgJson("aws-blocks-swift"),
+			"native/swift/.changeset/ok.md": changeset({ "aws-blocks-swift": "patch" }),
+		});
+
+		const { status, output } = guard(dir, "validate-structure");
+		assert.equal(status, 0, output);
+		assert.match(output, /✓ \d+ changeset\(s\) are structurally valid\./);
+		assert.match(output, /✓ 1 changeset\(s\) are structurally valid\./);
 	});
 });
 

@@ -28,7 +28,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
 import { getStackName } from './stack-id.js';
-import { runSync } from './run-command.js';
+import { runSync, runSyncRetained } from './run-command.js';
+import { log, progressToStderr, resolveLogLevel } from './log.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -60,10 +61,25 @@ function runMigrateSubprocess(
   migrationsDir: string,
   regenerateTypesDir?: string,
 ): void {
-  runSync('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
-    stdio: 'inherit',
-    env: { ...process.env, BLOCKS_MIGRATE_URL: connValue },
+  runMigrateCommand('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
+    ...process.env,
+    BLOCKS_MIGRATE_URL: connValue,
   });
+}
+
+/**
+ * Run the migrate child under the output policy. Its stdout is progress: it
+ * moves to stderr with `BLOCKS_LOG_STREAM=stderr`. At `quiet` both its stdout
+ * and its stderr (bb-data's warnings) are hidden and printed to stderr only if
+ * the child fails. With neither set, stdio is inherited as before. Exported
+ * for tests.
+ */
+export function runMigrateCommand(command: string, args: string[], env: NodeJS.ProcessEnv): void {
+  if (resolveLogLevel(env) === 'quiet') {
+    runSyncRetained(command, args, { env }, (stdout, stderr) => process.stderr.write(stdout + stderr));
+    return;
+  }
+  runSync(command, args, { stdio: progressToStderr(env) ? ['inherit', 2, 'inherit'] : 'inherit', env });
 }
 
 export interface ApplyExternalMigrationsOptions {
@@ -106,7 +122,7 @@ export async function applyExternalMigrations(opts: ApplyExternalMigrationsOptio
     await assertNotProductionTarget(conn.value, { command: 'npm run sandbox', announceFailOpen: true });
   }
 
-  console.log(`🧬 Applying external database migrations (${opts.stage})...`);
+  log.progress(`🧬 Applying external database migrations (${opts.stage})...`);
   runMigrateSubprocess(conn.value, opts.stage, migrationsDir);
   return true;
 }
@@ -256,7 +272,7 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
     optOutHint: 'set BLOCKS_SKIP_DEV_MIGRATIONS=1 to opt out',
   });
 
-  console.log(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})...`);
+  log.progress(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})...`);
   try {
     // Dev loop: apply, then refresh generated types from the migrated schema in
     // the SAME subprocess (one developer-visible step). Deploy/sandbox omit the
@@ -266,8 +282,9 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
   } catch (e: any) {
     // Don't block local dev on a migration apply failure (e.g. port 5432 blocked
     // on a corp network). Warn and continue — the app may still run.
-    console.warn(`⚠️  Could not apply migrations in dev: ${e?.message ?? e}`);
-    console.warn(`    Continuing without applying. Run migrations before deploy.`);
+    log.warn(`⚠️  Could not apply migrations in dev: ${e?.message ?? e}`);
+    log.warn(`    Continuing without applying. Run migrations before deploy.`);
+    log.debugError(e);
     return false;
   }
 }

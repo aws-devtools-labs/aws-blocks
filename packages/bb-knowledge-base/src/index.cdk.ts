@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
+import type { KnowledgeBaseOptions, ChunkingConfig, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
+import { createAgentTool } from './agent-tool.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -20,7 +23,10 @@ export type {
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
+	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolResult,
 } from './types.js';
+import { BB_NAME } from './version.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
 // ── Env var helpers ────────────────────────────────────────────────────────
@@ -186,22 +192,26 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  * @param id - Unique identifier within the scope.
  * @param options - Knowledge base configuration (source, chunking, embedding dimensions, description).
  */
-export class KnowledgeBase extends Scope {
+export class KnowledgeBase extends BuildingBlockScope {
+	private readonly kbDescription?: string;
+
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
+		this.kbDescription = options.description;
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────
 
-		// In sandbox mode, default to DESTROY + autoDeleteObjects so a teardown
-		// can fully clean up without manual bucket emptying. An explicit
-		// `removalPolicy` from the customer always takes precedence. Computed
-		// up-front because it also drives the S3 Vectors resources' deletion
-		// policy (section 2) — keeping the data bucket and the vector store in
-		// sync on teardown.
-		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-		const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
+		// Removal: an explicit `removalPolicy` from the customer always takes
+		// precedence; otherwise follow the stack-wide `defaults` (sandbox →
+		// DESTROY + autoDeleteObjects so a teardown fully cleans up without
+		// manual bucket emptying; production → RETAIN). Computed up-front because
+		// it also drives the S3 Vectors resources' deletion policy (section 2) —
+		// keeping the data bucket and the vector store in sync on teardown.
+		const destroy =
+			options.removalPolicy === 'destroy' ||
+			(options.removalPolicy === undefined && this.defaults.removalPolicy === cdk.RemovalPolicy.DESTROY);
 
 		let dataBucket: s3.IBucket;
 		let inclusionPrefixes: string[] | undefined;
@@ -276,18 +286,14 @@ export class KnowledgeBase extends Scope {
 		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
-		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
-		// Ideally we'd also add aws:SourceArn scoped to the KB ARN, but that
-		// creates a circular dependency (Role ↔ KB). aws:SourceAccount is sufficient
-		// since it limits the role to this account's Bedrock service principal.
-
+		// Trust is limited to Bedrock knowledge bases in this account and region:
+		// aws:SourceAccount pins the account, aws:SourceArn matches any knowledge
+		// base ARN there. The wildcard names no concrete knowledge base, so the role
+		// does not depend on the CfnKnowledgeBase that assumes it.
+		const stack = cdk.Stack.of(this);
 		const bedrockRole = new iam.Role(this, 'BedrockRole', {
 			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
-				conditions: {
-					StringEquals: {
-						'aws:SourceAccount': cdk.Stack.of(this).account,
-					},
-				},
+				conditions: sourceScopedConditions(stack, 'bedrock', 'knowledge-base/*'),
 			}),
 		});
 
@@ -431,6 +437,10 @@ export class KnowledgeBase extends Scope {
 				},
 				physicalResourceId: cr.PhysicalResourceId.of(stableIngestId),
 			},
+			// Stable BedrockAgent API bundled in the Lambda runtime's SDK v3 — skip the
+			// npm-install at invoke time (avoids ~15-30s cold start). The shared provider
+			// only drops back off 512MB once every AwsCustomResource in the stack opts out.
+			installLatestAwsSdk: false,
 			policy: cr.AwsCustomResourcePolicy.fromStatements([
 				new iam.PolicyStatement({
 					actions: ['bedrock:StartIngestionJob'],
@@ -466,7 +476,7 @@ export class KnowledgeBase extends Scope {
 			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
 		});
 
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:Retrieve'],
 			resources: [knowledgeBaseArn],
 		}));
@@ -474,7 +484,7 @@ export class KnowledgeBase extends Scope {
 		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
 		// authorized at the knowledge-base resource level (the data source and
 		// ingestion jobs are sub-resources of the KB ARN).
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
 			resources: [knowledgeBaseArn],
 		}));
@@ -487,6 +497,53 @@ export class KnowledgeBase extends Scope {
 	// top-level (which runs during synth) would otherwise fail with a cryptic
 	// `X is not a function`; these stubs turn that into an actionable message.
 	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
+	/**
+	 * Expose this knowledge base as an Agent tool whose search scope comes from your server code,
+	 * not from the model.
+	 *
+	 * Pass the result to the `tool()` factory in an Agent's `tools` callback. The tool takes one
+	 * input, `query`; the metadata filter is derived on every call by `options.filter` from the
+	 * per-call tool context, which you fill from the authenticated session in `agent.stream()`.
+	 * The tool is marked `untrustedOutput: true`, so the agent wraps retrieved text in an
+	 * untrusted-data block and tells the model to treat it as data, never instructions.
+	 *
+	 * Retrieval is read-only, so the tool doesn't set `needsApproval`. Set `needsApproval` on the
+	 * agent's tools that have side effects.
+	 *
+	 * Synth-safe: you can declare the tool at module top level. The search itself runs only at
+	 * runtime; under CDK synth the returned handler throws the usual synth-time error.
+	 *
+	 * @param options - `filter` (required) derives the metadata filter from the tool context;
+	 *   optional `description` and `maxResults` (default 5).
+	 * @returns A plain tool definition (`description`, `parameters`, `untrustedOutput: true`,
+	 *   `handler`) for the Agent's `tool()` factory. The handler returns plain JSON search hits.
+	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function, or
+	 *   `options.maxResults` is not an integer. When the tool runs, an error thrown by `filter`
+	 *   fails the call (no unscoped search), and so does a `filter` result other than `undefined`
+	 *   that isn't a non-empty filter with a non-empty string `equals` per key (`null`, `{}`,
+	 *   `{ tenant: { equals: undefined } }`); `retrieve()` errors propagate.
+	 *
+	 * @example
+	 * ```typescript
+	 * const agent = new Agent(scope, 'assistant', {
+	 *   systemPrompt: 'Answer questions from the tenant documents.',
+	 *   toolContextSchema: z.object({ tenantId: z.string() }),
+	 *   tools: (tool) => ({
+	 *     searchDocs: tool(kb.asAgentTool({
+	 *       filter: (context) => ({ tenant: { equals: context.tenantId } }),
+	 *     })),
+	 *   }),
+	 * });
+	 *
+	 * // In an API method: the scope comes from the authenticated session. The built-in auth
+	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
+	 * const user = await auth.requireAuth(context);
+	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
+	 * ```
+	 */
+	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
+		return createAgentTool(async (query, options) => this.retrieve(query, options), options, this.kbDescription);
+	}
 	isSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isSynced'); }
 	waitUntilSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilSynced'); }
 }

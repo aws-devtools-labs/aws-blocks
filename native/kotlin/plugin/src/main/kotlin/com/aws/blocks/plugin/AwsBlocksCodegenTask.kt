@@ -2,6 +2,7 @@ package com.aws.blocks.plugin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.generator.RelayToRequirement
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -10,6 +11,7 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
@@ -46,10 +48,18 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
     @get:Input
     abstract val visibility: Property<GeneratedVisibility>
 
-    /** Custom-scheme URI the app receives after OIDC sign-in completes. */
+    /** Declared native package identities to leave unbound. */
+    @get:Input
+    abstract val excludeNativePackages: SetProperty<String>
+
+    /** URI the backend relays back to once OIDC sign-in completes. */
     @get:Input
     @get:org.gradle.api.tasks.Optional
-    abstract val redirectUrl: Property<String>
+    abstract val relayTo: Property<String>
+
+    /** How strongly this project's targets need a relay target. */
+    @get:Input
+    abstract val relayToRequirement: Property<RelayToRequirement>
 
     /** Directory where generated `.kt` files are written. */
     @get:OutputDirectory
@@ -62,16 +72,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
             throw GradleException("Blocks Spec file not found: ${file.absolutePath}")
         }
 
-        val outputDir = outputDirectory.get().asFile
-
-        // Clear previous output
-        if (outputDir.exists()) {
-            outputDir.deleteRecursively()
-        }
-        outputDir.mkdirs()
-
-        val json = file.readText()
-        val model = OpenRpcParser.parse(json)
+        val model = OpenRpcParser.parse(file.readText())
 
         // Merge server overrides from the extension DSL into the parsed model.
         // Overrides replace servers with the same name; new names are appended.
@@ -93,10 +94,22 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         val generator = KotlinCodeGenerator(
             packageName = packageName.get(),
             internalVisibility = visibility.get() == GeneratedVisibility.Internal,
-            redirectUrl = redirectUrl.orNull,
+            relayTo = relayTo.orNull,
+            relayToRequirement = relayToRequirement.get(),
+            excludedPackages = excludeNativePackages.get(),
         )
         val codegenModel = CodegenModelBuilder().build(mergedModel)
         val result = generator.generate(codegenModel)
+
+        // Generate before clearing, so a rejected spec leaves the previous sources in place.
+        // The clear and the write are not atomic: that guarantee covers a spec rejected
+        // before writing starts, not a crash part-way through it.
+        val outputDir = outputDirectory.get().asFile
+        if (outputDir.exists()) {
+            outputDir.deleteRecursively()
+        }
+        outputDir.mkdirs()
+
         result.warnings.forEach { logger.warn("w: $it") }
         result.files.forEach { it.writeTo(outputDir) }
 

@@ -8,9 +8,12 @@ Real-time todo app with React, authentication, per-user data isolation, and live
 npm run dev          # Start dev server + React frontend
 npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/aws-blocks/*`) from a single origin, so browser-navigation auth flows (e.g. OIDC redirects) work locally.
+
+**Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in. Once deployed, Amazon Cognito emails the code (its default sender is limited to 50 emails a day).
 
 ## Project Structure
 
@@ -23,8 +26,8 @@ Open http://localhost:3000 after `npm run dev`. The dev server serves the React 
 
 ## What's Included
 
-- **AuthBasic** — sign up / sign in / sign out with JWT sessions
-- **DistributedTable** — todos stored in DynamoDB with Zod schema validation
+- **Auth** — email + password sign-up / sign-in / sign-out with server-side sessions (Amazon Cognito on AWS)
+- **KVStore** — todos stored in DynamoDB with Zod schema validation. A `KVStore` with a `schema` and a `key` stores records you list or query as a collection; a store fixes its key when you create it
 - **Optimistic locking** — `version` field + `ifFieldEquals` prevents lost updates
 - **Realtime** — todo changes broadcast to all connected tabs via WebSocket
 
@@ -33,10 +36,23 @@ Open http://localhost:3000 after `npm run dev`. The dev server serves the React 
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Backend + React dev server on a single origin (http://localhost:3000) |
+| `npm run dev:stop` | Stop the local dev server this app started |
 | `npm run test:e2e` | Test API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
+| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Stack naming
 
@@ -50,4 +66,4 @@ Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
 
 **Do not use local files or in-memory storage** — use Building Blocks for all data persistence and cloud abstractions (they mock locally and deploy to AWS automatically).
 
-Start in `aws-blocks/index.ts` (backend) and `src/App.tsx` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend.
+Start in `aws-blocks/index.ts` (backend) and `src/App.tsx` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.listTodos"`, `"authApi.getAuthState"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `TROUBLESHOOTING.md` in `node_modules/@aws-blocks/blocks/docs` for curl examples.

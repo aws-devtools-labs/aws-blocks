@@ -16,9 +16,12 @@ import {
 	bedrockConverse,
 	buildRollupUserText,
 	fmt,
+	renderFailureAnalyses,
+	summarizeFailures,
 } from './lib/analysis.mjs';
 import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
+import { redactDeep, redactSecrets, stringifyRedacted } from './lib/secrets.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 const BASELINE_PATH = process.env.BASELINE_PATH;
@@ -37,7 +40,7 @@ function main() {
 	const cells = [];
 	for (const d of dirs) {
 		try {
-			cells.push(JSON.parse(readFileSync(join(RESULTS_DIR, d, 'result.json'), 'utf-8')));
+			cells.push(redactDeep(JSON.parse(readFileSync(join(RESULTS_DIR, d, 'result.json'), 'utf-8'))));
 		} catch {
 			// unreadable cell — skip
 		}
@@ -83,19 +86,31 @@ function main() {
 			regressed: delta !== null && delta < REGRESSION_DELTA,
 			analysis: c.analysis || null,
 			issues: Array.isArray(c.analysis_issues) ? c.analysis_issues.filter((s) => typeof s === 'string' && s.trim()) : [],
+			failure_analysis: c.failure_analysis && typeof c.failure_analysis === 'object' ? c.failure_analysis : null,
 		};
 	});
 
 	// ── Executive summary: ONE best-effort Bedrock synthesis over the analyses ─
 	const execSummary = synthesize(aggregate, verdictCounts, rows);
 
+	// ── Failure root-cause: deterministic roll-up line + per-cell structured diagnosis ─
+	const failureRows = rows.filter((r) => r.failure_analysis);
+	const failureRollup = summarizeFailures(failureRows);
+
 	// ── Potential issues: deterministic flags + each cell's emitted issues ─────
 	const potential = collectPotentialIssues(rows);
 
-	// ── Render: Executive summary → Potential issues → collapsible per-cell ────
+	// ── Render: Executive summary → Failure root-cause → Potential issues → collapsible per-cell ────
 	const out = [];
 	out.push('## Executive summary', '');
+	if (failureRollup) out.push(failureRollup, '');
 	out.push(execSummary.text, '');
+
+	if (failureRows.length > 0) {
+		out.push('## 🔴 Failure root-cause', '');
+		out.push(`_Deep per-cell diagnosis of ${failureRows.length} failing cell(s) from quoted test/log evidence · model \`${MODEL_ID}\`._`, '');
+		for (const line of renderFailureAnalyses(failureRows)) out.push(line);
+	}
 
 	out.push('## ⚠️ Potential issues', '');
 	if (potential.length === 0) {
@@ -139,8 +154,14 @@ function main() {
 		executive_summary_error: execSummary.error ?? null,
 		potential_issues: potential,
 		cells: rows,
+		failure_analyses: failureRows.map((r) => ({ task: r.task, template: r.template, ...r.failure_analysis })),
 	});
 }
+
+// Badge per failure category (falls back to a generic marker for unknown categories).
+// The failure roll-up helpers (fdisp / summarizeFailures / renderFailureAnalyses) and their constants
+// (FAILURE_CATEGORY_BADGE / MAX_EVIDENCE_CHARS) live in lib/analysis.mjs, colocated with the other pure
+// helpers so they are unit-tested; imported above.
 
 // Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
 // every per-cell issue, each attributed to its cell.
@@ -192,7 +213,8 @@ function synthesize(aggregate, verdictCounts, rows) {
 }
 
 function emit(lines) {
-	const md = `${lines.join('\n')}\n`;
+	// Redacted: the step summary is public and quotes per-cell analyses + the model's roll-up.
+	const md = redactSecrets(`${lines.join('\n')}\n`);
 	if (process.env.GITHUB_STEP_SUMMARY) {
 		try {
 			appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
@@ -208,20 +230,17 @@ function emit(lines) {
 function writeAnalysis(extra) {
 	if (!ANALYSIS_PATH) return;
 	try {
+		// Redacted: uploaded publicly as bench-analysis, and it quotes per-cell evidence + model output.
 		writeFileSync(
 			ANALYSIS_PATH,
-			`${JSON.stringify(
-				{
-					schema: 3,
-					generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-					model: MODEL_ID,
-					low_threshold: LOW_THRESHOLD,
-					regression_delta: REGRESSION_DELTA,
-					...extra,
-				},
-				null,
-				2,
-			)}\n`,
+			`${stringifyRedacted({
+				schema: 3,
+				generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+				model: MODEL_ID,
+				low_threshold: LOW_THRESHOLD,
+				regression_delta: REGRESSION_DELTA,
+				...extra,
+			})}\n`,
 		);
 	} catch (err) {
 		process.stderr.write(`[analyze] failed to write analysis to ${ANALYSIS_PATH}: ${err?.message ?? err}\n`);

@@ -261,7 +261,7 @@ const probeCheckAuth = {
 const probeAuthFlow = {
   feature: 'api.authSignUp + authConfirmSignUp + authSignIn',
   description: 'Full auth flow: create disposable account, fetch the verification code, confirm, sign in. Cookie set as a result.',
-  source: 'aws-blocks/index.ts → AuthBasic helpers',
+  source: 'aws-blocks/index.ts → Auth helpers',
   buttons: [
     {
       label: 'Run full auth flow',
@@ -269,7 +269,11 @@ const probeAuthFlow = {
         const username = `apitest-${Date.now()}@example.com`;
         const password = 'TestPass123!';
         await api.authSignUp(username, password);
-        const code = await api.authGetLastCode();
+        let code = null;
+        for (let i = 0; i < 15 && !code; i++) {
+          code = await api.authGetLastCode(username);
+          if (!code) await new Promise((r) => setTimeout(r, 200));
+        }
         if (!code) return { pass: false, observed: { step: 'authGetLastCode', got: null } };
         await api.authConfirmSignUp(username, code.code);
         const signin = await api.authSignIn(username, password);

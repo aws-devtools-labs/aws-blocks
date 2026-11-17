@@ -24,9 +24,8 @@ export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-1
 
 # BUILD-ONCE: the upstream `build-blocks` job packs the monorepo to dist-registry/ once per run and
 # hands it to every cell as an artifact. If present (guard requires an actual *.tgz, since
-# download-artifact creates the dir even on a skipped/partial extract), reuse it and skip the ~150s
+# download-artifact creates the dir even on a skipped/partial extract), reuse it and skip the ~40s
 # per-cell build + pack; otherwise build locally so the cell is self-sufficient.
-# `npm run build` is topology-aware; `build:packages` runs alphabetically and trips over bb-data.
 if [ -d dist-registry ] && [ -n "$(find dist-registry -name '*.tgz' -type f 2>/dev/null)" ]; then
   echo "1. Init: reusing prebuilt dist-registry/ (from the build-blocks job) — skipping monorepo build + pack"
 else
@@ -57,6 +56,11 @@ cd bench-workdir
 cat > .npmrc <<EOF
 @aws-blocks:registry=http://localhost:4873/registry/
 EOF
+# create-blocks-app runs `npm install` inside bench-app/, which has its own package.json, so npm
+# never reads this project .npmrc and would pull @aws-blocks/* from public npm. Point npm's USER
+# config at it instead (as scripts/ci/templates-e2e.mjs does) so the scaffold's install resolves
+# the packed packages; bench-app's package-lock.json then pins the localhost tarballs.
+export NPM_CONFIG_USERCONFIG="$(pwd)/.npmrc"
 # Empty package.json forces npm to treat this as the project root, so
 # `npm install` writes into bench-workdir/node_modules instead of walking
 # up to the monorepo root and installing there.

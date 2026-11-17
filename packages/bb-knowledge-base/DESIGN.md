@@ -20,7 +20,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Rationale:** Ingestion can take minutes to hours depending on corpus size. Blocking `cdk deploy` until ingestion completes would make iterative development painful. Fire-and-forget means the deploy finishes quickly and ingestion happens in the background. The trade-off is that the knowledge base may return stale or empty results for a brief window after deploy. This is acceptable because the alternative (using a CDK `Provider` with `isComplete` polling) adds significant complexity and Lambda cold-start cost for a one-time operation.
 
-**Resolution of the warm-up window:** The `isSynced()` / `waitUntilSynced()` sync API (see [README.md](./README.md#sync)) closes the gap left by fire-and-forget ingestion. Rather than blocking the deploy, callers poll the data source's ingestion-job status at runtime (`ListIngestionJobs` / `GetIngestionJob`) and gate on completion — keeping deploys fast while giving application code a reliable "is the KB synced with my latest data yet?" signal. `COMPLETE` → synced, `FAILED` → throws `IngestionFailedException`, anything else (or no jobs yet) → not synced. This tracks *freshness*, not availability: `retrieve()` is always callable and serves the prior snapshot during a re-ingestion (it returns empty only during the initial pre-sync window, before the first ingestion completes). So `isSynced() === false` means "not yet synced with your latest data," never "unavailable."
+**Resolution of the warm-up window:** The `isSynced()` / `waitUntilSynced()` sync API (see [README.md](./README.md#sync)) closes the gap left by fire-and-forget ingestion. Rather than blocking the deploy, callers poll the data source's ingestion-job status at runtime (`ListIngestionJobs` / `GetIngestionJob`) and gate on completion — keeping deploys fast while giving application code a reliable "is the KB synced with my latest data yet?" signal. `COMPLETE` → synced, `FAILED` → throws `IngestionFailedException` (with a stable message: the job's raw `failureReasons` are Bedrock service text that can name buckets, object keys or ARNs, so they are logged server-side and kept on the error's non-enumerable `cause`, never in the message that crosses the RPC wire), anything else (or no jobs yet) → not synced. This tracks *freshness*, not availability: `retrieve()` is always callable and serves the prior snapshot during a re-ingestion (it returns empty only during the initial pre-sync window, before the first ingestion completes). So `isSynced() === false` means "not yet synced with your latest data," never "unavailable."
 
 **Embedding-propagation lag after `COMPLETE`:** `isSynced() === true` means the ingestion *job* reached `COMPLETE`. Per the Bedrock docs, for non-Aurora vector stores — and this BB uses S3 Vectors — newly-written embeddings can take a few minutes after `COMPLETE` before they are fully queryable. So `isSynced()` signals "the ingestion job finished," with a possible short embedding-propagation lag before the freshest chunks surface in `retrieve()` results.
 
@@ -44,6 +44,12 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Rationale:** Blocks already has a separate Agent Building Block that handles RAG orchestration (retrieve + generate). Baking generation into KnowledgeBase would create overlapping responsibilities. `retrieve()` is the primitive — it returns ranked chunks that the Agent or application code can feed into any LLM. This keeps KnowledgeBase single-purpose and composable.
 
+### D-KB-5a: `asAgentTool()` returns a plain tool shape, and its filter is required
+
+**Decision:** `asAgentTool(options)` returns a plain object shaped like `@aws-blocks/bb-agent`'s `ToolDefinition` (`description`, a zod `parameters` schema with a single `query`, `untrustedOutput: true`, `handler`). The metadata filter is never a tool input: a required `filter(context)` callback derives it from the agent's per-call tool context on every call. Returning `undefined` (an explicit `filter: () => undefined`) searches everything; a throw fails the call before Bedrock is queried.
+
+**Rationale:** A filter the model can set is not an access control, and retrieved text is untrusted, so the safe composition is the one this method hard-codes. Making `filter` required means a multi-tenant app can't forget it, and a single-tenant app opts out visibly. Returning a structural shape (not importing `bb-agent`) keeps the dependency one-way: `bb-agent` already sits above the data blocks, and the Agent's `tool()` factory infers `TContext` from its `toolContextSchema` through the generic, so `context` is typed with no casts. `zod` is a runtime dependency for the tool's own input schema, the same library `bb-agent` uses for `ToolDefinition.parameters`. The CDK entry implements the method for real (it's in `SYNTH_SAFE_METHODS`) because tools may be declared at module top level; the returned handler calls the guarded `retrieve()`, so a search still can't run at synth.
+
 ### D-KB-6: Folder metadata via auto-generated sidecar files
 
 **Decision:** During CDK synth, auto-generate `.metadata.json` sidecar files for documents in subfolders. Each sidecar sets a `folder` metadata attribute derived from the top-level subfolder name. Customer-provided sidecars take precedence and are never overwritten.
@@ -62,7 +68,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Rationale:** KnowledgeBase requires Bedrock API access (AWS runtime) or filesystem reads (mock). Neither is available in the browser. Throwing at construction — not at `retrieve()` time — gives developers an immediate, clear error message guiding them to use server actions, API routes, or Lambda handlers. This follows the same pattern as other server-only Building Blocks.
 
-The method stubs are consistent with construction: `retrieve()`, `isSynced()`, and `waitUntilSynced()` **all** throw `BrowserNotSupportedException` as well (none silently no-ops or returns a fake "synced"). So the browser layer's sync contract matches `retrieve()` — completing the picture across all three layers: mock is always synced (`isSynced()` returns `true`, `waitUntilSynced()` resolves immediately; see the table below), AWS polls the real ingestion job, and browser throws for the data *and* sync methods alike.
+The method stubs are consistent with construction: `retrieve()`, `asAgentTool()`, `isSynced()`, and `waitUntilSynced()` **all** throw `BrowserNotSupportedException` as well (none silently no-ops or returns a fake "synced"). So the browser layer's sync contract matches `retrieve()` — completing the picture across all three layers: mock is always synced (`isSynced()` returns `true`, `waitUntilSynced()` resolves immediately; see the table below), AWS polls the real ingestion job, and browser throws for the data *and* sync methods alike.
 
 ### D-KB-9: Raw `s3.Bucket` for the data bucket (not the `FileBucket` Building Block)
 
@@ -118,7 +124,7 @@ Creates the following resources:
 ## Mock Implementation
 
 - Documents read from the local folder specified in `options.source` (must be a relative path within the project).
-- Text files chunked by paragraph (split on double newlines, minimum 20 characters per chunk).
+- Text files chunked per the configured strategy: `'fixed'` uses overlapping word windows (`chunkSize` words, `chunkOverlap` percent overlap), `'none'` keeps each document whole, and `'semantic'`/`'hierarchical'` split on blank-line paragraphs. Chunks under 20 characters are dropped (except the final `'fixed'` window).
 - Relevance scoring via TF-IDF (term frequency–inverse document frequency) — not real embeddings. Algorithm: tokenize → normalized TF → smoothed IDF (`log((N+1)/(df+1)) + 1`) → scores normalized to [0, 1].
 - Chunks cached to `.bb-data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .bb-data`.
 - Folder metadata derived from directory structure (top-level subfolder name). Customer-provided `.metadata.json` sidecar files take precedence.
@@ -132,7 +138,7 @@ Creates the following resources:
 |------------|--------|------------|
 | TF-IDF scoring vs Bedrock embeddings | Relevance ranking differs — keyword-based vs semantic | Scores are relative within each environment. API contract is identical. Recommend sandbox testing for retrieval quality tuning |
 | No PDF/DOCX support in mock | Documents in binary formats are skipped locally | Document the gap; these formats work on AWS where Bedrock handles parsing |
-| Paragraph chunking vs Bedrock strategies | Chunk boundaries differ between mock and production | No mitigation — chunking configuration only affects the CDK/Bedrock path. Mock uses simple paragraph splitting for all strategies |
+| Paragraph chunking vs Bedrock strategies | Chunk boundaries differ between mock and production | Partial — the mock honors `'fixed'` (word windows from `chunkSize`/`chunkOverlap`) and `'none'`, but approximates `'semantic'` and `'hierarchical'` with blank-line paragraph splitting (`breakpointPercentile` is ignored) |
 | No ingestion pipeline | Documents are indexed synchronously on first `retrieve()` | No mitigation — the mock doesn't need async ingestion. First call may be slower due to indexing |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 | Immediate consistency | New documents appear instantly vs async ingestion in AWS | No mitigation — eventual consistency in AWS is inherent to the Bedrock ingestion pipeline |

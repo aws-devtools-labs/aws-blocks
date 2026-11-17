@@ -43,6 +43,11 @@ export function pgTypeToTs(pgType: string): string {
   return PG_TO_TS[pgType.toLowerCase()] ?? 'unknown';
 }
 
+/** Every TypeScript type expression {@link pgTypeToTs} can return. */
+export function mappedTsTypes(): string[] {
+  return [...new Set([...Object.values(PG_TO_TS), 'unknown'])];
+}
+
 // ── Identifier casing ──────────────────────────────────────────────────
 
 export function pascalCase(str: string): string {

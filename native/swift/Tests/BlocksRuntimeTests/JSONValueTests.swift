@@ -123,4 +123,44 @@ final class JSONValueTests: XCTestCase {
         let decodedData = try encoder.encode(decoded)
         XCTAssertEqual(originalData, decodedData)
     }
+
+    /// The shape codegen emits for `AuthenticatedUser.claims` (`Record<string, unknown>`, optional
+    /// and nullable): every JSON kind survives a decode/encode, and absent or null claims are nil.
+    private struct UserWithClaims: Codable {
+        let userId: String
+        let claims: [String: JSONValue]?
+    }
+
+    func testOptionalMapOfJSONValueRoundTrips() throws {
+        let wire = Data(#"""
+        {
+            "claims": {
+                "address": { "country": "NZ", "postal_code": null },
+                "amr": ["pwd", "mfa"],
+                "email_verified": true,
+                "exp": 1767225600,
+                "iss": "https://idp.example.com",
+                "nickname": null,
+                "ratio": 0.5
+            },
+            "userId": "u1"
+        }
+        """#.utf8)
+        let decoded = try JSONDecoder().decode(UserWithClaims.self, from: wire)
+        let claims = try XCTUnwrap(decoded.claims)
+        XCTAssertEqual(claims.count, 7)
+        if case .int(let exp) = claims["exp"] { XCTAssertEqual(exp, 1_767_225_600) } else { XCTFail("exp") }
+        if case .string(let iss) = claims["iss"] { XCTAssertEqual(iss, "https://idp.example.com") } else { XCTFail("iss") }
+
+        // Re-encoding gives back the same JSON (compared as parsed objects, so key order and spacing don't matter).
+        let reencoded = try JSONEncoder().encode(decoded)
+        let expected = try XCTUnwrap(JSONSerialization.jsonObject(with: wire) as? NSDictionary)
+        let actual = try XCTUnwrap(JSONSerialization.jsonObject(with: reencoded) as? NSDictionary)
+        XCTAssertEqual(actual, expected)
+
+        let absent = try JSONDecoder().decode(UserWithClaims.self, from: Data(#"{"userId":"u1"}"#.utf8))
+        XCTAssertNil(absent.claims)
+        let explicitNull = try JSONDecoder().decode(UserWithClaims.self, from: Data(#"{"userId":"u1","claims":null}"#.utf8))
+        XCTAssertNil(explicitNull.claims)
+    }
 }

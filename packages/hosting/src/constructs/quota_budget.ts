@@ -31,7 +31,12 @@
  */
 
 /** A tracked, adjustable quota. */
-export type QuotaKind = 'cacheBehaviors' | 'edgeFunctions' | 'headerPolicies';
+export type QuotaKind =
+  | 'cacheBehaviors'
+  | 'edgeFunctions'
+  | 'headerPolicies'
+  | 'cacheKeyCookies'
+  | 'cacheKeyHeaders';
 
 /**
  * Caller-supplied quota overrides. Each field corresponds to a named AWS
@@ -70,6 +75,20 @@ export type QuotaOverrides = {
    */
   headerPolicies?: number;
   /**
+   * Max cookies in the SSR cache key. AWS Service Quota "Cookies per cache
+   * policy" (`Cookies in cache key`), default 10. Some are reserved for
+   * Next.js preview mode, leaving the rest for `cdn.cacheKeyCookies`.
+   * @default 10
+   */
+  cacheKeyCookies?: number;
+  /**
+   * Max headers in the SSR cache key. AWS Service Quota "Headers per cache
+   * policy" (`Headers in cache key`), default 10. Some are reserved for the
+   * Next.js router headers, leaving the rest for `cdn.cacheKeyHeaders`.
+   * @default 10
+   */
+  cacheKeyHeaders?: number;
+  /**
    * Max chunks per KVS edge route table (routes / redirects / headers). Each
    * chunk holds ~25 entries, so the default 64 ≈ 1600 entries per table. This
    * is NOT an AWS service quota — it's a self-imposed guard: the KVS store is
@@ -92,6 +111,8 @@ export const AWS_DEFAULT_QUOTAS: Record<QuotaKind, number> = {
   cacheBehaviors: 25,
   edgeFunctions: 25,
   headerPolicies: 20,
+  cacheKeyCookies: 10,
+  cacheKeyHeaders: 10,
 };
 
 /**
@@ -119,6 +140,10 @@ export class QuotaBudget {
         overrides?.edgeFunctions ?? AWS_DEFAULT_QUOTAS.edgeFunctions,
       headerPolicies:
         overrides?.headerPolicies ?? AWS_DEFAULT_QUOTAS.headerPolicies,
+      cacheKeyCookies:
+        overrides?.cacheKeyCookies ?? AWS_DEFAULT_QUOTAS.cacheKeyCookies,
+      cacheKeyHeaders:
+        overrides?.cacheKeyHeaders ?? AWS_DEFAULT_QUOTAS.cacheKeyHeaders,
     };
   }
 

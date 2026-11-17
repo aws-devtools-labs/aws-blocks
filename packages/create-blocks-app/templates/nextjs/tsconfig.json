@@ -33,12 +33,12 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".blocks/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",
     "aws-blocks/index.cdk.ts",
-    "aws-blocks/deploy.ts",
-    "aws-blocks/scripts"
+    "aws-blocks/deploy.ts"
   ]
 }

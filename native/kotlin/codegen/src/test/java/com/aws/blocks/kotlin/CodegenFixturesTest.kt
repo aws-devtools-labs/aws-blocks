@@ -3,6 +3,7 @@ package com.aws.blocks.kotlin
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.parser.OpenRpcParser
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.io.File
@@ -25,7 +26,20 @@ class CodegenFixturesTest : FunSpec({
                     val spec = specFile.readText()
                     val rpcModel = OpenRpcParser.parse(spec)
                     val codegenModel = CodegenModelBuilder().build(rpcModel)
-                    val result = KotlinCodeGenerator("com.example.app").generate(codegenModel)
+                    // A relay target so a fixture's OIDC operations generate their real client
+                    // instead of the stub an unconfigured build gets.
+                    val result = KotlinCodeGenerator("com.example.app", relayTo = "blocks-fixture://auth")
+                        .generate(codegenModel)
+
+                    val generatedSource = result.files.joinToString("\n") { it.toString() }
+                    Regex("@Serializable\\(\\s*with = ([A-Za-z0-9_]+)::class\\s*\\)")
+                        .findAll(generatedSource)
+                        .forEach { match ->
+                            val serializerName = match.groupValues[1]
+                            withClue("fixture ${fixture.name}: missing serializer $serializerName") {
+                                generatedSource.contains("object $serializerName") shouldBe true
+                            }
+                        }
 
                     if (regenerate) {
                         goldenDir.mkdirs()

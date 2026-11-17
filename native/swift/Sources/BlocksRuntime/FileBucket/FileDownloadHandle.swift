@@ -20,13 +20,13 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "FileDo
 /// // or stream to disk:
 /// try await handle.downloadTo(fileURL: localPath)
 /// ```
-public class FileDownloadHandle {
+public final class FileDownloadHandle: Sendable {
     private let url: String
     private let session: URLSession
 
-    public init(url: String, session: URLSession = .shared) {
+    public init(url: String, session: URLSession? = nil) {
         self.url = url
-        self.session = session
+        self.session = session ?? BlocksRuntimeSession.shared
     }
 
     /// Hydrates a FileDownloadHandle from a JSON descriptor.
@@ -37,6 +37,27 @@ public class FileDownloadHandle {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
         return FileDownloadHandle(url: url)
+    }
+
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/download", "url": … }` descriptor, so a generated
+    /// model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/download")
+        self.init(url: try container.decode(String.self, forKey: .url))
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/download", "url" }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/download", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
     }
 
     /// Returns the presigned download URL.
@@ -62,7 +83,8 @@ public class FileDownloadHandle {
                 throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Downloaded \(data.count) bytes from \(requestURL)")
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Downloaded \(data.count) bytes from \(requestURL.redactedForLogging)")
             return data
         } catch let error as FileBucketError {
             throw error
@@ -106,3 +128,5 @@ public class FileDownloadHandle {
         }
     }
 }
+
+extension FileDownloadHandle: Codable {}

@@ -17,7 +17,11 @@ void describe('sub-path exports', () => {
     assert.ok(require.resolve('@aws-blocks/hosting/error'));
   });
 
-  void it('resolves main entry', () => {
+  void it('resolves ./scripts', () => {
+    assert.ok(require.resolve('@aws-blocks/hosting/scripts'));
+  });
+
+  void it('resolves main entry (the CDK-free value API)', () => {
     assert.ok(require.resolve('@aws-blocks/hosting'));
   });
 });

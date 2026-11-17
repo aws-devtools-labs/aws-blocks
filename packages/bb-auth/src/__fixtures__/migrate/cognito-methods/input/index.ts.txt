@@ -1,0 +1,71 @@
+import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
+import {
+	AuthCognito,
+	AuthCognitoErrors,
+	type AuthCognitoOptions,
+	type CognitoUser,
+	type MFAPreference,
+} from '@aws-blocks/bb-auth-cognito';
+
+const scope = new Scope('app');
+const options = { groups: ['admins'] } as const satisfies AuthCognitoOptions;
+const auth = new AuthCognito(scope, 'auth', {
+	mfa: 'optional',
+	mfaTypes: ['TOTP'],
+	groups: ['admins'],
+	userPool: AuthCognito.fromExisting('us-east-1_abc', 'client'),
+});
+void options;
+
+function describeUser(user: CognitoUser): string {
+	return user.username;
+}
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+	async session() {
+		return auth.fetchAuthSession(context, { forceRefresh: true });
+	},
+	async attributes() {
+		const attrs = await auth.fetchUserAttributes(context);
+		return attrs;
+	},
+	async mfa(): Promise<MFAPreference> {
+		await auth.setUpTOTP(context);
+		await auth.verifyTOTPSetup(context, '123456');
+		await auth.updateMFAPreference(context, { totp: 'PREFERRED' });
+		return auth.fetchMFAPreference(context);
+	},
+	async devices() {
+		return Array.fromAsync(auth.fetchDevices(context));
+	},
+	async setTenant(tenant: string) {
+		await auth.updateUserAttribute(context, 'custom:tenant', tenant);
+	},
+	async setEmail(email: string) {
+		const outcome = await auth.updateUserAttribute(context, 'email', email);
+		return outcome;
+	},
+	async answer(session: string, code: string) {
+		return auth.confirmSignIn(session, { code }, context);
+	},
+	async register(username: string, password: string) {
+		return auth.signUp(username, password, { autoSignIn: true }, context);
+	},
+	async registerQuiet(username: string, password: string) {
+		return auth.signUp(username, password, { autoSignIn: true, attributes: { email: username } });
+	},
+	async signIn(username: string, password: string, cognitoSession: string) {
+		return auth.signIn(username, password, context, { cognitoSession });
+	},
+	async whoAmI() {
+		try {
+			return describeUser(await auth.requireAuth(context));
+		} catch (e) {
+			if (isBlocksError(e, AuthCognitoErrors.NotAuthenticated)) return null;
+			throw e;
+		}
+	},
+	async promote(username: string) {
+		await auth.admin.addUserToGroup(username, 'admins');
+	},
+}));

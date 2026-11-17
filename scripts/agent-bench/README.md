@@ -6,7 +6,7 @@ Playwright grades the result, and a judge agent scores against the rubric.
 
 ## Architecture
 
-Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxiliaries):
+Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxiliaries):
 
 0. **Init result** — write a baseline `result.json` before any AWS call, so
    even an OIDC failure still produces a cell row in the summary
@@ -15,16 +15,20 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
    port, so the agent's edit phase runs with nothing bound
 2. **Agent run** — Strands + Bedrock; the agent has the framework's vended
    `bash` + `fileEditor` tools, both routed through a `WORKSPACE`-rooted Sandbox
-   (`lib/run-shell.ts`). The workspace is already scaffolded; no dev server is
-   running (the agent must not rely on or start one).
+   (`lib/run-shell.ts`) whose shell runs as the unprivileged `benchagent` user
+   with a credential-free env (see *Security*). The workspace is already
+   scaffolded; no dev server is running (the agent must not rely on or start one).
 3. **Build and test** — `npm run build`, then launch the dev server fresh and
    discover the port it binds by anchoring on the framework's startup banner
    (`AWS Blocks local server running on http://localhost:<port>`) — no port
    guessing — exported as `APP_BASE_URL`; then run the task's Playwright spec
-   against it. Records build / dev-server / playwright / test signals
+   against it. Records build / dev-server / playwright / test signals. The script
+   is a trusted supervisor; every process that runs the agent's app or its
+   dependencies runs as `benchagent` (see *Security*)
 4. **Judge** — Strands + Bedrock; one vended `bash` tool rooted at a
    spec-blinded, disposable source-only COPY of the workspace
-   (`lib/run-shell.ts`); any writes it makes to the copy can't affect scoring.
+   (`lib/run-shell.ts`, same `benchagent` + credential-free shell as the builder);
+   any writes it makes to the copy can't affect scoring.
    Scores source only; objective signals are applied as caps afterward, not
    shown to it.
    - **4b. Analyze cell** (best-effort) — asks the judge model for a concise
@@ -32,45 +36,169 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
      plus a short list of potential issues, and writes both back into
      `result.json` as `analysis` + `analysis_issues[]` (`analyze-cell.mjs`); the
      summary job later rolls these up
+   - **4c. Stage artifacts** — reaps every `benchagent` process, then builds the
+     only copy that gets published: redacted `result.json`, trace, metrics,
+     command log and generated source in a runner-only dir
+     (`stage-artifacts.mjs`; see *Security*). Steps 5–6b and the S3 persist read
+     only that copy and run only if this step succeeded
 5. **Upload result** — JSON artifact + S3 archive (best-effort)
-6. **Upload source** — uploads the generated `bench-app` as
-   `bench-source-<task>-<template>` for post-run auditing, excluding deps/build
-   output and anything credential-shaped (`node_modules`, `.git`, `dist`,
-   `.env*`, `*.pem`, `.aws`)
-   - **6b. Upload trace** (best-effort) — the agent trace + run metrics written
-     by step 2; on a wall-clock timeout step 2 emits no trace, so nothing uploads
+6. **Upload source** — uploads the staged `bench-app` copy as
+   `bench-source-<task>-<template>` for post-run auditing (deps/build output,
+   VCS and anything credential-shaped — `node_modules`, `.git`, `dist`,
+   `.blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
+   - **6b. Upload trace** (best-effort) — the agent trace, run metrics and
+     command log written by step 2; on a wall-clock timeout step 2 emits no
+     trace, so nothing uploads
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge currently both run on
-Opus 4.8 (the builder model is the `BENCH_MODEL` knob, default Opus 4.8); set
-`BENCH_MODEL` back to a Sonnet id to de-correlate and limit same-model
-self-evaluation bias.
+Opus 4.8 (builder via `BENCH_MODEL`, judge via `BENCH_JUDGE_MODEL`, both
+defaulting to Opus 4.8). To de-correlate and limit same-model self-evaluation
+bias, give the builder and judge different ids — set `BENCH_MODEL` (builder) and
+`BENCH_JUDGE_MODEL` (judge) to distinct values.
 
 ## Security
 
-The builder step (`2. Agent run`) executes an LLM-driven agent with vended
-`bash` + `fileEditor` tools **inside the job's shell environment**, which holds
-the live OIDC/AWS session minted by the `Configure AWS credentials` step. A
-prompt-injected or
-otherwise malicious task `PROMPT.md` could therefore, in principle, drive the
-agent to reach **any AWS API within the role's scope** — i.e. Bedrock
-(`InvokeModelWithResponseStream` on the bench model) and the registry bucket
-(`s3:PutObject` on `bench/*`) — not just the build it was asked to perform.
+The builder (`2. Agent run`) and the judge (`4. Judge`) run LLM-driven agents
+with a shell, and step 3 runs the code the builder wrote. A prompt-injected or
+otherwise malicious task `PROMPT.md` — or agent-written source the judge reads —
+could try to use or leak the job's credentials: the Bedrock-scoped AWS session,
+the `ACTIONS_ID_TOKEN_REQUEST_*` pair (which mints a fresh OIDC token and could
+assume the role *without* the session policy), and the runner's own tokens.
+The boundary, outermost first:
 
-This is bounded by **who can trigger the bench, not by sandboxing the agent**:
-the matrix runs only on the same repo. It runs automatically on every same-repo
-pull request (opened / synchronized / reopened) and on every push to `main`,
-plus manual `workflow_dispatch` — there is **no label gate**. The same-repo guard
-is enforced in
-[`pr-agent-bench.yml`](../../.github/workflows/pr-agent-bench.yml): fork PRs get
-no secrets or OIDC under `pull_request`, so an external contributor cannot reach
-the role at all (push-to-`main` is same-repo by definition). The task `PROMPT.md`
-files are themselves in-repo and member-reviewed.
+1. **Who can trigger.** The matrix runs only on the same repo: automatically on
+   every same-repo pull request (opened / synchronized / reopened) and every
+   push to `main`, plus manual `workflow_dispatch` — there is **no label gate**.
+   The same-repo guard is enforced in
+   [`pr-agent-bench.yml`](../../.github/workflows/pr-agent-bench.yml): fork PRs
+   get no secrets or OIDC under `pull_request`, so an external contributor
+   cannot reach the role (push-to-`main` is same-repo by definition). The task
+   `PROMPT.md` files are in-repo and member-reviewed.
+2. **Bedrock-only AWS session.** The bench job's `Configure AWS credentials`
+   step passes an inline session policy, so the session every step up to the
+   uploads runs with can only call `bedrock:InvokeModelWithResponseStream` and
+   `bedrock:Converse` on model-invocation ARNs (the effective permissions are the
+   intersection of the role and that policy). The S3 write is regained only by
+   re-assuming the role without the policy right before `Persist to S3`, after
+   every agent, analysis and upload step, and only if step 4c succeeded (so
+   after every agent process has been killed), never on a cancelled run. The
+   `summary` job holds the full role but runs no agent code.
 
-**Future hardening (not yet implemented):** scope the builder step to a
-dedicated, minimal **Bedrock-invoke-only** role (drop the `s3:PutObject` grant,
-which only the separate "Persist to S3" step needs) so a compromised agent has
-the smallest possible blast radius even within a trusted trigger.
+   The role is `blocks-github-bench` in E2E account 1
+   ([`test-infra/github-oidc-stack.ts`](../../test-infra/github-oidc-stack.ts)):
+   Bedrock model invocation plus `s3:GetObject`/`s3:PutObject` on `bench/*` in
+   the bench bucket, nothing else. Both jobs run in the `agent-bench` GitHub
+   environment, and the role trusts only that environment's OIDC `sub`, so a
+   token minted in a bench job can assume this role and no other (the E2E
+   role, `blocks-github-e2e`, trusts only the `e2e` environment). That trust
+   policy, not the role's permissions, is the outer bound on what the job's
+   OIDC token can reach.
+3. **A separate uid for all agent code, fail closed** (`steps/lib/isolation.mjs`).
+   The harness processes keep the job env: the builder/judge model calls run in
+   the harness (Strands `BedrockModel`) and the analysis calls run the `aws` CLI
+   from the harness. Everything the agent controls runs as `benchagent`, an
+   unprivileged user with no sudo rights, via `sudo -n runuser`: the builder and
+   judge shells (`lib/run-shell.ts`) and, in step 3, every process of the
+   agent's app — the `package.json` probes, `npm install` and its lifecycle
+   scripts, the build, the dev server and Playwright (it loads the app's
+   `node_modules`), all started through `lib/agent-exec.mjs`. A different uid
+   can't read the harness's `/proc/<pid>/environ` or signal it. Step 3's script
+   is the trusted supervisor: it opens the log redirects itself (runner-owned
+   files), reads agent-written files without following links, and alone writes
+   `GITHUB_OUTPUT`, from validated integers. Under CI (`CI` or
+   `GITHUB_ACTIONS` set) there is no same-uid fallback: if `benchagent`, the
+   workspace ACL or the checks below fail, the phase refuses to run and records
+   `isolation_failure`, which scores as `harness_error` (infra). A bare shell
+   exists only for local development, behind `BENCH_ALLOW_BARE_SHELL=1`, and is
+   refused under CI.
+4. **Runner temp locked and verified.** The runner's file-command files
+   (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, …, including the env file
+   `configure-aws-credentials` writes the AWS keys to) live in `RUNNER_TEMP`.
+   Before any agent code runs, each phase makes `RUNNER_TEMP` and the
+   file-command dirs `0700`, then checks **as `benchagent`** that it can't list or
+   read any of them, nor read any runner-uid `/proc/<pid>/environ`; a failure
+   is an `isolation_failure`. Writing those files would otherwise inject env or
+   `PATH` into later steps, including the one that re-assumes the full role.
+5. **Trusted executables locked and verified.** Later runner-uid steps — and
+   `sudo`, as root, through its `secure_path` — execute from the runner `PATH`,
+   `/usr/local/{s,}bin` and the other system dirs, the node install, the hosted
+   tool cache, global npm modules, the checkout (its `scripts/agent-bench` and
+   `node_modules`), the downloaded actions and the runner itself. The hosted image
+   ships some of these world-writable (e.g. `/usr/local/bin`,
+   `/opt/hostedtoolcache`), which would let the agent plant or replace a binary
+   that a later step runs with the credentials. Before any agent code runs, each
+   phase removes group/other write from every such path `benchagent` can write
+   (via `sudo`, under CI), then checks **as `benchagent`** that it can't write or
+   replace any of them, any entry in them, or any (non-sticky) ancestor; anything
+   left (e.g. a file it already owns) is an `isolation_failure`. The agent's own
+   dirs (the workspace, the Playwright browser cache, which no runner-uid process
+   executes from afterwards) are excluded. The harness's own tool calls (`sudo`,
+   `runuser`, `pkill`, …) use absolute system paths.
+6. **Reap.** Every `benchagent` process (setsid/nohup escapees included) is
+   killed and its crontab removed at the start and end of each agent phase, and
+   step 4c reaps and verifies none remain before anything is published or the
+   role is re-assumed.
+7. **Credential-free env.** Each agent process gets an explicit env from
+   `buildShellEnv` (`steps/lib/secrets.mjs`); per-command overrides pass the same
+   filter, so they can add app settings (`BLOCKS_URL`, `RUN_ID`, …) but never
+   reintroduce anything denied:
+   - **allowed:** `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
+     `HOSTNAME`, locale (`LANG`, `LANGUAGE`, `TZ`, `LC_*`), terminal (`TERM`,
+     `COLORTERM`, `FORCE_COLOR`, `NO_COLOR`), `XDG_*` dirs, CI markers (`CI`,
+     `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH`), node/TLS/proxy (`NODE_OPTIONS`,
+     `NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`/`DIR`, `HTTP(S)_PROXY`,
+     `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
+     `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
+     `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
+     system dirs and the harness's own node dir (both covered by the lockdown);
+     `NODE_OPTIONS` keeps only flags that load no code.
+   - **always stripped:** every other `AWS_*` (keys, session token, profile,
+     web-identity, container-credential and config-file vars), every `ACTIONS_*`,
+     `GITHUB_TOKEN`, `GH_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, any name
+     containing `TOKEN`, `SECRET`, `PASSW`, `KEY`, `CREDENTIAL` or `AUTH`, every
+     other `GITHUB_*` / `RUNNER_*` (file commands, `RUNNER_TEMP`), and startup
+     hooks (`BASH_ENV`, `ENV`, exported bash functions, `PROMPT_COMMAND`,
+     `LD_*`, npm's `node-options`/`script-shell`/config-file redirects).
+8. **Redaction, then a fail-closed published copy.** Writers redact before
+   writing: `commands.jsonl` (command, cwd, stdout, stderr — redacted before the
+   4000-char cut), `trace.json`, `metrics.json`, `result.json`, the summary
+   job's step summary, PR comment, S3 aggregate, Athena NDJSON and
+   `bench-analysis.json`, and every analysis prompt (trace values are redacted
+   before serialization). Step 4c then builds the only copy that is published,
+   in a runner-only dir: harness files must be regular files owned by the
+   runner, opened without following links; the source root and its ancestors
+   must contain no symlink; and symlinks, special files, binaries (NUL / invalid
+   UTF-8), files over 20 MiB, unreadable files and entries whose name carries a
+   credential or control character are dropped, never published. Harness JSON
+   (result, trace, metrics, command log) is redacted value by value and
+   key-aware: a string under a credential field name (`SecretAccessKey`,
+   `SessionToken`, `password`, `apiKey`, `authorization`, env-style `*_TOKEN`, …;
+   exact names, not substrings) is replaced whatever its format, and numeric
+   usage fields survive. Source files the agent wrote, JSON included, are
+   redacted by value only, so `package.json` scripts and lockfile package names
+   (`credential-provider-*`, `js-cookie`, …) stay byte-identical. The redactor
+   replaces the exact values of the credential vars in the harness env, AWS key
+   ids (`AKIA`/`ASIA`), STS session tokens, JWTs (e.g. OIDC tokens), GitHub
+   (`ghp_`/`ghs_`/…, `github_pat_`) and npm tokens, PEM private keys and — in
+   logs, not source — credential-named `NAME=value` pairs. If 4c fails, nothing
+   from that cell is uploaded or persisted (it is then missing from the summary
+   table); the scoring itself is unchanged.
+
+**Limits.** The boundary is a uid on a shared VM, not a container: `benchagent`
+can still read whatever is world-readable on the runner outside `RUNNER_TEMP`,
+and it shares the network (the bench assumes a GitHub-hosted runner; on an EC2
+self-hosted runner the instance metadata service would hand out the instance
+role to any process). Allowed values such as a proxy URL pass through to the
+agent and are not redaction sources. The agent's code produces the Playwright
+report the supervisor scores (validated as bounded integers), so score
+integrity rests on the same trust as before. Redaction is best-effort: it cannot
+catch a secret that was encoded, split or otherwise transformed, or a credential
+in an unknown format without a credential-like name next to it (in source files,
+only exact values and known token formats are caught); dropped binary
+and oversized files are simply missing from the source artifact. Job logs are
+not passed through this redactor (GitHub masks the secrets it knows about), and
+the agent never holds credentials to print.
 
 ## Tasks
 
@@ -84,18 +212,18 @@ dimensions* below — there is no per-task dimension to author.
 
 | Task | Template | Blocks exercised |
 |------|----------|------------------|
-| `auth-notes` | `demo` | AuthBasic + KVStore |
+| `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
-| `collab-presence-board` | `default` | Realtime + DistributedTable |
-| `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
+| `collab-presence-board` | `default` | Realtime + KVStore (schema + key) |
+| `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + DistributedDatabase |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
-These 10 cells cover 18 Building Blocks across 7 templates. The matrix in
+These 10 cells cover 16 Building Blocks across 7 templates. The matrix in
 `pr-agent-bench.yml` is an explicit `include:` list of (task, template) pairs —
 not a cross-product: each task runs on the single template that pre-ships (or
 best exercises) its blocks, to bound Bedrock spend. The `task` name is part of
@@ -137,14 +265,20 @@ and a broken (composite 0) cell scores 0 no matter how cheap it was. A cell with
 no recorded tokens renders `—` (never a fake `$0`). Flip the single
 `SCORE_PER_DOLLAR` constant in `lib/scoring.mjs` for cost-per-point instead.
 
-**Colors vs baseline (per metric).** In the report every metric cell is colored
-against the baseline value for that metric: 🟢 same-or-better · 🟡 worse but
-within the margin · 🔴 worse beyond it · 🆕 no baseline value (new cell) · `—`
-nothing to diff · 🗑️ cell gone since the baseline. The margin is a SINGLE tunable,
-`MARGIN_PCT` (5% relative) in `lib/overview.mjs`; for integer metrics (test
-counts, 0–10 judge dims) it is floored to 1, so a single-point nudge reads 🟡,
-never 🔴. Directions: tests ↑, judge ↑, score ↑ are better (higher = 🟢); cost ↓,
-tokens ↓ are better (lower = 🟢).
+**Indicators vs baseline (per metric).** In the report every metric cell shows its
+current value with a **signed delta vs the baseline value**
+for that metric, using an emoji indicator for the SIGNIFICANCE + DIRECTION of the change (not
+absolute quality): ✨ noticeably improved · ✅ OK / no significant change (within noise band) ·
+⚠️ slight regression (beyond 1× threshold) · ❌ serious regression (beyond 2× threshold) ·
+🆕 no baseline value for that field (a new cell, or a
+metric the baseline predates) — the current value is still shown, tagged `(new)`
+· `—` nothing to show this run · 🗑️ cell gone since the baseline. Directions:
+tests, judge, score are higher-better; cost, turns are lower-better. The
+per-metric noise bands are a SINGLE tunable, `DELTA_THRESHOLDS` in
+`lib/overview.mjs`, consumed by `deltaColor`: composite/score ±5 points, judge
+±0.3, tests ±1 pass, cost ±10% (relative, floor $0.02), turns ±3. A
+change within its band reads ✅ (noise, since N=1); beyond 1× threshold ✨/⚠️ by
+direction; beyond 2× threshold ❌ (serious regression).
 
 **Verdict tiers** are pure pass-rate — the judge plays no part, so an LLM
 failure can never flip a verdict:
@@ -201,7 +335,7 @@ omitted because Opus rejects it, so builder determinism (like the judge's) rests
 on the tool/loop structure. The judge (Opus 4.8) likewise omits `temperature`,
 resting on the structured-output schema + the deterministic hard caps. Model IDs
 are pinned snapshots (the Claude 4.x IDs carry no date suffix — the version *is* the
-snapshot). Playwright is pinned to `1.60.0` and runs with `retries: 0` — a retry
+snapshot). Playwright is pinned to `1.64.1` and runs with `retries: 0` — a retry
 would mask realtime-propagation flake, and the bench wants an honest pass/fail
 for the judge. A run-stable `RUN_ID` seeds the specs' unique-but-deterministic
 data so identifiers stay collision-free across a spec's internal navigation.
@@ -209,19 +343,35 @@ data so identifiers stay collision-free across a spec's internal navigation.
 **Re-derivability.** Each `result.json` publishes `tests_passed`/`tests_total`,
 `test_rate`, the raw per-dimension judge scores (pre-cap `judge_dimensions_raw`
 and post-cap `judge_dimensions`), `judge_overall`, `composite`, `verdict`,
-`klass`, the builder `tokens_in`/`tokens_out`, and `stop_reason`. The **Detailed
-results** table renders every post-cap dimension inline (one colored
-`baseline -> pr` line per dimension in its Judge cell), and the cost + score are
-derived from the published tokens via `lib/scoring.mjs`. A reader can re-derive —
-or re-weight — every composite, cost and score from the published data without
-re-running anything.
+`klass`, the builder `tokens_in`/`tokens_out`, and `stop_reason`. The results
+table renders the overall judge score, tests, cost, turns and score per cell,
+and the cost + score are derived from the published tokens via `lib/scoring.mjs`.
+A reader can re-derive — or re-weight — every composite, cost and score from the
+published data without re-running anything.
 
-**Gating.** Observational by default: with the repo/org variable
-`BENCH_MIN_SCORE` unset the summary only reports the mean composite. Set it to a
-number to gate — the summary job exits non-zero when the mean composite across
-scored cells falls below it; this is the **one** intentional exception to
-green-regardless (below). There is no baseline-*delta* gate — the PR-vs-baseline
-overview (below) is observational only.
+**Gating.** Observational by default: with all three gate variables unset the
+summary only reports the mean composite and never turns the check red. Each gate
+is opt-in via its own repo/org variable, and any one tripping exits the summary
+job non-zero (the intentional exception to green-regardless, below):
+
+- `BENCH_MIN_SCORE` — absolute floor. Fails when the mean composite across scored
+  cells falls below it. Skipped (never fails) when no cell scored.
+- `BENCH_MAX_REGRESSION` — regression vs `main`. Fails when the mean composite
+  drops more than this many points below the `main` baseline. Skipped on the
+  first run / when no baseline exists (nothing to diff).
+- `BENCH_MAX_HARNESS_ERRORS` — infra-failure ceiling. Fails when more than this
+  many cells are `harness_error` — an unreadable/corrupt `result.json` artifact
+  counts too, since it is also a broken measurement. Distinct from a low agent
+  score: this catches a broken *measurement*. Must be a whole number — a negative
+  or fractional value is treated as unset (a negative count would invert the gate;
+  a fractional count is nonsensical). One case fires with **no variable set
+  at all**: if the bench matrix did not succeed AND produced zero result artifacts
+  (e.g. `build-blocks` failed so every cell was skipped), the summary reds the
+  check — a total upstream failure must not report green.
+
+A negative or non-numeric value for any gate variable is treated as unset. The
+PR-vs-baseline results table is observational; the regression *gate* above
+(`BENCH_MAX_REGRESSION`), not the table's ±5-pt display band, is what blocks.
 
 **Check status — green regardless.** A bench cell never turns the PR check red.
 Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test`,
@@ -229,28 +379,31 @@ Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`, `3-build-and-test
 `if: steps.<prev>.outcome == 'success'` chain that reproduces the old implicit
 skip-chain — so an agent timeout still skips its tests/judge and scores composite
 0, rather than scoring a partial app. A cell's outcome lives in `result.json` +
-the run summary, not the check status, and the summary job is green too (unless
-`BENCH_MIN_SCORE` is set and trips). A new commit cancels the prior in-flight run
+the run summary, not the check status, and the summary job is green too (unless a
+gate above is set and trips). A new commit cancels the prior in-flight run
 via the workflow `concurrency` group.
 
-**The report — Overview + Detailed vs the `main` baseline.** Each run writes a
-compact **aggregate** (per cell: composite/verdict, test counts, per-dimension
+**The report — a single results table vs the `main` baseline.** Each run writes
+a compact **aggregate** (per cell: composite/verdict, test counts, per-dimension
 judge scores, builder tokens, cost, and score-per-$, plus the mean) to S3 at
 `bench/runs/<sha>/results.json`; a push-to-`main` run also updates the stable
 pointer `bench/runs/latest-main.json`. The summary job fetches a baseline and
-renders TWO tables from the SAME rows (`lib/overview.mjs`):
+renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
+`TASK · TEMPLATE · TESTS · JUDGE · COST · TURNS · SCORE · STOP REASON`.
+Each metric cell is a single inline line — `<indicator> <value> (<Δ vs main>)`: the
+current value with its signed delta vs the baseline (`🆕 (new)` when the baseline
+has no value for that field — the value is still shown), indicated by `deltaColor`
+per the `DELTA_THRESHOLDS` bands. The JUDGE cell shows the overall judge score
+with its signed delta; the per-dimension breakdown lives in the judge artifact
+JSON. There is no separate colors-only Overview and no standalone `Δ vs base`
+column — the delta is baked into every cell.
 
-- **Overview** — colors ONLY (🟢/🟡/🔴 per metric vs baseline), at-a-glance:
-  `TASK · TEMPLATE · TESTS · JUDGE · COST · TOKENS (in/out) · SCORE`.
-- **Detailed results** — the same rows widened WITH numbers (`baseline -> pr`),
-  including a multi-line per-dimension Judge cell and the cell's stop reason.
-
-A collapsible **Glossary** (scoring, colors, the ±5% margin) sits at the very
-top; a best-effort roll-up step (`analyze.mjs`) then appends an **Executive
-summary** (a short paragraph + bullets), a **Potential issues** section (fed by
-each cell's own analysis), and a collapsed **Per-cell analysis** (each cell also
-collapsed within it). The old `build` / `verdict` / `composite` columns and the
-raw per-dimension blurb are gone — folded into the two tables above.
+A collapsible **Glossary** (scoring, colors, the per-metric thresholds) sits at
+the very top; the deterministic **headline** (mean composite + delta) prints just
+above the table; a best-effort roll-up step (`analyze.mjs`) then appends an
+**Executive summary** (a short paragraph + bullets), a **Potential issues**
+section (fed by each cell's own analysis), and a collapsed **Per-cell analysis**
+(each cell also collapsed within it).
 
 **Baseline selection.** The baseline a **PR** diffs against is ALWAYS the most
 recent `main`-branch bench, `bench/runs/latest-main.json` — the current tip of
@@ -260,8 +413,9 @@ so an exact-base-sha lookup can silently diff against an outdated or never-bench
 commit; `latest-main.json`, refreshed on every push to `main`, can't. A **push to
 `main`** instead diffs against the immediately preceding main commit
 (`github.event.before`) by exact sha — the ONLY place a commit-keyed baseline is
-read — with `latest-main` as the fallback. With no baseline found the tables show
-absolute values (every metric 🆕) and a "no baseline" note (never an error).
+read — with `latest-main` as the fallback. With no baseline found the table shows
+current values only (every metric 🆕 `(new)`) and a "no baseline" note (never an
+error).
 Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 `s3:PutObject` on `bench/*`); a missing grant just degrades to "no baseline".
 
@@ -275,16 +429,22 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/0-init-result.mjs` | Write a baseline `result.json` so failed cells still produce an artifact |
 | `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, seed the telemetry canary from `BLOCKS_TELEMETRY_CANARY_ID` (optional — skipped with a warning if unset), no dev server (the verifier owns that) |
 | `steps/2-agent-run.ts` | Builder agent (Strands + Bedrock); vended `bash` + `fileEditor` tools; capped at `MAX_TURNS` |
-| `steps/3-build-and-test.sh` | `npm run build` + Playwright spec; writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
+| `steps/3-build-and-test.sh` | Trusted supervisor: `npm run build` + Playwright spec, every app/dependency process run as `benchagent` via `lib/agent-exec.mjs`; validates and writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
 | `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed shared rubric (`COMMON_DIMENSIONS`) and applies hard caps |
-| `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
+| `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner that spawns every command as `benchagent` with the `buildShellEnv` env and writes the redacted `commands.jsonl`. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
+| `steps/lib/isolation.mjs` | **Single source of truth** for the agent-user boundary: the `runuser` spawn (refuses a same-uid fallback under CI), workspace ACL, trusted-executable lockdown + runner-temp lockdown (each verified as the agent user), the reap, and `enterAgentPhase` |
+| `steps/lib/agent-exec.mjs` | Step 3's bridge to that boundary: `preflight`, `run` (a command as `benchagent`), `reap`, and `read-file` (copy an agent-written file without following links) |
+| `steps/lib/secrets.mjs` | **Single source of truth** for credential hygiene: `buildShellEnv` (the env policy for agent processes), `redactSecrets` / `redactDeep` (key-aware) / `stringifyRedacted` / `createRedactor` (artifact, sink and prompt redaction). Pure apart from `redactSecrets` reading `process.env` |
+| `steps/stage-artifacts.mjs` | Step 4c: reap, then build the only published copy (redacted harness files + source, no links/binaries/oversized/unreadable files or credential-bearing names); fails closed |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`, plus the cost/score model — `PRICING`/`BUILDER_PRICING`, `cellCost`, `scorePerDollar` (+ the `SCORE_PER_DOLLAR` knob). Imported by finalize, summary, and overview |
-| `steps/lib/overview.mjs` | Pure helpers for the two report tables: `buildAggregate` (schema-2 aggregate — per-cell composite/tests/judge-dims/tokens/cost/score/stop_reason + mean), `diffAgainstBaseline`, the color engine (`MARGIN_PCT`, `metricColor`), formatters, and `renderOverview` (colors) + `renderDetailed` (numbers). Imported by summary + analyze |
+| `steps/lib/overview.mjs` | Pure helpers for the report table: `buildAggregate` (schema-2 aggregate — per-cell composite/tests/judge-dims/tokens/cost/score/stop_reason + mean), `diffAgainstBaseline`, the color engine (`DELTA_THRESHOLDS`, `deltaColor`), formatters, and `renderDetailed` (the single results table: current value + colored signed delta per cell). Imported by summary + analyze |
 | `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature: trace trimming, prompt builders, and `parseCellAnalysis` (splits the per-cell model output into an analysis string + a bounded potential-issues list). Imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
 | `steps/analyze-cell.mjs` | Step 4b: per-cell trace/metrics analysis via the judge model; writes a concise `analysis` string **and** an `analysis_issues[]` (potential issues) back into the cell's `result.json` |
 | `steps/analyze.mjs` | Summary-job roll-up: synthesizes the per-cell analyses into a short **Executive summary** (paragraph + bullets) via one best-effort Bedrock call, aggregates a **Potential issues** section, and renders a collapsed **Per-cell analysis** (each cell also collapsed) |
+| `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case). Pure; imported by summary |
+| `steps/lib/pr-comment.sh` | Upsert the report as one sticky PR comment keyed by a hidden marker (update oldest, delete duplicates); same-repo PR only, best-effort |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
-| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY`: a collapsible **Glossary**, the colors-only **Overview** + numbers **Detailed results** tables (vs the `main` baseline), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; optional `BENCH_MIN_SCORE` gate |
+| `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the headline (mean composite + delta), the single **results table** — current value + colored signed delta per cell — vs the `main` baseline, a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |
 | `package.json` | Workspace metadata; `private: true` |
 
 Failure handling: every cell starts with `0-init-result.mjs` writing a
@@ -292,16 +452,23 @@ pessimistic baseline. Each successful step augments it. `finalize-result.mjs`
 runs with `if: always()` and stamps `status: scored` (all steps green),
 `status: error, failed_at: <step>` (a tracked step failed), or
 `failed_at: pre-oidc` (something before OIDC — e.g. `npm ci` — failed). The
-upload step also runs with `if: always()`, so the cell always shows up in the
-summary table — never silently missing.
+upload step runs whenever step 4c staged the cell (`if: always()` plus the
+staging gate), so the cell shows up in the summary table unless its files could
+not be safely staged.
 
 The report is written to the **GitHub Actions run summary**
-(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the Overview +
-Detailed tables, then the executive summary / potential issues / per-cell
-analysis. The bench posts **no PR comment** — the github-script commenting step in
-`agent-bench.yml` is intentionally left in place but commented out, so it can be
-restored if commenting is ever wanted again. When the bench matrix produces no
-results, `summary.mjs` renders a benign "no results" note and still exits 0.
+(`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the headline,
+the single results table, then the executive summary / potential issues /
+per-cell analysis. The bench also posts the report as **one sticky PR comment** — the
+`Comment bench report on PR` step upserts a single comment keyed by a hidden
+`<!-- agent-bench-report -->` marker (`steps/lib/pr-comment.sh`): it updates the
+oldest marker comment in place and deletes any duplicates, so re-runs never spam
+the thread. It runs same-repo PRs only (a fork PR has no token) and is
+`continue-on-error`, so a comment failure never reds the bench — the report is
+also in the Actions run summary. Requires `pull-requests: write`, granted on the
+caller `bench` job in `pr-agent-bench.yml` (a reusable workflow's token is capped
+down to the caller's). When the bench matrix produces no results, `summary.mjs`
+renders a benign "no results" note and still exits 0.
 
 ## Local development
 
@@ -314,3 +481,10 @@ TASK_PROMPT=tasks/auth-notes/PROMPT.md \
 OUTPUT=/tmp/builder-result.json \
   npx tsx scripts/agent-bench/steps/2-agent-run.ts
 ```
+
+The agent phases need the isolated user: create it as the workflow does
+(`sudo useradd -m benchagent`, passwordless `sudo runuser` for your user) or
+point `BENCH_AGENT_USER` at another unprivileged account. Without one, set
+`BENCH_ALLOW_BARE_SHELL=1` to run the agent's commands as your own user — local
+only: it is refused whenever `CI` or `GITHUB_ACTIONS` is set, and the agent can
+then read your environment.

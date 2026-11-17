@@ -6,7 +6,8 @@
   },
   "files": {
     "includes": [
-      "packages/**/*.ts"
+      "packages/**/*.ts",
+      "!packages/create-block/templates/**"
     ]
   },
   "formatter": {

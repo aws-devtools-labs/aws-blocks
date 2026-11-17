@@ -10,11 +10,11 @@ To get started with Blocks, create a new Scope and instantiate the Building Bloc
 
 ## What databases does Blocks support?
 
-Blocks supports DynamoDB through KVStore and DistributedTable Building Blocks for NoSQL workloads. For SQL workloads, the Database Building Block provides Aurora Serverless v2 with a Kysely query builder.
+Blocks supports DynamoDB through the KVStore Building Block for NoSQL workloads: a string-keyed store with no options, or records with a schema, a declared key, and indexes. For SQL workloads, the Database Building Block provides Aurora Serverless v2 with a Kysely query builder.
 
 ## How does authentication work?
 
-Blocks provides AuthBasic for username and password authentication with JWT sessions. It includes password hashing with bcrypt, HTTP-only cookie sessions, optional email-confirmed signup, and password reset flows.
+Blocks provides the Auth Building Block for authentication: email and password sign-in backed by a Cognito user pool, social sign-in, OIDC and SAML. It includes HTTP-only cookie sessions, email-confirmed signup, and password reset flows.
 
 ## Can I use Blocks for real-time features?
 

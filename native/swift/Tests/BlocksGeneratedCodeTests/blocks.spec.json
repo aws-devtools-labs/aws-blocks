@@ -1,0 +1,27 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "entry-point", "version": "1.0.0" },
+  "servers": [
+    { "name": "default", "url": "https://example.invalid/prod/aws-blocks/api" },
+    { "name": "local", "url": "http://localhost:3001/aws-blocks/api" }
+  ],
+  "methods": [
+    { "name": "users.list", "params": [], "result": { "name": "R", "schema": { "type": "array", "items": { "type": "string" } } } },
+    { "name": "client.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google", "github", "my-sso"] }] } } },
+    { "name": "admin.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["okta"] }] } } },
+    { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": { "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] } }, "required": ["client"] } } },
+    { "name": "class.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "type.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "self.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "init.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "close.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "server.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "blocks.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "blocksApi.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "sendable.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "servers.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "session.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
+    { "name": "ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } }
+  ]
+}

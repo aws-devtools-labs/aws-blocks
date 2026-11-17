@@ -1,5 +1,8 @@
 {
   "app": "npx tsx -C cdk aws-blocks/index.cdk.ts",
+  "context": {
+    "@aws-blocks/bb-data:encryptStorageByDefault": true
+  },
   "watch": {
     "include": [
       "**"
@@ -10,6 +13,7 @@
       "**/*.d.ts",
       "node_modules/**",
       ".blocks-sandbox/**",
+      "aws-blocks/client.js",
       "dist/**",
       "*.log",
       "*.tsbuildinfo"

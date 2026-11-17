@@ -20,6 +20,14 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
+kotlin {
+    compilerOptions {
+        // Gradle reflects over every declared method of the plugin class, and invokedynamic lambda
+        // bodies would name AGP's Variant there although AGP is compileOnly. Inner classes keep it out.
+        freeCompilerArgs.add("-Xlambdas=class")
+    }
+}
+
 dependencies {
     implementation(projects.codegen)
 
@@ -36,6 +44,18 @@ dependencies {
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.kotest.property)
+
+    // Tests assert over KotlinPlatformType, which main only needs at compile time.
+    testImplementation(libs.plugins.kotlin.multiplatform.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
+
+    // The functional test drives a real Gradle build, which needs TestKit and the
+    // serialization plugin the codegen plugin requires of its consumer.
+    testImplementation(gradleTestKit())
+    testImplementation(libs.plugins.kotlinx.serialization.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
 }
 
 tasks.withType<Test> {

@@ -123,3 +123,25 @@ export const isRemoteSourceAllowed = (
   }
   return false;
 };
+
+/**
+ * Whether image bytes are an SVG document — decided by **content**, not by the
+ * URL's file extension.
+ *
+ * An origin's `Content-Type` isn't constrained by its path, so an extension check
+ * alone is bypassed by an SVG served from `/logo` or `/logo.png`. Every raster
+ * format IPX handles starts with a binary magic number, never `<`, so markup that
+ * opens with `<` and contains an `<svg` element in its first 4 KiB is treated as
+ * SVG (covers a bare `<svg …>`, an XML prolog, a DOCTYPE, or leading comments).
+ *
+ * Embedded verbatim into the Lambda via `looksLikeSvg.toString()` (see
+ * `ipx_lambda_template.ts`), so it must stay self-contained: no imports, no
+ * Node-only APIs (`TextDecoder` is a global in Node and the Lambda runtime).
+ */
+export const looksLikeSvg = (data: Uint8Array | ArrayBuffer | null | undefined): boolean => {
+  if (!data) return false;
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 4096)).replace(/^\uFEFF/, '').trimStart();
+  if (!head.startsWith('<')) return false;
+  return /<svg[\s>/]/i.test(head);
+};

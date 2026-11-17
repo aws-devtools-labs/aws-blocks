@@ -1,0 +1,48 @@
+name: E2E account slot
+description: >-
+  Picks which E2E account a run uses. A PR always maps to the same account
+  (PR number plus offset, mod the number of accounts), so re-runs and new
+  commits update or delete their own stacks. Runs without a PR (push,
+  schedule, manual) count as PR 0, so they use account 1 unless an offset is
+  given.
+inputs:
+  offset:
+    description: >-
+      Added to the PR number before the mod, so the jobs of one run can use
+      different accounts (the E2E Hosting legs do, see pr-checks.yml). Keep a
+      job's offset fixed: changing it moves the job's stacks to another account.
+    required: false
+    default: '0'
+outputs:
+  index:
+    description: 0-based index into the AWS_ROLE_ARNS secret (a JSON array, account 1 first)
+    value: ${{ steps.pick.outputs.index }}
+  account:
+    description: 1-based account number, for names and logs
+    value: ${{ steps.pick.outputs.account }}
+  accounts:
+    description: Number of E2E accounts in the pool
+    value: ${{ steps.pick.outputs.accounts }}
+runs:
+  using: composite
+  steps:
+    - id: pick
+      shell: bash
+      env:
+        # Number of E2E accounts, the one place the pool size is set. The
+        # cleanup-stacks.yml matrix is built from it, and cleanup runs fail if
+        # AWS_ROLE_ARNS (e2e environment and Dependabot secrets) has a
+        # different length.
+        E2E_ACCOUNTS: '3'
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        OFFSET: ${{ inputs.offset }}
+      run: |
+        if ! [[ "$OFFSET" =~ ^[0-9]+$ ]]; then
+          echo "::error::e2e-slot offset must be a whole number, got '$OFFSET'."
+          exit 1
+        fi
+        index=$(( (${PR_NUMBER:-0} + 10#$OFFSET) % E2E_ACCOUNTS ))
+        echo "E2E account $((index + 1)) of $E2E_ACCOUNTS"
+        echo "index=$index" >> "$GITHUB_OUTPUT"
+        echo "account=$((index + 1))" >> "$GITHUB_OUTPUT"
+        echo "accounts=$E2E_ACCOUNTS" >> "$GITHUB_OUTPUT"

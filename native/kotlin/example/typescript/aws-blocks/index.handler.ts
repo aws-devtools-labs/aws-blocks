@@ -1,4 +1,5 @@
 import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';
-import * as backend from './index.js';
 
-export const handler = createLambdaHandler(backend);
+// Lazy import: the handler loads its injected configuration before the backend
+// module (and the Building Blocks it constructs) is evaluated.
+export const handler = createLambdaHandler(() => import('./index.js'));

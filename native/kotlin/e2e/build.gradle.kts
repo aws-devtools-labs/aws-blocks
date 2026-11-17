@@ -7,6 +7,13 @@ plugins {
 }
 
 kotlin {
+    compilerOptions {
+        // Blocks.clearStoredState() is internal API. It is the only way these tests can start from
+        // a clean slate on iOS, where storage is Keychain-backed and cannot be pointed at a
+        // disposable location the way the JVM's can.
+        optIn.add("com.aws.blocks.kotlin.InternalBlocksApi")
+    }
+
     jvm()
 
     iosSimulatorArm64 {
@@ -51,6 +58,8 @@ tasks.named<Test>("jvmTest") {
     ).getOrElse("")
     systemProperty("BLOCKS_URL", url)
     environment("BLOCKS_URL", url)
+    // RUN_OIDC=1: the deployed backend federates a real, auto-approving IdP, so OidcE2ETest runs.
+    providers.environmentVariable("RUN_OIDC").orNull?.let { environment("RUN_OIDC", it) }
 }
 
 // Boots and opens an iOS simulator. The Keychain-backed tests run non-standalone against a
@@ -78,9 +87,27 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     // embedded keychain-access-groups entitlement is honored and Keychain storage works.
     standalone.set(false)
     device.set("booted")
+
+    // The test suite reads its endpoint from BLOCKS_URL via NSProcessInfo.environment
+    // (see TestEnv.ios.kt / BlocksE2ETestCase.kt). Kotlin/Native has no system properties,
+    // and `xcrun simctl spawn` only forwards environment variables that are set in the
+    // calling environment with a SIMCTL_CHILD_ prefix (it strips the prefix in the child).
+    // Without this, the sandbox suite never sees BLOCKS_URL, falls back to
+    // http://localhost:3001, and every request fails with DarwinHttpRequestException.
+    // Left unset for local runs so the suite still falls back to the localhost dev server.
+    val url = providers.systemProperty("BLOCKS_URL").orElse(
+        providers.environmentVariable("BLOCKS_URL")
+    ).getOrElse("")
+    if (url.isNotEmpty()) {
+        environment("SIMCTL_CHILD_BLOCKS_URL", url)
+    }
+    providers.environmentVariable("RUN_OIDC").orNull?.let { environment("SIMCTL_CHILD_RUN_OIDC", it) }
 }
 
 awsBlocks {
     apiSpec = file("blocks.spec.json")
     packageName = "blocks.e2e"
+    oidc {
+        relayTo = "nativebindings://auth"
+    }
 }

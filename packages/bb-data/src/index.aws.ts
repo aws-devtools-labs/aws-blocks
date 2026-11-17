@@ -7,6 +7,7 @@ import { DataApiEngine } from './engines/data-api-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { createCrudHandlers } from './crud/index.js';
+import type { CrudRlsConfig } from './crud/rls-guard.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
@@ -66,13 +67,15 @@ export class Database extends Scope {
       const connStr = typeof conn.connectionString === 'string'
         ? conn.connectionString
         : await conn.connectionString.get();
+
+      const applicationName = this.formatUserAgentString();
       // Verify the server's TLS certificate by default (PgClientEngine defaults to
       // rejectUnauthorized: true when ssl is undefined). The `db pull`-generated
       // wiring supplies an ssl config that pins the provider CA; callers using
       // fromExisting() directly can pass `ssl` to pin a CA or opt out. Previously
       // this hardcoded rejectUnauthorized:false, leaving the deployed Lambda's
       // connection to external DBs (Supabase/Neon/etc.) unauthenticated (MITM-exposed).
-      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: conn.ssl }));
+      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: conn.ssl, applicationName }));
     }
     return new RLSEnabledDatabase(this.createDataApiEngine(envName, conn));
   }
@@ -142,7 +145,7 @@ export class Database extends Scope {
     if (!this.options?.schema) {
       throw new Error('crud() requires schema metadata. Pass `schema: tableMeta` to the Database constructor.');
     }
-    return createAsyncCrudProxy(() => this.resolveBase(), this.options.schema, options) as any;
+    return createAsyncCrudProxy(() => this.resolveBase(), this.options.schema, options, { rlsPolicy: this.options.rlsPolicy }) as any;
   }
 
   /** @internal Get the underlying DatabaseEngine. Used by createKyselyAdapter(). */
@@ -155,7 +158,12 @@ export class Database extends Scope {
 /**
  * Creates a proxy that defers crud handler creation until the first method call.
  */
-function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, schema: TableSchema, options: CrudOptions<any>): any {
+function createAsyncCrudProxy(
+  resolveBase: () => Promise<RLSEnabledDatabase>,
+  schema: TableSchema,
+  options: CrudOptions<any>,
+  rlsConfig: CrudRlsConfig,
+): any {
   let handlers: any = null;
   let initPromise: Promise<any> | null = null;
 
@@ -176,7 +184,7 @@ function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, sc
     if (initPromise) return initPromise;
     initPromise = (async () => {
       const base = await resolveBase();
-      handlers = createCrudHandlers(base, schema, options);
+      handlers = createCrudHandlers(base, schema, options, undefined, rlsConfig);
       return handlers;
     })();
     handlers = await initPromise;
@@ -202,6 +210,6 @@ export { PgClientEngine } from './engines/pg-client-engine.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
-export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions, SubnetSelection } from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
 export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';

@@ -27,7 +27,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import semver from 'semver';
-import { VERIFIED_OPENNEXT_RANGE } from './nextjs.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import {
+  OPENNEXT_FALLBACK_VERSION,
+  VERIFIED_OPENNEXT_RANGE,
+} from './nextjs.js';
 import { VERIFIED_NITRO_RANGE } from './nitro.js';
 import { VERIFIED_ASTRO_RANGE } from './astro.js';
 import { VERIFIED_SVELTEKIT_RANGE } from './sveltekit.js';
@@ -74,5 +80,26 @@ void describe('adapter version pins (X.1)', () => {
     // shouldn't, the validators above are broken.
     assert.strictEqual(semver.validRange('not-a-range'), null);
     assert.strictEqual(/(<=|<)/.test('>=1.0.0'), false);
+  });
+
+  void it('pins the create-blocks-app nextjs template to the OpenNext fallback version', () => {
+    // The adapter's fallback and the template's declared OpenNext must move
+    // together: a new app should build with the same verified version the
+    // adapter falls back to.
+    assert.ok(
+      semver.satisfies(OPENNEXT_FALLBACK_VERSION, VERIFIED_OPENNEXT_RANGE),
+      `fallback ${OPENNEXT_FALLBACK_VERSION} must be inside ${VERIFIED_OPENNEXT_RANGE}`,
+    );
+    const templatePkg = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../create-blocks-app/templates/nextjs/package.json',
+    );
+    const pkg = JSON.parse(fs.readFileSync(templatePkg, 'utf8')) as {
+      devDependencies?: Record<string, string>;
+    };
+    assert.strictEqual(
+      pkg.devDependencies?.['@opennextjs/aws'],
+      `~${OPENNEXT_FALLBACK_VERSION}`,
+    );
   });
 });

@@ -1,0 +1,2 @@
+# The inspected 0.24.0 source, including native multi-step resume support.
+harbor @ git+https://github.com/laude-institute/harbor.git@09f5b964f8e5075f7e52fd08c9994dfc80ad5d24

@@ -5,8 +5,10 @@
  * Imports the typed backend API via `aws-blocks` (auto-generated proxy).
  */
 import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, AuthenticatedContent } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, AuthenticatedContent, injectTheme, StatusMessage } from '@aws-blocks/blocks/ui';
 import { html, render } from 'lit-html';
+
+injectTheme();
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 // Show Account Menu bar that pops open authenticator when Sign In is clicked.
@@ -15,18 +17,36 @@ menuBarEl.appendChild(AccountMenuBar(authApi));
 
 // ─── App (shown when authenticated, fallback when not) ──────────────────────
 const signInMessage = document.createElement('p');
-signInMessage.textContent = 'Sign in to get started.';
+signInMessage.textContent = 'Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the `npm run dev` terminal.';
 
 document.getElementById('app')!.appendChild(
   AuthenticatedContent(authApi, (user) => {
     const container = document.createElement('div');
+    const view = document.createElement('div');
+    // Mounted outside the lit-html render target so redraws never remount the
+    // live region — a region that stays mounted is what screen readers announce.
+    const status = StatusMessage({ testId: 'todo-status' });
+    container.append(view, status.element);
     type Todo = { todoId: string; title: string; completed: boolean; priority: number };
     let todos: Todo[] = [];
     let sortBy: 'priority' | 'title' | undefined;
 
+    async function run(action: () => Promise<unknown>, failure: string): Promise<boolean> {
+      try {
+        await action();
+        status.set('idle');
+        return true;
+      } catch (e) {
+        status.set('error', `${failure}: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+      }
+    }
+
     async function load() {
-      todos = await api.listTodos(sortBy);
-      redraw();
+      await run(async () => {
+        todos = await api.listTodos(sortBy);
+        redraw();
+      }, 'Could not load todos');
     }
 
     function redraw() {
@@ -41,9 +61,9 @@ document.getElementById('app')!.appendChild(
             <option value="2" selected>🟡 Medium</option>
             <option value="3">🟢 Low</option>
           </select>
-          <button @click=${addTodo}>Add</button>
+          <button class="bb-button bb-button-primary" @click=${addTodo}>Add</button>
         </div>
-        <div style="margin-bottom:12px;font-size:0.85em;color:#666">
+        <div style="margin-bottom:12px;font-size:0.85em;color:var(--bb-color-text-muted,#666)">
           Sort:
           <button @click=${() => setSort(undefined)} style="font-weight:${!sortBy ? 'bold' : 'normal'}">Default</button>
           <button @click=${() => setSort('priority')} style="font-weight:${sortBy === 'priority' ? 'bold' : 'normal'}">Priority</button>
@@ -63,8 +83,8 @@ document.getElementById('app')!.appendChild(
             </li>
           `)}
         </ul>
-        <p style="color:#888;font-size:0.85em">${todos.filter(t => !t.completed).length} remaining</p>
-      `, container);
+        <p style="color:var(--bb-color-text-muted,#888);font-size:0.85em">${todos.filter(t => !t.completed).length} remaining</p>
+      `, view);
     }
 
     async function addTodo() {
@@ -72,7 +92,7 @@ document.getElementById('app')!.appendChild(
       const select = container.querySelector('#new-priority') as HTMLSelectElement;
       const title = input.value.trim();
       if (!title) return;
-      await api.createTodo(title, parseInt(select.value));
+      if (!(await run(() => api.createTodo(title, parseInt(select.value)), 'Could not add todo'))) return;
       input.value = '';
       await load();
     }
@@ -93,7 +113,7 @@ document.getElementById('app')!.appendChild(
     }
 
     async function remove(todoId: string) {
-      await api.deleteTodo(todoId);
+      if (!(await run(() => api.deleteTodo(todoId), 'Could not delete todo'))) return;
       await load();
     }
 

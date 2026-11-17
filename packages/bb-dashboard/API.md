@@ -4,13 +4,14 @@
 
 ```ts
 
+import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // @public
-export class Dashboard {
+export class Dashboard extends Scope {
     constructor(scope: ScopeParent, id: string, options?: DashboardOptions);
     readonly dashboardName: string;
-    readonly fullId: string;
+    get fullId(): string;
     readonly url: string | null;
 }
 
@@ -23,18 +24,11 @@ export const DashboardErrors: {
 export interface DashboardOptions {
     dashboardName?: string;
     defaultTimeRange?: string;
-    logger?: LoggerBBRef;
-    metricConfigs?: MetricConfig[];
-    metrics?: MetricsBBRef;
+    logs?: boolean;
+    metrics?: MetricsSource | MetricsSource[];
     routePath?: string | false;
     title?: string;
-    tracer?: TracerBBRef;
-}
-
-// @public
-export interface LoggerBBRef {
-    // (undocumented)
-    readonly fullId: string;
+    traces?: boolean;
 }
 
 // @public
@@ -54,9 +48,9 @@ export interface MetricsBBRef {
 }
 
 // @public
-export interface TracerBBRef {
-    // (undocumented)
-    readonly fullId: string;
+export interface MetricsSource {
+    metricConfigs?: MetricConfig[];
+    metrics: MetricsBBRef;
 }
 
 // (No @packageDocumentation comment for this package)

@@ -2,6 +2,7 @@ package com.aws.blocks.kotlin.model
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 // ── Info Object Hierarchy ─────────────────────────────────────────
 
@@ -117,6 +118,38 @@ data class Method(
     val paramStructure: String? = null,
 )
 
+// ── Native binding catalogs ───────────────────────────────────────
+
+/**
+ * An `x-blocks-native-bindings` entry of kind `transferable`, joined to its package's
+ * `android` field. [kotlinPackage] is null when the bound package declares no `android`
+ * field, which keeps the tag on the `UnknownTransferable` fallback for Kotlin alone.
+ */
+data class NativeTransferableBinding(
+    val tag: String,
+    val packageIdentity: String,
+    val export: String,
+    val genericArity: Int,
+    val kotlinPackage: String?,
+    val id: String,
+)
+
+data class DeclaredBinding(val id: String, val kind: String)
+
+data class NativeCatalogs(
+    val bindings: List<NativeTransferableBinding> = emptyList(),
+    /** Declared identities that no binding of any kind names. */
+    val unreferencedPackages: Set<String> = emptySet(),
+    /** Every identity the packages catalog declares, whether or not a binding names it. */
+    val declaredPackages: Set<String> = emptySet(),
+    /** Every entry the bindings catalog declared, in declaration order, whatever its kind. */
+    val declaredBindings: List<DeclaredBinding> = emptyList(),
+) {
+    companion object {
+        val EMPTY = NativeCatalogs()
+    }
+}
+
 // ── Root Model ────────────────────────────────────────────────────
 
 /** Root model produced by the parser. */
@@ -126,19 +159,46 @@ data class RpcModel(
     val servers: List<Server> = emptyList(),
     val components: JsonObject? = null,
     val endpoint: String? = null,
+    val nativeCatalogs: NativeCatalogs = NativeCatalogs.EMPTY,
 )
 
 /** A reference to a type, which can be primitive, inline, union, array, nullable, or imported. */
 sealed interface TypeRef {
     data class Primitive(val tsType: String, val constraints: Constraints = Constraints.EMPTY) : TypeRef
-    data class InlineObject(val fields: List<Field>, val additionalProperties: TypeRef? = null) : TypeRef
-    data class UnionLiteral(val values: List<String>) : TypeRef
+    /**
+     * An object with named fields. [positional] marks a tuple (`prefixItems`, or array-form
+     * `items`): its fields are `item0`, `item1`, …, and on the wire it is a JSON array of their
+     * values, in order, not an object.
+     */
+    data class InlineObject(
+        val fields: List<Field>,
+        val additionalProperties: TypeRef? = null,
+        val positional: Boolean = false,
+    ) : TypeRef
+    /**
+     * A string (or boolean) enum. [schemaName] is the component schema it was reached through by
+     * a `${'$'}ref`, which makes it one named enum shared by every use; it is null for an inline enum.
+     * [literals] are the values as the spec writes them, with their JSON types (`true`, `5`, `"a"`):
+     * [values] holds their text, so a boolean `true` and a string `"true"` are told apart only here.
+     */
+    data class UnionLiteral(
+        val values: List<String>,
+        val schemaName: String? = null,
+        val literals: List<JsonPrimitive> = values.map(::JsonPrimitive),
+    ) : TypeRef
     data class ArrayType(val elementType: TypeRef, val constraints: Constraints = Constraints.EMPTY) : TypeRef
     data class MapType(val valueType: TypeRef) : TypeRef
     data class TupleType(val elements: List<TypeRef>) : TypeRef
     data class Nullable(val inner: TypeRef) : TypeRef
     data class Union(val members: List<TypeRef>) : TypeRef
     data class SchemaRef(val schemaName: String, val resolved: InlineObject, val description: String? = null) : TypeRef
+    /**
+     * A `${'$'}ref` to the component schema [schemaName] from inside that schema's own definition (a
+     * self-referencing type, `TreeNode.children: [TreeNode]`, or one of mutually recursive types). It
+     * names the type the enclosing [SchemaRef] declares rather than describing it again. A schema
+     * that declares no named type (a recursive union or array) is an unknown value there.
+     */
+    data class RecursiveSchemaRef(val schemaName: String) : TypeRef
     data class Transferable(val transferableName: String, val typeArgs: List<TypeRef>) : TypeRef
     data class ObjectWithOneOf(val fields: List<Field>, val oneOf: List<TypeRef>) : TypeRef
 }

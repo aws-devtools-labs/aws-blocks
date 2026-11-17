@@ -12,19 +12,19 @@
       "path": "../core"
     },
     {
-      "path": "../bb-distributed-table"
+      "path": "../bb-kv-store"
     },
     {
       "path": "../bb-realtime"
-    },
-    {
-      "path": "../bb-async-job"
     },
     {
       "path": "../bb-file-bucket"
     },
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-lambda-compute"
     }
   ]
 }

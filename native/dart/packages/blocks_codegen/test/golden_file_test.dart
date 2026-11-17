@@ -28,15 +28,8 @@ void main() {
       final specFile = File('${fixture.path}/spec.json');
       final spec = specFile.readAsStringSync();
 
-      final CodegenModel codegenModel;
-      try {
-        final rpcModel = const OpenRpcParser().parse(spec);
-        codegenModel = CodegenModelBuilder().build(rpcModel);
-      } catch (_) {
-        // Skip fixtures that use features the Dart parser doesn't yet support
-        markTestSkipped('Dart parser does not support this fixture');
-        return;
-      }
+      final rpcModel = const OpenRpcParser().parse(spec);
+      final codegenModel = CodegenModelBuilder().build(rpcModel);
 
       final output = const DartCodeGenerator().generate(codegenModel);
 
@@ -44,7 +37,6 @@ void main() {
 
       if (regenerate) {
         goldenDir.createSync(recursive: true);
-        // Clean existing golden files
         for (final f in goldenDir.listSync().whereType<File>()) {
           f.deleteSync();
         }

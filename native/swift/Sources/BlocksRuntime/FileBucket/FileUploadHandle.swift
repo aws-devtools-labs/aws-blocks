@@ -20,15 +20,15 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "FileUp
 /// // or stream from disk:
 /// try await handle.uploadFrom(fileURL: localPath)
 /// ```
-public class FileUploadHandle {
+public final class FileUploadHandle: Sendable {
     private let url: String
     private let contentType: String?
     private let session: URLSession
 
-    public init(url: String, contentType: String? = nil, session: URLSession = .shared) {
+    public init(url: String, contentType: String? = nil, session: URLSession? = nil) {
         self.url = url
         self.contentType = contentType
-        self.session = session
+        self.session = session ?? BlocksRuntimeSession.shared
     }
 
     /// Hydrates a FileUploadHandle from a JSON descriptor.
@@ -40,6 +40,32 @@ public class FileUploadHandle {
         }
         let contentType = json["contentType"] as? String
         return FileUploadHandle(url: url, contentType: contentType)
+    }
+
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+        case contentType
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/upload", "url": …, "contentType"?: … }` descriptor,
+    /// so a generated model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/upload")
+        self.init(
+            url: try container.decode(String.self, forKey: .url),
+            contentType: try container.decodeIfPresent(String.self, forKey: .contentType)
+        )
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/upload", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
+        try container.encodeIfPresent(contentType, forKey: .contentType)
     }
 
     /// Returns the presigned upload URL.
@@ -73,7 +99,8 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded \(body.count) bytes to \(requestURL)")
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Uploaded \(body.count) bytes to \(requestURL.redactedForLogging)")
         } catch let error as FileBucketError {
             throw error
         } catch {
@@ -82,6 +109,11 @@ public class FileUploadHandle {
     }
 
     /// Uploads a file from disk to the presigned URL.
+    ///
+    /// The request's `Content-Length` is the file's size. If the handle was
+    /// created on the server with a `contentLength` option, that size is signed
+    /// into the URL and the upload is rejected unless the file is exactly that
+    /// many bytes.
     ///
     /// - Parameter fileURL: The local file URL to upload.
     /// - Throws: `FileBucketError.uploadFailed` on HTTP errors or network failures.
@@ -108,7 +140,7 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL)")
+            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL.redactedForLogging)")
         } catch let error as FileBucketError {
             throw error
         } catch {
@@ -116,3 +148,5 @@ public class FileUploadHandle {
         }
     }
 }
+
+extension FileUploadHandle: Codable {}

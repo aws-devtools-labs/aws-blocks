@@ -7,6 +7,7 @@
  * BigInt conversion, Error object extraction, and log level filtering.
  */
 
+import { currentRequestId } from '@aws-blocks/core/bb-utils';
 import type { LogLevel } from './types.js';
 import { LoggingErrors } from './errors.js';
 
@@ -59,6 +60,10 @@ export function safeStringify(obj: Record<string, unknown>): string {
 			message: obj.message,
 			timestamp: obj.timestamp,
 			logger: obj.logger,
+			// Keep the correlation ids: degraded lines are the ones most worth tracing.
+			awsRequestId: typeof obj.awsRequestId === 'string' ? obj.awsRequestId : undefined,
+			requestId: typeof obj.requestId === 'string' ? obj.requestId : undefined,
+			traceId: typeof obj.traceId === 'string' ? obj.traceId : undefined,
 			_serializationError: LoggingErrors.SerializationFailed,
 		});
 	}
@@ -70,13 +75,13 @@ export function safeStringify(obj: Record<string, unknown>): string {
  * key like `{ level: 'debug' }` on an error log would silently corrupt the
  * entry and break level-based CloudWatch filtering/queries.
  */
-const RESERVED_FIELDS = new Set(['level', 'message', 'timestamp', 'logger', 'traceId']);
+const RESERVED_FIELDS = new Set(['level', 'message', 'timestamp', 'logger', 'traceId', 'awsRequestId']);
 
 /**
  * Build a serialized log entry string. Structural fields are written first to
  * guarantee consistent JSON property order (`level` always appears first), then
  * user contexts are merged — reserved keys are skipped so user data can never
- * clobber level/message/timestamp/logger/traceId.
+ * clobber level/message/timestamp/logger/traceId/awsRequestId.
  *
  * @param level - Log severity level.
  * @param message - Log message.
@@ -97,6 +102,12 @@ export function buildEntry(
 		timestamp: new Date(now).toISOString(),
 		logger: loggerName,
 	};
+
+	// The Lambda invocation's awsRequestId, so every line one request logs can be
+	// correlated. Reserved, so context can't replace it; an app's own `requestId`
+	// context field is a separate key and is left alone.
+	const awsRequestId = currentRequestId();
+	if (awsRequestId) entry.awsRequestId = awsRequestId;
 
 	// Merge user context — reserved keys are skipped (structural fields already written above).
 	for (const ctx of contexts) {

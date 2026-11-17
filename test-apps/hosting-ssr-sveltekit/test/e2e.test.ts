@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,18 +9,13 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr-sveltekit sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
+    // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(
       readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
@@ -43,16 +37,7 @@ test.beforeAll(async () => {
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
+// Teardown: `globalTeardown` (test/global-teardown.ts) destroys the stack once, after all tests and retries.
 
 test.describe('SvelteKit SSR Hosting', () => {
   test('home is server-rendered', async ({ request }) => {
@@ -135,10 +120,15 @@ test.describe('SvelteKit SSR Hosting', () => {
   test('a hashed _app/immutable asset is served immutable from S3', async ({ request }) => {
     const home = await request.get(hostingUrl);
     const html = await home.text();
-    const m = html.match(/(?:src|href)="([^"]*\/_app\/immutable\/[^"]*\.(?:js|css))"/);
+    // Match the asset path itself, not a src=/href= attribute. SvelteKit 2 loads
+    // its entry chunks with import() specifiers inside an inline bootstrap
+    // script — `import("./_app/immutable/entry/start.<hash>.js")` — so no
+    // attribute carries the URL, and `paths.relative` (the default) emits the
+    // specifier relative to the page. Matching the path keeps this working in
+    // both forms, and mirrors how the astro suite finds its /_astro/ chunk.
+    const m = html.match(/_app\/immutable\/[^"']+?\.(?:js|css)/);
     expect(m, 'home references an _app/immutable asset').toBeTruthy();
-    const url = m![1].startsWith('http') ? m![1] : `${hostingUrl}${m![1]}`;
-    const r = await request.get(url);
+    const r = await request.get(`${hostingUrl}/${m![0]}`);
     expect(r.status()).toBe(200);
     expect(r.headers()['cache-control'] ?? '').toMatch(/immutable|max-age=\d{5,}/);
   });

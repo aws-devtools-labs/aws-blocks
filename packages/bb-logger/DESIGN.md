@@ -8,12 +8,27 @@ Design document for Logger. For usage, see [README.md](./README.md).
 
 ## Infrastructure (CDK)
 
-The CDK construct optionally creates a CloudWatch Logs LogGroup:
+**Logging is always on and Logger owns no deploy-time infrastructure.** Every
+compute captures stdout to a single CloudWatch Logs LogGroup for its handler,
+created by the compute itself. There is no "enable logging" seam — logs always
+exist for every compute.
 
-- **When `retention` is set:** Creates a LogGroup with the specified retention policy and `RemovalPolicy.DESTROY` for clean stack teardown.
-- **When `retention` is omitted:** No LogGroup is created — Lambda's auto-created log group applies (logs never expire).
-- **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when `options.level` is configured. Multiple Logger BBs can coexist with different levels via constructor options.
-- **LogGroup name:** `/aws/lambda/${handler.functionName}` (matches Lambda's default naming).
+Because logging is unconditional, the CDK `Logger` is a **no-op placeholder**:
+its constructor just lets `new Logger(scope, id)` resolve in a CDK app. Any
+number of Loggers can coexist freely (they own nothing to collide over). The
+two things a Logger *used* to carry now live elsewhere:
+
+- **Retention** is a **compute-level setting**, not a Logger option. A compute's
+  handler log group takes its retention from that compute's `logRetention` prop
+  (e.g. `LambdaCompute`'s `logRetention`), falling back to the stack-wide
+  `defaults.logRetention`. Set retention where the compute is constructed, not
+  on a Logger. (The `retention` option was removed from `LoggingOptions`.)
+- **Log level** is purely per-instance *runtime* behavior. A `Logger`'s `level`
+  is applied by the logger instance itself; a logger without an explicit `level`
+  defaults to `'info'` (see *Log Level Resolution* below). Blocks does **not**
+  stamp an app-wide default — there is no `defaults.logLevel`, no `LOG_LEVEL`
+  env var, and the CDK layer provisions nothing for level. This is why multiple
+  Loggers with different levels coexist without fighting over shared config.
 
 ## Serialization Format
 
@@ -36,6 +51,7 @@ Fields:
 - `timestamp` — ISO 8601 timestamp from `new Date().toISOString()`.
 - `logger` — The `id` passed to the constructor.
 - `traceId` — X-Ray trace ID (auto-injected from `_X_AMZN_TRACE_ID` env var when present).
+- `awsRequestId` — the Lambda invocation's `awsRequestId`. Core's `createLambdaHandler` runs each invocation inside an `AsyncLocalStorage` scope holding it (`request-context.ts`, registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__`), and the serializer reads it with `currentRequestId()` from `@aws-blocks/core/bb-utils` when it builds a line. A separately resolved copy of core reuses the store already registered on the global, so it still sees the id. The backend import and Building Block constructors run outside the first invocation's scope, so long-lived state created at init doesn't keep that request's id. Only functions built with `createLambdaHandler` set the id; SSR hosting web functions, container compute and AgentCore runtimes don't yet. It is a reserved field, so a context value under that key is ignored; it uses its own key so an app's `requestId` context field (a common name for an app-chosen correlation id) is neither replaced nor replaces it. Overlapping invocations on one container each see their own id.
 - Spread fields from `defaultContext`, `child()` context, and per-call `context` (later wins).
 
 ### Serialization Safety
@@ -64,15 +80,15 @@ All logging methods are **synchronous**. This is an intentional deviation from t
 
 Priority order (highest wins):
 1. Constructor `options.level`
-2. Global env var: `LOG_LEVEL`
-3. Default: `'info'`
+2. Default: `'info'`
 
 ## Mock Implementation
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.
 
 - No files created in `.bb-data/` — logs are ephemeral.
-- `retention` option is accepted but ignored (no local CloudWatch equivalent).
+- Retention is a cloud-only concept (no local CloudWatch equivalent); it is a
+  compute-level setting and has no effect locally.
 - Log level filtering works identically to production.
 
 ### Mock vs AWS Behavior Differences
@@ -83,3 +99,4 @@ The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts
 | No log retention enforcement | Logs are ephemeral in local terminal | No mitigation needed — local logs don't persist |
 | No log group/stream structure | Cannot test subscription filters | Sandbox testing covers these |
 | No X-Ray trace ID injection | `traceId` field absent locally | Set `_X_AMZN_TRACE_ID` env var manually if needed |
+| No request id | `awsRequestId` field absent locally (the dev server sets none) | Pass your own correlation field (e.g. `requestId`) in `child()` context if you need correlation locally |

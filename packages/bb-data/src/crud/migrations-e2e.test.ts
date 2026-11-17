@@ -157,7 +157,8 @@ describe('external migrate + type refresh E2E — Supabase', { skip }, () => {
     await engine.execute(`DELETE FROM _migrations WHERE name IN ($1, $2)`, [CREATE_FILE, ALTER_FILE]).catch(() => {});
     fs.writeFileSync(
       path.join(migrationsDir, CREATE_FILE),
-      `CREATE TABLE ${TABLE} (id serial PRIMARY KEY, name text NOT NULL);`,
+      // RLS on: db pull / type refresh only generates tables with RLS enabled.
+      `CREATE TABLE ${TABLE} (id serial PRIMARY KEY, name text NOT NULL); ALTER TABLE ${TABLE} ENABLE ROW LEVEL SECURITY;`,
     );
   });
 

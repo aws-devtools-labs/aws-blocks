@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dbConnectionParameterName } from '../db-naming.js';
 import { getStackName } from './stack-id.js';
+import { resolveDeploymentTarget } from './deployment-target.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 
@@ -41,6 +42,7 @@ export function findConnectionString(): { name: string; value: string } | null {
  * parameter name. `projectRoot` locates the committed `.blocks/config.json`
  * that defines the stack name; it must match the root used at synth (the deploy
  * commands pass it explicitly) so the written name equals the name the app reads.
+ * The SSM client uses the same Region and CDK profile as the credential check.
  */
 export async function ensureSecrets(
   stage?: string,
@@ -56,7 +58,8 @@ export async function ensureSecrets(
   const { SSMClient, GetParameterCommand, PutParameterCommand } =
     await import('@aws-sdk/client-ssm');
 
-  const client = new SSMClient();
+  const target = await resolveDeploymentTarget({ projectRoot });
+  const client = new SSMClient({ region: target.region ?? undefined, profile: target.profile });
   const parameterName = dbConnectionParameterName(getStackName({ sandbox: resolvedStage !== 'production', projectRoot }));
 
   let isNew = false;
@@ -83,6 +86,63 @@ export async function ensureSecrets(
   (isNew ? result.created : result.updated).push(parameterName);
 
   return result;
+}
+
+/** The one SSM call {@link deleteSandboxSecrets} makes; injectable for tests. */
+export type DeleteParameterSender = (name: string) => Promise<void>;
+
+/**
+ * Delete the SSM parameters a sandbox deploy wrote outside CloudFormation
+ * (see {@link ensureSecrets}): the sandbox's `/<sandbox stack>-db-url`
+ * SecureString. CloudFormation never owned it, so deleting the stack leaves it,
+ * with the database password inside. Only the sandbox name is ever derived
+ * here, never the production one. Returns the names that were deleted; a name
+ * that does not exist (the app has no external database) is skipped, and so is
+ * an app whose `.blocks/config.json` gives no stack name: the deploy derives the
+ * name the same way, so it wrote no parameter for such an app.
+ *
+ * Any other SSM error (access denied, throttling, no Region) is a warning that
+ * names the parameter and the command that deletes it, not a failure: the
+ * stack is already gone, and the call is made for every app, also one that
+ * never had an external database.
+ */
+export async function deleteSandboxSecrets(
+  projectRoot?: string,
+  send?: DeleteParameterSender,
+): Promise<string[]> {
+  let stackName: string;
+  try {
+    stackName = getStackName({ sandbox: true, projectRoot });
+  } catch {
+    return [];
+  }
+  const parameterName = dbConnectionParameterName(stackName);
+  try {
+    const deleteParameter = send ?? (await ssmDeleteParameter(projectRoot));
+    await deleteParameter(parameterName);
+  } catch (e: unknown) {
+    const name = e instanceof Error ? e.name : 'Error';
+    if (name === 'ParameterNotFound') return [];
+    // console.warn, not log.warn: BLOCKS_LOG_LEVEL=quiet must not hide a password left in SSM.
+    console.warn(
+      `⚠️  The sandbox stack was deleted, but the SSM parameter ${parameterName}, which holds its database ` +
+        `connection string if the app has one, could not be deleted (${name}). ` +
+        `Delete it with: aws ssm delete-parameter --name ${parameterName}`,
+    );
+    return [];
+  }
+  return [parameterName];
+}
+
+/** DeleteParameter with the Region and CDK profile the sandbox deploy wrote the parameter with. */
+async function ssmDeleteParameter(projectRoot: string | undefined): Promise<DeleteParameterSender> {
+  // Loaded on demand, as in ensureSecrets, so importing this module stays cheap.
+  const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
+  const target = await resolveDeploymentTarget({ projectRoot });
+  const client = new SSMClient({ region: target.region ?? undefined, profile: target.profile });
+  return async (name) => {
+    await client.send(new DeleteParameterCommand({ Name: name }));
+  };
 }
 
 /**

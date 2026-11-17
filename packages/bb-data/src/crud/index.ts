@@ -8,11 +8,17 @@
  * with filtering, sorting, pagination, and column selection.
  * All queries run through `withRLS()` using the provided auth callback.
  *
+ * Row-level security is the only thing that scopes these handlers to the
+ * calling user, so each handler first checks it with
+ * {@link assertCrudRowLevelSecurity} and refuses tables that require it but
+ * don't have it (see `./rls-guard.ts`).
+ *
  * @module
  */
 import type { RLSEnabledDatabase } from '../database.js';
 import type { TableSchema, CrudOptions, CrudAuthResult, QueryOpts, TableTypeMeta } from './types.js';
 import { buildSelect, buildInsert, buildUpdate, buildDelete } from './sql-builder.js';
+import { assertCrudRowLevelSecurity, type CrudRlsConfig } from './rls-guard.js';
 
 /**
  * Create CRUD handlers for the given tables.
@@ -20,15 +26,28 @@ import { buildSelect, buildInsert, buildUpdate, buildDelete } from './sql-builde
  * @param db - The DatabaseBase instance (provides withRLS + raw query)
  * @param schema - Runtime table metadata (from database.meta.ts)
  * @param options - Tables to generate, auth callback, optional exclusions
+ * @param ensureReady - Awaited before the first query of every handler (see below)
+ * @param rlsConfig - Database-level row-level security settings (`rlsPolicy`)
  * @returns Object with list/get/create/update/delete methods for each table
  */
 export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
   db: RLSEnabledDatabase,
   schema: TableSchema,
   options: CrudOptions<M>,
+  /**
+   * Awaited at the start of every handler, before the first query. The Database
+   * passes `() => this.ensureMigrations()` so CRUD — which otherwise hits
+   * `db` directly, bypassing the query methods' own migration gate — waits for
+   * (and can re-trigger, after a transient PGlite init trap) migrations. Without
+   * it, a CRUD call after a recovered trap would hit tables that were never
+   * created and return a misleading "relation does not exist".
+   */
+  ensureReady?: () => Promise<void>,
+  rlsConfig: CrudRlsConfig = {},
 ): Record<string, Function> {
   const handlers: Record<string, Function> = {};
   const excludeSet = new Set(options.exclude ?? []);
+  const acknowledged = new Set<string>(options.dangerouslyAllowWithoutRowLevelSecurity ?? []);
 
   for (const table of options.tables) {
     const meta = schema[table];
@@ -37,6 +56,14 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const singular = capitalize(meta.singular);
     const plural = capitalize(meta.plural);
     const pkCols = Array.isArray(meta.primaryKey) ? meta.primaryKey : [meta.primaryKey];
+
+    /** Resolve the caller, then refuse the table if it must have RLS and doesn't. Runs before any query. */
+    async function authorize(): Promise<CrudAuthResult> {
+      await ensureReady?.();
+      const auth = await options.auth();
+      await assertCrudRowLevelSecurity(db, table, meta, rlsConfig, acknowledged);
+      return auth;
+    }
 
     function resolvePkValues(id: string | Record<string, unknown>): unknown[] {
       if (id != null && typeof id === 'object' && !Array.isArray(id)) {
@@ -55,7 +82,7 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const listName = `list${plural}`;
     if (!excludeSet.has(listName)) {
       handlers[listName] = async (opts?: QueryOpts<any>) => {
-        const auth = await options.auth();
+        const auth = await authorize();
         const query = buildSelect(table, opts, meta);
         return execQuery(db, auth, query.text, query.params);
       };
@@ -65,7 +92,7 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const getName = `get${singular}`;
     if (!excludeSet.has(getName)) {
       handlers[getName] = async (id: string | Record<string, unknown>) => {
-        const auth = await options.auth();
+        const auth = await authorize();
         let where: Record<string, unknown>;
         if (id != null && typeof id === 'object' && !Array.isArray(id)) {
           for (const c of pkCols) {
@@ -88,7 +115,7 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const createName = `create${singular}`;
     if (!excludeSet.has(createName)) {
       handlers[createName] = async (data: Record<string, unknown>) => {
-        const auth = await options.auth();
+        const auth = await authorize();
         const query = buildInsert(table, data, meta);
         const rows = await execQuery(db, auth, query.text, query.params);
         return rows[0];
@@ -99,7 +126,7 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const updateName = `update${singular}`;
     if (!excludeSet.has(updateName)) {
       handlers[updateName] = async (id: string | Record<string, unknown>, data: Record<string, unknown>) => {
-        const auth = await options.auth();
+        const auth = await authorize();
         const query = buildUpdate(table, resolvePkValues(id), data, meta);
         const rows = await execQuery(db, auth, query.text, query.params);
         return rows[0] ?? null;
@@ -110,7 +137,7 @@ export function createCrudHandlers<M extends Record<string, TableTypeMeta>>(
     const deleteName = `delete${singular}`;
     if (!excludeSet.has(deleteName)) {
       handlers[deleteName] = async (id: string | Record<string, unknown>) => {
-        const auth = await options.auth();
+        const auth = await authorize();
         const query = buildDelete(table, resolvePkValues(id), meta);
         const scoped = db.withRLS({ userId: auth.userId, claims: auth.claims });
         const result = await scoped.executeRaw(query.text, query.params);

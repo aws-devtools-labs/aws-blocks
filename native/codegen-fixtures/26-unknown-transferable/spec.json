@@ -1,0 +1,38 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.getDeviceHandle",
+      "params": [
+        { "name": "deviceId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "GetDeviceHandleResult",
+        "schema": { "x-blocks-transferable": "example-iot/device-handle" }
+      }
+    },
+    {
+      "name": "api.connectDevice",
+      "params": [
+        { "name": "deviceId", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": {
+        "name": "ConnectDeviceResult",
+        "schema": {
+          "x-blocks-transferable": "example-iot/device-link",
+          "x-blocks-type-args": [
+            {
+              "type": "object",
+              "properties": {
+                "temperature": { "type": "number" },
+                "humidity": { "type": "number" }
+              },
+              "required": ["temperature", "humidity"]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

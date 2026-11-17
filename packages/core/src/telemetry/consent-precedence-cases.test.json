@@ -1,0 +1,13 @@
+{
+  "cases": [
+    { "name": "no config either side", "global": null, "project": null, "expected": true },
+    { "name": "project enables, no global", "global": null, "project": true, "expected": true },
+    { "name": "project disables, no global", "global": null, "project": false, "expected": false },
+    { "name": "global enables, no project", "global": true, "project": null, "expected": true },
+    { "name": "both enable", "global": true, "project": true, "expected": true },
+    { "name": "project disables over a global enable", "global": true, "project": false, "expected": false },
+    { "name": "global disables, no project", "global": false, "project": null, "expected": false },
+    { "name": "project cannot re-enable a global disable", "global": false, "project": true, "expected": false },
+    { "name": "both disable", "global": false, "project": false, "expected": false }
+  ]
+}

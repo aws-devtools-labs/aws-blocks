@@ -1,10 +1,82 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
-import { codePoller } from './poll-for-code.js';
+import { isBlocksError } from '@aws-blocks/core';
+import { AgentErrors } from '@aws-blocks/bb-agent';
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
+import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
+// The agent per-user isolation test needs two distinct signed-in users; it does
+// not test sign-up itself. On a deployed stack they are provisioned through the
+// secret-gated `testSupport.provisionUser` (no mailbox needed), locally through
+// the code-confirmed sign-up.
+import { provisionConfirmedUser } from './test-support.js';
+
+/**
+ * Build the Realtime transport wired to the canned agent's RPCs — the copy-paste
+ * boilerplate an app writes once per runtime. This is what `createChat` streams over.
+ */
+function cannedTransport(api: typeof apiType) {
+  return realtimeTransport({
+    subscribe: async (channelId, handlerOrOptions) => {
+      const { channel } = await api.cannedGetChannel(channelId);
+      // channel.subscribe is overloaded (bare handler | options object). Branch on the
+      // shape so each arm narrows to one overload and the options form reaches the channel.
+      return typeof handlerOrOptions === 'function'
+        ? channel.subscribe(handlerOrOptions)
+        : channel.subscribe(handlerOrOptions);
+    },
+    sendMessage: async (channelId, message, conversationId) => {
+      await api.cannedStream(message, conversationId ?? undefined, channelId);
+    },
+    resume: async (channelId, responses, conversationId) => {
+      await api.cannedResume(
+        channelId,
+        responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false })),
+        conversationId ?? undefined,
+      );
+    },
+  });
+}
+
+/**
+ * Poll `predicate` until true or `ms` elapses, rejecting with `label` on timeout.
+ * Mirrors the existing waitForMessages helper; keeps the createChat tests free of
+ * repeated setInterval/setTimeout timer plumbing.
+ */
+function waitUntil(predicate: () => boolean, ms: number, label: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { clearInterval(check); reject(new Error(label)); }, ms);
+    const check = setInterval(() => {
+      if (predicate()) { clearTimeout(timer); clearInterval(check); resolve(); }
+    }, 200);
+  });
+}
+
+/**
+ * Build a createChat wired to the canned agent for a fixed conversationId — the
+ * api adapter (createConversation / getConversation / getPendingInterrupts) is
+ * identical across the createChat tests, so each test only passes its own on*
+ * callbacks via `handlers`.
+ */
+function cannedChat(
+  api: typeof apiType,
+  conversationId: string,
+  handlers: Partial<Pick<CreateChatOptions, 'onChunk' | 'onInterrupt' | 'onMessagesChange' | 'onLoadingChange' | 'onError'>>,
+) {
+  return createChat({
+    transport: cannedTransport(api),
+    api: {
+      createConversation: async () => ({ conversationId }),
+      getConversation: async (id) => await api.cannedGetConversation(id),
+      getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+    },
+    ...handlers,
+  });
+}
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -16,17 +88,6 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   }
   const { messages } = useCanned ? await api.cannedGetConversation(conversationId) : await api.agentGetConversation(conversationId);
   return messages;
-}
-
-/**
- * Sign up a user and confirm it with the verification code delivered for that
- * username. The agent per-user isolation test needs two distinct signed-in
- * users, so the code has to be matched to the right one.
- */
-async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
-  await api.authSignUp(username, password);
-  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
-  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {
@@ -66,6 +127,88 @@ export function agentTests(getApi: () => typeof apiType) {
         await done;
         assert.ok(chunks.filter((c: any) => c.type === 'text-delta').length > 0, 'should receive text-delta chunks');
         assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive done chunk');
+      });
+
+      test('agentGetRawDescriptor returns a fresh, well-formed chunks-channel descriptor', async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        const d1 = await api.agentGetRawDescriptor(conversationId);
+        // __blocks is stripped so the response middleware does NOT hydrate this into a
+        // subscribe-only channel client — the raw token fields must be reachable.
+        assert.ok(!('__blocks' in d1), 'raw descriptor must have __blocks stripped');
+        assert.strictEqual(typeof d1.token, 'string', 'descriptor carries a channel token');
+        assert.ok((d1.token as string).length > 0, 'channel token is non-empty');
+        const channel1 = d1.channel;
+        // The descriptor targets the AGENT chunks channel for this conversation.
+        assert.ok(typeof channel1 === 'string' && channel1.includes(conversationId), 'channel path targets the conversation');
+
+        // Each call mints a FRESH channel token. The local mint bakes exp=floor(now/1000)
+        // into the token, so a >1s gap guarantees a distinct token (deterministic in both
+        // local mint and the deployed authorizer, which are also exp-based).
+        await new Promise(r => setTimeout(r, 1100));
+        const d2 = await api.agentGetRawDescriptor(conversationId);
+        assert.notStrictEqual(d2.token, d1.token, 'each call mints a fresh channel token');
+      });
+
+      test('reconnect on the agent chunks channel invokes refresh and resubscribes', { timeout: 120_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+        // Subscribe via the SAME path useChat uses (agentGetChannel → hydrated chunks channel).
+        const { channel } = await api.agentGetChannel(conversationId);
+
+        const chunks: any[] = [];
+        let reconnects = 0;
+        let refreshCalls = 0;
+
+        // Mirror realtime.test.ts's refresh callback, sourced from the AGENT's chunks
+        // channel: agentGetRawDescriptor mints a FRESH token server-side and strips
+        // __blocks so the response middleware won't hydrate it; we re-add the discriminant.
+        // We return the raw descriptor as-is (NOT overriding `channel`): it already carries
+        // the concrete full channel path the transport keys the fresh token under, so the
+        // resubscribe after reconnect replays the FRESH token, not a stale one.
+        const sub = channel.subscribe({
+          onMessage: (chunk: any) => { chunks.push(chunk); },
+          onReconnect: () => { reconnects++; },
+          refresh: async () => {
+            refreshCalls++;
+            const fresh = await api.agentGetRawDescriptor(conversationId);
+            return { ...fresh, __blocks: 'realtime/channel' };
+          },
+        } satisfies import('aws-blocks').SubscribeOptions<any>);
+
+        try {
+          await sub.established;
+          // Start a stream (canned provider in local) so the subscription is live mid-turn.
+          await api.agentStream('Say hello', conversationId, conversationId);
+
+          // Wait for at least one chunk — proves delivery on the agent channel pre-drop.
+          const chunkDeadline = Date.now() + 30_000;
+          while (chunks.length < 1) {
+            if (Date.now() > chunkDeadline) throw new Error('no chunk delivered on the agent channel within 30s');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // Force a mid-stream drop of the underlying socket. Because a refresh fn is
+          // registered, the transport must invoke it before reopening, then resubscribe
+          // the chunks channel and fire onReconnect.
+          sub.connection?.close();
+
+          const reconnectDeadline = Date.now() + 60_000;
+          while (reconnects < 1) {
+            if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close on the agent channel');
+            await new Promise(r => setTimeout(r, 100));
+          }
+
+          // PR503 assertion: the refresh path IS exercised on the AGENT chunks channel —
+          // agentGetRawDescriptor is invoked to re-mint credentials before the reconnect.
+          // (Post-reconnect transport-level delivery with fresh creds is covered by the
+          // realtime.test.ts refresh e2e — same transport + refresh mechanism.)
+          assert.ok(refreshCalls >= 1, `refresh callback should be invoked on the agent-channel reconnect, got ${refreshCalls}`);
+          assert.ok(reconnects >= 1, 'onReconnect should fire on the agent channel after the forced close');
+        } finally {
+          sub.unsubscribe();
+        }
       });
     });
 
@@ -247,9 +390,9 @@ export function agentTests(getApi: () => typeof apiType) {
       test('conversations are scoped to the authenticated user', async () => {
         const api = getApi();
 
-        // Sign up and sign in as user A
+        // Provision and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await signUpAndConfirm(api, userA, 'password123');
+        await provisionConfirmedUser(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -258,10 +401,10 @@ export function agentTests(getApi: () => typeof apiType) {
         const idsA = listA.conversations.map((c: any) => c.conversationId);
         assert.ok(idsA.includes(conversationId), 'user A should see their conversation');
 
-        // Sign out, sign up and sign in as user B
+        // Sign out, provision and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await signUpAndConfirm(api, userB, 'password123');
+        await provisionConfirmedUser(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation
@@ -272,6 +415,223 @@ export function agentTests(getApi: () => typeof apiType) {
         // Clean up
         await api.authSignOut();
       });
+
+      // Ownership is keyed on `userSub`, the id that is stable for the user's lifetime,
+      // so the user-scoped channel key carries it rather than the username.
+      test('conversation ownership is keyed on userSub', async () => {
+        const api = getApi();
+        const username = `agent-test-sub-${Date.now()}`;
+        await provisionConfirmedUser(api, username, 'password123');
+        const { userSub } = await api.authSignIn(username, 'password123');
+        assert.notStrictEqual(userSub, username, 'this pool gives users a sub distinct from the username');
+
+        const { conversationId } = await api.agentCreateConversationId();
+        const { channel } = await api.agentGetRawDescriptor(conversationId);
+        assert.ok(
+          channel.endsWith(`/u/${encodeURIComponent(userSub)}/${conversationId}`),
+          `channel key should be scoped to the userSub, got ${channel}`,
+        );
+
+        await api.authSignOut();
+      });
+    });
+
+    // User B knows user A's conversation id (it is also A's default channel id). Every
+    // stream/resume/read/listen path must treat it as "not found" for B, and A's own
+    // conversation must keep working.
+    describe('Cross-user conversation ownership', () => {
+      const password = 'password123';
+      const userA = `agent-own-a-${Date.now()}`;
+      const userB = `agent-own-b-${Date.now()}`;
+      let convA = '';
+      const chunksA: AgentStreamChunk[] = [];
+      let subA: RealtimeSubscription | undefined;
+
+      async function signInAs(api: typeof apiType, username: string) {
+        await api.authSignOut();
+        await api.authSignIn(username, password);
+      }
+
+      /**
+       * Both users share this test's one WebSocket connection. If B's channel were the
+       * same as A's, the client would not re-send `subscribe` and B's `established`
+       * would never settle, so bound the wait: that case then fails on the leak
+       * assertion instead of timing out.
+       */
+      function establishedOrTimeout(sub: RealtimeSubscription, ms = 5_000) {
+        return Promise.race([sub.established, new Promise<void>(r => setTimeout(r, ms))]);
+      }
+
+      /**
+       * Wait for the turn that started at `chunks[from]` to end. Resolves on its `done`
+       * chunk. Rejects on an `error` chunk, with its message, so a failed turn isn't
+       * reported as a timeout, and on a timeout lists the chunk types that did arrive.
+       */
+      async function turnEnds(chunks: AgentStreamChunk[], from: number, label: string, ms = 60_000) {
+        const end = () => chunks.slice(from).find(c => c.type === 'done' || c.type === 'error');
+        try {
+          await waitUntil(() => end() !== undefined, ms, label);
+        } catch {
+          const seen = chunks.slice(from).map(c => c.type);
+          throw new Error(`${label}: no done or error chunk within ${ms}ms (received: ${seen.length > 0 ? seen.join(', ') : 'nothing'})`);
+        }
+        const last = end();
+        if (last?.type === 'error') {
+          throw new Error(`${label}: the turn ended with an error chunk: ${last.errorName ?? 'unclassified'}: ${last.error ?? '(no message)'}`);
+        }
+      }
+
+      /**
+       * Positive control for the tests that assert nothing reached `subA`: a new turn
+       * of user A's must still arrive on `subA`, so an empty result means isolation and
+       * not a subscription that stopped receiving. On failure, the error also lists
+       * what A's history recorded for the turn, which tells a turn that never ran or
+       * failed apart from one that ran but wasn't delivered.
+       */
+      async function assertSubAReceivesOwnTurn(api: typeof apiType) {
+        await signInAs(api, userA);
+        const historyBefore = (await api.agentGetConversation(convA)).messages.length;
+        const from = chunksA.length;
+        await api.agentStream('Say hello again', convA);
+        try {
+          await turnEnds(chunksA, from, "user A's own turn on subA");
+        } catch (err) {
+          const recorded = (await api.agentGetConversation(convA)).messages.slice(historyBefore)
+            .map(m => (m.metadata.error ? `${m.role} (error: ${m.metadata.error})` : m.role));
+          throw new Error(`${(err as Error).message}; user A's history recorded: ${recorded.length > 0 ? recorded.join(', ') : 'nothing'}`);
+        }
+      }
+
+      before(async () => {
+        const api = getApi();
+        await provisionConfirmedUser(api, userA, password);
+        await provisionConfirmedUser(api, userB, password);
+        await signInAs(api, userA);
+        ({ conversationId: convA } = await api.agentCreateConversationId());
+        const { channel } = await api.agentGetChannel(convA);
+        subA = channel.subscribe((chunk) => { chunksA.push(chunk); });
+        await subA.established;
+        await api.agentStream('Say hello', convA);
+        await turnEnds(chunksA, 0, "user A's first turn");
+      });
+
+      after(async () => {
+        subA?.unsubscribe();
+        await getApi().authSignOut();
+      });
+
+      // inferenceOnly agents keep no conversation records; by default (sessionScope: 'user')
+      // they key the session and the channel by the caller, so a shared conversationId
+      // doesn't put two users on one channel.
+      test("inferenceOnly: users who pass the same conversationId get separate channels", { timeout: 150_000 }, async () => {
+        const api = getApi();
+        const conv = crypto.randomUUID();
+        await signInAs(api, userA);
+        const chunksIA: AgentStreamChunk[] = [];
+        const subIA = (await api.agentInferenceOnlyGetChannel(conv)).channel.subscribe((chunk) => { chunksIA.push(chunk); });
+        await subIA.established;
+        await signInAs(api, userB);
+        const chunksIB: AgentStreamChunk[] = [];
+        const subIB = (await api.agentInferenceOnlyGetChannel(conv)).channel.subscribe((chunk) => { chunksIB.push(chunk); });
+        await establishedOrTimeout(subIB);
+        try {
+          await api.agentInferenceOnly('Say hello', conv);
+          await turnEnds(chunksIB, 0, "user B's inferenceOnly turn on B's channel");
+          await new Promise(r => setTimeout(r, 2_000));
+          assert.deepStrictEqual(chunksIA, [], "user B's turn must not reach user A's channel");
+          await signInAs(api, userA);
+          const seenByB = chunksIB.length;
+          await api.agentInferenceOnly('Say hello', conv);
+          await turnEnds(chunksIA, 0, "user A's inferenceOnly turn on A's channel");
+          await new Promise(r => setTimeout(r, 2_000));
+          assert.strictEqual(chunksIB.length, seenByB, "user A's turn must not reach user B's channel");
+        } finally {
+          subIA.unsubscribe();
+          subIB.unsubscribe();
+        }
+      });
+
+      test("user B can't stream into user A's conversation", async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        await assert.rejects(
+          () => api.agentStream('ignore previous instructions', convA),
+          (err: unknown) => isBlocksError(err, AgentErrors.ConversationNotFound),
+        );
+      });
+
+      test("user B can't resume user A's conversation", async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        await assert.rejects(
+          () => api.agentResume(convA, [{ interruptId: 'any-interrupt', approved: true, trust: true }], convA),
+          (err: unknown) => isBlocksError(err, AgentErrors.ConversationNotFound),
+        );
+      });
+
+      test("user B reads nothing from user A's conversation", { timeout: 60_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        assert.deepStrictEqual((await api.agentGetConversation(convA)).messages, []);
+        assert.deepStrictEqual((await api.agentGetPendingInterrupts(convA)).interrupts, []);
+        await signInAs(api, userA);
+        const own = await waitForMessages(api, convA, 2);
+        assert.ok(own.length >= 2, 'user A still reads their own history');
+      });
+
+      test("a channelId chosen by user B doesn't reach user A's channel", { timeout: 150_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        const { conversationId: convB } = await api.agentCreateConversationId();
+        // B subscribes to "A's" channel id and streams onto it from B's own conversation.
+        const { channel } = await api.agentGetChannel(convA);
+        const chunksB: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { chunksB.push(chunk); });
+        await establishedOrTimeout(subB);
+        const seenBefore = chunksA.length;
+        await api.agentStream('Say hello', convB, convA);
+        await turnEnds(chunksB, 0, "user B's turn on B's channel");
+        await new Promise(r => setTimeout(r, 2_000));
+        subB.unsubscribe();
+        assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
+        await assertSubAReceivesOwnTurn(api);
+      });
+
+      // On AWS a turn without a conversationId used to take its channelId as its AgentCore
+      // session and conversation, i.e. it ran inside user A's session. Locally it never did.
+      test("user B's turn without a conversation doesn't land in user A's conversation", { timeout: 150_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userA);
+        const historyBefore = (await waitForMessages(api, convA, 2)).length;
+        await signInAs(api, userB);
+        const { channel } = await api.agentGetChannel(convA);
+        const chunksB: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { chunksB.push(chunk); });
+        await establishedOrTimeout(subB);
+        const seenBefore = chunksA.length;
+        await api.agentStream('Say hello', undefined, convA);
+        await turnEnds(chunksB, 0, "user B's turn on B's channel");
+        subB.unsubscribe();
+        await signInAs(api, userA);
+        await new Promise(r => setTimeout(r, 3_000));
+        assert.strictEqual((await api.agentGetConversation(convA)).messages.length, historyBefore, "user A's history must not change");
+        assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
+        await assertSubAReceivesOwnTurn(api);
+      });
+
+      test("user B can't listen to user A's turn", { timeout: 90_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        const { channel } = await api.agentGetChannel(convA);
+        const leaked: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { leaked.push(chunk); });
+        await establishedOrTimeout(subB);
+        // A's turn must reach subA (the positive control), and none of it may reach subB.
+        await assertSubAReceivesOwnTurn(api);
+        await new Promise(r => setTimeout(r, 2_000));
+        subB.unsubscribe();
+        assert.deepStrictEqual(leaked, [], "user B must not receive user A's chunks");
+      });
     });
 
     describe('Error Handling', () => {
@@ -279,7 +639,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyGetConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
@@ -287,7 +647,7 @@ export function agentTests(getApi: () => typeof apiType) {
         const api = getApi();
         await assert.rejects(
           () => api.agentInferenceOnlyDeleteConversation('test'),
-          (err: any) => err.message.includes('persistence'),
+          (err: unknown) => isBlocksError(err, AgentErrors.PersistenceRequired),
         );
       });
 
@@ -340,6 +700,22 @@ export function agentTests(getApi: () => typeof apiType) {
     });
 
     describe('HITL — Tool Approval (deterministic)', () => {
+      /**
+       * The paused turn's pending interrupts, read from history once its `interrupt` chunk has
+       * arrived. The turn publishes the chunk before it records the interrupt, so poll until the
+       * record is there instead of reading once, and fail on a timeout instead of returning none.
+       */
+      async function pendingInterruptsAfterChunk(api: typeof apiType, chunks: AgentStreamChunk[], conversationId: string) {
+        await waitUntil(() => chunks.some(c => c.type === 'interrupt'), 10_000, 'No interrupt chunk within 10s');
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
+          if (interrupts.length > 0) return interrupts;
+          if (Date.now() > deadline) throw new Error('No pending interrupt recorded within 5s of the interrupt chunk');
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
@@ -369,27 +745,25 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            // Wait for interrupt to arrive
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-            }
+            // Resume once the turn has paused, not after a fixed wait: a wait that ended before
+            // the interrupt was recorded skipped the resume, and the test then timed out on `done`.
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: true })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should have received done after resume');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'should have received done after resume');
       });
 
       test('approval is persisted to conversation history', { timeout: 20_000 }, async () => {
@@ -423,32 +797,323 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: false })), conversationId);
-            }
+            // Resume once the turn has paused (see the approval test above).
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: false })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'agent should complete after denial');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'agent should complete after denial');
         // After denial, conversation history should show the tool was cancelled (not executed successfully)
         const { messages } = await api.cannedGetConversation(conversationId);
         const toolResult = messages.find((m: any) => m.role === 'tool-result');
         assert.ok(toolResult, 'should have tool-result message');
         const output = toolResult.metadata.toolOutput;
         assert.ok(JSON.stringify(output).includes('denied'), 'tool-result should contain denial message');
+      });
+    });
+
+    describe('createChat (compute-agnostic client API)', () => {
+      test('sendMessage streams a reply into the assistant message', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        const chat = createChat({
+          transport: cannedTransport(api),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.cannedGetConversation(id),
+            getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+          },
+          onChunk: (chunk) => chunks.push(chunk),
+        });
+
+        const done = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No done chunk within 25s')), 25_000);
+          const check = setInterval(() => {
+            if (chunks.some(c => c.type === 'done')) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage('Say hello');
+        await done;
+
+        assert.ok(chunks.some(c => c.type === 'text-delta'), 'should receive text-delta chunks');
+        assert.ok(chunks.some(c => c.type === 'done'), 'should receive a done chunk');
+        const assistant = chat.getMessages().find(m => m.role === 'assistant');
+        assert.ok(assistant && assistant.content.length > 0, 'assistant message should accumulate streamed text');
+        assert.strictEqual(chat.isLoading(), false, 'loading clears on done');
+        chat.destroy();
+      });
+
+      test('interrupt surfaces via onInterrupt and sendMessage({ interruptResponses }) resumes', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chat = createChat({
+          transport: cannedTransport(api),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.cannedGetConversation(id),
+            getPendingInterrupts: (id) => api.cannedGetPendingInterrupts(id),
+          },
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+
+        const interrupted = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No interrupt within 15s')), 15_000);
+          const check = setInterval(() => {
+            if (interrupts.length) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage('use deleteRecords');
+        await interrupted;
+        assert.ok(interrupts[0].name.includes('deleteRecords'), 'interrupt should reference the tool');
+
+        const completed = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('No done chunk after resume within 15s')), 15_000);
+          const check = setInterval(() => {
+            if (chunks.some(c => c.type === 'done')) { clearTimeout(timer); clearInterval(check); resolve(); }
+          }, 200);
+        });
+
+        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: true })) });
+        await completed;
+
+        assert.ok(chunks.some(c => c.type === 'done'), 'resume should complete the turn');
+        assert.ok(chat.getMessages().some(m => m.role === 'approval'), 'approval decision recorded in the chat');
+        chat.destroy();
+      });
+
+      test('loadConversation rehydrates history and projects approval metadata', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        // First chat: run a turn, hit the approval interrupt, approve it. This
+        // persists an `approval` message (with decision metadata) to history.
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chunks: AgentStreamChunk[] = [];
+        const first = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+        await first.sendMessage('use deleteRecords');
+        await waitUntil(() => interrupts.length > 0, 15_000, 'No interrupt within 15s');
+        await first.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: true })) });
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 15_000, 'No done after resume within 15s');
+        first.destroy();
+
+        // Second chat, fresh instance: load the SAME conversation and assert the
+        // history rehydrates. The customer passes canned metadata straight through
+        // (getConversation returns `unknown`); loadConversation projects it through
+        // asJSONRecord into the message list.
+        let loaded: ChatMessage[] = [];
+        const second = cannedChat(api, conversationId, {
+          onMessagesChange: (msgs) => { loaded = msgs; },
+        });
+        await second.loadConversation(conversationId);
+
+        assert.ok(loaded.length > 0, 'loadConversation should rehydrate the message list');
+        assert.strictEqual(second.getConversationId(), conversationId, 'conversationId is set after load');
+        const approval = loaded.find(m => m.role === 'approval');
+        assert.ok(approval, 'approval message should be present in loaded history');
+        // `/client` now re-exports the discriminated-union ChatMessage, so narrowing on
+        // role === 'approval' types `metadata` as ApprovalMetadata — reading `.approved`
+        // here needs no cast. This both proves the persisted decision survives
+        // loadConversation's projection AND exercises the compile-time union.
+        assert.ok(approval!.role === 'approval', 'loaded message narrows to the approval variant');
+        if (approval!.role === 'approval') {
+          assert.strictEqual(approval!.metadata?.approved, true, 'approval metadata.approved round-trips as true');
+        }
+        second.destroy();
+      });
+
+      test('denying an interrupt continues the turn without executing the tool', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        let interrupts: Array<{ interruptId: string; name: string; reason?: unknown }> = [];
+        const chat = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+          onInterrupt: (ints) => { interrupts = ints; },
+        });
+
+        await chat.sendMessage('use deleteRecords');
+        await waitUntil(() => interrupts.length > 0, 15_000, 'No interrupt within 15s');
+
+        // Deny (approved: false) — the turn should still complete, with the denial recorded.
+        await chat.sendMessage({ interruptResponses: interrupts.map(i => ({ interruptId: i.interruptId, approved: false })) });
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 15_000, 'No done after denial within 15s');
+
+        const denial = chat.getMessages().find(m => m.role === 'approval');
+        assert.ok(denial, 'a decision message should be recorded on denial');
+        assert.strictEqual(denial?.metadata?.approved, false, 'denial metadata.approved round-trips as false');
+        assert.strictEqual(chat.isLoading(), false, 'loading clears after a denied turn completes');
+        // The tool must NOT have run: the persisted tool-result records the denial
+        // rather than a successful execution (mirrors the pre-existing denial test).
+        const { messages: persisted } = await api.cannedGetConversation(conversationId);
+        const toolResult = persisted.find((m) => m.role === 'tool-result');
+        assert.ok(toolResult, 'a tool-result message should be persisted');
+        assert.ok(
+          JSON.stringify(toolResult?.metadata?.toolOutput).includes('denied'),
+          'tool-result records the denial, proving the tool was not executed',
+        );
+        chat.destroy();
+      });
+
+      test('newConversation() clears messages and conversation id', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        const chunks: AgentStreamChunk[] = [];
+        const chat = cannedChat(api, conversationId, {
+          onChunk: (chunk) => chunks.push(chunk),
+        });
+
+        await chat.sendMessage('Say hello');
+        await waitUntil(() => chunks.some(c => c.type === 'done'), 25_000, 'No done within 25s');
+        assert.ok(chat.getMessages().length > 0, 'messages accumulate during the turn');
+
+        chat.newConversation();
+        assert.strictEqual(chat.getMessages().length, 0, 'newConversation clears the message list');
+        assert.strictEqual(chat.getConversationId(), null, 'newConversation clears the conversation id');
+        assert.strictEqual(chat.isLoading(), false, 'newConversation is not loading');
+        chat.destroy();
+      });
+
+      test('onMessagesChange fires as the assistant message streams in', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.cannedCreateConversationId();
+
+        let latest: ChatMessage[] = [];
+        let changeCount = 0;
+        const chat = cannedChat(api, conversationId, {
+          onMessagesChange: (msgs) => { latest = msgs; changeCount++; },
+        });
+
+        await chat.sendMessage('Say hello');
+        await waitUntil(
+          () => latest.some(m => m.role === 'assistant' && m.content.length > 0),
+          25_000,
+          'No assistant text within 25s',
+        );
+
+        assert.ok(changeCount > 0, 'onMessagesChange fires at least once');
+        assert.ok(latest.some(m => m.role === 'user'), 'user message present in the rendered list');
+        // (the assistant-with-content check is the waitUntil predicate above — not repeated here)
+        chat.destroy();
+      });
+    });
+
+    describe('createChat mid-turn reconnect (Option A e2e)', () => {
+      // Exercises the FULL createChat -> real hydrated agent channel wiring end-to-end (the
+      // unit tests mock the transport). Sends a message, forces a mid-turn socket drop, and
+      // asserts the spinner clears and the final assistant text is recovered — mirroring the
+      // transport-level reconnect test in realtime.test.ts, but through the createChat path so
+      // a wiring regression (options object degrading to a bare handler, so onReconnect/
+      // onDisconnect are dropped) would be caught.
+      // Per-test timeout for the real-AWS reconnect round-trip (backoff + $connect + resubscribe).
+      test('createChat recovers a mid-turn reconnect: loading clears and final text is restored', { timeout: 120_000 }, async () => {
+        const api = getApi();
+        const { conversationId } = await api.agentCreateConversationId();
+
+        // Capture the live subscription so the test can force a transport drop. The
+        // subscribe adapter records the handle bb-realtime returns (it exposes `.connection`).
+        let sub: RealtimeSubscription | undefined;
+        const messages: Array<{ role: string; content: string }> = [];
+
+        const chat = createChat({
+          // Mirror the app wiring in src/index.ts createChatForConvo, but capture `sub`.
+          transport: realtimeTransport({
+            subscribe: async (channelId, handlerOrOptions) => {
+              const { channel } = await api.agentGetChannel(channelId);
+              // channel.subscribe is overloaded (bare handler | options object). Branch on the
+              // shape so each arm narrows to one overload and the options form (onReconnect/
+              // onDisconnect) reaches the channel intact. Capture the handle to force a drop.
+              sub = typeof handlerOrOptions === 'function'
+                ? channel.subscribe(handlerOrOptions)
+                : channel.subscribe(handlerOrOptions);
+              return sub;
+            },
+            sendMessage: async (channelId, message, convId) => {
+              await api.agentStream(message, convId ?? undefined, channelId);
+            },
+            resume: async (channelId, responses, convId) => {
+              await api.agentResume(
+                channelId,
+                responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false })),
+                convId ?? undefined,
+              );
+            },
+          }),
+          api: {
+            createConversation: async () => ({ conversationId }),
+            getConversation: async (id) => await api.agentGetConversation(id),
+            getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
+          },
+          onMessagesChange: (m) => {
+            // Replace in place so the outer reference always reflects the latest render.
+            messages.length = 0;
+            for (const x of m) messages.push({ role: x.role, content: x.content });
+          },
+        });
+
+        try {
+          await chat.loadConversation(conversationId);
+          await chat.sendMessage('Say hello');
+
+          // Wait until the turn has started (loading true) so the drop is genuinely mid-turn.
+          // Poll chat.isLoading() directly — TS narrows the method's boolean return.
+          const startDeadline = Date.now() + 30_000;
+          while (!chat.isLoading()) {
+            if (Date.now() > startDeadline) throw new Error('turn did not start (loading never became true) within 30s');
+            await new Promise((r) => setTimeout(r, 100));
+          }
+
+          // Force a mid-turn transport drop; the transport transparently reconnects and
+          // resubscribes, and createChat re-syncs the final assistant text from getConversation
+          // (or a live done chunk resolves it on the resubscribed channel).
+          sub?.connection?.close();
+
+          // The spinner MUST clear (via a live done chunk on the resubscribed channel, or the
+          // reconnect re-sync from the DB) — this is the stuck-spinner failure the PR fixes.
+          const clearDeadline = Date.now() + 90_000;
+          while (chat.isLoading()) {
+            if (Date.now() > clearDeadline) throw new Error('loading did not clear within 90s after the mid-turn drop');
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          assert.strictEqual(chat.isLoading(), false, 'loading cleared after the mid-turn reconnect');
+
+          // The final assistant text is present and non-empty (recovered live or from the DB).
+          const assistant = messages.find((m) => m.role === 'assistant');
+          assert.ok(assistant, 'an assistant message should exist after the turn');
+          assert.ok(assistant!.content.length > 0, 'final assistant text is recovered, not left empty');
+          // The persisted conversation agrees (source of truth).
+          const { messages: persisted } = await api.agentGetConversation(conversationId);
+          assert.ok(
+            persisted.some((m) => m.role === 'assistant' && m.content.length > 0),
+            'the recovered assistant text is backed by the persisted conversation',
+          );
+        } finally {
+          chat.destroy();
+        }
       });
     });
   });

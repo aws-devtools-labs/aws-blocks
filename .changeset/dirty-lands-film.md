@@ -1,14 +1,10 @@
 ---
-"@aws-blocks/bb-distributed-table": patch
 "@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/bb-knowledge-base": patch
-"@aws-blocks/bb-auth-cognito": patch
 "@aws-blocks/bb-email-client": patch
 "@aws-blocks/bb-app-setting": patch
 "@aws-blocks/bb-file-bucket": patch
-"@aws-blocks/bb-auth-basic": patch
 "@aws-blocks/bb-async-job": patch
-"@aws-blocks/bb-auth-oidc": patch
 "@aws-blocks/bb-dashboard": patch
 "@aws-blocks/auth-common": patch
 "@aws-blocks/bb-cron-job": patch

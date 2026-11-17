@@ -1,0 +1,28 @@
+import { ApiNamespace, Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+
+// AuthCognito's signUp() did not sign the user in unless it passed
+// autoSignIn: true, so confirmSignUp() returned DONE. Nothing here relies on
+// auto sign-in: the codemod keeps that with emailPassword.autoSignIn: false.
+const scope = new Scope('app');
+export const auth = new Auth(scope, 'auth', {
+	emailPassword: {
+		selfSignUp: true,
+		autoSignIn: false,
+	},
+});
+export const plain = new Auth(scope, 'plain', { emailPassword: { autoSignIn: false } });
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+	async register(username: string, password: string) {
+		return auth.signUp(username, password, { attributes: { email: username } }, context);
+	},
+	async registerExplicit(username: string, password: string) {
+		// The same default, spelled out: it moves into the options.
+		return auth.signUp(username, password, {}, context);
+	},
+	async confirm(username: string, code: string) {
+		const r = await auth.confirmSignUp(username, code, context);
+		return r.nextStep.signUpStep === 'DONE';
+	},
+}));

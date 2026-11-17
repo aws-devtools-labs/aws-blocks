@@ -1,0 +1,7 @@
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('cognito');
+export const auth = new AuthCognito(scope, 'auth', {});
+export const label = auth.toString();
+export const same = auth.valueOf() === auth;

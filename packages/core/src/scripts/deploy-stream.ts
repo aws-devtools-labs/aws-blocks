@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { progressToStderr } from './log.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -55,6 +56,9 @@ export interface DeploySignalResponse {
 
 /** Signals whose delivery we take over while a deploy is in flight. */
 export const DEPLOY_SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+
+/** The long-running CDK operation {@link runStreaming} keeps alive across a stray signal. */
+export type CdkOperation = 'deploy' | 'destroy';
 
 /** Default gap (ms) of silence after which the runner prints a progress heartbeat. */
 export const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -115,24 +119,27 @@ export const SIGNAL_COALESCE_MS = 2_000;
  *   separately, so a deferred SIGHUP never consumes the SIGTERM abort budget
  *   (and a repeated SIGHUP is deduped the same way a repeated SIGTERM is).
  * @param coalesceWindowMs - see {@link SIGNAL_COALESCE_MS}.
+ * @param operation - what is running, for the messages: a `deploy` (default) or a `destroy`.
  */
 export function decideSignalResponse(
   signal: NodeJS.Signals,
   msSinceFirstDeferral: number | null,
   coalesceWindowMs: number = SIGNAL_COALESCE_MS,
+  operation: CdkOperation = 'deploy',
 ): DeploySignalResponse {
+  const pending = operation === 'destroy' ? 'the stack deletion' : 'the change set';
   if (signal === 'SIGINT') {
     return {
       action: 'abort',
       message:
-        '\n🛑 Interrupted. Stopping the CDK CLI — CloudFormation may keep applying the change set server-side.',
+        `\n🛑 Interrupted. Stopping the CDK CLI — CloudFormation may keep applying ${pending} server-side.`,
     };
   }
   if (signal === 'SIGHUP') {
     return {
       action: 'defer',
       message:
-        '⚠️  Ignoring SIGHUP: the deploy is still running and CloudFormation is still converging. Streaming continues; send SIGTERM twice to abort.',
+        `⚠️  Ignoring SIGHUP: the ${operation} is still running and CloudFormation is still converging. Streaming continues; send SIGTERM twice to abort.`,
       coalesced: msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs,
     };
   }
@@ -140,12 +147,12 @@ export function decideSignalResponse(
     return {
       action: 'defer',
       message:
-        '⚠️  Ignoring SIGTERM: the deploy is still running and CloudFormation is still converging. Send SIGTERM again to abort (the stack update continues server-side either way).',
+        `⚠️  Ignoring SIGTERM: the ${operation} is still running and CloudFormation is still converging. Send SIGTERM again to abort (the stack ${operation === 'destroy' ? 'deletion' : 'update'} continues server-side either way).`,
     };
   }
   if (signal === 'SIGTERM' && msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs) {
     // Same signal reaching us twice (process group + a wrapper's relay), not a
-    // second request — keep deploying and stay quiet about the duplicate.
+    // second request — keep going and stay quiet about the duplicate.
     return {
       action: 'defer',
       message: '',
@@ -154,7 +161,7 @@ export function decideSignalResponse(
   }
   return {
     action: 'abort',
-    message: `\n🛑 Received ${signal} while deploying. Stopping the CDK CLI — CloudFormation may keep applying the change set server-side.`,
+    message: `\n🛑 Received ${signal} while ${operation === 'destroy' ? 'destroying' : 'deploying'}. Stopping the CDK CLI — CloudFormation may keep applying ${pending} server-side.`,
   };
 }
 
@@ -196,6 +203,144 @@ export function formatElapsed(ms: number): string {
   return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, '0')}s` : `${seconds}s`;
 }
 
+/** One resource transition parsed from a `cdk deploy --progress events` line. */
+export interface CdkResourceEvent {
+  /** CloudFormation resource status, e.g. `CREATE_IN_PROGRESS`, `CREATE_COMPLETE`. */
+  status: string;
+  /** CloudFormation resource type, e.g. `AWS::CloudFront::Distribution`. */
+  resourceType: string;
+  /** The resource's logical id, e.g. `HostingDistribution`. */
+  logicalId: string;
+}
+
+// A `cdk deploy --progress events` line is pipe-delimited:
+//   StackName | STATUS | Namespace::Service::Type | LogicalId  [| optional reason]
+// CDK prefixes each with a spinner/timestamp fragment and pads the columns, so
+// we match the STATUS | TYPE | LOGICALID triple anywhere in the line rather
+// than anchoring to the start. STATUS is an uppercase CloudFormation status
+// (a self-clearing transient the tracker ignores), TYPE is a CloudFormation
+// resource type — `AWS::x::y`, but also `Custom::x` (a custom resource such as
+// the KVStore GSI manager, which is exactly what a serialized-GSI
+// deploy sits on) — and LOGICALID is the first token after it. Purely
+// structural: no dependency on CDK's exact spacing or leading fragment.
+const CDK_EVENT_LINE = /\b([A-Z][A-Z0-9_]*(?:_IN_PROGRESS|_COMPLETE|_FAILED))\s*\|\s*([A-Za-z0-9]+::[A-Za-z0-9:]+)\s*\|\s*([^\s|]+)/;
+
+/**
+ * Parse a single CDK `--progress events` line into a resource transition, or
+ * return `null` for any line that is not one (banners, summaries, blank lines).
+ * Pure and exported so the parsing is unit-tested directly against real CDK
+ * output shapes.
+ */
+export function parseCdkEventLine(line: string): CdkResourceEvent | null {
+  const m = CDK_EVENT_LINE.exec(line);
+  if (!m) return null;
+  return { status: m[1], resourceType: m[2], logicalId: m[3] };
+}
+
+/**
+ * Whether a CloudFormation status is a ROLLBACK — a failure being undone, not
+ * forward progress. Both `ROLLBACK_IN_PROGRESS` and `UPDATE_ROLLBACK_COMPLETE`
+ * qualify; the latter ENDS in `_COMPLETE` but is emphatically not a clean
+ * completion, which is the distinction the tracker and heartbeat turn on.
+ */
+export function isRollbackStatus(status: string): boolean {
+  return status.includes('ROLLBACK');
+}
+
+/**
+ * Render the human-friendly resource name used in the heartbeat, e.g.
+ * `HostingDistribution (AWS::CloudFront::Distribution)`. A resource that is
+ * rolling back is flagged so the heartbeat surfaces the failure ("⚠️ … rolling
+ * back") instead of reading like ordinary progress. Kept pure so the wording is
+ * asserted without a running deploy.
+ */
+export function describeConvergingResource(event: CdkResourceEvent): string {
+  const name = `${event.logicalId} (${event.resourceType})`;
+  return isRollbackStatus(event.status) ? `⚠️ ${name} rolling back` : name;
+}
+
+/**
+ * Track which resource is currently converging, from the stream of CDK event
+ * lines. A resource becomes "current" when it enters `*_IN_PROGRESS` and is
+ * cleared when it reaches a terminal `*_COMPLETE` / `*_FAILED`, so the heartbeat
+ * can say what the deploy is actually waiting on right now instead of a bare
+ * tick. Pure and stateful like {@link createLineAssembler}; feed it every
+ * relayed line.
+ */
+export function createResourceTracker(): {
+  observe(line: string): void;
+  current(): CdkResourceEvent | null;
+} {
+  let current: CdkResourceEvent | null = null;
+  return {
+    observe(line: string): void {
+      const event = parseCdkEventLine(line);
+      if (!event) return;
+      if (event.status.endsWith('_IN_PROGRESS')) {
+        // Covers both forward progress (CREATE/UPDATE/DELETE_IN_PROGRESS) and
+        // UPDATE_ROLLBACK_IN_PROGRESS — a rollback is still something the deploy
+        // is actively doing, and it is a failure signal the heartbeat should
+        // keep naming rather than fall silent on.
+        current = event;
+      } else if (
+        current &&
+        event.logicalId === current.logicalId &&
+        isRollbackStatus(event.status)
+      ) {
+        // A ROLLBACK reached its terminal state. This ENDS in `_COMPLETE`
+        // (UPDATE_ROLLBACK_COMPLETE / ROLLBACK_COMPLETE), but it is NOT a clean
+        // settle — the resource failed and was rolled back. Keep it current so
+        // the heartbeat surfaces the rollback instead of silently clearing it
+        // as if the deploy succeeded.
+        current = event;
+      } else if (
+        current &&
+        event.logicalId === current.logicalId &&
+        (event.status.endsWith('_COMPLETE') || event.status.endsWith('_FAILED'))
+      ) {
+        // A clean terminal (CREATE/UPDATE/DELETE_COMPLETE) or a plain _FAILED:
+        // the resource we were reporting on has settled; stop naming it. The
+        // next _IN_PROGRESS line names whatever the deploy moves on to.
+        current = null;
+      }
+    },
+    current: () => current,
+  };
+}
+
+// CDK prints the stack's CloudFront/hosting URL as an Outputs line once the
+// distribution is created, e.g.  `Foo.HostingDistributionUrl = https://d123.cloudfront.net`
+// — which lands on stdout well BEFORE full CREATE_COMPLETE and the post-run
+// outputs.json read. Matching it lets deploy() surface the URL early, so a
+// deploy that is still converging (or gets killed at a caller timeout) has
+// already told the agent where the app lives.
+const CDK_HOSTING_URL_LINE = /(?:Hosting|Cdn|Distribution)\w*Url\s*[:=]\s*(https:\/\/[^\s]+)/i;
+
+/**
+ * Extract the hosting (CloudFront) URL from a single streamed line, or `null`.
+ * Pure and exported so the recognition is unit-tested against real CDK Outputs
+ * shapes without a deploy.
+ */
+export function extractHostingUrlFromLine(line: string): string | null {
+  const m = CDK_HOSTING_URL_LINE.exec(line);
+  return m ? m[1].replace(/[.,);]+$/, '') : null;
+}
+
+/**
+ * The single machine-readable completion line a caller (a coding agent, a CI
+ * step, a script) greps for "deploy done + where it lives", instead of parsing
+ * CloudFormation output or polling the stack. Pure + exported so it is unit
+ * tested and shared by both `deploy()` and `sandbox()`; each prints exactly this
+ * string on its success path. `api=` is always present; `url=` (the public
+ * frontend) only when the app deployed hosting — a plain sandbox deploy serves
+ * the frontend locally, so it omits `url=`; a preview sandbox includes it.
+ */
+export function formatDeploySignal(apiUrl: string, hostingUrl?: string): string {
+  return hostingUrl
+    ? `BLOCKS_DEPLOYED url=${hostingUrl} api=${apiUrl}`
+    : `BLOCKS_DEPLOYED api=${apiUrl}`;
+}
+
 export interface CdkDeployArgsOptions {
   /** Project root passed to synth as `--context projectRoot=…`. */
   projectRoot: string;
@@ -206,7 +351,18 @@ export interface CdkDeployArgsOptions {
 /**
  * Build the `cdk deploy` argv used by `npm run deploy`.
  *
- * Two of these flags exist purely so the deploy is observable — losing either
+ * - `--all`: deploy every stack the app synthesizes. Blocks apps routinely
+ *   synth more than one stack in documented configurations — `Hosting` with an
+ *   explicit `env.region` other than `us-east-1` adds a `us-east-1` monitoring
+ *   stack for the CloudFront alarm, and any Lambda@Edge function (e.g. a
+ *   Next.js `runtime = 'edge'` route) adds the CDK edge-support stack in
+ *   `us-east-1`. Without a stack selector the CDK CLI refuses to run a
+ *   multi-stack app ("Since this app includes more than a single stack, specify
+ *   which stacks to use … or specify `--all`"), so the deploy fails before any
+ *   stack is touched. The sandbox path ({@link buildSandboxDeployArgs}) already
+ *   passes `--all`; this keeps the two commands in agreement.
+ *
+ * Two further flags exist purely so the deploy is observable — losing either
  * one brings back the 0-byte stdout:
  *
  * - `--ci`: the CDK CLI picks its log stream as `isCI ? stdout : stderr`, so
@@ -223,6 +379,7 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
   return [
     'cdk',
     'deploy',
+    '--all',
     '--require-approval',
     'never',
     '--ci',
@@ -253,6 +410,24 @@ export interface SignalRegistry {
   off(signal: NodeJS.Signals, handler: () => void): unknown;
 }
 
+/**
+ * A curated destination for {@link runStreaming}'s output, used at
+ * `BLOCKS_LOG_LEVEL=quiet|normal` (see `cdk-output.ts`). The runner still
+ * parses every raw line for progress and the hosting URL; it then hands raw
+ * lines to these sinks instead of `stdout`/`stderr`, and its own status lines
+ * to {@link CuratedStreams.status}.
+ */
+export interface CuratedStreams {
+  /** Receives each raw child stdout line as `line\n`. */
+  stdout: OutputSink;
+  /** Receives each raw child stderr line as `line\n`. */
+  stderr: OutputSink;
+  /** A runner status line (no trailing newline): an idle heartbeat or a signal notice. */
+  status(message: string, kind: 'heartbeat' | 'signal'): void;
+  /** Called once when the child is done: `ok` is false when the run throws. */
+  close(ok: boolean): void;
+}
+
 export interface RunStreamingOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -268,6 +443,20 @@ export interface RunStreamingOptions {
   now?: () => number;
   /** Injected for tests: signal registration seam. */
   signalTarget?: SignalRegistry;
+  /**
+   * Called with the hosting (CloudFront) URL the first time it is seen in the
+   * streamed CDK output — which is BEFORE the child exits and the post-run
+   * outputs.json read. Lets a caller emit the "deployed" signal early so it
+   * survives a caller-timeout kill. Fired at most once.
+   */
+  onHostingUrl?: (url: string) => void;
+  /**
+   * Curate the output instead of relaying it raw. When absent (every level
+   * except `quiet`/`normal`), output is relayed exactly as before.
+   */
+  curated?: CuratedStreams;
+  /** What is running, for the signal notices (see {@link decideSignalResponse}). Defaults to `deploy`. */
+  operation?: CdkOperation;
 }
 
 /** Raised when the child exits non-zero, is killed, or the operator aborts. */
@@ -275,16 +464,28 @@ export class DeployProcessError extends Error {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly aborted: boolean;
+  /**
+   * The signal this process received that aborted the run (`SIGTERM` or
+   * `SIGINT`), when `aborted`: a caller exits 128 + its number, like a process
+   * that signal killed, and not 1, which reports a failed deploy.
+   */
+  readonly operatorSignal: NodeJS.Signals | null;
 
   constructor(
     message: string,
-    details: { exitCode?: number | null; signal?: NodeJS.Signals | null; aborted?: boolean } = {},
+    details: {
+      exitCode?: number | null;
+      signal?: NodeJS.Signals | null;
+      aborted?: boolean;
+      operatorSignal?: NodeJS.Signals | null;
+    } = {},
   ) {
     super(message);
     this.name = 'DeployProcessError';
     this.exitCode = details.exitCode ?? null;
     this.signal = details.signal ?? null;
     this.aborted = details.aborted ?? false;
+    this.operatorSignal = details.operatorSignal ?? null;
   }
 }
 
@@ -318,6 +519,9 @@ export class DeployProcessError extends Error {
  *   their own sinks and never merged, so a deploy failure reason (which the CDK
  *   CLI keeps on stderr even under `--ci`) stays on stderr while progress is on
  *   stdout.
+ * - **Optional curation.** With `curated` (set by callers at
+ *   `BLOCKS_LOG_LEVEL=quiet|normal`), raw lines and the runner's status lines
+ *   go to {@link CuratedStreams} instead; without it, every line is relayed raw.
  *
  * Resolves when the child exits 0; otherwise throws {@link DeployProcessError}.
  */
@@ -331,16 +535,27 @@ export async function runStreaming(
     env,
     label = 'deploy',
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
-    stdout = process.stdout,
+    // BLOCKS_LOG_STREAM=stderr (the cdk-blocks CLI): the relayed CloudFormation events are progress.
+    stdout = progressToStderr() ? process.stderr : process.stdout,
     stderr = process.stderr,
     now = Date.now,
     signalTarget = process,
+    onHostingUrl,
+    curated,
+    operation = 'deploy',
   } = options;
 
   const startedAt = now();
   let lastOutputAt = startedAt;
-  let aborting = false;
+  /** The signal that aborted the run, once one has (see {@link decideSignalResponse}). */
+  let abortedBy: NodeJS.Signals | null = null;
   let exitObserved = false;
+  // Tracks the resource CloudFormation is currently converging, so the
+  // heartbeat can name it instead of printing a bare tick.
+  const resources = createResourceTracker();
+  // The hosting URL is reported at most once, the first time it appears in the
+  // stream (well before the child exits).
+  let hostingUrlSeen = false;
   // Per signal, when its current deferral window opened. Kept per signal so a
   // deferred SIGHUP neither consumes the SIGTERM abort budget nor silently
   // swallows its own log line.
@@ -358,28 +573,51 @@ export async function runStreaming(
   const relay = (
     stream: NodeJS.ReadableStream | null | undefined,
     sink: OutputSink,
+    trackProgress: boolean,
   ): void => {
     if (!stream) return;
     const assembler = createLineAssembler();
     stream.setEncoding('utf-8');
     stream.on('data', (chunk: string) => {
       lastOutputAt = now();
-      for (const line of assembler.push(chunk)) sink.write(`${line}\n`);
+      for (const line of assembler.push(chunk)) {
+        if (trackProgress) observeProgressLine(line);
+        sink.write(`${line}\n`);
+      }
     });
     stream.on('end', () => {
-      for (const line of assembler.flush()) sink.write(`${line}\n`);
+      for (const line of assembler.flush()) {
+        if (trackProgress) observeProgressLine(line);
+        sink.write(`${line}\n`);
+      }
     });
   };
-  relay(child.stdout, stdout);
-  relay(child.stderr, stderr);
+  // Update the converging-resource tracker and surface the hosting URL the first
+  // time it appears — both read from the CDK progress stream on stdout.
+  const observeProgressLine = (line: string): void => {
+    resources.observe(line);
+    if (!hostingUrlSeen && onHostingUrl) {
+      const url = extractHostingUrlFromLine(line);
+      if (url) {
+        hostingUrlSeen = true;
+        onHostingUrl(url);
+      }
+    }
+  };
+  relay(child.stdout, curated?.stdout ?? stdout, true);
+  relay(child.stderr, curated?.stderr ?? stderr, false);
 
   const heartbeat =
     heartbeatMs > 0
       ? setInterval(() => {
           if (now() - lastOutputAt < heartbeatMs) return;
-          stdout.write(
-            `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — CloudFormation is converging (pid ${child.pid ?? '?'})\n`,
-          );
+          const converging = resources.current();
+          const waitingOn = converging
+            ? `waiting on ${describeConvergingResource(converging)}`
+            : 'CloudFormation is converging';
+          const message = `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — ${waitingOn} (pid ${child.pid ?? '?'})`;
+          if (curated) curated.status(message, 'heartbeat');
+          else stdout.write(`${message}\n`);
         }, heartbeatMs)
       : undefined;
   // Never let the heartbeat timer be the reason the process stays alive.
@@ -421,6 +659,8 @@ export async function runStreaming(
       const { action, message, coalesced } = decideSignalResponse(
         signal,
         openedAt === undefined ? null : now() - openedAt,
+        SIGNAL_COALESCE_MS,
+        operation,
       );
       if (action === 'defer') {
         // A coalesced duplicate is the same signal arriving twice (process group
@@ -430,13 +670,15 @@ export async function runStreaming(
         if (!coalesced) {
           deferredAt.set(signal, now());
           lastOutputAt = now();
-          stdout.write(`${message}\n`);
+          if (curated) curated.status(message, 'signal');
+          else stdout.write(`${message}\n`);
         }
         return;
       }
-      if (aborting) return; // already tearing down; a repeat signal is a no-op
-      aborting = true;
-      stdout.write(`${message}\n`);
+      if (abortedBy) return; // already tearing down; a repeat signal is a no-op
+      abortedBy = signal;
+      if (curated) curated.status(message, 'signal');
+      else stdout.write(`${message}\n`);
       // Reap the whole tree (npx → cdk → node), not just the npx parent, so an
       // abort cannot leave an orphaned CDK CLI still driving the stack.
       void terminateProcessTree(child, ABORT_GRACE_MS);
@@ -445,15 +687,16 @@ export async function runStreaming(
     signalTarget.on(signal, handler);
   }
 
+  let ok = false;
   try {
     const { code, signal } = await exited;
     // Let the pipes drain so a caller reading our stdout sees the child's final
     // lines (CDK's summary / failure reason) before the terminal status.
     await Promise.race([streamsEnded, delay(STREAM_FLUSH_GRACE_MS)]);
-    if (aborting) {
+    if (abortedBy) {
       throw new DeployProcessError(
-        `${command} was aborted by an operator signal after ${formatElapsed(now() - startedAt)}`,
-        { exitCode: code, signal, aborted: true },
+        `${command} was aborted by an operator signal (${abortedBy}) after ${formatElapsed(now() - startedAt)}`,
+        { exitCode: code, signal, aborted: true, operatorSignal: abortedBy },
       );
     }
     if (signal) {
@@ -468,8 +711,10 @@ export async function runStreaming(
         { exitCode: code },
       );
     }
+    ok = true;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     removeHandlers();
+    curated?.close(ok);
   }
 }

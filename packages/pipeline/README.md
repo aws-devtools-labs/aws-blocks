@@ -37,6 +37,48 @@ new Pipeline(stack, 'Pipeline', {
 For async stage factories (for example, `BlocksStack.create()`), use the static
 `Pipeline.create()` method instead of `new Pipeline()`.
 
+## Per-stage post-deploy steps (`postStage`)
+
+The optional `postStage` prop runs a **second per-stage phase** after a stage
+deploys — for example a step that consumes the stage's deploy outputs. It is invoked
+once per deploy stage and returns steps that are attached as that stage's post-deploy
+actions:
+
+```ts
+import { Duration } from 'aws-cdk-lib';
+import { CodeBuildStep } from 'aws-cdk-lib/pipelines';
+
+new Pipeline(stack, 'Pipeline', {
+  source: { repo: 'my-org/my-app', connectionArn: '...' },
+  branches: [{ branch: 'main', stages: [{ name: 'beta' }, { name: 'prod', bakeTime: Duration.minutes(10) }] }],
+  stageFactory: (scope, stageConfig) => new MyAppStack(scope, 'App', { env: stageConfig.env }),
+  postStage: ({ stage, stageConfig, source }) => [
+    new CodeBuildStep(`Smoke-${stageConfig.name}`, {
+      input: source, // the resolved pipeline source — see below
+      env: { STAGE: stageConfig.name },
+      commands: ['npm ci', 'npm run smoke'],
+    }),
+  ],
+});
+```
+
+The hook receives a `PostStageContext`:
+
+- **`stage`** — the CDK `Stage` the returned steps attach to.
+- **`stageConfig`** — the full stage config, including `env` (the stage's target
+  account/region); read it to make a post step target the same account/region.
+- **`source`** — the **resolved pipeline source file set** for this stage's branch.
+  Use it as a step's `input` so the step runs against the already-checked-out source.
+  This is exposed precisely so a caller never has to walk the construct tree and
+  string-match internal stage IDs to rediscover the source (which silently breaks on
+  any internal rename).
+
+**Ordering with `bakeTime`.** When a stage has both `postStage` steps and a
+`bakeTime`, the bake step is made to **depend on** the post-stage steps, so baking
+begins only after they complete rather than racing them in parallel. Returning
+`undefined` (or `[]`) adds nothing and leaves synthesis identical to a pipeline with
+no hook.
+
 ## Controlling the synth runtime
 
 The synth step's CodeBuild runtime can be customized via `synth.partialBuildSpec`.

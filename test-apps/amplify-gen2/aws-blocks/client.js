@@ -19,11 +19,12 @@ if (!BLOCKS_API_URL) {
   throw new Error('Blocks API URL not found in amplify_outputs.json. Did you deploy the backend?');
 }
 
-// Attach Cognito bearer token to every Blocks API call
+// Attach the Cognito access token to every Blocks API call (`Auth` accepts
+// access tokens only, never ID tokens).
 registerMiddleware({
   async onRequest(req) {
     const session = await fetchAuthSession();
-    const token = session.tokens?.idToken?.toString();
+    const token = session.tokens?.accessToken?.toString();
     if (token) req.headers['Authorization'] = `Bearer ${token}`;
     return req;
   }

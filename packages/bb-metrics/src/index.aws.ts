@@ -12,6 +12,7 @@ import type {
 	ExternalMetricsRef,
 	MetricsEmitter,
 } from './types.js';
+import { externalMetricsRef } from './from-existing.js';
 import { MetricsErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import {
@@ -52,7 +53,7 @@ export type {
  *
  * **When NOT to use:** If you need structured log output only, use `Logging`.
  * If you need distributed request tracing, use `Tracing`. If you need to store
- * time-series data for querying, use `Database` or `DistributedTable`.
+ * time-series data for querying, use `Database` or `KVStore`.
  *
  * **Best practices:**
  * - Keep dimension cardinality low (avoid user IDs or request IDs as dimensions)
@@ -215,7 +216,7 @@ export class Metrics extends Scope implements MetricsEmitter {
 	 * ```
 	 */
 	static fromExisting(namespace: string): ExternalMetricsRef {
-		return { __brand: 'ExternalMetricsRef' as const, namespace };
+		return externalMetricsRef(namespace);
 	}
 }
 

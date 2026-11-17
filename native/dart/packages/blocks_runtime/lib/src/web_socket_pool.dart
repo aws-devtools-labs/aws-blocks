@@ -1,5 +1,8 @@
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'user_agent.dart';
+import 'web_socket_connect.dart';
+
 /// Manages pooled WebSocket connections keyed by URL.
 class WebSocketPool {
   final Map<String, _PoolEntry> _pool = {};
@@ -11,7 +14,11 @@ class WebSocketPool {
       entry.refCount++;
       return entry.channel;
     }
-    final channel = WebSocketChannel.connect(Uri.parse(url));
+    // WebSocket upgrades bypass http.Client; connectWebSocket attaches this
+    // header where the platform permits custom upgrade headers.
+    final channel = connectWebSocket(Uri.parse(url), {
+      'User-Agent': blocksUserAgentToken,
+    });
     _pool[url] = _PoolEntry(channel: channel, refCount: 1);
     return channel;
   }

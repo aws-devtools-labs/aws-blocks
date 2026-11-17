@@ -18,9 +18,10 @@ function getSsrCookies(): string | undefined {
 /**
  * Get or lazily create the request cookie AsyncLocalStorage.
  *
- * In the API Lambda, `lambda-handler.ts` creates the store and registers it
- * on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__`. In the SSR Lambda (a separate
- * process), the store may not exist yet — this function creates it on demand.
+ * In the API Lambda (and the container HTTP server), `request-context.ts` creates
+ * the store and registers it on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__`. In
+ * the SSR Lambda (a separate process), the store may not exist yet — this function
+ * creates it on demand.
  *
  * This module is server-only (never bundled for the browser), so direct
  * `node:async_hooks` import is safe — no `webpackIgnore` needed.
@@ -224,6 +225,35 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
   return providers;
 }
 
+/** Options for {@link withAuth}. */
+export interface WithAuthOptions {
+  /**
+   * Run `fn` signed out when no cookies are found, instead of throwing a `401`.
+   *
+   * Applies only after the normal resolution order finds nothing: a non-empty
+   * `cookies` argument, an existing request context, and the registered
+   * providers still win. A missing, `null`, empty or blank `cookies` argument
+   * all count as "no cookies", so the option works whatever your framework's
+   * header API returns for a visitor without cookies.
+   *
+   * `fn` then runs with an empty request cookie value, so API calls inside it
+   * carry no `Cookie` header, like a signed-out browser call: public methods
+   * work, and methods gated with `auth.requireAuth` still answer `401`.
+   *
+   * @defaultValue false
+   *
+   * @example
+   * ```typescript
+   * // Node-style headers: `req.headers.cookie` is `undefined` without cookies
+   * const posts = await withAuth(() => api.listPosts(), req.headers.cookie, { allowAnonymous: true });
+   *
+   * // Next.js: built-in detection, signed-out visitors allowed
+   * const page = await withAuth(() => api.listPosts(), undefined, { allowAnonymous: true });
+   * ```
+   */
+  allowAnonymous?: boolean;
+}
+
 /**
  * Wraps an async function with authenticated cookie forwarding for SSR.
  *
@@ -236,7 +266,8 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * 2. Existing request context (Lambda handler already set it up)
  * 3. Registered cookie providers — Next.js and Nuxt are built-in, plus any
  *    you've added via `registerCookieProvider`
- * 4. Throws if no cookies found
+ * 4. Throws if no cookies found, unless `options.allowAnonymous` is set: then
+ *    runs `fn` without cookies
  *
  * **Built-in providers:**
  *
@@ -249,6 +280,7 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * @param cookies - Optional explicit cookie string. If omitted, auto-detects
  *   from the request context or registered providers. Pass this for frameworks
  *   without a registered provider (or use `registerCookieProvider` to add one).
+ * @param options - Optional settings; see {@link WithAuthOptions}.
  * @returns The return value of `fn`.
  *
  * @example
@@ -274,6 +306,17 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  *
  * @example
  * ```typescript
+ * // Public pages: signed-out visitors render instead of getting a 401.
+ * // Methods gated with `auth.requireAuth` still answer 401.
+ * const posts = await withAuth(
+ *   () => api.listPosts(),
+ *   request.headers.get('cookie'),
+ *   { allowAnonymous: true },
+ * );
+ * ```
+ *
+ * @example
+ * ```typescript
  * // Nuxt — auto-detects cookies via the active Nitro request event
  * // (built-in provider). Requires the experimental.asyncContext flag.
  * //
@@ -290,11 +333,13 @@ export function _getProviders(): ReadonlyArray<{ name: string; detect: CookiePro
  * });
  * ```
  *
- * @throws {Error} If no cookies are found and no provider detected them.
+ * @throws {Error} If no cookies are found, no provider detected them, and
+ *   `options.allowAnonymous` is not set.
  */
 export async function withAuth<T>(
   fn: () => Promise<T>,
   cookies?: string | null,
+  options?: WithAuthOptions,
 ): Promise<T> {
   if (cookies != null && cookies.trim()) {
     const store = getRequestCookieStore();
@@ -312,12 +357,20 @@ export async function withAuth<T>(
     return store.run(detected, fn);
   }
 
+  if (options?.allowAnonymous) {
+    // An empty store value forwards nothing, so `fn` runs like a signed-out
+    // browser call.
+    const store = getRequestCookieStore();
+    return store.run('', fn);
+  }
+
   const providerNames = providers.map(p => p.name).join(', ');
   throw new ApiError(
     `withAuth: No authentication cookies found. ` +
     `Tried providers: [${providerNames || 'none registered'}]. ` +
     `Ensure the user is logged in and cookies are being forwarded, ` +
-    `or pass cookies explicitly as the second argument.`,
+    `pass cookies explicitly as the second argument, ` +
+    `or pass { allowAnonymous: true } to run signed out.`,
     401,
   );
 }

@@ -1,0 +1,370 @@
+import { Scope } from '@aws-blocks/core';
+import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
+import { makeExternalUserPoolRef, type AdminGetterOf, type AuthCognitoMockOptions, type AttrOf, type AuthSession, type CognitoUser, type ConfirmSignInOptions, type ConfirmSignInResponse, type DeviceRecord, type CompletePasskeyRegistrationResult, type PasskeyDescription, type StartPasskeyRegistrationResult, type FetchAuthSessionOptions, type GroupOf, type MFAPreference, type MFAPreferenceInput, type ReadAttrOf, type ResetPasswordResult, type SignInOptions, type SignInResult, type SignUpOptions, type ConfirmSignUpResult, type SignUpResult, type UpdateAttributeOutcome } from './types.js';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+export * from './types.js';
+export { SessionStore, type SessionRecord } from './sessions.js';
+/**
+ * Cognito authentication — username/password + MFA + groups.
+ *
+ * **When to use:** Auth with MFA, user groups, and custom attributes on top
+ * of AWS Cognito. For simple username/password without Cognito, use
+ * `AuthBasic`. For direct OIDC (no Cognito), use `AuthOIDC`.
+ *
+ * **When NOT to use:** Prototypes or internal tools that don't need MFA
+ * (use `AuthBasic`).
+ *
+ * **Best practices:**
+ * - Enable MFA for production (`mfa: 'required'`).
+ * - Use groups + `requireRole(context, 'admins')` for RBAC rather than
+ *   custom attributes.
+ * - Keep custom attributes minimal — prefer application-level storage for
+ *   mutable user data.
+ *
+ * **Scaling:** Cognito scales automatically. Default quotas: 40 sign-ups/sec,
+ * 120 sign-ins/sec (adjustable via Service Quotas). Session records live
+ * in a nested DynamoDB table provisioned by this BB via KVStore — single-
+ * digit ms reads, pay-per-request billing.
+ */
+export declare class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMockOptions> extends Scope implements BlocksAuth {
+    readonly options: O;
+    private readonly sessions;
+    private readonly stateFile;
+    private readonly sessionDuration;
+    private readonly crossDomain;
+    private state;
+    private challenges;
+    /**
+     * The full admin surface, built once against the live `this.state`. Typed
+     * against the wide base so the single cast in `get admin()` is the only
+     * place the generic projection is applied. `actions` scoping is a
+     * compile-time concern (the type hides ungranted methods); at runtime
+     * every method exists.
+     */
+    private readonly adminSurface;
+    /** @internal Logger for internal operations. Defaults to error-level when not provided. */
+    protected log: ChildLogger;
+    constructor(scope: ScopeParent, id: string, options?: O);
+    /**
+     * Opt-in server-side admin surface (group membership + user lifecycle).
+     *
+     * Returns `AdminDisabled` (any member access is a compile error) unless the
+     * pool was constructed with an `admin` options object, and throws at
+     * runtime for untyped JS callers that reach past the type system. The set
+     * of methods is narrowed by `admin.actions`; the runtime object always
+     * carries every method (the type hides the ungranted ones).
+     *
+     * Because the mock holds a single in-memory `state`, every admin mutation
+     * is immediately visible to this same instance's `signIn` / `requireRole`.
+     *
+     * @category admin
+     */
+    get admin(): AdminGetterOf<O>;
+    /**
+     * Throw a clear error when an admin method's action group wasn't granted by
+     * `admin.actions` — the runtime half of the {@link AdminActionGate} compile
+     * gate, so untyped JS callers (or widened generics) fast-fail here instead
+     * of getting a cryptic AWS `AccessDenied` from Cognito.
+     */
+    private assertAdminAction;
+    /**
+     * Build the mock admin surface against the live `this.state`. All mutators
+     * call the existing private `flushToDisk()` so changes persist and are seen
+     * by the next request on this instance.
+     */
+    private buildAdminSurface;
+    /** Generate a policy-compliant temporary password for admin-created users. */
+    private generateTemporaryPassword;
+    /**
+     * Wrap a pre-provisioned Cognito User Pool instead of creating one.
+     * Pass the result via `AuthCognitoOptions.userPool`.
+     */
+    static fromExisting: typeof makeExternalUserPoolRef;
+    /**
+     * Register a new user.
+     *
+     * @param username - The username (typically email).
+     * @param password - The password; must satisfy `options.passwordPolicy`.
+     * @param options - Custom attributes + client metadata.
+     * @returns `{ isSignUpComplete, userId, nextStep }`. In mock mode,
+     *   `nextStep.name === 'CONFIRM_SIGN_UP'` is returned unless `mfa: 'off'`
+     *   and no required attributes are configured.
+     * @throws {AuthCognitoErrors.UserAlreadyExists} If the username is taken.
+     * @throws {AuthCognitoErrors.InvalidPassword} If the password doesn't satisfy the policy.
+     *
+     * @example
+     * ```typescript
+     * const { isSignUpComplete, nextStep } = await auth.signUp('alice', 'P@ssw0rd!', {
+     *   attributes: { email: 'alice@example.com' },
+     * });
+     * if (!isSignUpComplete) { /* prompt for nextStep.codeDeliveryDetails *\/ }
+     * ```
+     *
+     * @category client
+     */
+    signUp(username: string, password: string, options?: SignUpOptions<O>): Promise<SignUpResult>;
+    signUp(username: string, password: string, options: SignUpOptions<O>, context: BlocksContext): Promise<SignUpResult>;
+    /**
+     * Confirm a new user's sign-up with the code delivered to them.
+     *
+     * An unknown username is answered exactly like a wrong code
+     * (`CodeMismatch`), never `UserNotFound`, so the call cannot be used to
+     * probe which accounts exist — matching Cognito with
+     * `PreventUserExistenceErrors`.
+     *
+     * @throws {AuthCognitoErrors.CodeMismatch}
+     * @throws {AuthCognitoErrors.ExpiredCode}
+     *
+     * @category client
+     */
+    confirmSignUp(username: string, code: string): Promise<ConfirmSignUpResult>;
+    confirmSignUp(username: string, code: string, context: BlocksContext): Promise<ConfirmSignUpResult>;
+    /**
+     * Complete the auto-sign-in bridge — see `index.aws.ts` for the full
+     * contract docstring. Mirror implementation: read the encrypted
+     * cookie, clear it, replay `signIn` with the cached credentials.
+     *
+     * @throws {AuthCognitoErrors.NotAuthenticated} when no bridging cookie
+     *   is present, the cookie is expired/tampered, or the username
+     *   doesn't match an active sign-up flow.
+     *
+     * @category client
+     */
+    autoSignIn(context: BlocksContext): Promise<SignInResult<O>>;
+    /**
+     * Resend the sign-up verification code.
+     *
+     * Resolves for an unknown username too (no code is sent), never throwing
+     * `UserNotFound`, so the call cannot be used to probe which accounts
+     * exist — matching Cognito with `PreventUserExistenceErrors`.
+     *
+     * @category client
+     */
+    resendSignUpCode(username: string): Promise<void>;
+    /**
+     * Authenticate a user. Returns `{ status: 'signedIn', user }` on success
+     * (also sets the session cookie), or `{ status: 'continueSignIn', nextStep }`
+     * when a challenge is required (MFA, NEW_PASSWORD_REQUIRED, etc.).
+     *
+     * @throws {AuthCognitoErrors.NotAuthorized} Wrong password.
+     * @throws {AuthCognitoErrors.UserNotConfirmed} User hasn't confirmed sign-up.
+     *
+     * @category client
+     */
+    signIn(username: string, password: string, context: BlocksContext, options?: SignInOptions): Promise<SignInResult<O>>;
+    /**
+     * Mock-side USER_AUTH first-factor picker. When a `preferredChallenge` is
+     * provided the corresponding challenge is issued directly; otherwise the
+     * available factors (derived from pool config + the user's verified
+     * attributes) are surfaced via `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION`.
+     * Mirrors the AWS runtime's USER_AUTH dispatcher so `setAuthState`
+     * sequences line up in both modes.
+     */
+    private firstFactorChallenge;
+    /**
+     * Advance a sign-in challenge (MFA, NEW_PASSWORD_REQUIRED, etc.).
+     *
+     * The `session` argument is whatever the previous call returned in
+     * `nextStep.session`. The `response` is discriminated:
+     *
+     * - `{ code: string }` — SMS / TOTP / Email code + TOTP-setup / Email-setup.
+     * - `{ newPassword: string }` — `CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`.
+     * - `{ mfaType: MfaTypeOf<O> }` — MFA selection / MFA setup selection.
+     *
+     * For call sites that still need to pass a raw string (internal dispatch
+     * from the state-machine `setAuthState` path), a third overload accepts
+     * `string` and maps it to `{ code: … }` semantics at the implementation
+     * boundary.
+     *
+     * @throws {AuthCognitoErrors.CodeMismatch}
+     * @throws {AuthCognitoErrors.ExpiredCode} Session token expired.
+     * @throws {AuthCognitoErrors.InvalidPassword} NEW_PASSWORD_REQUIRED with a policy-violating password.
+     *
+     * @category client
+     */
+    confirmSignIn(session: string, response: ConfirmSignInResponse<O>, context: BlocksContext, options?: ConfirmSignInOptions<O>): Promise<SignInResult<O>>;
+    confirmSignIn(session: string, response: string, context: BlocksContext, options?: ConfirmSignInOptions<O>): Promise<SignInResult<O>>;
+    private confirmSignInImpl;
+    /**
+     * Clear the session cookie (and when `global: true`, invalidate the
+     * refresh token at Cognito). In mock mode `global: true` deletes the
+     * stored session record.
+     *
+     * @category client
+     */
+    signOut(context: BlocksContext, options?: {
+        global?: boolean;
+    }): Promise<void>;
+    /** @category client */
+    requireAuth(context: BlocksContext): Promise<CognitoUser<O>>;
+    /** @category client */
+    checkAuth(context: BlocksContext): Promise<boolean>;
+    /** @category client */
+    getCurrentUser(context: BlocksContext): Promise<CognitoUser<O> | null>;
+    /**
+     * Return the current auth session's tokens, or `{ tokens: undefined }`
+     * when there is no valid session. Pass `{ forceRefresh: true }` to rotate
+     * the tokens (mock: re-mints with a fresh `exp`; AWS: calls
+     * `REFRESH_TOKEN_AUTH` against Cognito). Shape mirrors Amplify-JS v6's
+     * `AuthSession` for interoperability — code using Amplify-JS patterns
+     * works without changes.
+     *
+     * The mock intentionally does not model a refresh-token lifecycle — an
+     * expired access token is simply treated as dead and the session is
+     * cleared, matching `getCurrentUser` semantics.
+     *
+     * @category client
+     */
+    fetchAuthSession(context: BlocksContext, options?: FetchAuthSessionOptions): Promise<AuthSession>;
+    /**
+     * Return the authenticated user, additionally asserting they belong to
+     * `role`. Throws 403 if not a member.
+     *
+     * @throws {AuthCognitoErrors.NotAuthenticated}
+     * @throws {AuthCognitoErrors.NotAuthorized}
+     * @category client
+     */
+    requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>>;
+    /**
+     * Read live attributes from the user record — mirrors the AWS runtime's
+     * `GetUserCommand` call. Session records are only as current as the last
+     * ID-token issue, so reading them directly would return stale data after
+     * `updateUserAttributes`.
+     *
+     * @category client
+     */
+    fetchUserAttributes(context: BlocksContext): Promise<Partial<Record<ReadAttrOf<O>, string>>>;
+    /** @category client */
+    updatePassword(context: BlocksContext, oldPassword: string, newPassword: string): Promise<void>;
+    /** @category client */
+    updateUserAttributes(context: BlocksContext, attributes: Partial<Record<AttrOf<O>, string>>): Promise<Partial<Record<AttrOf<O>, UpdateAttributeOutcome>>>;
+    /** @category client */
+    updateUserAttribute(context: BlocksContext, name: AttrOf<O>, value: string): Promise<UpdateAttributeOutcome>;
+    /** @category client */
+    confirmUserAttribute(context: BlocksContext, name: AttrOf<O>, code: string): Promise<void>;
+    /** @category client */
+    sendUserAttributeVerificationCode(context: BlocksContext, name: AttrOf<O>): Promise<void>;
+    /** @category client */
+    deleteUser(context: BlocksContext): Promise<void>;
+    /**
+     * Initiate password reset. Sends a verification code via email/SMS.
+     *
+     * **Security note:** Always returns success (never throws `UserNotFound`),
+     * even for non-existent users, to prevent username enumeration. Callers
+     * should NOT rely on the return value to infer whether an account exists.
+     *
+     * @category client
+     */
+    resetPassword(username: string): Promise<ResetPasswordResult>;
+    /**
+     * Complete a password reset with the code from `resetPassword`.
+     * An unknown username is answered exactly like a wrong code
+     * (`CodeMismatch`), never `UserNotFound`.
+     *
+     * @category client
+     */
+    confirmResetPassword(username: string, code: string, newPassword: string): Promise<void>;
+    /** @category client */
+    setUpTOTP(context: BlocksContext): Promise<{
+        sharedSecret: string;
+    }>;
+    /** @category client */
+    verifyTOTPSetup(context: BlocksContext, code: string): Promise<void>;
+    /**
+     * Update the MFA preferences for the signed-in user.
+     *
+     * Per-factor delta compatible with Amplify-JS v6. Factors omitted from the
+     * input are left unchanged. At most one factor may be set to
+     * `'PREFERRED'` per call — setting two raises
+     * `InvalidParameterException`. Setting `'PREFERRED'` on a new factor
+     * automatically demotes the previously-preferred factor to
+     * `'NOT_PREFERRED'` (matches Cognito's documented behavior).
+     *
+     * @throws {AuthCognitoErrors.InvalidParameter} multiple `'PREFERRED'`
+     *   factors in one call, OR a factor the pool doesn't advertise in
+     *   `mfaTypes`.
+     *
+     * @category client
+     */
+    updateMFAPreference(context: BlocksContext, input: MFAPreferenceInput<O>): Promise<void>;
+    /**
+     * Read the signed-in user's current MFA preferences.
+     *
+     * `enabled` may contain any number of factors. `preferred` is
+     * zero-or-one of those factors (or the `'NOMFA'` sentinel). Verified
+     * contact attributes (`email_verified`, `phone_number_verified`) are
+     * surfaced as enabled factors if the pool's `mfaTypes` allows them —
+     * this matches Cognito's behavior where a verified email auto-enables
+     * Email MFA without an explicit preference call.
+     *
+     * @category client
+     */
+    fetchMFAPreference(context: BlocksContext): Promise<MFAPreference<O>>;
+    /** @category client */
+    fetchDevices(context: BlocksContext): AsyncIterable<DeviceRecord>;
+    /** @category client */
+    rememberDevice(context: BlocksContext): Promise<void>;
+    /** @category client */
+    forgetDevice(context: BlocksContext, deviceKey: string): Promise<void>;
+    /**
+     * Mock passkey enrolment. Returns a deterministic
+     * `credentialCreationOptions` blob; the browser is expected to feed it
+     * into `navigator.credentials.create(...)` (or, in unit tests, hand the
+     * mock an arbitrary credential JSON with a stable `id`). The signature
+     * is intentionally loose — see {@link confirmSignIn}'s WEB_AUTHN branch.
+     *
+     * @category client
+     */
+    startPasskeyRegistration(context: BlocksContext): Promise<StartPasskeyRegistrationResult>;
+    /**
+     * Mock passkey enrolment finalisation. Persists the credential's `id` so
+     * future sign-ins can match against it.
+     *
+     * @category client
+     */
+    completePasskeyRegistration(context: BlocksContext, credential: string): Promise<CompletePasskeyRegistrationResult>;
+    /** @category client */
+    listPasskeys(context: BlocksContext): Promise<PasskeyDescription[]>;
+    /** @category client */
+    deletePasskey(context: BlocksContext, credentialId: string): Promise<void>;
+    createApi(): AuthStateApi;
+    private requireUser;
+    private prefixCustomAttrs;
+    private generateCode;
+    private verifyCode;
+    private enforcePasswordPolicy;
+    /**
+     * Resolve which attribute the pool treats as a synthetic copy of the
+     * username. Mirrors how Cognito interprets `UsernameAttributes` —
+     * `signInWith: 'email'` (singular) or `signInWith: ['email']` makes
+     * `email` the alias; `'phone'` makes `phone_number` the alias. The
+     * default (`['username', 'email']` / `'username'`) has no alias —
+     * `email` is just a regular configurable attribute.
+     *
+     * Returns the attribute name to populate from the username value at
+     * sign-up time, or `undefined` when no alias resolution applies.
+     */
+    private usernameAliasAttr;
+    private selectSignInChallenge;
+    private challengeForMfaType;
+    private challengeForMfaSetup;
+    /** Mint a new challenge token, store it server-side, and bake it into the returned next-step. */
+    private issueChallenge;
+    private issueSession;
+    private sessionIdFromCookie;
+    private toCognitoUser;
+    private codeDeliveryFor;
+    private loadFromDisk;
+    private flushToDisk;
+    /**
+     * Write the most-recently-issued verification code to disk so e2e tests
+     * can retrieve it without mailbox delivery. **Test scaffolding only** —
+     * not secure storage, and the file lives inside `.bb-data/<fullId>/`
+     * which is gitignored at the repo root. Overwritten on every code
+     * issuance, so only the last code of any purpose is visible.
+     */
+    private writeLastCode;
+    private seedGroups;
+}
+//# sourceMappingURL=index.d.ts.map

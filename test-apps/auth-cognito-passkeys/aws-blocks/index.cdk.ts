@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -19,9 +18,5 @@ const stackName = sandboxMode
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,
 });
-
-if (sandboxMode) {
-  RemovalPolicies.of(blocksStack).destroy();
-  Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
-}

@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,23 +35,52 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
 import blocks.testapp.Api
 import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
+import blocks.testapp.AuthState
+import blocks.testapp.Servers
 import blocks.testapp.Todo
+import blocks.testapp.api
+import blocks.testapp.authApi
+import blocks.testapp.invoke
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.signIn
 import com.aws.blocks.example.ui.theme.BlocksKotlinExampleTheme
 import kotlinx.coroutines.launch
 
+/**
+ * Owns the entry point so that it outlives the configuration changes that destroy the Activity.
+ * `addCloseable` closes it when the ViewModel is cleared, which keeps the HTTP engine and its
+ * pooled connections alive across a rotation.
+ */
+class MainViewModel : ViewModel() {
+    // The zero-argument form reaches the server the spec declares, so switching backends is a
+    // regeneration rather than an edit here.
+    val blocks = Blocks().also(::addCloseable)
+}
+
+/** Provider ids from the backend's `providers` (`../typescript/aws-blocks/index.ts`). */
+private val providers = listOf("google")
+
+/**
+ * Where the backend relays the sign-in result. It must match `oidc { relayTo }` in
+ * `app/build.gradle.kts` and the backend's `redirects.allowedRelayOrigins`.
+ */
+private const val RELAY_TO = "blocks.testapp://oidcRedirect"
+
 class MainActivity : ComponentActivity() {
-    val auth = AuthApi()
-    val api = Api()
+    private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val auth = viewModel.blocks.authApi
+        val api = viewModel.blocks.api
         setContent {
             BlocksKotlinExampleTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -60,7 +90,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        OidcAuth(auth = auth)
+                        OidcAuth(auth = auth, blocks = viewModel.blocks)
                         Spacer(modifier = Modifier.height(16.dp))
                         CursorTracker(api = api)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -79,25 +109,20 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun OidcAuth(auth: AuthApi) {
-    var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
+fun OidcAuth(auth: AuthApi, blocks: Blocks) {
+    // The `Auth` block serves its sign-in routes at fixed paths, so the client is built locally.
+    // It keeps the signed-in user in memory, so it is remembered for the composition's lifetime.
+    val client = remember { OidcClient.forAuth(blocks.client(), providers, RELAY_TO) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    // A client that has not signed in this launch reports no user, so the starting point comes
+    // from the server, which verifies the session cookie and answers for earlier launches too.
+    var restoredState by remember { mutableStateOf<AuthState?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        oidcClient = runCatching { auth.getClient() }.getOrElse {
-            error = it.message
-            null
-        }
-    }
-
-    val client = oidcClient
-    if (client == null) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
-            Text(text = error ?: "Loading...")
-        }
-        return
+        // A failure here only means no session to restore, so the screen falls back to sign-in.
+        runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
     }
 
     val authState by client.authState.collectAsState()
@@ -105,31 +130,39 @@ fun OidcAuth(auth: AuthApi) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
 
-        when (val state = authState) {
-            is OidcAuthState.SignedIn -> {
-                Text(text = "Signed in as: ${state.user.username}")
-                Button(onClick = {
-                    scope.launch {
-                        error = runCatching { client.signOut() }.exceptionOrNull()?.message
-                    }
-                }) {
-                    Text("Sign Out")
+        // Loading means the client has not signed in or out yet, so it has no opinion and the
+        // restored session stands in. Signing in or out gives it one, and it wins.
+        val username = when (val state = authState) {
+            is OidcAuthState.SignedIn -> state.user.username
+            OidcAuthState.SignedOut -> null
+            OidcAuthState.Loading -> restoredState
+                ?.takeIf { it.state == AuthState.State.SignedIn }
+                ?.user
+                ?.username
+        }
+
+        if (username != null) {
+            Text(text = "Signed in as: $username")
+            Button(onClick = {
+                scope.launch {
+                    error = runCatching { client.signOut() }.exceptionOrNull()?.message
                 }
+            }) {
+                Text("Sign Out")
             }
-            else -> {
-                client.providers.forEach { provider ->
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Sign in with $provider")
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
+        } else {
+            client.providers.forEach { provider ->
+                Button(
+                    onClick = {
+                        scope.launch {
+                            error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Sign in with $provider")
                 }
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
 

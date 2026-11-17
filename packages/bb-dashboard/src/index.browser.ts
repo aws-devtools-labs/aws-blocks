@@ -6,16 +6,13 @@
  * Dashboard is a CDK-only construct with no browser-side behavior.
  * Exported for pattern consistency with other BBs.
  */
-export const DashboardErrors = {
-	InvalidMetricConfig: 'InvalidMetricConfigException',
-} as const;
+export { DashboardErrors } from './errors.js';
 
 export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
 } from './types.js';
 
 export class Dashboard {

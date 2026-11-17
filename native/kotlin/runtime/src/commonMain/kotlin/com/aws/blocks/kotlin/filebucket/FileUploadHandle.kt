@@ -13,12 +13,16 @@ import io.ktor.utils.io.writeFully
 import kotlinx.io.Buffer
 import kotlinx.io.RawSource
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 class FileUploadHandle(
     val url: String,
     private val fileContentType: String? = null,
+    // No cookie jar: [url] is pre-authorized, so it carries its own credential.
     private val httpClient: HttpClient = defaultHttpClient()
 ) {
 
@@ -29,6 +33,17 @@ class FileUploadHandle(
             val contentType = obj["contentType"]?.jsonPrimitive?.content
             return FileUploadHandle(url, contentType)
         }
+    }
+
+    /**
+     * This handle's descriptor, as the server's `toJSON()` sends it and [fromJson] reads it:
+     * `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`. A generated client sends a
+     * handle parameter this way.
+     */
+    fun toJson(): JsonObject = buildJsonObject {
+        put("__blocks", "file-bucket/upload")
+        put("url", url)
+        fileContentType?.let { put("contentType", it) }
     }
 
     suspend fun upload(body: ByteArray) {
@@ -49,6 +64,19 @@ class FileUploadHandle(
         }
     }
 
+    /**
+     * Streams [source] to the presigned upload URL.
+     *
+     * When [contentLength] is `null` the body is sent without a `Content-Length`
+     * header (chunked). If the handle was created on the server with a
+     * `contentLength` option, that size is signed into the URL and the upload is
+     * rejected unless it sends exactly that `Content-Length`: pass the same value
+     * here, and make [source] yield exactly that many bytes.
+     *
+     * @param source The bytes to upload.
+     * @param contentLength The body size in bytes, or `null` to stream without one.
+     * @throws TransferableIOException On an HTTP error or a network failure.
+     */
     suspend fun uploadFrom(source: RawSource, contentLength: Long? = null) {
         try {
             val parsedContentType = fileContentType?.let { ContentType.parse(it) }

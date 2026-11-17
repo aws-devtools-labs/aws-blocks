@@ -5,3 +5,5 @@
 export class FileBucket {
   constructor(...args: any[]) {}
 }
+
+export { FileBucketErrors } from './errors.js';

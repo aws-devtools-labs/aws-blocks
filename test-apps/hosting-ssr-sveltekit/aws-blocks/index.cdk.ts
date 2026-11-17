@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { Hosting, BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -24,10 +23,11 @@ const stackName = sandboxMode
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  // Disposable CI test stack: force the sandbox posture (DESTROY, no deletion
+  // protection) so teardown works in every deploy mode. A real app would use
+  // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
+  defaults: BlocksPresets.sandbox,
 });
-
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
 
 // SvelteKit SSR deploy. The Blocks SvelteKit adapter runs @sveltejs/adapter-node
 // on Lambda via the Lambda Web Adapter (http-server compute). `api: blocksStack`
@@ -39,10 +39,12 @@ new Hosting(blocksStack, 'Hosting', {
   buildOutputDir: 'build',
   framework: 'sveltekit',
   api: blocksStack,
-  compute: {
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(30),
-  },
+  // HOSTING_COMPUTE_TYPE=web-function runs the same suite against AWS Lambda
+  // Web Functions (the CI matrix covers both compute types).
+  compute:
+    process.env.HOSTING_COMPUTE_TYPE === 'web-function'
+      ? { type: 'web-function', timeout: cdk.Duration.seconds(30) }
+      : { memorySize: 1024, timeout: cdk.Duration.seconds(30) },
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-sveltekit');

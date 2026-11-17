@@ -1,0 +1,337 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * CDK-side tests for the Agent BB.
+ *
+ * Pin that the Agent provisions an AgentCore Runtime for the streaming loop that runs AS the shared
+ * Blocks execution role (the same principal as the handler) — not a bespoke per-runtime role. That
+ * shared role already carries everything the loop touches (Realtime publish via the handler wiring,
+ * Bedrock, the conversation/message tables, the session bucket); the Agent adds only the
+ * AgentCore-specific bits — the scoped `bedrock-agentcore` assume-role trust, Bedrock model access,
+ * and the shared handler's permission to INVOKE the runtime — and injects the config location so the
+ * container loads the same app config as the handler.
+ */
+import { test, before, after } from 'node:test';
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as cdk from 'aws-cdk-lib';
+import { Match, Template } from 'aws-cdk-lib/assertions';
+import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { Agent } from './index.cdk.js';
+
+/**
+ * Inject LambdaCompute as the stack's default compute, the same way
+ * `@aws-blocks/blocks` does for real apps. `main` (PR #459) made the Agent
+ * resolve the stack's `defaultCompute` at construction (the Realtime/AgentCore
+ * wiring reads it), so a bare handler-only stub stack (no default compute) can
+ * no longer synthesize it — `BlocksStack.create` initializes the default
+ * compute the getter resolves to. (`root as never` is core's existing plumbing
+ * pattern for the factory signature.)
+ */
+const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
+
+/** A real directory to hand fromCodeAsset (any existing dir works for a synth-only test). */
+const ASSET_DIR = dirname(fileURLToPath(import.meta.url));
+
+let tmpDir: string;
+let handlerPath: string;
+let backendPath: string;
+
+before(() => {
+	// Building Blocks resolve to their mock entry points unless `--conditions=cdk`
+	// is active; keep it set so `BlocksStack.create` produces real CloudFormation.
+	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
+	// `BlocksStack.create` needs a real backend handler + backend module on disk
+	// (it imports the backend module and points the handler compute at the file).
+	tmpDir = mkdtempSync(join(ASSET_DIR, 'tmp-agent-cdk-'));
+	handlerPath = join(tmpDir, 'handler.mjs');
+	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
+	backendPath = join(tmpDir, 'backend.mjs');
+	writeFileSync(backendPath, 'export default () => {};\n');
+});
+
+after(() => {
+	rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function synth(): Promise<Template> {
+	const app = new cdk.App();
+	// Real BlocksStack (with the shared executionRole/BlocksRole + a LambdaCompute default compute)
+	// so the Agent can resolve its default compute. `id` === 'teststack' so BLOCKS_STACK_NAME (derived
+	// from the owning root id) resolves to 'teststack', which the injection assertion below matches.
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	// agentcoreAssetPath bypasses the synth-time co-bundle (which needs a BlocksStack backend path).
+	new Agent(stack, 'agent', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	return Template.fromStack(stack);
+}
+
+test('CDK: Agent provisions an AgentCore Runtime for the loop', async () => {
+	const template = await synth();
+	assert.ok(
+		Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length >= 1,
+		'expected an AWS::BedrockAgentCore::Runtime resource',
+	);
+});
+
+test('CDK: the loop runs as the shared execution role, which carries everything it touches', async () => {
+	const template = await synth();
+	const json = JSON.stringify(template.toJSON());
+	// Realtime publish (both halves) — load-bearing for streaming from the container. Granted to the
+	// shared role by the Realtime BB's handler wiring (not by the Agent), and inherited because the
+	// loop runs AS that role.
+	assert.ok(json.includes('execute-api:ManageConnections'), 'Realtime postToConnection');
+	assert.ok(json.includes('dynamodb:Query'), 'connections-table + history query');
+	// Model + storage the loop uses (Bedrock granted here; S3/DynamoDB via the child BBs).
+	assert.ok(json.includes('bedrock:InvokeModel'), 'Bedrock invoke');
+	assert.ok(json.includes('s3:GetObject'), 'session-bucket access (via FileBucket)');
+	// The RPC handler (also the shared role) can start the loop.
+	assert.ok(json.includes('bedrock-agentcore:InvokeAgentRuntime'), 'InvokeAgentRuntime');
+	// The runtime runs AS the shared BlocksRole — not a bespoke per-runtime role. Its RoleArn
+	// should reference BlocksRole, and there should be no `RuntimeRole` construct anywhere.
+	const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as { Properties?: Record<string, unknown> };
+	assert.ok(JSON.stringify(runtime.Properties ?? {}).includes('BlocksRole'), 'runtime executionRole should be the shared BlocksRole');
+	assert.ok(!json.includes('RuntimeRole'), 'no bespoke per-runtime role should be created');
+	// The container is given the config location so loadConfigToProcessEnv() loads the same full app
+	// config as the handler (delivers BLOCKS_RT_CALLBACK_URL + any config-backed BB values a tool needs).
+	const runtimeJson = JSON.stringify(runtime.Properties ?? {});
+	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_BUCKET'), 'runtime must be injected BLOCKS_CONFIG_BUCKET');
+	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_KEY'), 'runtime must be injected BLOCKS_CONFIG_KEY');
+	// BLOCKS_STACK_NAME must be the owning root id (`backendStackName`) — the SAME value the handler
+	// uses to derive resource names — so the container's namespace matches what CDK provisioned. Here
+	// the owning BlocksStack's id is 'teststack', so backendStackName resolves to 'teststack'.
+	assert.ok(runtimeJson.includes('BLOCKS_STACK_NAME'), 'runtime must be injected BLOCKS_STACK_NAME');
+	assert.ok(runtimeJson.includes('teststack'), 'BLOCKS_STACK_NAME resolves to the owning root id');
+});
+
+test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', async () => {
+	// Core is BB-agnostic — it does not trust bedrock-agentcore. The Agent adds that trust here, so
+	// the AgentCore Runtime can assume the shared role it runs AS. It must be scoped by
+	// aws:SourceAccount (AWS's recommended AgentCore trust policy), and lambda trust must remain.
+	const template = await synth();
+	const roles = template.findResources('AWS::IAM::Role');
+	const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
+	assert.ok(blocksRoleId, 'expected the shared BlocksRole');
+
+	const statements = roles[blocksRoleId].Properties.AssumeRolePolicyDocument.Statement as Array<{
+		Principal?: { Service?: string | string[] };
+		Condition?: Record<string, Record<string, unknown>>;
+	}>;
+	const servicesOf = (s: (typeof statements)[number]) => {
+		const svc = s.Principal?.Service;
+		return Array.isArray(svc) ? svc : svc ? [svc] : [];
+	};
+	const services = statements.flatMap(servicesOf);
+	assert.ok(services.includes('lambda.amazonaws.com'), 'shared role must stay Lambda-assumable');
+	assert.ok(services.includes('bedrock-agentcore.amazonaws.com'), 'shared role must be assumable by the AgentCore Runtime');
+
+	const agentCoreStmt = statements.find(s => servicesOf(s).includes('bedrock-agentcore.amazonaws.com'));
+	assert.ok(agentCoreStmt?.Condition, 'AgentCore trust statement must carry a scoping Condition');
+	assert.ok(
+		JSON.stringify(agentCoreStmt.Condition).includes('aws:SourceAccount'),
+		'AgentCore trust must be scoped by aws:SourceAccount',
+	);
+});
+
+test('CDK: multiple agents add the identical shared-role grants ONCE, not per-agent', async () => {
+	// Every agent would otherwise add the SAME bedrock-agentcore trust / Bedrock / InvokeAgentRuntime
+	// statements to the one shared role. They're identical (stack-scoped), so they must be added
+	// exactly once regardless of agent count — keeping the shared role's policy from bloating with
+	// duplicates. (Overflow into managed policies is a normal CDK mechanism and not asserted against.)
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	for (const id of ['agent1', 'agent2', 'agent3']) {
+		new Agent(stack, id, { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	}
+	const template = Template.fromStack(stack);
+	const json = JSON.stringify(template.toJSON());
+
+	// Three runtimes (per-agent), but the shared-role grant statements appear once (deduped).
+	assert.strictEqual(Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length, 3, 'three runtimes');
+	const invokeGrants = json.split('bedrock-agentcore:InvokeAgentRuntime').length - 1;
+	assert.strictEqual(invokeGrants, 1, `InvokeAgentRuntime should be granted once, found ${invokeGrants}`);
+});
+
+test('CDK: an over-long session bucket name is shortened, and the shared role is granted on that bucket', async () => {
+	// FX58: the SB3 production stack's `preset-balanced` agent. Its session bucket's `fullId`
+	// (`<stack>-test-app-preset-balanced-sn`) is 64 characters, so FileBucket provisions the shortened
+	// `deriveBucketName` form. The grant must reference that bucket, and nothing may name the raw
+	// `fullId` as a bucket. `session-bucket.aws.test.ts` pins that the deployed loop addresses the
+	// same literal.
+	const stackId = 'bb-test-prod-sb3prod-devuser1-b1e1a6';
+	const fullId = `${stackId}-test-app-preset-balanced-sn`;
+	const shortened = 'bb-test-prod-sb3prod-devuser1-b1e1a6-test-app-preset-b-0c16bd0c';
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, stackId, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	const testApp = new Scope('test-app', { parent: stack });
+	new Agent(testApp, 'preset-balanced', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	const template = Template.fromStack(stack);
+
+	const buckets = template.findResources('AWS::S3::Bucket', { Properties: { BucketName: shortened } });
+	const bucketIds = Object.keys(buckets);
+	assert.strictEqual(bucketIds.length, 1, `expected one bucket named ${shortened}`);
+	const [bucketId] = bucketIds;
+
+	// The grant on the shared role names the provisioned bucket (by its logical id), object-level too.
+	const policies = Object.values(template.findResources('AWS::IAM::Policy')) as Array<{
+		Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[]; Resource: unknown }> } };
+	}>;
+	const statements = policies.flatMap((p) => p.Properties.PolicyDocument.Statement);
+	const onBucket = statements.filter((s) => JSON.stringify(s.Resource).includes(`"${bucketId}"`));
+	const actions = onBucket.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+	assert.ok(actions.includes('s3:PutObject'), `s3:PutObject on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(actions.includes('s3:GetObject*'), `s3:GetObject* on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(
+		onBucket.some((s) => JSON.stringify(s.Resource).includes('/*')),
+		'the grant covers the bucket objects',
+	);
+
+	// Nothing addresses the raw, over-long fullId as a bucket.
+	const json = JSON.stringify(template.toJSON());
+	assert.ok(!json.includes(`"${fullId}"`), `the raw fullId ${fullId} appears in the template`);
+	assert.ok(!json.includes(`:s3:::${fullId}`), 'an S3 ARN names the raw fullId');
+});
+
+test('CDK: a deployed model guardrail grants bedrock:ApplyGuardrail on that guardrail only', async () => {
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'guarded', {
+		systemPrompt: 'You are a test agent.',
+		agentcoreAssetPath: ASSET_DIR,
+		model: {
+			deployed: [
+				{ provider: 'bedrock', modelId: 'm1', guardrail: { identifier: 'gr-abc123', version: '1' } },
+				{ provider: 'bedrock', modelId: 'm2', guardrail: { identifier: 'arn:aws:bedrock:us-west-2:111122223333:guardrail/gr-other', version: '3' } },
+			],
+		},
+	});
+	const statements = Object.values(Template.fromStack(stack).findResources('AWS::IAM::Policy'))
+		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>)
+		.filter((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]).includes('bedrock:ApplyGuardrail'));
+	assert.strictEqual(statements.length, 1, `expected one ApplyGuardrail statement, got ${JSON.stringify(statements)}`);
+	const resources = JSON.stringify(statements[0].Resource);
+	assert.ok(resources.includes(':guardrail/gr-abc123'), `id-form guardrail is expanded to an ARN: ${resources}`);
+	assert.ok(resources.includes('arn:aws:bedrock:us-west-2:111122223333:guardrail/gr-other'), `ARN-form guardrail is used as-is: ${resources}`);
+	assert.ok(!resources.includes('guardrail/*'), 'never a wildcard guardrail grant');
+});
+
+test('CDK: no guardrail configured means no ApplyGuardrail grant', async () => {
+	const json = JSON.stringify((await synth()).toJSON());
+	assert.ok(!json.includes('bedrock:ApplyGuardrail'));
+});
+
+/** Synthesizes an Agent with the given deployed models and returns its IAM policy statements (inline and managed). */
+async function deployedModelStatements(deployed: unknown): Promise<Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>> {
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'mantle', {
+		systemPrompt: 'You are a test agent.',
+		agentcoreAssetPath: ASSET_DIR,
+		model: { deployed: deployed as never },
+	});
+	const template = Template.fromStack(stack);
+	return [...Object.values(template.findResources('AWS::IAM::Policy')), ...Object.values(template.findResources('AWS::IAM::ManagedPolicy'))]
+		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>);
+}
+
+const actionsOf = (s: { Action: string | string[] }) => (Array.isArray(s.Action) ? s.Action : [s.Action]);
+
+test('CDK: a deployed openai-api model on a Mantle endpoint without apiKey grants region-scoped bedrock-mantle access', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.eu-west-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/openai/v1' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(inference)}`);
+	assert.deepStrictEqual(actionsOf(inference[0]).sort(), ['bedrock-mantle:CreateInference', 'bedrock-mantle:GetModel', 'bedrock-mantle:ListModels']);
+	const resources = JSON.stringify(inference[0].Resource);
+	assert.ok(Array.isArray(inference[0].Resource) && inference[0].Resource.length === 2, `one resource per distinct region: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:us-east-1:'), `us-east-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:eu-west-1:'), `eu-west-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':project/*'), `project-scoped ARN: ${resources}`);
+	assert.ok(!resources.includes('"*"'), 'inference actions are never granted on "*"');
+
+	const bearer = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken'));
+	assert.strictEqual(bearer.length, 1);
+	assert.deepStrictEqual(actionsOf(bearer[0]), ['bedrock-mantle:CallWithBearerToken']);
+	assert.strictEqual(bearer[0].Resource, '*');
+	assert.deepStrictEqual(bearer[0].Condition, { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } });
+});
+
+test('CDK: an empty apiKey on a Mantle endpoint counts as omitted and gets the bedrock-mantle grant', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: '' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(statements)}`);
+	assert.ok(JSON.stringify(inference[0].Resource).includes(':bedrock-mantle:us-east-1:'));
+	assert.strictEqual(statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken')).length, 1);
+});
+
+test('CDK: no bedrock-mantle grant for non-Mantle openai-api, explicit apiKey, or bedrock-only models', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://api.openai.com/v1' },
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: 'explicit-key' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: () => Promise.resolve('k') },
+		{ provider: 'bedrock', modelId: 'm1' },
+	]);
+	assert.ok(!JSON.stringify(statements).includes('bedrock-mantle:'), `unexpected bedrock-mantle grant: ${JSON.stringify(statements)}`);
+	assert.ok(!JSON.stringify((await synth()).toJSON()).includes('bedrock-mantle:'), 'the default Agent has no bedrock-mantle grant');
+});
+
+// The key attribute types are probed from the conversation and message schemas.
+// Pin them, so a change to the probe cannot change the provisioned tables.
+test('CDK: the conversation and message tables keep their key schemas (string keys)', async () => {
+	const template = await synth();
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		KeySchema: [
+			{ AttributeName: 'userId', KeyType: 'HASH' },
+			{ AttributeName: 'conversationId', KeyType: 'RANGE' },
+		],
+		AttributeDefinitions: Match.arrayWith([
+			{ AttributeName: 'userId', AttributeType: 'S' },
+			{ AttributeName: 'conversationId', AttributeType: 'S' },
+		]),
+	});
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		KeySchema: [
+			{ AttributeName: 'conversationId', KeyType: 'HASH' },
+			{ AttributeName: 'messageId', KeyType: 'RANGE' },
+		],
+		AttributeDefinitions: Match.arrayWith([
+			{ AttributeName: 'conversationId', AttributeType: 'S' },
+			{ AttributeName: 'messageId', AttributeType: 'S' },
+		]),
+	});
+});

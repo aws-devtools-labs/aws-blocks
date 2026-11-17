@@ -1,13 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { blocksError } from '@aws-blocks/core';
 import { MetricsErrors } from './errors.js';
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Validate a metric name against CloudWatch constraints.

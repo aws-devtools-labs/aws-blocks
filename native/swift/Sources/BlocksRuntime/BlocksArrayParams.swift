@@ -20,20 +20,9 @@ public struct BlocksArrayParams: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.unkeyedContainer()
         for value in values {
-            try container.encode(AnyEncodableValue(value))
+            // Through the container, not `value.encode(to:)`: the encoder applies its strategies only to values
+            // it encodes itself, so a `Date` parameter is sent as an ISO 8601 string, not as a number.
+            try container.encode(value)
         }
-    }
-}
-
-/// Type-erased wrapper that forwards encoding to the underlying value.
-private struct AnyEncodableValue: Encodable {
-    private let _encode: (Encoder) throws -> Void
-
-    init(_ value: any Encodable) {
-        self._encode = { encoder in try value.encode(to: encoder) }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try _encode(encoder)
     }
 }

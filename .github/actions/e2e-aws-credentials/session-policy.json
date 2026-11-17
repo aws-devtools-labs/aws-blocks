@@ -1,0 +1,69 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "E2EWork",
+			"Effect": "Allow",
+			"NotAction": [
+				"organizations:*",
+				"account:Accept*",
+				"account:Close*",
+				"account:Delete*",
+				"account:Disable*",
+				"account:Enable*",
+				"account:Put*",
+				"account:Start*",
+				"aws-portal:Modify*",
+				"billing:Put*",
+				"billing:Update*",
+				"payments:*",
+				"iam:*User*",
+				"iam:*Group*",
+				"iam:*AccessKey*",
+				"iam:*LoginProfile*",
+				"iam:*ServiceSpecificCredential*",
+				"iam:*SSHPublicKey*",
+				"iam:*SigningCertificate*",
+				"iam:*MFADevice*",
+				"iam:*OpenIDConnectProvider*",
+				"iam:*SAMLProvider*",
+				"iam:*AccountAlias*",
+				"iam:*PasswordPolicy*",
+				"cloudtrail:DeleteTrail",
+				"cloudtrail:PutEventSelectors",
+				"cloudtrail:StopLogging",
+				"cloudtrail:UpdateTrail",
+				"cloudtrail:DeleteEventDataStore",
+				"cloudtrail:StopEventDataStoreIngestion",
+				"cloudtrail:UpdateEventDataStore",
+				"cloudtrail:PutInsightSelectors",
+				"config:StopConfigurationRecorder",
+				"config:DeleteConfigurationRecorder",
+				"sts:AssumeRole",
+				"sts:TagSession"
+			],
+			"Resource": "*"
+		},
+		{
+			"Sid": "AssumeCdkBootstrapRoles",
+			"Effect": "Allow",
+			"Action": ["sts:AssumeRole", "sts:TagSession"],
+			"Resource": "arn:aws:iam::*:role/cdk-hnb659fds-*"
+		},
+		{
+			"Sid": "KeepBootstrapAndE2ERoles",
+			"Effect": "Deny",
+			"Action": [
+				"iam:Attach*",
+				"iam:Create*",
+				"iam:Delete*",
+				"iam:Detach*",
+				"iam:Put*",
+				"iam:Tag*",
+				"iam:Untag*",
+				"iam:Update*"
+			],
+			"Resource": ["arn:aws:iam::*:role/cdk-hnb659fds-*"]
+		}
+	]
+}

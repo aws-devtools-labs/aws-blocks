@@ -11,10 +11,11 @@ import { Runtime } from 'aws-cdk-lib/aws-lambda';
  * the runtime is bumped.
  *
  * Scope: this governs ONLY hosting-owned handlers. It deliberately does NOT
- * govern the SSR/edge bundles the adapters emit (Astro/Nuxt/OpenNext), which
- * pin `nodejs20.x` to match the Node version the framework compiled the bundle
- * against — bumping those independently of the bundle would break them. That is
- * why the adapters emit a literal rather than importing this constant.
+ * govern the SSR/edge bundles the adapters emit (Astro/Nuxt/OpenNext). Those
+ * use their own shared constants — `FRAMEWORK_COMPUTE_RUNTIME` (regional) and
+ * `FRAMEWORK_EDGE_COMPUTE_RUNTIME` (Lambda@Edge) in `../framework_runtime.js` —
+ * because framework compute is a fixed, separately-versioned choice: nothing
+ * detects the Node version a framework compiled its bundle against.
  *
  * Mirrors `@aws-blocks/core`'s `DEFAULT_NODE_RUNTIME`; kept local because
  * hosting does not depend on core. Bump both together. This controls only the

@@ -70,6 +70,9 @@ extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
 awsBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
+    oidc {
+        relayTo = "blocks.testapp://oidcRedirect"
+    }
 }
 
 compose.desktop {

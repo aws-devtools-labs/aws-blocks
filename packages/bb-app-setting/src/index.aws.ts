@@ -4,13 +4,16 @@
 import {
 	SSMClient,
 	GetParameterCommand,
+	ParameterNotFound,
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import type { GetParameterCommandOutput } from '@aws-sdk/client-ssm';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
+import { assertValueWithinSizeLimit } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -18,14 +21,14 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
 export type { AppSettingOptions } from './types.js';
+export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+// Uses core's prefixing `blocksError` (message prefixed with the error `name`).
+// The `blocksError` in validation.ts is deliberately UNPREFIXED to preserve the
+// CDK synth error text — keep that one local; do not route it through core.
+// @see validation.ts
 
 async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value: unknown): Promise<void> {
 	if (!schema) return;
@@ -43,15 +46,17 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  *
  * **When to use:** You need to store and retrieve a non-secret configuration
  * value at runtime — a feature flag, API URL, threshold, or structured config
- * object. For sensitive values, set `secret: true` to use SSM SecureString.
+ * object. `secret: true` encrypts the stored value, a free fallback for a
+ * low-value secret; for a production secret (API keys, tokens, passwords) use
+ * `Secret`, the recommended home for credentials.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes and queries, use `KVStore` or `DistributedTable`.
+ * writes and queries, use `KVStore`.
  *
  * **Best practices:**
  * - One AppSetting per logical configuration value
  * - Use a schema for structured objects to get type safety and runtime validation
- * - Use `secret: true` for API keys, tokens, and passwords
+ * - `secret: true` encrypts a low-value secret for free; reach for `Secret` for production credentials
  *
  * **Scaling:** Standard-tier SSM parameters. 40 TPS default for GetParameter
  * (can be increased). No cost for standard parameters.
@@ -67,7 +72,7 @@ export class AppSetting<T = string> extends Scope {
 	static fromExisting<T = string>(
 		scope: ScopeParent,
 		id: string,
-		options: { name: string; secret?: boolean },
+		options: { name: string; secret?: boolean; kmsKeyArn?: string },
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);
@@ -76,6 +81,7 @@ export class AppSetting<T = string> extends Scope {
 	readonly bbName = BB_NAME;
 	private schema?: StandardSchemaV1<T>;
 	private isSecret: boolean;
+	private kmsKeyArn?: string;
 	private client: SSMClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -88,9 +94,11 @@ export class AppSetting<T = string> extends Scope {
 		const parameterName = options.name ?? `/${this.fullId}`;
 		this.schema = options.schema;
 		this.isSecret = options.secret ?? false;
+		this.kmsKeyArn = options.kmsKeyArn;
 		this.client = new SSMClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		registerSdkIdentifiers(this.fullId, { parameterName });
 	}
 
@@ -109,15 +117,24 @@ export class AppSetting<T = string> extends Scope {
 	 * ```
 	 */
 	async get(): Promise<T> {
-		const result = await this.client.send(new GetParameterCommand({
-			Name: getSdkIdentifiers(this).parameterName,
-			WithDecryption: this.isSecret,
-		}));
+		const parameterName = getSdkIdentifiers(this).parameterName;
+		let result: GetParameterCommandOutput;
+		try {
+			result = await this.client.send(new GetParameterCommand({
+				Name: parameterName,
+				WithDecryption: this.isSecret,
+			}));
+		} catch (e) {
+			if (e instanceof ParameterNotFound || (e instanceof Error && e.name === 'ParameterNotFound')) {
+				throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${parameterName}" does not exist`);
+			}
+			throw e;
+		}
 
 		this.client.config.customUserAgent = this.buildUserAgentChain();
 		const raw = result.Parameter?.Value;
 		if (raw === undefined || raw === null) {
-			throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${getSdkIdentifiers(this).parameterName}" has no value`);
+			throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${parameterName}" has no value`);
 		}
 
 		let value: T;
@@ -154,12 +171,18 @@ export class AppSetting<T = string> extends Scope {
 		await validateSchema(this.schema, value);
 
 		const serialized = JSON.stringify(value);
+		// Same check, at the same point, as the mock (see validation.ts): an
+		// oversized value fails with ValidationFailed before reaching SSM.
+		assertValueWithinSizeLimit(serialized, this.isSecret);
 
 		await this.client.send(new PutParameterCommand({
 			Name: getSdkIdentifiers(this).parameterName,
 			Value: serialized,
 			Type: this.isSecret ? 'SecureString' : 'String',
 			Overwrite: true,
+			// Re-specify the CMK on overwrite: SSM falls back to the default aws/ssm
+			// key when KeyId is omitted, which would silently downgrade encryption.
+			...(this.isSecret && this.kmsKeyArn ? { KeyId: this.kmsKeyArn } : {}),
 		}));
 	}
 }

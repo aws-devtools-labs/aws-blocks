@@ -2,6 +2,11 @@
 
 Distributed tracing backed by AWS X-Ray.
 
+> **Fleet-wide + cost:** tracing is presence-gated — constructing **any** `Tracer`
+> in the app enables X-Ray Active mode on **every** compute (X-Ray is billed per
+> trace recorded/retrieved). `enabled: false` on a `Tracer` only removes *that*
+> Tracer's opt-in; if any other `Tracer` exists, X-Ray still turns on fleet-wide.
+
 **When to use:** You need to trace request flow across services, debug latency issues, or visualize service dependencies. Good for identifying bottlenecks, understanding call chains, and correlating failures across Building Blocks.
 
 **When NOT to use:** If you need structured log output, use `Logging`. If you need numeric measurements over time, use `Metrics`.

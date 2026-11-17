@@ -3,13 +3,9 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 export function rawRouteTests() {
 
@@ -54,6 +50,15 @@ export function rawRouteTests() {
       assert.strictEqual(res.status, 200);
       const body = await res.json();
       assert.strictEqual(body.path, 'image.png');
+    });
+
+    test('GET /files/* — ctx.request.url.pathname is the route path, without an API Gateway stage', async () => {
+      const res = await fetch(`${getBaseUrl()}/files/docs/readme.md`);
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      // Not `new URL(...).pathname` of the fetched URL: in sandbox that URL is the
+      // execute-api stage URL (`/prod/files/...`), and the handler must not see `/prod`.
+      assert.strictEqual(body.pathname, '/files/docs/readme.md');
     });
 
     // ── POST with body ────────────────────────────────────────────────────

@@ -25,43 +25,42 @@
  * Inclusion rule: every package under packages/ that has a README.md and is not in
  * EXCLUDED.
  *
- * NOTE: EXCLUDED + getPackages() are intentionally duplicated in this file and in
- * gen-block-docs.mjs so each script stays dependency-free and independently
- * runnable (no shared module to resolve, no build step). They MUST agree on the
- * block set — keep the two in sync when editing. If this pair grows further,
- * extract a shared module instead.
+ * The block set (inclusion rule + EXCLUDED) is shared with gen-block-docs.mjs via
+ * block-packages.mjs so the two generators can't drift.
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getBlockPackages, packagesDir } from './block-packages.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const packagesDir = join(__dirname, '..', 'packages');
 const readmePath = join(packagesDir, 'blocks', 'README.md');
-
-const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
 
 const BEGIN_MARKER = '<!-- BEGIN:block-catalog -->';
 const END_MARKER = '<!-- END:block-catalog -->';
 
 const SYNC_HINT = 'Run `npm run sync-docs` and commit the result.';
 
-const mode = process.argv.includes('--check') ? 'check' : 'write';
-
-const packages = getPackages();
-const catalog = buildCatalog(packages);
-const table = renderCatalogTable(catalog);
-
-if (mode === 'check') {
-  runCheck();
-} else {
-  runWrite();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }
 
 // ─── Modes ───────────────────────────────────────────────────────────────────
 
-function runCheck() {
+function main() {
+  const mode = process.argv.includes('--check') ? 'check' : 'write';
+  const packages = getBlockPackages();
+  const catalog = buildCatalog(packages);
+  const table = renderCatalogTable(catalog);
+
+  if (mode === 'check') {
+    runCheck(table);
+  } else {
+    runWrite(catalog, table);
+  }
+}
+
+function runCheck(table) {
   const readme = readFileSync(readmePath, 'utf-8');
   const current = extractBetweenMarkers(readme);
 
@@ -83,7 +82,7 @@ function runCheck() {
   process.exit(0);
 }
 
-function runWrite() {
+function runWrite(catalog, table) {
   const readme = readFileSync(readmePath, 'utf-8');
   const updated = injectCatalog(readme, table);
   if (updated !== readme) writeFileSync(readmePath, updated);
@@ -91,12 +90,6 @@ function runWrite() {
 }
 
 // ─── Catalog ─────────────────────────────────────────────────────────────────
-
-function getPackages() {
-  return readdirSync(packagesDir).filter(
-    (name) => !name.startsWith('.') && !EXCLUDED.has(name) && existsSync(join(packagesDir, name, 'README.md')),
-  );
-}
 
 function buildCatalog(pkgs) {
   const entries = pkgs.map((pkg) => {
@@ -120,7 +113,7 @@ function escapeCell(value) {
 
 // ─── Marker helpers ──────────────────────────────────────────────────────────
 
-function injectCatalog(readme, catalogTable) {
+export function injectCatalog(readme, catalogTable) {
   const begin = readme.indexOf(BEGIN_MARKER);
   const end = readme.indexOf(END_MARKER);
   if (begin === -1 || end === -1 || end < begin) {
@@ -134,7 +127,7 @@ function injectCatalog(readme, catalogTable) {
   return `${before}\n${catalogTable}\n${after}`;
 }
 
-function extractBetweenMarkers(readme) {
+export function extractBetweenMarkers(readme) {
   const begin = readme.indexOf(BEGIN_MARKER);
   const end = readme.indexOf(END_MARKER);
   if (begin === -1 || end === -1 || end < begin) return null;
@@ -143,7 +136,7 @@ function extractBetweenMarkers(readme) {
 
 // ─── README parsing ──────────────────────────────────────────────────────────
 
-function extractBlurb(content) {
+export function extractBlurb(content) {
   const lines = content.split('\n');
   const h1 = lines.findIndex((l) => l.startsWith('# '));
   if (h1 === -1) return '';

@@ -19,11 +19,8 @@ export class HostingError extends Error {
     opts: { message: string; resolution: string },
     cause?: Error,
   ) {
-    super(opts.message);
+    super(opts.message, cause ? { cause } : undefined);
     this.name = code;
     this.resolution = opts.resolution;
-    if (cause) {
-      this.cause = cause;
-    }
   }
 }

@@ -28,72 +28,75 @@ dependencies {
 }
 ```
 
-## Configuration
-
-All properties are optional. Override them in the `awsBlocks` block if the defaults don't fit your project:
+### 3. Point at your spec
 
 ```kotlin
-import com.aws.blocks.plugin.GeneratedVisibility
-
 awsBlocks {
-    // Path to the generated spec file (defaults to rootProject.file("blocks.spec.json"))
-    apiSpec = rootProject.file("path/to/your/blocks.spec.json")
-
-    // Package name for generated code (defaults to "com.aws.blocks.generated")
-    packageName = "com.example.myapp.generated"
-
-    // Visibility of generated types: Public (default) or Internal
-    visibility = GeneratedVisibility.Internal
-
-    // Override or add server URLs (optional)
-    servers {
-        local("http://10.0.2.2:3001")
-        sandbox("https://sandbox.example.com")
-        prod("https://api.example.com")
-        custom("staging", "https://staging.example.com")
-    }
+    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+    packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```
 
-Servers defined in the `servers` block override entries from the spec file that share the same name. New names are added alongside the spec's servers.
+See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration options.
 
-## Using the Generated Code
+### 4. Call your backend
+
+Codegen runs as part of compilation, so building the module is all it takes to get the client.
 
 ```kotlin
-import com.example.myapp.generated.Api
-import com.example.myapp.generated.Todo
+val blocks = Blocks()
 
-val api = Api()
+suspend fun todos() {
+    // Create a todo
+    val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
 
-// Create a todo
-val todo: Todo = api.createTodo(title = "Buy groceries", priority = 1.0)
+    // List todos with optional sorting
+    val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
 
-// List todos with optional sorting
-val todos: List<Todo> = api.listTodos(sortBy = ListTodos.SortBy.Priority)
+    // Update a todo
+    blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
 
-// Update a todo
-api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+    // A second namespace in the same spec
+    val authState = blocks.authApi.getAuthState()
+}
 ```
 
-## Gradle Tasks
+Building the instance — which server it reaches, the imports the generated accessors need, and
+closing the engine it owns — is covered in
+[runtime configuration](docs/runtime-configuration.md#building-an-instance).
 
-| Task | Description |
-|------|-------------|
-| `awsBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `awsBlocksCodegenDebug`) |
-| `awsBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `awsBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
+> **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
-## Example
+## Generated types
 
-See the [`example/android`](example/android) directory for a complete Android app, or [`example/kmp`](example/kmp) for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API.
+A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
+
+A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, read and written in the spec's wire format. When every arm is an object with a string discriminator property, the subclasses are written with that property (`{"type":"email",…}`). Otherwise each value is its arm's bare JSON value: a string, number, boolean, array, map, date-time or transferable arm is a subclass holding it as `value` (`Search.Query.Variant1("abc")` is sent as `"abc"`), a `const` arm is a `data object` written as its literal, and an object arm is its object, with no extra key. A value decodes to the first arm, in spec order, whose JSON shape it has (its JSON type, its required keys, or its exact literal), and one that matches no arm throws a `SerializationException` naming the union. A boolean or numeric discriminator is written and matched with that JSON type (`"isUpdated": true`). An arm with its own properties plus a nested `oneOf` (the `confirmSignIn` action of an `Auth` block's `createApi()`) is one flat object: `ConfirmSignIn(session, challenge = Challenge.Code(code))` sends `{"action":"confirmSignIn","session":…,"challenge":"code","code":…}`.
+
+Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Gradle plugin](docs/gradle-plugin.md) | the full `awsBlocks { }` block, tasks, and multi-module setups |
+| [Runtime configuration](docs/runtime-configuration.md) | `BlocksConfig`, per-target configuration, where the session is stored, signing out |
+| [OIDC](docs/oidc.md) | sign-in, relay scheme registration, JVM landing pages, typed providers |
+| [Transferables](docs/transferables.md) | results that are live objects rather than data |
+
+## Example apps
+
+See [`example/android`](example/android) for a complete Android app, or [`example/kmp`](example/kmp)
+for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API across Android,
+iOS and desktop.
 
 ## Supported Platforms
 
-| Platform | Engine | Cookie Storage |
-|----------|--------|----------------|
-| Android | OkHttp | EncryptedSharedPreferences |
-| iOS | Darwin (URLSession) | Keychain Services |
-| JVM | OkHttp | AES-256-GCM encrypted files |
+| Platform | Engine | Cookie Storage                                                                                                          |
+|----------|--------|-------------------------------------------------------------------------------------------------------------------------|
+| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#what-desktop-storage-protects), with the key held by the OS — in memory if no id is set |
 
 ## Support by Target
 
@@ -102,7 +105,7 @@ See the [`example/android`](example/android) directory for a complete Android ap
 | General/RPC | ✅ | ✅ | ✅ |
 | Realtime    | ✅ | ✅ | ✅ |
 | File Bucket | ✅ | ✅ | ✅ |
-| OIDC        | ✅ | ❌ | ❌ |
+| OIDC        | ✅ | ✅ | ✅ |
 
 ## Requirements
 

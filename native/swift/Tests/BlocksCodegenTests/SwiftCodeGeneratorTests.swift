@@ -13,10 +13,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
     let builder = CodegenModelBuilder()
     let generator = SwiftCodeGenerator()
 
-    private func generate(from json: String) throws -> (models: String, api: String) {
-        let rpcModel = try parser.parse(data: Data(json.utf8))
+    private func generate(from json: String, optOut: Set<String> = []) throws -> GeneratedSources {
+        let rpcModel = try OpenRPCParser(optOutNativePackages: optOut).parse(data: Data(json.utf8))
         let codegenModel = builder.build(from: rpcModel)
-        return generator.generate(from: codegenModel)
+        return try generator.generate(from: codegenModel)
     }
 
     // MARK: - Basic Generation
@@ -63,6 +63,53 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(all.contains("case date"))
         XCTAssertTrue(all.contains("case priority"))
     }
+
+    // MARK: - Void Methods
+
+    /// A method with no result discards what `execute` returns rather than binding an unused `let`, which warns
+    /// and fails an app's build that treats warnings as errors.
+    private let voidMethodsSpec = """
+    {
+        "openrpc": "1.3.2",
+        "info": { "title": "test", "version": "1.0.0" },
+        "methods": [
+            { "name": "api.ping", "params": [], "result": { "name": "PingResult", "schema": { "type": "null" } } },
+            {
+                "name": "api.remember",
+                "params": [{ "name": "note", "required": true, "schema": { "type": "string" } }],
+                "result": { "name": "RememberResult", "schema": { "type": "null" } }
+            },
+            { "name": "api.count", "params": [], "result": { "name": "CountResult", "schema": { "type": "integer" } } }
+        ]
+    }
+    """
+
+    func testVoidMethodDiscardsTheResult() throws {
+        let output = try generate(from: voidMethodsSpec)
+        for name in ["ping", "remember"] {
+            let start = try XCTUnwrap(output.api.range(of: "func \(name)("), "func \(name)")
+            let body = output.api[start.lowerBound...].prefix { $0 != "}" }
+            XCTAssertTrue(body.contains("-> Void {"), String(body))
+            XCTAssertTrue(body.contains("_ = try await client.execute(request)"), String(body))
+            XCTAssertFalse(body.contains("let result"), String(body))
+        }
+        // A method with a result still binds and decodes it.
+        XCTAssertTrue(output.api.contains("let result = try await client.execute(request)"))
+    }
+
+    #if os(macOS)
+    func testVoidMethodCompilesWithWarningsAsErrors() throws {
+        let output = try generate(from: voidMethodsSpec)
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+            func use(_ api: Api) async throws { try await api.ping(); try await api.remember(note: "n") }
+            """,
+            moduleFlags: ["-warnings-as-errors"]
+        )
+    }
+    #endif
 
     // MARK: - Format Types
 
@@ -147,7 +194,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public class Api"))
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"))
         XCTAssertTrue(output.api.contains("func greet(name: String)"))
         XCTAssertTrue(output.api.contains("async throws"))
     }
@@ -191,11 +238,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.api.contains("RealtimeChannel<"))
     }
 
-    /// Ensures the realtime closure passes raw bytes to the decoder:
-    /// the realtime closure should hand the raw payload bytes straight to
-    /// the typed decoder. Eliminates the redundant String round-trip we
-    /// previously emitted (`{ text in try JSONDecoder().decode(_, from: Data(text.utf8)) }`).
-    func testRealtimeClosurePassesPayloadDataDirectlyToDecoder() throws {
+    /// A realtime result decodes through `RealtimeChannel`'s `Decodable`, so BlocksRuntime forms the message
+    /// decoder: one formed here inherits MainActor default isolation and traps when the socket task calls it.
+    func testRealtimeResultDecodesThroughTheRuntime() throws {
         let output = try generate(from: """
         {
             "openrpc": "1.3.2",
@@ -214,21 +259,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(
-            output.api.contains("{ data in"),
-            "expected emitted closure to bind `data in`, got:\n\(output.api)"
+            output.api.contains("return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)"),
+            "expected the channel to decode through Decodable, got:\n\(output.api)"
         )
-        XCTAssertTrue(
-            output.api.contains("from: data)"),
-            "expected emitted closure to decode straight from data, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("Data(text.utf8)"),
-            "expected the String→Data round-trip to be removed, got:\n\(output.api)"
-        )
-        XCTAssertFalse(
-            output.api.contains("{ text in"),
-            "expected the closure to no longer bind `text in`, got:\n\(output.api)"
-        )
+        XCTAssertFalse(output.api.contains("{ data in"), "expected no message decoder in generated code, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("Invalid channel descriptor"), "expected Decodable to own descriptor errors, got:\n\(output.api)")
     }
 
     func testGeneratesFileDownloadHandle() throws {
@@ -277,7 +312,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(output.api.contains("-> OIDCClient"))
-        XCTAssertTrue(output.api.contains("OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"))
+        XCTAssertTrue(output.api.contains("OIDCClient<String>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"))
     }
 
     // MARK: - Multiple Namespaces
@@ -298,8 +333,8 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
 
-        XCTAssertTrue(output.api.contains("public class Posts"), "Should emit Posts class")
-        XCTAssertTrue(output.api.contains("public class Users"), "Should emit Users class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Posts: Sendable {"), "Should emit Posts class")
+        XCTAssertTrue(output.api.contains("public final nonisolated class Users: Sendable {"), "Should emit Users class")
         XCTAssertTrue(output.api.contains("func list()"), "Each class has its own list() — no prefix needed")
     }
 
@@ -411,5 +446,801 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(output.api.contains("[String: UpdateAttributes.ResultValue?]"), "Map value type should be optional")
+    }
+
+    // MARK: - unknown
+
+    /// `unknown` is any JSON value: `JSONValue`, not a synthesized empty struct (which drops the
+    /// value and fails to decode anything but an object).
+    func testUnknownGeneratesJSONValue() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.store",
+                "params": [{ "name": "payload", "required": true, "schema": { "type": "unknown" } }],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Entry" } }
+            }],
+            "components": { "schemas": { "Entry": {
+                "type": "object",
+                "properties": {
+                    "payload": { "type": "unknown" },
+                    "nullablePayload": { "oneOf": [{ "type": "unknown" }, { "type": "null" }] },
+                    "tags": { "type": "array", "items": { "type": "unknown" } },
+                    "claims": { "oneOf": [
+                        { "type": "object", "additionalProperties": { "type": "unknown" } },
+                        { "type": "null" }
+                    ] }
+                },
+                "required": ["payload", "nullablePayload", "tags"]
+            } } }
+        }
+        """)
+
+        XCTAssertTrue(output.models.contains("public let payload: JSONValue\n"))
+        XCTAssertTrue(output.models.contains("public let nullablePayload: JSONValue?"))
+        XCTAssertTrue(output.models.contains("public let tags: [JSONValue]"))
+        XCTAssertTrue(output.models.contains("public let claims: [String: JSONValue]?"))
+        XCTAssertTrue(output.api.contains("func store(payload: JSONValue)"))
+        XCTAssertFalse(output.models.contains("ClaimsValue"), "No struct is synthesized for an unknown value")
+        XCTAssertFalse(output.models.contains("struct Payload"), "No struct is synthesized for an unknown value")
+        XCTAssertTrue(output.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"), "JSONValue is a BlocksRuntime type")
+    }
+
+    func testModelsWithoutJSONValueDoNotImportRuntime() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.get", "params": [],
+                "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Todo" } }
+            }],
+            "components": { "schemas": { "Todo": {
+                "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"]
+            } } }
+        }
+        """)
+
+        XCTAssertFalse(output.models.contains("import BlocksRuntime"))
+    }
+
+    // MARK: - Unknown Transferable
+
+    private func build(from json: String) throws -> CodegenModel {
+        let rpcModel = try parser.parse(data: Data(json.utf8))
+        return builder.build(from: rpcModel)
+    }
+
+    private let unboundSpec = """
+    {
+        "openrpc": "1.3.2",
+        "info": { "title": "iot", "version": "1.0.0" },
+        "methods": [{
+            "name": "api.connectDevice",
+            "params": [{ "name": "deviceId", "required": true, "schema": { "type": "string" } }],
+            "result": { "name": "Link", "schema": {
+                "x-blocks-transferable": "example-iot/device-link",
+                "x-blocks-type-args": [{ "type": "object",
+                    "properties": { "temperature": { "type": "number" } },
+                    "required": ["temperature"] }]
+            }}
+        }]
+    }
+    """
+
+    func testUnboundTransferableGeneratesFallback() throws {
+        let output = try generate(from: unboundSpec)
+        XCTAssertTrue(output.api.contains("-> BlocksRuntime.UnknownTransferable"), "unbound tag should return UnknownTransferable, got:\n\(output.api)")
+        XCTAssertTrue(
+            output.api.contains("BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: \"example-iot/device-link\")"),
+            "unbound tag should hydrate via fromJSON with the declared tag, got:\n\(output.api)"
+        )
+        XCTAssertTrue(
+            output.api.contains("guard let result else { throw RPCError(message: \"Unexpected null result for api.connectDevice\") }"),
+            "a required (non-optional) result must throw on a null body, got:\n\(output.api)"
+        )
+        // The emitted code must declare the type the diagnostic names (Api.ConnectDevice.ResultMessage),
+        // or that name would not resolve in the generated client.
+        XCTAssertTrue(output.api.contains("public final nonisolated class Api: Sendable {"), "namespace class Api not emitted, got:\n\(output.api)")
+        guard let opEnum = output.api.range(of: "public enum ConnectDevice {") else {
+            return XCTFail("operation enum ConnectDevice not emitted, got:\n\(output.api)")
+        }
+        let body = output.api[opEnum.upperBound...]
+        XCTAssertTrue(body.contains("public struct ResultMessage"), "type-arg model should be emitted under ConnectDevice")
+    }
+
+    func testUnboundTransferableEmitsDiagnostic() throws {
+        let output = try generate(from: unboundSpec)
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertEqual(
+            diagnostic,
+            "AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type argument Api.ConnectDevice.ResultMessage."
+        )
+    }
+
+    func testKnownTransferableTagsMapToConcreteTypesWithoutFallback() throws {
+        let cases: [(tag: String, type: String)] = [
+            ("realtime/channel", "RealtimeChannel<"),
+            ("file-bucket/download", "FileDownloadHandle"),
+            ("file-bucket/upload", "FileUploadHandle"),
+            ("oidc/client", "OIDCClient")
+        ]
+        for testCase in cases {
+            let json = """
+            {
+                "openrpc": "1.3.2",
+                "info": { "title": "test", "version": "1.0.0" },
+                "methods": [{
+                    "name": "api.get",
+                    "params": [],
+                    "result": { "name": "R", "schema": { "x-blocks-transferable": "\(testCase.tag)" } }
+                }]
+            }
+            """
+            let model = try build(from: json)
+            let output = try generator.generate(from: model)
+            XCTAssertTrue(output.api.contains(testCase.type), "\(testCase.tag) should map to \(testCase.type), got:\n\(output.api)")
+            XCTAssertFalse(output.api.contains("UnknownTransferable"), "\(testCase.tag) is bound and must not use the fallback")
+            XCTAssertTrue(output.warnings.isEmpty, "\(testCase.tag) is bound and must not emit a diagnostic, got: \(output.warnings)")
+        }
+    }
+
+    func testTransferableNestedInListStaysUntypedWithNoFallback() throws {
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.listDevices",
+                "params": [],
+                "result": { "name": "R", "schema": { "type": "array", "items": { "x-blocks-transferable": "example-iot/device-link" } } }
+            }]
+        }
+        """
+        let model = try build(from: json)
+        let output = try generator.generate(from: model)
+        XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable nested in a list is out of scope, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("[JSONValue]"), "a nested unbound transferable keeps its prior JSONValue type, got:\n\(output.api)")
+        XCTAssertTrue(output.warnings.isEmpty, "a nested transferable must not emit a diagnostic, got: \(output.warnings)")
+    }
+
+    func testTransferableParameterStaysUntypedWithNoFallback() throws {
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.attach",
+                "params": [{ "name": "link", "required": true, "schema": { "x-blocks-transferable": "example-iot/device-link" } }],
+                "result": { "name": "R", "schema": { "type": "string" } }
+            }]
+        }
+        """
+        let model = try build(from: json)
+        let output = try generator.generate(from: model)
+        XCTAssertTrue(output.api.contains("link: JSONValue"), "an unbound transferable parameter keeps its prior JSONValue type, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable parameter is out of scope, got:\n\(output.api)")
+        XCTAssertTrue(output.warnings.isEmpty, "a transferable parameter must not emit a diagnostic, got: \(output.warnings)")
+    }
+
+    func testTransferableInRecordFieldStaysUntypedWithNoFallback() throws {
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getWrapper",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "type": "object",
+                    "properties": { "link": { "x-blocks-transferable": "example-iot/device-link" } },
+                    "required": ["link"]
+                }}
+            }]
+        }
+        """
+        let model = try build(from: json)
+        let output = try generator.generate(from: model)
+        let all = output.api + "\n" + output.models
+        XCTAssertTrue(all.contains("let link: JSONValue"), "an unbound transferable record field keeps its prior JSONValue type, got:\n\(all)")
+        XCTAssertFalse(all.contains("UnknownTransferable"), "a transferable nested in a record is out of scope, got:\n\(all)")
+        XCTAssertTrue(output.warnings.isEmpty, "a nested transferable must not emit a diagnostic, got: \(output.warnings)")
+    }
+
+    func testNullableTransferableResultStaysUntypedWithNoFallback() throws {
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.maybeLink",
+                "params": [],
+                "result": { "name": "R", "schema": { "oneOf": [
+                    { "x-blocks-transferable": "example-iot/device-link" },
+                    { "type": "null" }
+                ] } }
+            }]
+        }
+        """
+        let model = try build(from: json)
+        let output = try generator.generate(from: model)
+        XCTAssertTrue(output.api.contains("-> JSONValue?"), "a nullable unbound transferable keeps its prior optional JSONValue type, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable in a nullable container is out of scope, got:\n\(output.api)")
+        XCTAssertTrue(output.warnings.isEmpty, "a nullable transferable must not emit a diagnostic, got: \(output.warnings)")
+    }
+
+    func testNullableBoundTransferableHydratesToOptionalConcreteType() throws {
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.maybeChannel",
+                "params": [],
+                "result": { "name": "R", "schema": { "oneOf": [
+                    { "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [
+                        { "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] }
+                    ] },
+                    { "type": "null" }
+                ] } }
+            }]
+        }
+        """
+        let output = try generate(from: json)
+        XCTAssertTrue(
+            output.api.contains("-> RealtimeChannel<MaybeChannel.ResultMessage>?"),
+            "a nullable bound transferable keeps its concrete optional type, got:\n\(output.api)"
+        )
+        XCTAssertTrue(output.api.contains("guard let result else { return nil }"), "a nullable result returns nil for a null body, got:\n\(output.api)")
+        XCTAssertTrue(
+            output.api.contains("return try self.client.makeDecoder().decode(RealtimeChannel<MaybeChannel.ResultMessage>.self, from: result)"),
+            "a nullable bound channel hydrates through RealtimeChannel's Decodable, got:\n\(output.api)"
+        )
+        // A message decoder formed in generated code inherits MainActor default isolation and traps when the socket task calls it.
+        XCTAssertFalse(output.api.contains("{ data in"), "generated code must not form the message decoder, got:\n\(output.api)")
+    }
+
+    func testEveryKnownTagResolvesToConcreteType() throws {
+        // Iterates the set itself: a tag added without a concrete binding - the
+        // drift that emits non-compiling client code - fails here.
+        let expectedReturn: [String: String] = [
+            "realtime/channel": "-> RealtimeChannel<",
+            "file-bucket/download": "-> FileDownloadHandle",
+            "file-bucket/upload": "-> FileUploadHandle",
+            "oidc/client": "-> OIDCClient"
+        ]
+        let expectedBody: [String: String] = [
+            "realtime/channel": "RealtimeChannel<",
+            "file-bucket/download": "FileDownloadHandle.fromJSON(descriptor)",
+            "file-bucket/upload": "FileUploadHandle.fromJSON(descriptor)",
+            "oidc/client": "OIDCClient<String>.fromJSON(descriptor"
+        ]
+        for tag in knownTransferableTags {
+            guard let concreteReturn = expectedReturn[tag], let concreteBody = expectedBody[tag] else {
+                return XCTFail("\(tag) is in knownTransferableTags but has no expected concrete return type")
+            }
+            let json = """
+            {
+                "openrpc": "1.3.2",
+                "info": { "title": "test", "version": "1.0.0" },
+                "methods": [{
+                    "name": "api.get",
+                    "params": [],
+                    "result": { "name": "R", "schema": { "x-blocks-transferable": "\(tag)" } }
+                }]
+            }
+            """
+            let output = try generate(from: json)
+            XCTAssertTrue(output.api.contains(concreteReturn), "\(tag) should resolve to \(concreteReturn)")
+            XCTAssertTrue(
+                output.api.contains(concreteBody),
+                "\(tag) is bound but its hydration body does not construct \(concreteBody)"
+            )
+            XCTAssertFalse(
+                output.api.contains("UnknownTransferable.fromJSON"),
+                "\(tag) is bound but its hydration body fell through to the UnknownTransferable fallback"
+            )
+        }
+    }
+
+    func testUnboundTransferableEscapesTagInEmittedLiteral() throws {
+        // Tag carries " and \ - the emitted literal must escape both, or the
+        // generated Swift would break (and \( would become interpolation).
+        let json = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.get",
+                "params": [],
+                "result": { "name": "R", "schema": { "x-blocks-transferable": "v/a\\"b\\\\c" } }
+            }]
+        }
+        """
+        let output = try generate(from: json)
+        XCTAssertTrue(output.api.contains(#"expectedTag: "v/a\"b\\c""#), "tag was not escaped for the emitted literal, got:\n\(output.api)")
+
+        // A newline or carriage return in the tag must be escaped too, or the emitted
+        // literal would span lines and fail to compile.
+        let crlf = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.get",
+                "params": [],
+                "result": { "name": "R", "schema": { "x-blocks-transferable": "v/a\\nb\\rc" } }
+            }]
+        }
+        """)
+        XCTAssertTrue(crlf.api.contains(#"expectedTag: "v/a\nb\rc""#), "newline/CR in tag was not escaped, got:\n\(crlf.api)")
+    }
+
+    func testDiagnosticNamesModelForCollectionTypeArgument() throws {
+        let model = try build(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.listArg",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "type": "array", "items": {
+                        "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] } }]
+                }}
+            }]
+        }
+        """)
+        let output = try generator.generate(from: model)
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertTrue(diagnostic?.contains("with type argument Api.ListArg.ResultMessage") ?? false, "model not named: \(diagnostic ?? "nil")")
+    }
+
+    func testDiagnosticNamesModelForMapAndNullableTypeArguments() throws {
+        // The diagnostic recurses through map (additionalProperties) and nullable
+        // (oneOf [T, null]) type arguments to the underlying model name.
+        let mapOutput = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.mapArg",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "type": "object", "additionalProperties": { "$ref": "#/components/schemas/Val" } }]
+                }}
+            }],
+            "components": { "schemas": { "Val": { "type": "object", "properties": { "v": { "type": "string" } }, "required": ["v"] } } }
+        }
+        """)
+        XCTAssertEqual(
+            mapOutput.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") },
+            "AWSBLOCKS-NATIVE-001: api.mapArg returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type argument Val."
+        )
+        let nullableOutput = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.nullArg",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "oneOf": [{ "$ref": "#/components/schemas/Inner" }, { "type": "null" }] }]
+                }}
+            }],
+            "components": { "schemas": { "Inner": { "type": "object", "properties": { "v": { "type": "string" } }, "required": ["v"] } } }
+        }
+        """)
+        XCTAssertEqual(
+            nullableOutput.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") },
+            "AWSBLOCKS-NATIVE-001: api.nullArg returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type argument Inner."
+        )
+    }
+
+    func testRealtimeChannelReturnTypeQualifiesInlineTypeArg() throws {
+        // The return type must match the body's qualified nested model, or the
+        // generated client won't compile (cannot find type in scope).
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getChannel",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "realtime/channel",
+                    "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] }]
+                }}
+            }]
+        }
+        """)
+        XCTAssertTrue(output.api.contains("-> RealtimeChannel<GetChannel.ResultMessage>"), "return type must qualify the nested type-arg, got:\n\(output.api)")
+    }
+
+    /// A nested `oidc/client` hydrates through the client's decoder (`BlocksClient.makeDecoder()` carries the client).
+    func testNestedOIDCClientHydratesThroughTheClientsDecoder() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": {
+                    "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client" } }, "required": ["client"]
+                }}},
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client" } } }
+            ]
+        }
+        """)
+        XCTAssertTrue(output.api.contains("public let client: OIDCClient<String>"), "a nested oidc/client hydrates, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "a direct oidc/client hydrates, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [])
+    }
+
+    // MARK: - OIDC Provider Enums
+
+    private func oidcSpec(_ methods: String) -> String {
+        """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [\(methods)]
+        }
+        """
+    }
+
+    func testTypedOIDCClientIsTypedByItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google", "github", "my-sso"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("public func getClient() async throws -> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
+        XCTAssertTrue(
+            output.api.contains("return try OIDCClient<GetClient.Provider>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"),
+            "got:\n\(output.api)"
+        )
+        XCTAssertTrue(output.api.contains("""
+            public enum GetClient {
+
+                /// The providers `auth.getClient` signs in with.
+                public nonisolated enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                    case google
+                    case github
+                    case mySso = "my-sso"
+                }
+            }
+        """), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("extension"), "the runtime's signIn takes the enum, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("ResultMessage"), "the type argument is not a channel message, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings, [])
+    }
+
+    func testOIDCClientWithoutAStringEnumTypeArgStaysUntyped() throws {
+        let untypedArgs = [
+            "",
+            #", "x-blocks-type-args": [{ "type": "string" }]"#,
+            #", "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } } }]"#
+        ]
+        for typeArgs in untypedArgs {
+            let output = try generate(from: oidcSpec("""
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client"\(typeArgs) } } }
+            """))
+            XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "got:\n\(output.api)")
+            XCTAssertTrue(output.api.contains("OIDCClient<String>.fromJSON(descriptor"), "got:\n\(output.api)")
+            XCTAssertFalse(output.api.contains("public enum GetClient"), "no nested types for \(typeArgs), got:\n\(output.api)")
+        }
+    }
+
+    func testOptionalTypedOIDCClientKeepsItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.findClient", "params": [], "result": { "name": "R", "schema": { "oneOf": [
+                { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] },
+                { "type": "null" }
+            ]}}}
+        """))
+        XCTAssertTrue(output.api.contains("-> OIDCClient<FindClient.Provider>? {"), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("OIDCClient<FindClient.Provider>.fromJSON(descriptor"), "got:\n\(output.api)")
+    }
+
+    func testNestedTypedOIDCClientHasNoProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": {
+                "type": "object", "properties": { "client": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}, "required": ["client"]
+            }}}
+        """))
+        // Below the top level a client hydrates untyped: only an operation's own client gets a provider enum.
+        XCTAssertTrue(output.api.contains("public let client: OIDCClient<String>"), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("enum Provider"), "a nested client gets no provider enum, got:\n\(output.api)")
+    }
+
+    func testProviderCaseNamesAreLegalSwift() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["default", "1password", "Google", "google", "my-sso", "my-sso", "+"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("""
+                public nonisolated enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                    case `default`
+                    case _1password = "1password"
+                    case google = "Google"
+                    case google2 = "google"
+                    case mySso = "my-sso"
+                    case _unnamed = "+"
+                }
+        """), "got:\n\(output.api)")
+    }
+
+    func testProviderEnumNameAvoidsAParameterType() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "provider", "required": true, "schema": { "type": "string", "enum": ["a", "b"] } }
+            ], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}}
+        """))
+        XCTAssertTrue(
+            output.api.contains("public func getClient(provider: GetClient.Provider) async throws -> OIDCClient<GetClient.ResultProvider> {"),
+            "got:\n\(output.api)"
+        )
+        XCTAssertTrue(
+            output.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(output.api)"
+        )
+        XCTAssertEqual(output.warnings, [
+            "swift: auth.getClient names its providers Auth.GetClient.ResultProvider, since its operation already declares or uses a type named Provider."
+        ])
+    }
+
+    func testProviderEnumNameAvoidsVariantStructsAndModels() throws {
+        let typedClient = #"{ "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] }"#
+        // A root union's variant structs share the operation enum with the provider enum.
+        let variants = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "via", "required": true, "schema": { "oneOf": [
+                    { "type": "object", "required": ["kind", "name"],
+                      "properties": { "kind": { "type": "string", "enum": ["provider"] }, "name": { "type": "string" } } },
+                    { "type": "object", "required": ["kind", "pw"],
+                      "properties": { "kind": { "type": "string", "enum": ["password"] }, "pw": { "type": "string" } } }
+                ]}}
+            ], "result": { "name": "R", "schema": \(typedClient) } }
+        """))
+        XCTAssertTrue(variants.api.contains("public struct Provider: Codable {"), "got:\n\(variants.api)")
+        XCTAssertTrue(
+            variants.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(variants.api)"
+        )
+        // A nested type naming the `Provider` model must not resolve to the provider enum.
+        let model = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "auth.getClient", "params": [
+                { "name": "options", "required": true, "schema": {
+                    "type": "object", "properties": { "via": { "$ref": "#/components/schemas/Provider" } }, "required": ["via"]
+                }}
+            ], "result": { "name": "R", "schema": \(typedClient) } }],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(
+            model.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(model.api)"
+        )
+        XCTAssertFalse(model.api.contains("public enum Provider: String"), "got:\n\(model.api)")
+        // With no other types in the operation enum, nothing there can name the model, so the enum keeps its name.
+        let unshadowed = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": \(typedClient) } },
+                { "name": "api.listProviders", "params": [], "result": { "name": "R", "schema": {
+                    "type": "array", "items": { "$ref": "#/components/schemas/Provider" }
+                }}}
+            ],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(unshadowed.api.contains("-> OIDCClient<GetClient.Provider> {"), "got:\n\(unshadowed.api)")
+        XCTAssertTrue(unshadowed.models.contains("public nonisolated struct Provider: Codable {"), "got:\n\(unshadowed.models)")
+        XCTAssertEqual(unshadowed.warnings, [])
+    }
+
+    func testUnrelatedProviderModelDoesNotRenameTheEnum() throws {
+        // The operation has an inline type, but only another method names the `Provider` model.
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getClient", "params": [
+                    { "name": "opts", "required": true, "schema": {
+                        "type": "object", "properties": { "force": { "type": "boolean" } }, "required": ["force"]
+                    }}
+                ], "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}},
+                { "name": "catalog.listProviders", "params": [], "result": { "name": "R", "schema": {
+                    "type": "array", "items": { "$ref": "#/components/schemas/Provider" }
+                }}}
+            ],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(output.api.contains("-> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
+        XCTAssertEqual(output.warnings, [])
+    }
+
+    func testProviderRenameEndsForAParameterWithNoNamePart() throws {
+        // A param named only by separators PascalCases to "", which can't prefix a clashing name.
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "provider", "required": true, "schema": { "type": "string", "enum": ["a", "b"] } },
+                { "name": ".", "required": true, "schema": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}
+            ], "result": { "name": "R", "schema": { "type": "string" } } }
+        """))
+        XCTAssertTrue(output.api.contains("public func getClient("), "got:\n\(output.api)")
+    }
+
+    func testTypedOIDCClientInAModelHasNoProviderEnum() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Setup" } } }],
+            "components": { "schemas": { "Setup": { "type": "object", "properties": { "client": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}, "required": ["client"] } } }
+        }
+        """)
+        XCTAssertTrue(output.models.contains("public let client: OIDCClient<String>"), "got:\n\(output.models)")
+        XCTAssertFalse(output.models.contains("enum"), "a client in a model gets no provider enum, got:\n\(output.models)")
+        XCTAssertFalse(output.api.contains("enum Provider"), "got:\n\(output.api)")
+    }
+
+    func testDefaultNamespaceClientIsTypedByItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("/// The providers `getClient` signs in with."), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public func getClient() async throws -> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
+    }
+
+    func testUnboundTransferableDiagnosticQualifiesDefaultNamespace() throws {
+        // A non-namespaced method nests under `_Default`; the diagnostic must
+        // name that class, or the printed type is unusable from app scope.
+        let spec = """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "connectDevice",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "type": "object", "properties": { "temp": { "type": "number" } }, "required": ["temp"] }]
+                }}
+            }]
+        }
+        """
+        let model = try build(from: spec)
+        let output = try generator.generate(from: model)
+        XCTAssertTrue(output.api.contains("public final nonisolated class _Default: Sendable {"), "expected _Default class, got:\n\(output.api)")
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertEqual(
+            diagnostic,
+            "AWSBLOCKS-NATIVE-001: connectDevice returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type argument _Default.ConnectDevice.ResultMessage."
+        )
+    }
+
+    func testUnboundTransferableDiagnosticNamesRefTypeArgAtTopLevel() throws {
+        // A $ref type argument resolves to a top-level generated type, so the
+        // diagnostic names it bare (not namespace-prefixed), unlike an inline nested type.
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getTelemetry",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "$ref": "#/components/schemas/Telemetry" }]
+                }}
+            }],
+            "components": {
+                "schemas": {
+                    "Telemetry": { "type": "object", "properties": { "temp": { "type": "number" } }, "required": ["temp"] }
+                }
+            }
+        }
+        """)
+        XCTAssertTrue(
+            output.models.contains("public nonisolated struct Telemetry"),
+            "the $ref type-arg must be a resolvable top-level type, got:\n\(output.models)"
+        )
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertEqual(
+            diagnostic,
+            "AWSBLOCKS-NATIVE-001: api.getTelemetry returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type argument Telemetry."
+        )
+    }
+
+    func testUnboundTransferableDiagnosticReportsNoModelsForPrimitiveTypeArg() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getRaw",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [{ "type": "string" }]
+                }}
+            }]
+        }
+        """)
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertEqual(
+            diagnostic,
+            "AWSBLOCKS-NATIVE-001: api.getRaw returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with no generated type-argument models."
+        )
+    }
+
+    func testUnboundTransferableDiagnosticListsMultipleTypeArgModels() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.multi",
+                "params": [],
+                "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "example-iot/device-link",
+                    "x-blocks-type-args": [
+                        { "$ref": "#/components/schemas/Foo" },
+                        { "$ref": "#/components/schemas/Bar" }
+                    ]
+                }}
+            }],
+            "components": { "schemas": {
+                "Foo": { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"] },
+                "Bar": { "type": "object", "properties": { "b": { "type": "string" } }, "required": ["b"] }
+            } }
+        }
+        """)
+        let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
+        XCTAssertEqual(
+            diagnostic,
+            "AWSBLOCKS-NATIVE-001: api.multi returns unbound transferable "
+                + "'example-iot/device-link' on swift; generated UnknownTransferable with type arguments Foo, Bar."
+        )
     }
 }

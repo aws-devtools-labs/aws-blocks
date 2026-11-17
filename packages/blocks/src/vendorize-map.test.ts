@@ -46,8 +46,20 @@ describe('aws-blocks.vendorize map', () => {
     const missing: string[] = [];
 
     for (const dep of deps) {
-      // Skip infrastructure packages (not user-facing BBs)
-      if (dep.endsWith('/core') || dep.endsWith('/auth-common')) continue;
+      // Skip infrastructure packages (not user-facing BBs). bb-lambda-compute
+      // and bb-container-compute are the internal backing computes — CDK-only and
+      // not customer-instantiable (customers use the generic `Compute` from
+      // bb-compute, which IS in the map) — so they have no public symbol to
+      // vendorize. `hosting` is the CDK hosting library whose value API is
+      // re-exported through core/blocks — infra, not a BB.
+      if (
+        dep.endsWith('/core') ||
+        dep.endsWith('/auth-common') ||
+        dep.endsWith('/bb-lambda-compute') ||
+        dep.endsWith('/bb-container-compute') ||
+        dep.endsWith('/hosting')
+      )
+        continue;
 
       // Find the package directory by resolving its main entry and walking up
       let pkgDir: string | null = null;

@@ -17,6 +17,17 @@ export interface DsqlEngineConfig {
   poolSize?: number;
   /** PostgreSQL role name to connect as (mapped from IAM via `AWS IAM GRANT`). */
   role: string;
+  /**
+   * Postgres `application_name` to report when the caller supplies none.
+   *
+   * Applied as pg's `fallback_application_name`, which pg uses only when no
+   * `application_name` is set, so a caller's `PGAPPNAME` wins. Used by
+   * the AWS runtime layer to propagate the BB user-agent chain
+   * (`"aws-blocks/<core> bb/DistributedDatabase/<version>"`). DSQL applies the
+   * setting (`current_setting('application_name')` returns it) but does not
+   * support `pg_stat_activity`.
+   */
+  applicationName?: string;
 }
 
 export class DsqlEngine implements DatabaseEngine {
@@ -33,6 +44,7 @@ export class DsqlEngine implements DatabaseEngine {
       ssl: true,
       max: config.poolSize ?? DEFAULT_POOL_SIZE,
       password: config.getAuthToken,
+      ...(config.applicationName ? { fallback_application_name: config.applicationName } : {}),
     });
   }
 

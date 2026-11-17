@@ -15,43 +15,59 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Blocks
 /// Returns raw JSON `Data` from `execute()` — the generated code handles
 /// deserialization and transferable hydration.
 ///
-/// Usage (from generated code):
+/// Generated APIs run on the one the generated `Blocks` owns:
 /// ```swift
-/// let client = BlocksClient(url: "http://localhost:3001/api")
-/// let request = BlocksRequest(method: "api.createTodo", params: [title, priority], id: BlocksRequest.nextId())
-/// let result = try await client.execute(request)
-/// return Cursor.fromJson(result)
+/// let blocks = Blocks()
+/// let todos = try await blocks.api.listTodos(sortBy: nil)
 /// ```
-public final class BlocksClient {
+public final class BlocksClient: Sendable {
 
     /// Base host for localhost rewriting in transferable descriptors (e.g., WebSocket URLs).
-    /// Set to your Mac's LAN IP for physical device testing.
+    /// Only needed for a dev server started with `BLOCKS_DEV_HOST`: set it to the host the app reaches that server at.
     /// Default: "localhost" (no rewriting — works in Simulator).
-    public static var baseHost: String = "localhost"
+    public static var baseHost: String {
+        get { baseHostLock.withLock { $0 } }
+        set { baseHostLock.withLock { $0 = newValue } }
+    }
+
+    // Not a stored static var: Swift 6 app code cannot reference one.
+    private static let baseHostLock = OSAllocatedUnfairLock(initialState: "localhost")
 
     /// Base URL the client was constructed with — exposed for transferable
-    /// hydration (e.g. `OIDCClient.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
+    /// hydration (e.g. `OIDCClient<Provider>.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
     public var baseUrl: String { url }
 
     /// Token store used to hydrate `OIDCClient` transferables returned by this client.
-    /// Defaults to in-memory storage; pass a Keychain-backed implementation for
-    /// session persistence across app restarts.
+    /// Defaults to in-memory storage; pass a Keychain-backed implementation, e.g.
+    /// `Blocks(tokenStore: store)`, for session persistence across app restarts.
     public let tokenStore: TokenStore
 
     private let url: String
-    private let session: URLSession
+    /// The only path to the session; read by tests.
+    let gate: SessionGate
+    /// The one move of tokens saved under the old unscoped keys, shared by every OIDCClient on this client.
+    private let legacyTokenAdoption = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
     private static let cookieStore = KeychainCookieStore()
 
-    public init(
+    /// Applies cookie attributes over `cookieStore`.
+    private static let cookieJar = CookieJar(items: cookieStore)
+
+    /// A `session` you pass stays yours; without one the client creates a session and invalidates it on close or release.
+    public convenience init(
         url: String,
         session: URLSession? = nil,
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
+        self.init(url: url, session: session ?? BlocksClient.makeSession(), ownsSession: session == nil, tokenStore: tokenStore)
+    }
+
+    /// Tests pass `ownsSession: true` to observe an owned session being invalidated.
+    init(url: String, session: URLSession, ownsSession: Bool, tokenStore: TokenStore) {
         self.url = url
-        self.session = session ?? BlocksClient.makeSession()
+        self.gate = SessionGate(session: session, ownsSession: ownsSession)
         self.tokenStore = tokenStore
     }
 
@@ -61,6 +77,22 @@ public final class BlocksClient {
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
         self.init(url: server.url, session: session, tokenStore: tokenStore)
+    }
+
+    /// Later requests throw `ClientClosedError`; in-flight ones finish, then the session this client created is invalidated.
+    public func close() {
+        gate.close()
+    }
+
+    /// Runs only the first caller's `move`; every later caller waits for that run instead.
+    func adoptLegacyTokensOnce(_ move: @escaping @Sendable () async -> Void) async {
+        let adoption = legacyTokenAdoption.withLock { state in
+            if let existing = state { return existing }
+            let started = Task { await move() }
+            state = started
+            return started
+        }
+        await adoption.value
     }
 
     /// Clears all stored cookies (e.g. on sign-out).
@@ -76,15 +108,24 @@ public final class BlocksClient {
         config.httpCookieAcceptPolicy = .never
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
+        // The Blocks server reads x-blocks-user-agent.
+        config.httpAdditionalHeaders = ["x-blocks-user-agent": blocksUserAgentToken]
         return URLSession(configuration: config)
     }
 
     /// Executes a JSON-RPC request and returns the raw JSON `Data` of the `result` field.
     /// The generated code is responsible for decoding this into typed models.
     ///
+    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+    /// `reports.build`), so a namespace that runs on its own compute is served by it.
+    ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        guard let requestURL = URL(string: url) else {
+        // Validate the base first: appending the namespace can turn an invalid base (e.g. "")
+        // into a relative URL that only fails later, as a transport error.
+        guard URL(string: url) != nil,
+              let requestURL = URL(string: BlocksClient.rpcURL(base: url, method: request.method))
+        else {
             throw RPCError(message: "Invalid URL: \(url)")
         }
 
@@ -93,45 +134,54 @@ public final class BlocksClient {
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // Attach stored cookies (filtered by host)
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(host)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { (String($0.key.dropFirst(hostPrefix.count)), $0.value) }
-
-        if !cookies.isEmpty {
-            let cookieHeader = cookies.map { "\($0.0)=\($0.1)" }.joined(separator: "; ")
+        // Attach stored cookies (filtered by host, path, `Secure` and expiry)
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        // Encode request body
-        urlRequest.httpBody = try JSONEncoder().encode(request)
+        // Encode request body (dates as ISO 8601 strings, see `makeEncoder()`)
+        urlRequest.httpBody = try makeEncoder().encode(request)
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Process Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
         }
 
         // Parse response to check for errors (minimal parsing)
-        guard let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw RPCError(message: "Invalid JSON response")
-        }
+        let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        // Check for JSON-RPC "error" field
-        if let errorObj = responseJson["error"] as? [String: Any] {
+        // Decode a JSON-RPC `error` body first, then check the HTTP status, and only then reject a
+        // body that is not a JSON object, so a non-2xx with such a body is reported by its status.
+        if let errorObj = responseJson?["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            throw RPCError(message: "Error occured with code: \(code) message: \(message)")
+            var errorData: [String: JSONValue]?
+            if let rawData = errorObj["data"] as? [String: Any],
+               case .dictionary(let entries)? = JSONValue(serialized: rawData) {
+                errorData = entries
+            }
+            var name: String?
+            if case .string(let value)? = errorData?["name"] { name = value }
+            throw RPCError(
+                message: "Error occured with code: \(code) message: \(message)",
+                code: code,
+                name: name,
+                retriable: errorData?["retriable"] == .bool(true),
+                data: errorData
+            )
         }
 
-        // Check HTTP status
+        // Check HTTP status: a non-2xx with no JSON-RPC error reports its status as `code`
         if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
-            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)")
+            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)", code: httpResponse.statusCode)
+        }
+
+        guard let responseJson else {
+            throw RPCError(message: "Invalid JSON response")
         }
 
         // Check for null result
@@ -158,9 +208,24 @@ public final class BlocksClient {
         }
     }
 
-    private var host: String {
-        URL(string: url)?.host ?? "unknown"
+    /// The URL a call to `method` is POSTed to: `{base}/{namespace}`, where the namespace is the
+    /// part of `method` before the first `.` — the path the TypeScript client uses, so the backend's
+    /// gateway can route each namespace to the compute that hosts it. The body still carries the
+    /// full `namespace.method`, which is what the server dispatches on. A `method` without a
+    /// namespace goes to `base` unchanged.
+    static func rpcURL(base: String, method: String) -> String {
+        guard let dot = method.firstIndex(of: "."), dot != method.startIndex else { return base }
+        let namespace = String(method[..<dot])
+        let segment = namespace.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? namespace
+        var trimmed = Substring(base)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return "\(trimmed)/\(segment)"
     }
+
+    /// Characters allowed in a single path segment: a path's characters, without its `/` separator.
+    private static let pathSegmentAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
 
     /// Base URL for raw routes — strips the RPC path suffix but keeps the stage prefix.
     /// Base URL for raw routes. Raw routes share the same origin and stage
@@ -193,24 +258,44 @@ public final class BlocksClient {
         urlRequest.httpMethod = "POST"
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         // Attach stored cookies
-        let reqHost = requestURL.host ?? ""
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(reqHost)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { "\(String($0.key.dropFirst(hostPrefix.count)))=\($0.value)" }
-        if !cookies.isEmpty {
-            urlRequest.setValue(cookies.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
+            urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
+            // An error response is the server refusing the request, not a malformed success:
+            // surface its status and error name instead of handing the error body to the caller.
+            if !(200 ..< 300).contains(httpResponse.statusCode) {
+                // Blocks routes answer `{ error: <message>, name }`; a plain OAuth body is
+                // `{ error: <code>, error_description }`.
+                // A Blocks body without a `name` (`{ error: 'Missing required fields' }`) holds a
+                // message, so `error` is a name only beside `error_description` or when it reads
+                // like a code (no spaces). Known approximation: a nameless one-word message
+                // (`{ error: 'Unauthorized' }`) reads as a code and becomes the error name.
+                let errorBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let blocksName = errorBody?["name"] as? String
+                let error = errorBody?["error"] as? String
+                let description = errorBody?["error_description"] as? String
+                let errorIsCode = blocksName == nil
+                    && error.map { description != nil || !$0.contains(" ") } == true
+                let name = blocksName ?? (errorIsCode ? error : nil)
+                // A body with only `error_description` keeps it as the detail.
+                let detail = errorIsCode ? description : (error ?? description)
+                let reason = [name, detail].compactMap { $0 }.joined(separator: ": ")
+                throw RawRouteError(
+                    message: "\(path) answered HTTP \(httpResponse.statusCode)" + (reason.isEmpty ? "" : " (\(reason))"),
+                    statusCode: httpResponse.statusCode,
+                    errorName: name
+                )
+            }
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -221,29 +306,16 @@ public final class BlocksClient {
 
     // MARK: - Cookie Handling
 
-    private func processCookies(from response: HTTPURLResponse) {
+    private func processCookies(from response: HTTPURLResponse, requestURL: URL) {
         for (key, value) in response.allHeaderFields {
             guard "\(key)".caseInsensitiveCompare("Set-Cookie") == .orderedSame else { continue }
 
             let rawCookies = splitSetCookieHeader("\(value)")
 
+            // After a followed redirect, `response.url` is the URL the cookies came from.
+            let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
-                let segments = rawCookie.split(separator: ";", maxSplits: 1)
-                guard let nameValuePart = segments.first else { continue }
-                guard let eqIdx = nameValuePart.firstIndex(of: "=") else { continue }
-
-                let name = String(nameValuePart[nameValuePart.startIndex ..< eqIdx])
-                    .trimmingCharacters(in: .whitespaces)
-                let cookieValue = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
-                    .trimmingCharacters(in: .whitespaces)
-
-                let cookieKey = "\(host)|\(name)"
-                let attrs = segments.count > 1 ? String(segments[1]).lowercased() : ""
-                if cookieValue.isEmpty || attrs.contains("max-age=0") {
-                    BlocksClient.cookieStore.remove(name: cookieKey)
-                } else {
-                    BlocksClient.cookieStore.set(name: cookieKey, value: cookieValue)
-                }
+                BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
             }
         }
     }
@@ -282,17 +354,73 @@ public struct RPCError: BlocksError {
     public let message: String
     public let underlyingError: Error?
 
-    public init(message: String, underlyingError: Error? = nil) {
+    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
+    /// status (e.g. `401`); `-1` when `code` is absent or not readable as an `Int`. For a non-2xx
+    /// response with no JSON-RPC error (a gateway or route error), the HTTP status (`name` and `data`
+    /// are `nil`, `retriable` is `false`). `nil` for other transport and decoding failures.
+    public let code: Int?
+
+    /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
+    /// Errors cross the wire by name, so match on this rather than on `message`.
+    /// `nil` when the server sent none or sent a non-string, and for transport and decoding failures.
+    public let name: String?
+
+    /// Whether the caller can retry the same action without restarting the broader flow
+    /// (`error.data.retriable`, e.g. a wrong MFA code). `true` only for the JSON boolean `true`;
+    /// it marks the kind of failure as retriable, not that a given retry will succeed.
+    public let retriable: Bool
+
+    /// The server's `error.data` object, as `[String: JSONValue]`. `nil` when the server sent none
+    /// or sent `error.data` that is not a JSON object, and for transport and decoding failures.
+    public let data: [String: JSONValue]?
+
+    public init(
+        message: String,
+        code: Int? = nil,
+        name: String? = nil,
+        retriable: Bool = false,
+        data: [String: JSONValue]? = nil,
+        underlyingError: Error? = nil
+    ) {
         self.message = message
+        self.code = code
+        self.name = name
+        self.retriable = retriable
+        self.data = data
         self.underlyingError = underlyingError
     }
+}
+
+public extension Error {
+    /// Whether this carries the server error name `name` (e.g. `"NotAuthenticatedException"`):
+    /// an `RPCError` (`error.data.name`) or a `RawRouteError` (its `errorName`). As with Kotlin's
+    /// `Throwable.isBlocksError`, it is offered on any `Error`.
+    func isBlocksError(name: String) -> Bool {
+        (self as? RPCError)?.name == name || (self as? RawRouteError)?.errorName == name
+    }
+}
+
+/// Thrown by a request made after `BlocksClient.close()` or the generated `Blocks.close()`.
+public struct ClientClosedError: BlocksError {
+    public let message = "This BlocksClient is closed; create a new Blocks to make requests."
+
+    public init() {}
 }
 
 /// Error thrown by raw route (non-RPC) requests.
 public struct RawRouteError: BlocksError {
     public let message: String
+    /// The HTTP status of a response outside 2xx; `nil` when no such response was received.
+    public let statusCode: Int?
+    /// The error name from the response body (`name`, else `error`), when the body is JSON and has one.
+    /// `error` counts as a name only beside `error_description` (an OAuth body) or when it has no
+    /// spaces; a nameless Blocks body's `error` is a message and goes into `message` instead. A
+    /// nameless one-word message (`{ "error": "Unauthorized" }`) has no spaces, so it is taken as the name.
+    public let errorName: String?
 
-    public init(message: String) {
+    public init(message: String, statusCode: Int? = nil, errorName: String? = nil) {
         self.message = message
+        self.statusCode = statusCode
+        self.errorName = errorName
     }
 }

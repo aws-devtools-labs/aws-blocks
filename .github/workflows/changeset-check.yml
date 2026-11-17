@@ -3,6 +3,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: changeset-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -11,10 +15,10 @@ jobs:
     name: Require changeset
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
 
@@ -25,6 +29,10 @@ jobs:
       # here instead of as a wrong verdict in the steps below.
       - name: Test the changeset guards
         run: node --test scripts/changeset-guard.test.mjs
+      - name: Test the keyword guard
+        run: node --test scripts/keywords-guard.test.mjs
+      - name: Test the dependency changeset generator
+        run: node --test scripts/generate-dependency-changeset.test.mjs
       # Catches malformed changesets (broken frontmatter, unknown package,
       # invalid bump type) that the regex parser silently ignores and would
       # otherwise fail post-merge at `changeset version`. Validates only the
@@ -35,6 +43,9 @@ jobs:
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          # Dependabot manifest bumps skip this check; the release job writes
+          # their changeset (publish-packages.yml).
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       - name: Block major version bumps (pre-release)
         run: node --experimental-strip-types scripts/changeset-guard.ts block-major
       # The umbrella re-exports its siblings and ships docs/ assembled from their
@@ -45,3 +56,10 @@ jobs:
       # treat removing an existing one as the same failure.
       - name: Verify the umbrella is bumped with its siblings
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
+      # `npm search keywords:aws-blocks` is the discovery path the publishing
+      # guide documents, and a package missing the tag still builds, tests and
+      # publishes cleanly — it just never shows up in that search. #491 was
+      # exactly that, across every published package, so assert the tag here
+      # instead of relying on review to spot its absence.
+      - name: Verify every published package carries the aws-blocks keyword
+        run: node --experimental-strip-types scripts/keywords-guard.ts verify-discovery-tag

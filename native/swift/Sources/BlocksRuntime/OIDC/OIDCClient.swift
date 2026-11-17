@@ -8,13 +8,31 @@
 import Foundation
 import CryptoKit
 
+/// A provider an `OIDCClient` signs in with: the enum generated from the spec's provider names, or
+/// `String` when the spec doesn't name them.
+public protocol OIDCProviderName: Sendable {
+    /// The name the server knows the provider by.
+    var providerName: String { get }
+}
+
+public extension OIDCProviderName where Self: RawRepresentable, RawValue == String {
+    var providerName: String { rawValue }
+}
+
+extension String: OIDCProviderName {
+    public var providerName: String { self }
+}
+
 /// Server-relay OIDC client. Delegates networking to `BlocksClient` so
 /// cookies are shared automatically. Implements the relay sign-in flow:
 /// fetches signed authorize params from the server, opens the IdP in a
 /// browser, and exchanges the authorization code for tokens.
 ///
+/// `Provider` is the type `signIn` takes: the generated provider enum, so a
+/// client only accepts its own providers, or `String` for an untyped spec.
+///
 /// All mutable state is protected by actor isolation.
-public actor OIDCClient: AuthProvider {
+public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     public nonisolated let exchangePath: String
     public nonisolated let refreshPath: String
@@ -25,6 +43,10 @@ public actor OIDCClient: AuthProvider {
 
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
+
+    /// The descriptor this client was hydrated from, as the server sent it. `nil` for a client built with `init`.
+    /// `encode(to:)` writes it back unchanged.
+    nonisolated let wireDescriptor: [String: JSONValue]?
 
     private var inflightRefresh: Task<Void, Error>?
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
@@ -38,6 +60,28 @@ public actor OIDCClient: AuthProvider {
         baseUrl: String,
         client: BlocksClient
     ) {
+        self.init(
+            exchangePath: exchangePath,
+            refreshPath: refreshPath,
+            signOutPath: signOutPath,
+            providers: providers,
+            providerConfigs: providerConfigs,
+            baseUrl: baseUrl,
+            client: client,
+            wireDescriptor: nil
+        )
+    }
+
+    init(
+        exchangePath: String,
+        refreshPath: String,
+        signOutPath: String,
+        providers: [String],
+        providerConfigs: [String: OIDCProviderConfig],
+        baseUrl: String,
+        client: BlocksClient,
+        wireDescriptor: [String: JSONValue]?
+    ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
         self.signOutPath = signOutPath
@@ -45,6 +89,7 @@ public actor OIDCClient: AuthProvider {
         self.providerConfigs = providerConfigs
         self.baseUrl = baseUrl
         self.client = client
+        self.wireDescriptor = wireDescriptor
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
@@ -81,7 +126,12 @@ public actor OIDCClient: AuthProvider {
 
     public static func generateVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        // Fail closed: never return the zero-filled buffer when the system RNG call fails.
+        // Traps like the standard library's SystemRandomNumberGenerator, keeping this API non-throwing.
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with OSStatus \(status)")
+        }
         return base64URLEncode(Data(bytes))
     }
 
@@ -107,10 +157,11 @@ public actor OIDCClient: AuthProvider {
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
     public func signIn(
-        provider: String,
+        provider: Provider,
         relayTo: String,
         launcher: BrowserLauncher
     ) async throws -> OIDCUser {
+        let provider = provider.providerName
         guard providers.contains(provider) else {
             throw OIDCError.unknownProvider(provider)
         }
@@ -241,11 +292,11 @@ public actor OIDCClient: AuthProvider {
         }
 
         if let accessToken = json["accessToken"] as? String {
-            await tokenStore.set("access_token", value: accessToken)
+            await storeToken("access_token", accessToken)
             if let refreshToken = json["refreshToken"] as? String {
-                await tokenStore.set("refresh_token", value: refreshToken)
+                await storeToken("refresh_token", refreshToken)
             }
-            await tokenStore.set("expires_at", value: Self.stringifyExpiry(json["expiresIn"]))
+            await storeToken("expires_at", Self.stringifyExpiry(json["expiresIn"]))
         }
 
         let user = try OIDCUser.fromJSON(userJSON)
@@ -268,7 +319,7 @@ public actor OIDCClient: AuthProvider {
     }
 
     private func performRefresh() async throws {
-        guard let refreshToken = await tokenStore.get("refresh_token") else {
+        guard let refreshToken = await storedToken("refresh_token") else {
             emit(.signedOut)
             return
         }
@@ -276,6 +327,9 @@ public actor OIDCClient: AuthProvider {
         let json: [String: Any]
         do {
             json = try await client.postRawRoute(path: refreshPath, body: ["refreshToken": refreshToken])
+        } catch let error as ClientClosedError {
+            // A closed client says nothing about the session, so the tokens stay.
+            throw error
         } catch {
             await clearTokens()
             emit(.signedOut)
@@ -288,17 +342,17 @@ public actor OIDCClient: AuthProvider {
             return
         }
 
-        await tokenStore.set("access_token", value: accessToken)
-        await tokenStore.set("expires_at", value: Self.stringifyExpiry(json["expiresAt"]))
+        await storeToken("access_token", accessToken)
+        await storeToken("expires_at", Self.stringifyExpiry(json["expiresAt"]))
         if let newRefresh = json["refreshToken"] as? String {
-            await tokenStore.set("refresh_token", value: newRefresh)
+            await storeToken("refresh_token", newRefresh)
         }
     }
 
     // MARK: - Sign out
 
     public func signOut() async {
-        let refreshToken = await tokenStore.get("refresh_token")
+        let refreshToken = await storedToken("refresh_token")
         _ = try? await client.postRawRoute(path: signOutPath, body: ["refreshToken": refreshToken ?? ""])
         await clearTokens()
         emit(.signedOut)
@@ -309,8 +363,8 @@ public actor OIDCClient: AuthProvider {
     public func restore() async {
         emit(.loading)
 
-        let accessToken = await tokenStore.get("access_token")
-        let refreshToken = await tokenStore.get("refresh_token")
+        let accessToken = await storedToken("access_token")
+        let refreshToken = await storedToken("refresh_token")
 
         guard accessToken != nil, refreshToken != nil else {
             emit(.signedOut)
@@ -320,6 +374,10 @@ public actor OIDCClient: AuthProvider {
         if await isExpired() {
             do {
                 try await refresh()
+            } catch is ClientClosedError {
+                // The tokens stay for a new Blocks to restore.
+                emit(.signedOut)
+                return
             } catch {
                 await clearTokens()
                 emit(.signedOut)
@@ -327,7 +385,7 @@ public actor OIDCClient: AuthProvider {
             }
         }
 
-        guard let token = await tokenStore.get("access_token") else {
+        guard let token = await storedToken("access_token") else {
             emit(.signedOut)
             return
         }
@@ -351,10 +409,15 @@ public actor OIDCClient: AuthProvider {
     // MARK: - AuthProvider
 
     public func getAccessToken() async -> String? {
-        guard let token = await tokenStore.get("access_token") else { return nil }
+        guard let token = await storedToken("access_token") else { return nil }
         if await isExpired() {
-            try? await refresh()
-            return await tokenStore.get("access_token")
+            do {
+                try await refresh()
+            } catch {
+                // Only a closed client throws here, and its expired token is no use.
+                return nil
+            }
+            return await storedToken("access_token")
         }
         return token
     }
@@ -362,6 +425,8 @@ public actor OIDCClient: AuthProvider {
     public func onAuthFailure() async {
         do {
             try await refresh()
+        } catch is ClientClosedError {
+            return
         } catch {
             await clearTokens()
             emit(.signedOut)
@@ -377,9 +442,9 @@ public actor OIDCClient: AuthProvider {
     /// {
     ///   "providers": ["google", "github"],
     ///   "providerConfigs": { "google": { "authorizeUrl": "...", "clientId": "...", "scopes": [...], "kind": "..." } },
-    ///   "exchangePath": "/auth/exchange",
-    ///   "refreshPath": "/auth/exchange/refresh",
-    ///   "signOutPath": "/auth/signout"
+    ///   "exchangePath": "/aws-blocks/auth/exchange",
+    ///   "refreshPath": "/aws-blocks/auth/exchange/refresh",
+    ///   "signOutPath": "/aws-blocks/auth/signout"
     /// }
     /// ```
     public static func fromJSON(
@@ -405,14 +470,18 @@ public actor OIDCClient: AuthProvider {
             providers: providers,
             providerConfigs: providerConfigs,
             baseUrl: baseUrl,
-            client: client
+            client: client,
+            wireDescriptor: JSONValue(serialized: descriptor).flatMap { value in
+                if case .dictionary(let entries) = value { return entries }
+                return nil
+            }
         )
     }
 
     // MARK: - Private helpers
 
     private func isExpired() async -> Bool {
-        guard let raw = await tokenStore.get("expires_at"),
+        guard let raw = await storedToken("expires_at"),
               let expiry = Int64(raw)
         else { return true }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
@@ -420,9 +489,43 @@ public actor OIDCClient: AuthProvider {
     }
 
     private func clearTokens() async {
-        await tokenStore.delete("access_token")
-        await tokenStore.delete("refresh_token")
-        await tokenStore.delete("expires_at")
+        for name in Self.tokenNames {
+            await tokenStore.delete(tokenKey(name))
+        }
+    }
+
+    // Computed: a generic type can't store a static property.
+    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at"] }
+
+    /// Scoped by exchange path, so OIDC blocks sharing one `TokenStore` keep separate sessions.
+    private func tokenKey(_ name: String) -> String {
+        "\(exchangePath)#\(name)"
+    }
+
+    private func storedToken(_ name: String) async -> String? {
+        await adoptLegacyTokens()
+        return await tokenStore.get(tokenKey(name))
+    }
+
+    private func storeToken(_ name: String, _ value: String) async {
+        await adoptLegacyTokens()
+        await tokenStore.set(tokenKey(name), value: value)
+    }
+
+    /// Once per BlocksClient, the first of its OIDCClients to use the store takes the unscoped tokens, unless it has its own.
+    private func adoptLegacyTokens() async {
+        await client.adoptLegacyTokensOnce { await self.moveLegacyTokens() }
+    }
+
+    private func moveLegacyTokens() async {
+        for name in Self.tokenNames where await tokenStore.get(tokenKey(name)) != nil {
+            return
+        }
+        for name in Self.tokenNames {
+            guard let value = await tokenStore.get(name) else { continue }
+            await tokenStore.set(tokenKey(name), value: value)
+            await tokenStore.delete(name)
+        }
     }
 
     private static func stringifyExpiry(_ value: Any?) -> String {
@@ -440,6 +543,78 @@ public actor OIDCClient: AuthProvider {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
+    }
+}
+
+// MARK: - Codable
+
+extension OIDCClient: Codable {
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case exchangePath
+        case refreshPath
+        case signOutPath
+        case providers
+        case providerConfigs
+    }
+
+    // Spelled `nonisolated`: an app module with MainActor default isolation that names `OIDCClient<Provider>`
+    // otherwise rejects the generic actor's `Decodable` conformance (`any Decoder` isn't `Sendable`).
+    /// Decodes a client from its `{ "__blocks": "oidc/client", … }` descriptor, like
+    /// ``fromJSON(_:baseUrl:client:)``, so a generated model can hold one at any depth.
+    ///
+    /// The client signs in through the ``BlocksClient`` that fetched the descriptor, so the decoder must carry it
+    /// in `userInfo[.blocksClient]`: decode with ``BlocksClient/makeDecoder()``. Generated operations do.
+    ///
+    /// - Throws: `DecodingError.dataCorrupted` when the decoder carries no client or the descriptor is malformed.
+    nonisolated public init(from decoder: any Decoder) throws {
+        guard let client = decoder.userInfo[.blocksClient] as? BlocksClient else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Decoding an OIDCClient needs the BlocksClient that fetched it in "
+                    + "decoder.userInfo[.blocksClient]. Decode with BlocksClient.makeDecoder()."
+            ))
+        }
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "oidc/client")
+        let descriptor = try [String: JSONValue](from: decoder)
+        let hydrated: OIDCClient
+        do {
+            let serialized = descriptor.mapValues(\.serialized)
+            hydrated = try Self.fromJSON(serialized, baseUrl: client.baseUrl, client: client)
+        } catch {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid OIDC client descriptor",
+                underlyingError: error
+            ))
+        }
+        self.init(
+            exchangePath: hydrated.exchangePath,
+            refreshPath: hydrated.refreshPath,
+            signOutPath: hydrated.signOutPath,
+            providers: hydrated.providers,
+            providerConfigs: hydrated.providerConfigs,
+            baseUrl: hydrated.baseUrl,
+            client: client,
+            wireDescriptor: descriptor
+        )
+    }
+
+    /// Encodes the descriptor this client was hydrated from, unchanged. A client built with `init` encodes
+    /// `{ "__blocks": "oidc/client", "exchangePath", "refreshPath", "signOutPath", "providers", "providerConfigs" }`.
+    public nonisolated func encode(to encoder: Encoder) throws {
+        if let wireDescriptor {
+            try wireDescriptor.encode(to: encoder)
+            return
+        }
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("oidc/client", forKey: .blocksType)
+        try container.encode(exchangePath, forKey: .exchangePath)
+        try container.encode(refreshPath, forKey: .refreshPath)
+        try container.encode(signOutPath, forKey: .signOutPath)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(providerConfigs, forKey: .providerConfigs)
     }
 }
 

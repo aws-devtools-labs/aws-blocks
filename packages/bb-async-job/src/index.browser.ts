@@ -6,8 +6,9 @@ export class AsyncJob {
 	constructor(...args: any[]) {}
 }
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
