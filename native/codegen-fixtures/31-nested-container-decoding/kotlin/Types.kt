@@ -17,14 +17,8 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Level.Serializer::class)
 public sealed class Level {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object Low : Level() {
@@ -35,22 +29,13 @@ public sealed class Level {
     override val `value`: String = "high"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Level()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Level> by lazy { listOf(Low, High) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Level = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 

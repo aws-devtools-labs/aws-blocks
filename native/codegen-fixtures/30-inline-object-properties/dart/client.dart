@@ -28,9 +28,7 @@ enum ShipmentDestinationGeoAccuracySourceKnown implements ShipmentDestinationGeo
   String toJson() => name;
 }
 
-/// A `ShipmentDestinationGeoAccuracySource` value this client was generated without.
 final class ShipmentDestinationGeoAccuracySourceUnknown implements ShipmentDestinationGeoAccuracySource {
-  /// The value as the server sent it.
   final String value;
 
   const ShipmentDestinationGeoAccuracySourceUnknown(this.value);

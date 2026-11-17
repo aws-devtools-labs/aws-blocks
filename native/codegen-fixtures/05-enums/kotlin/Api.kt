@@ -35,14 +35,8 @@ public class Api(
       public val status: Result.Status,
       public val updatedAt: String,
     ) {
-      /**
-       * A string enum that keeps a value this client was generated without as [Unknown].
-       */
       @Serializable(with = Status.Serializer::class)
       public sealed class Status {
-        /**
-         * The value as it is sent on the wire.
-         */
         public abstract val `value`: String
 
         public data object Active : Status() {
@@ -57,22 +51,13 @@ public class Api(
           override val `value`: String = "pending"
         }
 
-        /**
-         * A value this client was generated without, as the server sent it.
-         */
         public data class Unknown(
           override val `value`: String,
         ) : Status()
 
         public companion object {
-          /**
-           * The known values, in the spec's order.
-           */
           public val entries: List<Status> by lazy { listOf(Active, Inactive, Pending) }
 
-          /**
-           * The case for [value]: a known one, else [Unknown].
-           */
           public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
         }
 

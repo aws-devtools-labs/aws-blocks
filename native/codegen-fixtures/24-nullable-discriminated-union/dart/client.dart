@@ -47,7 +47,6 @@ class IsUpdatedFalseNextStep {
 }
 
 
-/// [json] with every map and list in it unmodifiable, at any depth.
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
       for (final e in json.entries) e.key: _blocksFrozen(e.value),
@@ -223,14 +222,11 @@ class SmsGetNotificationResult extends GetNotificationResult {
   String toString() => 'SmsGetNotificationResult(message: $message)';
 }
 
-/// A `GetNotificationResult` arm this client was generated without.
 final class GetNotificationResultUnknown extends GetNotificationResult {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const GetNotificationResultUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['type'] as String;
 
   @override

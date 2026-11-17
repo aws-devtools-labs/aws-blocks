@@ -27,14 +27,8 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Kind.Serializer::class)
 public sealed class Kind {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object X : Kind() {
@@ -45,22 +39,13 @@ public sealed class Kind {
     override val `value`: String = "y"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Kind()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Kind> by lazy { listOf(X, Y) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 
@@ -110,14 +95,8 @@ public data class Cart(
 public data class Order(
   public val status: Status,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Status.Serializer::class)
   public sealed class Status {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Pending : Status() {
@@ -128,22 +107,13 @@ public data class Order(
       override val `value`: String = "shipped"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Status()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Status> by lazy { listOf(Pending, Shipped) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -168,14 +138,8 @@ public data class Ticket(
   public val payload: Payload,
   public val payloads: List<Payloads>,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Kind.Serializer::class)
   public sealed class Kind {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Bug : Kind() {
@@ -186,22 +150,13 @@ public data class Ticket(
       override val `value`: String = "task"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Kind()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Kind> by lazy { listOf(Bug, Task) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -217,14 +172,8 @@ public data class Ticket(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Kinds.Serializer::class)
   public sealed class Kinds {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Urgent : Kinds() {
@@ -235,22 +184,13 @@ public data class Ticket(
       override val `value`: String = "later"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Kinds()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Kinds> by lazy { listOf(Urgent, Later) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Kinds = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -266,14 +206,8 @@ public data class Ticket(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Status.Serializer::class)
   public sealed class Status {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Open : Status() {
@@ -284,22 +218,13 @@ public data class Ticket(
       override val `value`: String = "closed"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Status()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Status> by lazy { listOf(Open, Closed) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -355,16 +280,9 @@ public data class Ticket(
       }
     }
 
-    /**
-     * An arm this client was generated without: the object as the server sent it.
-     */
     public data class Unknown(
       public val json: JsonObject,
     ) : Payload() {
-      /**
-       * The discriminator value that names no known arm. Decoding only makes this arm
-       * for an object whose discriminator is a string.
-       */
       public val discriminator: String
         get() = (json.getValue("type") as JsonPrimitive).content
     }
@@ -422,16 +340,9 @@ public data class Ticket(
       }
     }
 
-    /**
-     * An arm this client was generated without: the object as the server sent it.
-     */
     public data class Unknown(
       public val json: JsonObject,
     ) : Payloads() {
-      /**
-       * The discriminator value that names no known arm. Decoding only makes this arm
-       * for an object whose discriminator is a string.
-       */
       public val discriminator: String
         get() = (json.getValue("format") as JsonPrimitive).content
     }

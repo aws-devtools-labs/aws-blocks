@@ -60,10 +60,8 @@ internal object OpenEnumGenerator {
                     .addMember("with = %N.%N::class", name, serializer)
                     .build(),
             )
-            .addKdoc("A string enum that keeps a value this client was generated without as [%N].\n", unknown)
             .addProperty(
                 PropertySpec.builder("value", STRING, KModifier.ABSTRACT)
-                    .addKdoc("The value as it is sent on the wire.\n")
                     .build(),
             )
 
@@ -84,7 +82,6 @@ internal object OpenEnumGenerator {
         builder.addType(
             TypeSpec.classBuilder(unknown)
                 .addModifiers(KModifier.DATA)
-                .addKdoc("A value this client was generated without, as the server sent it.\n")
                 .superclass(self)
                 .primaryConstructor(FunSpec.constructorBuilder().addParameter("value", STRING).build())
                 .addProperty(PropertySpec.builder("value", STRING, KModifier.OVERRIDE).initializer("value").build())
@@ -96,7 +93,6 @@ internal object OpenEnumGenerator {
             TypeSpec.companionObjectBuilder(companion)
                 .addProperty(
                     PropertySpec.builder("entries", knownList)
-                        .addKdoc("The known values, in the spec's order.\n")
                         // Lazy: the cases' objects extend this class, so one first touched (`X.A`)
                         // initializes the companion before it is assigned itself.
                         .delegate(
@@ -109,7 +105,6 @@ internal object OpenEnumGenerator {
                 )
                 .addFunction(
                     FunSpec.builder("fromValue")
-                        .addKdoc("The case for [value]: a known one, else [%N].\n", unknown)
                         .addParameter("value", STRING)
                         .returns(self)
                         .addStatement("return entries.firstOrNull { it.value == value } ?: %N(value)", unknown)

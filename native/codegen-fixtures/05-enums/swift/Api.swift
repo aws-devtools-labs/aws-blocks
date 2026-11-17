@@ -42,7 +42,6 @@ public final nonisolated class Api: Sendable {
                 case active
                 case inactive
                 case pending
-                /// A value this client was generated without, as the server sent it.
                 case unknown(String)
 
                 public init(rawValue: String) {

@@ -43,14 +43,8 @@ public data class SampleTypeX(
     require(`with space` >= 1) { "with space must be >= 1" }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Kind.Serializer::class)
   public sealed class Kind {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object AB : Kind() {
@@ -89,23 +83,14 @@ public data class SampleTypeX(
       override val `value`: String = " sp ace"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Kind()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Kind> by
           lazy { listOf(AB, CD, XY, NewLine, X, Z, Unnamed, `1st`, SpAce) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 

@@ -139,7 +139,6 @@ public final nonisolated class Api: Sendable {
             public enum Severity: RawRepresentable, Codable, Hashable, Sendable {
                 case low
                 case high
-                /// A value this client was generated without, as the server sent it.
                 case unknown(String)
 
                 public init(rawValue: String) {
@@ -172,7 +171,6 @@ public final nonisolated class Api: Sendable {
             case moved(Moved)
             case flagged(Flagged)
             case unknown(Unknown)
-            /// An arm this client was generated without: the object as the server sent it.
             case unknownValue(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -198,7 +196,6 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            /// The discriminator of an arm this client was generated without; nil for a known arm.
             public var unknownDiscriminator: String? {
                 guard case .unknownValue(.dictionary(let object)) = self,
                       case .string(let tag)? = object["kind"] else { return nil }
@@ -233,7 +230,6 @@ public final nonisolated class Api: Sendable {
             public enum Change: RawRepresentable, Codable, Hashable, Sendable {
                 case created
                 case deleted
-                /// A value this client was generated without, as the server sent it.
                 case unknown(String)
 
                 public init(rawValue: String) {
@@ -298,7 +294,6 @@ public final nonisolated class Api: Sendable {
             public enum Mode: RawRepresentable, Codable, Hashable, Sendable {
                 case light
                 case dark
-                /// A value this client was generated without, as the server sent it.
                 case unknown(String)
 
                 public init(rawValue: String) {
@@ -346,7 +341,6 @@ public final nonisolated class Api: Sendable {
             public enum Item1: RawRepresentable, Codable, Hashable, Sendable {
                 case up
                 case down
-                /// A value this client was generated without, as the server sent it.
                 case unknown(String)
 
                 public init(rawValue: String) {

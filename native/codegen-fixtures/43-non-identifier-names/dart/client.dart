@@ -63,9 +63,7 @@ enum SampleType$XKindKnown implements SampleType$XKind {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `SampleType$XKind` value this client was generated without.
 final class SampleType$XKindUnknown implements SampleType$XKind {
-  /// The value as the server sent it.
   final String value;
 
   const SampleType$XKindUnknown(this.value);

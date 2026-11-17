@@ -89,16 +89,9 @@ public class Api(
         }
       }
 
-      /**
-       * An arm this client was generated without: the object as the server sent it.
-       */
       public data class Unknown(
         public val json: JsonObject,
       ) : Result() {
-        /**
-         * The discriminator value that names no known arm. Decoding only makes this arm
-         * for an object whose discriminator is a string.
-         */
         public val discriminator: String
           get() = (json.getValue("status") as JsonPrimitive).content
       }
@@ -212,16 +205,9 @@ public class Api(
             }
           }
 
-          /**
-           * An arm this client was generated without: the object as the server sent it.
-           */
           public data class Unknown(
             public val json: JsonObject,
           ) : NextStep() {
-            /**
-             * The discriminator value that names no known arm. Decoding only makes this arm
-             * for an object whose discriminator is a string.
-             */
             public val discriminator: String
               get() = (json.getValue("name") as JsonPrimitive).content
           }
@@ -252,14 +238,8 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSelection.AllowedMFATypes>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AllowedMFATypes.Serializer::class)
             public sealed class AllowedMFATypes {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Sms : AllowedMFATypes() {
@@ -274,22 +254,13 @@ public class Api(
                 override val `value`: String = "EMAIL"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AllowedMFATypes()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AllowedMFATypes> by lazy { listOf(Sms, Totp, Email) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 
@@ -312,14 +283,8 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSetupSelection.AllowedMFATypes>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AllowedMFATypes.Serializer::class)
             public sealed class AllowedMFATypes {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Totp : AllowedMFATypes() {
@@ -330,22 +295,13 @@ public class Api(
                 override val `value`: String = "EMAIL"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AllowedMFATypes()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AllowedMFATypes> by lazy { listOf(Totp, Email) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 
@@ -389,14 +345,8 @@ public class Api(
             public val availableChallenges:
                 List<ContinueSignInWithFirstFactorSelection.AvailableChallenges>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AvailableChallenges.Serializer::class)
             public sealed class AvailableChallenges {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Password : AvailableChallenges() {
@@ -415,23 +365,14 @@ public class Api(
                 override val `value`: String = "WEB_AUTHN"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AvailableChallenges()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AvailableChallenges> by
                     lazy { listOf(Password, EmailOtp, SmsOtp, WebAuthn) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AvailableChallenges = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 
@@ -536,16 +477,9 @@ public class Api(
         }
       }
 
-      /**
-       * An arm this client was generated without: the object as the server sent it.
-       */
       public data class Unknown(
         public val json: JsonObject,
       ) : Result() {
-        /**
-         * The discriminator value that names no known arm. Decoding only makes this arm
-         * for an object whose discriminator is a string.
-         */
         public val discriminator: String
           get() = (json.getValue("status") as JsonPrimitive).content
       }
@@ -659,16 +593,9 @@ public class Api(
             }
           }
 
-          /**
-           * An arm this client was generated without: the object as the server sent it.
-           */
           public data class Unknown(
             public val json: JsonObject,
           ) : NextStep() {
-            /**
-             * The discriminator value that names no known arm. Decoding only makes this arm
-             * for an object whose discriminator is a string.
-             */
             public val discriminator: String
               get() = (json.getValue("name") as JsonPrimitive).content
           }
@@ -699,14 +626,8 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSelection.AllowedMFATypes>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AllowedMFATypes.Serializer::class)
             public sealed class AllowedMFATypes {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Sms : AllowedMFATypes() {
@@ -721,22 +642,13 @@ public class Api(
                 override val `value`: String = "EMAIL"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AllowedMFATypes()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AllowedMFATypes> by lazy { listOf(Sms, Totp, Email) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 
@@ -759,14 +671,8 @@ public class Api(
             public val session: String,
             public val allowedMFATypes: List<ContinueSignInWithMfaSetupSelection.AllowedMFATypes>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AllowedMFATypes.Serializer::class)
             public sealed class AllowedMFATypes {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Totp : AllowedMFATypes() {
@@ -777,22 +683,13 @@ public class Api(
                 override val `value`: String = "EMAIL"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AllowedMFATypes()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AllowedMFATypes> by lazy { listOf(Totp, Email) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AllowedMFATypes = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 
@@ -836,14 +733,8 @@ public class Api(
             public val availableChallenges:
                 List<ContinueSignInWithFirstFactorSelection.AvailableChallenges>,
           ) : NextStep() {
-            /**
-             * A string enum that keeps a value this client was generated without as [Unknown].
-             */
             @Serializable(with = AvailableChallenges.Serializer::class)
             public sealed class AvailableChallenges {
-              /**
-               * The value as it is sent on the wire.
-               */
               public abstract val `value`: String
 
               public data object Password : AvailableChallenges() {
@@ -862,23 +753,14 @@ public class Api(
                 override val `value`: String = "WEB_AUTHN"
               }
 
-              /**
-               * A value this client was generated without, as the server sent it.
-               */
               public data class Unknown(
                 override val `value`: String,
               ) : AvailableChallenges()
 
               public companion object {
-                /**
-                 * The known values, in the spec's order.
-                 */
                 public val entries: List<AvailableChallenges> by
                     lazy { listOf(Password, EmailOtp, SmsOtp, WebAuthn) }
 
-                /**
-                 * The case for [value]: a known one, else [Unknown].
-                 */
                 public fun fromValue(`value`: String): AvailableChallenges = entries.firstOrNull { it.value == value } ?: Unknown(value)
               }
 

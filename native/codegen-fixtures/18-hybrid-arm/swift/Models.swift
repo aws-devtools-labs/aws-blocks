@@ -4,7 +4,6 @@ import Foundation
 public nonisolated enum AuthActionCapability: RawRepresentable, Codable, Hashable, Sendable {
     case webauthnGet
     case webauthnCreate
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -27,7 +26,6 @@ public nonisolated enum AuthActionCapability: RawRepresentable, Codable, Hashabl
 public nonisolated enum AuthActionMethod: RawRepresentable, Codable, Hashable, Sendable {
     case get
     case post
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -95,7 +93,6 @@ public nonisolated enum AuthFieldType: RawRepresentable, Codable, Hashable, Send
     case text
     case tel
     case hidden
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -163,7 +160,6 @@ public nonisolated enum AuthStateState: RawRepresentable, Codable, Hashable, Sen
     case confirmingSignIn
     case confirmingMfa
     case confirmingPasswordReset
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

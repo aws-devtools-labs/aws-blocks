@@ -526,7 +526,6 @@ public struct SwiftCodeGenerator {
             // The tag of an arm the client doesn't know, as Dart's `XUnknown.discriminator` and Kotlin's
             // `X.Unknown.discriminator` give it.
             lines.append("")
-            lines.append("\(indent)    /// The discriminator of an arm this client was generated without; nil for a known arm.")
             lines.append("\(indent)    public var unknownDiscriminator: String? {")
             lines.append("\(indent)        guard case .\(unknownCase)(.dictionary(let object)) = self,")
             lines.append("\(indent)              case .string(let tag)? = object[\"\(swiftStringContent(discriminator.fieldName))\"] else { return nil }")
@@ -730,7 +729,6 @@ public struct SwiftCodeGenerator {
         }
         guard let unknownCase else { return cases }
         return cases + [
-            "\(indent)    /// An arm this client was generated without: the object as the server sent it.",
             "\(indent)    case \(unknownCase)(\(runtimePrefix)JSONValue)"
         ]
     }

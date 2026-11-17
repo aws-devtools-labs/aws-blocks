@@ -100,7 +100,6 @@ public nonisolated enum Level: RawRepresentable, Codable, Hashable, Sendable {
     case name
     case _Hidden
     case ok
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

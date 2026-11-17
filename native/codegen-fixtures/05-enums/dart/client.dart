@@ -30,9 +30,7 @@ enum SetStatusResultStatusKnown implements SetStatusResultStatus {
   String toJson() => name;
 }
 
-/// A `SetStatusResultStatus` value this client was generated without.
 final class SetStatusResultStatusUnknown implements SetStatusResultStatus {
-  /// The value as the server sent it.
   final String value;
 
   const SetStatusResultStatusUnknown(this.value);

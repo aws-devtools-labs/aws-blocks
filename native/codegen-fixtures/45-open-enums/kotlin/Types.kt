@@ -12,14 +12,8 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Color.Serializer::class)
 public sealed class Color {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object Red : Color() {
@@ -30,22 +24,13 @@ public sealed class Color {
     override val `value`: String = "blue"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Color()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Color> by lazy { listOf(Red, Blue) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Color = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 
@@ -61,14 +46,8 @@ public sealed class Color {
   }
 }
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Kind.Serializer::class)
 public sealed class Kind {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object KindValue : Kind() {
@@ -79,22 +58,13 @@ public sealed class Kind {
     override val `value`: String = "other"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Kind()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Kind> by lazy { listOf(KindValue, Other) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 
@@ -118,14 +88,8 @@ public enum class Mode {
   Manual,
 }
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Size.Serializer::class)
 public sealed class Size {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object Small : Size() {
@@ -136,22 +100,13 @@ public sealed class Size {
     override val `value`: String = "large"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Size()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Size> by lazy { listOf(Small, Large) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Size = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 
@@ -167,14 +122,8 @@ public sealed class Size {
   }
 }
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Status.Serializer::class)
 public sealed class Status {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object Todo : Status() {
@@ -189,22 +138,13 @@ public sealed class Status {
     override val `value`: String = "done"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Status()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Status> by lazy { listOf(Todo, InProgress, Done) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 
@@ -228,14 +168,8 @@ public data class Labels(
   public val fallback: Fallback,
   public val maybe: Maybe?,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Case.Serializer::class)
   public sealed class Case {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object FooBar : Case() {
@@ -258,22 +192,13 @@ public data class Labels(
       override val `value`: String = "foo bar"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Case()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Case> by lazy { listOf(FooBar, FooBar2, FooBar3, FooBar4, FooBar5) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Case = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -289,14 +214,8 @@ public data class Labels(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [UnknownValue3].
-   */
   @Serializable(with = Fallback.Serializer::class)
   public sealed class Fallback {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Unknown : Fallback() {
@@ -311,22 +230,13 @@ public data class Labels(
       override val `value`: String = "UnknownValue"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class UnknownValue3(
       override val `value`: String,
     ) : Fallback()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Fallback> by lazy { listOf(Unknown, UnknownValue, UnknownValue2) }
 
-      /**
-       * The case for [value]: a known one, else [UnknownValue3].
-       */
       public fun fromValue(`value`: String): Fallback = entries.firstOrNull { it.value == value } ?: UnknownValue3(value)
     }
 
@@ -342,14 +252,8 @@ public data class Labels(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Maybe.Serializer::class)
   public sealed class Maybe {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Yes : Maybe() {
@@ -360,22 +264,13 @@ public data class Labels(
       override val `value`: String = "no"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Maybe()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Maybe> by lazy { listOf(Yes, No) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Maybe = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -391,14 +286,8 @@ public data class Labels(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [UnknownValue].
-   */
   @Serializable(with = Spelling.Serializer::class)
   public sealed class Spelling {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Unknown : Spelling() {
@@ -409,22 +298,13 @@ public data class Labels(
       override val `value`: String = "un-known"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class UnknownValue(
       override val `value`: String,
     ) : Spelling()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Spelling> by lazy { listOf(Unknown, UnKnown2) }
 
-      /**
-       * The case for [value]: a known one, else [UnknownValue].
-       */
       public fun fromValue(`value`: String): Spelling = entries.firstOrNull { it.value == value } ?: UnknownValue(value)
     }
 
@@ -446,14 +326,8 @@ public data class Node(
   public val kind: Kind,
   public val children: List<Node>,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Kind.Serializer::class)
   public sealed class Kind {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Leaf : Kind() {
@@ -464,22 +338,13 @@ public data class Node(
       override val `value`: String = "branch"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Kind()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Kind> by lazy { listOf(Leaf, Branch) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -506,14 +371,8 @@ public data class Task(
   public val source: Source? = null,
   public val phase: Phase? = null,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Labels.Serializer::class)
   public sealed class Labels {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Red : Labels() {
@@ -524,22 +383,13 @@ public data class Task(
       override val `value`: String = "green"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Labels()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Labels> by lazy { listOf(Red, Green) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Labels = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -555,14 +405,8 @@ public data class Task(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Phase.Serializer::class)
   public sealed class Phase {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Companion : Phase() {
@@ -573,22 +417,13 @@ public data class Task(
       override val `value`: String = "other"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Phase()
 
     public companion object Known {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Phase> by lazy { listOf(Companion, Other) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Phase = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -604,14 +439,8 @@ public data class Task(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Priority.Serializer::class)
   public sealed class Priority {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Low : Priority() {
@@ -622,22 +451,13 @@ public data class Task(
       override val `value`: String = "high"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Priority()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Priority> by lazy { listOf(Low, High) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Priority = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -653,14 +473,8 @@ public data class Task(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [UnknownValue].
-   */
   @Serializable(with = Source.Serializer::class)
   public sealed class Source {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Web : Source() {
@@ -671,22 +485,13 @@ public data class Task(
       override val `value`: String = "unknown"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class UnknownValue(
       override val `value`: String,
     ) : Source()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Source> by lazy { listOf(Web, Unknown) }
 
-      /**
-       * The case for [value]: a known one, else [UnknownValue].
-       */
       public fun fromValue(`value`: String): Source = entries.firstOrNull { it.value == value } ?: UnknownValue(value)
     }
 

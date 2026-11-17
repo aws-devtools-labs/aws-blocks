@@ -170,9 +170,7 @@ enum LevelKnown implements Level {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `Level` value this client was generated without.
 final class LevelUnknown implements Level {
-  /// The value as the server sent it.
   final String value;
 
   const LevelUnknown(this.value);

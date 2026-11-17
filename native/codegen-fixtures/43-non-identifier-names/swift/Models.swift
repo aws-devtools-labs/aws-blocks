@@ -12,7 +12,6 @@ public nonisolated enum Sample_Type__X___Kind: RawRepresentable, Codable, Hashab
     case __unnamed
     case _1st
     case _sp_ace
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

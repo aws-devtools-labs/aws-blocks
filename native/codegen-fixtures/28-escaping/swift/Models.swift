@@ -8,7 +8,6 @@ public nonisolated enum WidgetKind: RawRepresentable, Codable, Hashable, Sendabl
     case x__y
     case b_c
     case d__e
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

@@ -39,14 +39,8 @@ public data class Widget(
     require(code.matches(Regex("^a'b\"c\\${'$'}d[${'$'}{x}]+${'$'}"))) { "code must match pattern ^a'b\"c\\\$d[\${x}]+$" }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Kind.Serializer::class)
   public sealed class Kind {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object `Cost$` : Kind() {
@@ -69,22 +63,13 @@ public data class Widget(
       override val `value`: String = "d_${'$'}e"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Kind()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Kind> by lazy { listOf(`Cost$`, `A$b`, `X$$y`, `B$c`, `D$e`) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 

@@ -128,7 +128,6 @@ public nonisolated struct Shipment: Codable, Sendable {
                 public enum Source: RawRepresentable, Codable, Hashable, Sendable {
                     case gps
                     case cell
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {

@@ -95,9 +95,7 @@ enum OrderStatusKnown implements OrderStatus {
   String toJson() => name;
 }
 
-/// A `OrderStatus` value this client was generated without.
 final class OrderStatusUnknown implements OrderStatus {
-  /// The value as the server sent it.
   final String value;
 
   const OrderStatusUnknown(this.value);
@@ -136,9 +134,7 @@ enum TicketStatusKnown implements TicketStatus {
   String toJson() => name;
 }
 
-/// A `TicketStatus` value this client was generated without.
 final class TicketStatusUnknown implements TicketStatus {
-  /// The value as the server sent it.
   final String value;
 
   const TicketStatusUnknown(this.value);
@@ -177,9 +173,7 @@ enum TicketKindKnown implements TicketKind {
   String toJson() => name;
 }
 
-/// A `TicketKind` value this client was generated without.
 final class TicketKindUnknown implements TicketKind {
-  /// The value as the server sent it.
   final String value;
 
   const TicketKindUnknown(this.value);
@@ -218,9 +212,7 @@ enum TicketKindsKnown implements TicketKinds {
   String toJson() => name;
 }
 
-/// A `TicketKinds` value this client was generated without.
 final class TicketKindsUnknown implements TicketKinds {
-  /// The value as the server sent it.
   final String value;
 
   const TicketKindsUnknown(this.value);
@@ -320,14 +312,11 @@ class CountTicketPayload extends TicketPayload {
   String toString() => 'CountTicketPayload(total: $total)';
 }
 
-/// A `TicketPayload` arm this client was generated without.
 final class TicketPayloadUnknown extends TicketPayload {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const TicketPayloadUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['type'] as String;
 
   @override
@@ -426,14 +415,11 @@ class RichTicketPayloads extends TicketPayloads {
   String toString() => 'RichTicketPayloads(html: $html)';
 }
 
-/// A `TicketPayloads` arm this client was generated without.
 final class TicketPayloadsUnknown extends TicketPayloads {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const TicketPayloadsUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['format'] as String;
 
   @override
@@ -551,7 +537,6 @@ class PickActResultItems {
 }
 
 
-/// [json] with every map and list in it unmodifiable, at any depth.
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
       for (final e in json.entries) e.key: _blocksFrozen(e.value),
@@ -710,9 +695,7 @@ enum KindKnown implements Kind {
   String toJson() => name;
 }
 
-/// A `Kind` value this client was generated without.
 final class KindUnknown implements Kind {
-  /// The value as the server sent it.
   final String value;
 
   const KindUnknown(this.value);
@@ -979,14 +962,11 @@ class SkipActResult extends ActResult {
   String toString() => 'SkipActResult(reason: $reason)';
 }
 
-/// A `ActResult` arm this client was generated without.
 final class ActResultUnknown extends ActResult {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const ActResultUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['action'] as String;
 
   @override

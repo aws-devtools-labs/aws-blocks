@@ -23,14 +23,8 @@ public data class AuthenticatedUser(
   public val userId: String,
   public val username: String,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = Groups.Serializer::class)
   public sealed class Groups {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Admins : Groups() {
@@ -41,22 +35,13 @@ public data class AuthenticatedUser(
       override val `value`: String = "users"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : Groups()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<Groups> by lazy { listOf(Admins, Users) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): Groups = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -72,36 +57,21 @@ public data class AuthenticatedUser(
     }
   }
 
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = SignInProvider.Serializer::class)
   public sealed class SignInProvider {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Password : SignInProvider() {
       override val `value`: String = "password"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : SignInProvider()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<SignInProvider> by lazy { listOf(Password) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): SignInProvider = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 
@@ -124,14 +94,8 @@ public data class CodeDeliveryDetails(
   public val deliveryMedium: DeliveryMedium,
   public val attributeName: String,
 ) {
-  /**
-   * A string enum that keeps a value this client was generated without as [Unknown].
-   */
   @Serializable(with = DeliveryMedium.Serializer::class)
   public sealed class DeliveryMedium {
-    /**
-     * The value as it is sent on the wire.
-     */
     public abstract val `value`: String
 
     public data object Sms : DeliveryMedium() {
@@ -146,22 +110,13 @@ public data class CodeDeliveryDetails(
       override val `value`: String = "PHONE_NUMBER"
     }
 
-    /**
-     * A value this client was generated without, as the server sent it.
-     */
     public data class Unknown(
       override val `value`: String,
     ) : DeliveryMedium()
 
     public companion object {
-      /**
-       * The known values, in the spec's order.
-       */
       public val entries: List<DeliveryMedium> by lazy { listOf(Sms, Email, PhoneNumber) }
 
-      /**
-       * The case for [value]: a known one, else [Unknown].
-       */
       public fun fromValue(`value`: String): DeliveryMedium = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
 

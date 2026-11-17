@@ -545,9 +545,7 @@ class DartCodeGenerator {
     buf.writeln('}');
     buf.writeln();
 
-    buf.writeln('/// A `$name` value this client was generated without.');
     buf.writeln('final class $unknown implements $name {');
-    buf.writeln('  /// The value as the server sent it.');
     buf.writeln('  final String value;');
     buf.writeln();
     buf.writeln('  const $unknown(this.value);');
@@ -780,14 +778,11 @@ class DartCodeGenerator {
     if (unknown != null) {
       final name = sealed.name;
       final key = _dartStringLiteral(sealed.discriminant);
-      buf.writeln('/// A `$name` arm this client was generated without.');
       buf.writeln('final class $unknown extends $name {');
-      buf.writeln('  /// The object as the server sent it.');
       buf.writeln('  final Map<String, dynamic> json;');
       buf.writeln();
       buf.writeln('  const $unknown(this.json);');
       buf.writeln();
-      buf.writeln('  /// The discriminator value that names no known arm.');
       buf.writeln('  String get discriminator => json[$key] as String;');
       buf.writeln();
       buf.writeln('  @override');
@@ -1818,7 +1813,6 @@ class DartCodeGenerator {
   /// unmodifiable at every depth: each map and list in it is copied into an
   /// unmodifiable one. Private, so no spec name can take them.
   static const _frozenJsonHelpers = '''
-/// [json] with every map and list in it unmodifiable, at any depth.
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
       for (final e in json.entries) e.key: _blocksFrozen(e.value),

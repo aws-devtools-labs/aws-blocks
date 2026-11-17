@@ -162,7 +162,6 @@ extension SwiftCodeGenerator {
         let body = indent + "    "
         var lines = ["\(indent)\(declaration) \(name): RawRepresentable, Codable, Hashable, \(sendableProtocol) {"]
         lines += names.map { "\(body)case \($0)" }
-        lines.append("\(body)/// A value this client was generated without, as the server sent it.")
         lines.append("\(body)case \(unknown)(String)")
         lines.append("")
         lines.append("\(body)public init(rawValue: String) {")

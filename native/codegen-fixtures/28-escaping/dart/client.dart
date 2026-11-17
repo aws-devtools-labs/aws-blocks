@@ -47,9 +47,7 @@ enum WidgetKindKnown implements WidgetKind {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `WidgetKind` value this client was generated without.
 final class WidgetKindUnknown implements WidgetKind {
-  /// The value as the server sent it.
   final String value;
 
   const WidgetKindUnknown(this.value);

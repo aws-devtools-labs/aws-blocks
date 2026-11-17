@@ -29,9 +29,7 @@ enum TaskLabelsKnown implements TaskLabels {
   String toJson() => name;
 }
 
-/// A `TaskLabels` value this client was generated without.
 final class TaskLabelsUnknown implements TaskLabels {
-  /// The value as the server sent it.
   final String value;
 
   const TaskLabelsUnknown(this.value);
@@ -70,9 +68,7 @@ enum TaskPriorityKnown implements TaskPriority {
   String toJson() => name;
 }
 
-/// A `TaskPriority` value this client was generated without.
 final class TaskPriorityUnknown implements TaskPriority {
-  /// The value as the server sent it.
   final String value;
 
   const TaskPriorityUnknown(this.value);
@@ -111,9 +107,7 @@ enum TaskSourceKnown implements TaskSource {
   String toJson() => name;
 }
 
-/// A `TaskSource` value this client was generated without.
 final class TaskSourceUnknown implements TaskSource {
-  /// The value as the server sent it.
   final String value;
 
   const TaskSourceUnknown(this.value);
@@ -152,9 +146,7 @@ enum TaskPhaseKnown implements TaskPhase {
   String toJson() => name;
 }
 
-/// A `TaskPhase` value this client was generated without.
 final class TaskPhaseUnknown implements TaskPhase {
-  /// The value as the server sent it.
   final String value;
 
   const TaskPhaseUnknown(this.value);
@@ -193,9 +185,7 @@ enum NodeKindKnown implements NodeKind {
   String toJson() => name;
 }
 
-/// A `NodeKind` value this client was generated without.
 final class NodeKindUnknown implements NodeKind {
-  /// The value as the server sent it.
   final String value;
 
   const NodeKindUnknown(this.value);
@@ -234,9 +224,7 @@ enum KindKnown implements Kind {
   String toJson() => name;
 }
 
-/// A `Kind` value this client was generated without.
 final class KindUnknown implements Kind {
-  /// The value as the server sent it.
   final String value;
 
   const KindUnknown(this.value);
@@ -282,9 +270,7 @@ enum LabelsSpellingKnown implements LabelsSpelling {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `LabelsSpelling` value this client was generated without.
 final class LabelsSpellingUnknown implements LabelsSpelling {
-  /// The value as the server sent it.
   final String value;
 
   const LabelsSpellingUnknown(this.value);
@@ -342,9 +328,7 @@ enum LabelsCaseKnown implements LabelsCase {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `LabelsCase` value this client was generated without.
 final class LabelsCaseUnknown implements LabelsCase {
-  /// The value as the server sent it.
   final String value;
 
   const LabelsCaseUnknown(this.value);
@@ -385,9 +369,7 @@ enum LabelsFallbackKnown implements LabelsFallback {
   String toJson() => name;
 }
 
-/// A `LabelsFallback` value this client was generated without.
 final class LabelsFallbackUnknown implements LabelsFallback {
-  /// The value as the server sent it.
   final String value;
 
   const LabelsFallbackUnknown(this.value);
@@ -426,9 +408,7 @@ enum LabelsMaybeKnown implements LabelsMaybe {
   String toJson() => name;
 }
 
-/// A `LabelsMaybe` value this client was generated without.
 final class LabelsMaybeUnknown implements LabelsMaybe {
-  /// The value as the server sent it.
   final String value;
 
   const LabelsMaybeUnknown(this.value);
@@ -467,9 +447,7 @@ enum FlaggedGetEventResultSeverityKnown implements FlaggedGetEventResultSeverity
   String toJson() => name;
 }
 
-/// A `FlaggedGetEventResultSeverity` value this client was generated without.
 final class FlaggedGetEventResultSeverityUnknown implements FlaggedGetEventResultSeverity {
-  /// The value as the server sent it.
   final String value;
 
   const FlaggedGetEventResultSeverityUnknown(this.value);
@@ -508,9 +486,7 @@ enum WatchTasksResultMessageChangeKnown implements WatchTasksResultMessageChange
   String toJson() => name;
 }
 
-/// A `WatchTasksResultMessageChange` value this client was generated without.
 final class WatchTasksResultMessageChangeUnknown implements WatchTasksResultMessageChange {
-  /// The value as the server sent it.
   final String value;
 
   const WatchTasksResultMessageChangeUnknown(this.value);
@@ -587,9 +563,7 @@ enum GetSettingsResultModeKnown implements GetSettingsResultMode {
   String toJson() => name;
 }
 
-/// A `GetSettingsResultMode` value this client was generated without.
 final class GetSettingsResultModeUnknown implements GetSettingsResultMode {
-  /// The value as the server sent it.
   final String value;
 
   const GetSettingsResultModeUnknown(this.value);
@@ -609,7 +583,6 @@ final class GetSettingsResultModeUnknown implements GetSettingsResultMode {
 }
 
 
-/// [json] with every map and list in it unmodifiable, at any depth.
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
       for (final e in json.entries) e.key: _blocksFrozen(e.value),
@@ -655,9 +628,7 @@ enum StatusKnown implements Status {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `Status` value this client was generated without.
 final class StatusUnknown implements Status {
-  /// The value as the server sent it.
   final String value;
 
   const StatusUnknown(this.value);
@@ -759,9 +730,7 @@ enum ColorKnown implements Color {
   String toJson() => name;
 }
 
-/// A `Color` value this client was generated without.
 final class ColorUnknown implements Color {
-  /// The value as the server sent it.
   final String value;
 
   const ColorUnknown(this.value);
@@ -800,9 +769,7 @@ enum SizeKnown implements Size {
   String toJson() => name;
 }
 
-/// A `Size` value this client was generated without.
 final class SizeUnknown implements Size {
-  /// The value as the server sent it.
   final String value;
 
   const SizeUnknown(this.value);
@@ -1081,14 +1048,11 @@ class UnknownGetEventResult extends GetEventResult {
   String toString() => 'UnknownGetEventResult(note: $note)';
 }
 
-/// A `GetEventResult` arm this client was generated without.
 final class GetEventResultUnknown extends GetEventResult {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const GetEventResultUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['kind'] as String;
 
   @override
@@ -1159,9 +1123,7 @@ enum GetRangeResultKnown implements GetRangeResult {
   String toJson() => name;
 }
 
-/// A `GetRangeResult` value this client was generated without.
 final class GetRangeResultUnknown implements GetRangeResult {
-  /// The value as the server sent it.
   final String value;
 
   const GetRangeResultUnknown(this.value);

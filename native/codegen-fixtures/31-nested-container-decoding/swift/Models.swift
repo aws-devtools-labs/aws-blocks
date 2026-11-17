@@ -95,7 +95,6 @@ public nonisolated struct Layout: Codable, Sendable {
 public nonisolated enum Level: RawRepresentable, Codable, Hashable, Sendable {
     case low
     case high
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

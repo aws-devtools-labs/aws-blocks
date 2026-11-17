@@ -94,9 +94,7 @@ enum AuthStateStateKnown implements AuthStateState {
   String toJson() => name;
 }
 
-/// A `AuthStateState` value this client was generated without.
 final class AuthStateStateUnknown implements AuthStateState {
-  /// The value as the server sent it.
   final String value;
 
   const AuthStateStateUnknown(this.value);
@@ -178,9 +176,7 @@ enum AuthActionMethodKnown implements AuthActionMethod {
   String toJson() => name;
 }
 
-/// A `AuthActionMethod` value this client was generated without.
 final class AuthActionMethodUnknown implements AuthActionMethod {
-  /// The value as the server sent it.
   final String value;
 
   const AuthActionMethodUnknown(this.value);
@@ -226,9 +222,7 @@ enum AuthActionCapabilityKnown implements AuthActionCapability {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `AuthActionCapability` value this client was generated without.
 final class AuthActionCapabilityUnknown implements AuthActionCapability {
-  /// The value as the server sent it.
   final String value;
 
   const AuthActionCapabilityUnknown(this.value);
@@ -338,9 +332,7 @@ enum AuthFieldTypeKnown implements AuthFieldType {
   String toJson() => name;
 }
 
-/// A `AuthFieldType` value this client was generated without.
 final class AuthFieldTypeUnknown implements AuthFieldType {
-  /// The value as the server sent it.
   final String value;
 
   const AuthFieldTypeUnknown(this.value);

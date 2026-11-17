@@ -102,7 +102,6 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable, Sendable {
             case email(Email)
             case sms(Sms)
-            /// An arm this client was generated without: the object as the server sent it.
             case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -124,7 +123,6 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            /// The discriminator of an arm this client was generated without; nil for a known arm.
             public var unknownDiscriminator: String? {
                 guard case .unknown(.dictionary(let object)) = self,
                       case .string(let tag)? = object["type"] else { return nil }

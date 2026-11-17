@@ -55,7 +55,6 @@ public nonisolated struct Cart: Codable, Sendable {
 public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
     case x
     case y
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -78,7 +77,6 @@ public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
 public nonisolated enum OrderStatus: RawRepresentable, Codable, Hashable, Sendable {
     case pending
     case shipped
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -109,7 +107,6 @@ public nonisolated struct Order: Codable, Sendable {
 public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable, Sendable {
     case bug
     case task
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -132,7 +129,6 @@ public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable, Sendabl
 public nonisolated enum TicketKinds: RawRepresentable, Codable, Hashable, Sendable {
     case urgent
     case later
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -171,7 +167,6 @@ public nonisolated struct Count: Codable, Sendable {
 public nonisolated enum TicketPayload: Codable, Sendable {
     case text(Text)
     case count(Count)
-    /// An arm this client was generated without: the object as the server sent it.
     case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
@@ -193,7 +188,6 @@ public nonisolated enum TicketPayload: Codable, Sendable {
         }
     }
 
-    /// The discriminator of an arm this client was generated without; nil for a known arm.
     public var unknownDiscriminator: String? {
         guard case .unknown(.dictionary(let object)) = self,
               case .string(let tag)? = object["type"] else { return nil }
@@ -231,7 +225,6 @@ public nonisolated struct Rich: Codable, Sendable {
 public nonisolated enum TicketPayloads: Codable, Sendable {
     case plain(Plain)
     case rich(Rich)
-    /// An arm this client was generated without: the object as the server sent it.
     case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
@@ -253,7 +246,6 @@ public nonisolated enum TicketPayloads: Codable, Sendable {
         }
     }
 
-    /// The discriminator of an arm this client was generated without; nil for a known arm.
     public var unknownDiscriminator: String? {
         guard case .unknown(.dictionary(let object)) = self,
               case .string(let tag)? = object["format"] else { return nil }
@@ -275,7 +267,6 @@ public nonisolated enum TicketPayloads: Codable, Sendable {
 public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable, Sendable {
     case open
     case closed
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

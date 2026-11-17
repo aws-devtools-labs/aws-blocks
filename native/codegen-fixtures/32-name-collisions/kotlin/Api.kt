@@ -183,16 +183,9 @@ public class Api(
         }
       }
 
-      /**
-       * An arm this client was generated without: the object as the server sent it.
-       */
       public data class Unknown(
         public val json: JsonObject,
       ) : Result() {
-        /**
-         * The discriminator value that names no known arm. Decoding only makes this arm
-         * for an object whose discriminator is a string.
-         */
         public val discriminator: String
           get() = (json.getValue("action") as JsonPrimitive).content
       }

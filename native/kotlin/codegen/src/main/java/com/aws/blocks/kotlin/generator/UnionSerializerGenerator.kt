@@ -101,16 +101,11 @@ internal object UnionSerializerGenerator {
     fun unknownArm(unionName: String, name: String, discriminatorKey: String): TypeSpec =
         TypeSpec.classBuilder(name)
             .addModifiers(KModifier.DATA)
-            .addKdoc("An arm this client was generated without: the object as the server sent it.\n")
             .superclass(ClassName("", unionName))
             .primaryConstructor(FunSpec.constructorBuilder().addParameter("json", jsonObjectClass).build())
             .addProperty(PropertySpec.builder("json", jsonObjectClass).initializer("json").build())
             .addProperty(
                 PropertySpec.builder("discriminator", STRING)
-                    .addKdoc(
-                        "The discriminator value that names no known arm. Decoding only makes this arm\n" +
-                            "for an object whose discriminator is a string.\n",
-                    )
                     .getter(
                         FunSpec.getterBuilder()
                             .addStatement(

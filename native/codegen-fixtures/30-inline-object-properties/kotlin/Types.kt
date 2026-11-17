@@ -66,14 +66,8 @@ public data class Shipment(
         public val meters: Double,
         public val source: Source,
       ) {
-        /**
-         * A string enum that keeps a value this client was generated without as [Unknown].
-         */
         @Serializable(with = Source.Serializer::class)
         public sealed class Source {
-          /**
-           * The value as it is sent on the wire.
-           */
           public abstract val `value`: String
 
           public data object Gps : Source() {
@@ -84,22 +78,13 @@ public data class Shipment(
             override val `value`: String = "cell"
           }
 
-          /**
-           * A value this client was generated without, as the server sent it.
-           */
           public data class Unknown(
             override val `value`: String,
           ) : Source()
 
           public companion object {
-            /**
-             * The known values, in the spec's order.
-             */
             public val entries: List<Source> by lazy { listOf(Gps, Cell) }
 
-            /**
-             * The case for [value]: a known one, else [Unknown].
-             */
             public fun fromValue(`value`: String): Source = entries.firstOrNull { it.value == value } ?: Unknown(value)
           }
 

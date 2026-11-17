@@ -20,14 +20,8 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
 @Serializable(with = Level.Serializer::class)
 public sealed class Level {
-  /**
-   * The value as it is sent on the wire.
-   */
   public abstract val `value`: String
 
   public data object Values : Level() {
@@ -50,22 +44,13 @@ public sealed class Level {
     override val `value`: String = "ok"
   }
 
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
   public data class Unknown(
     override val `value`: String,
   ) : Level()
 
   public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
     public val entries: List<Level> by lazy { listOf(Values, Index, Name, Hidden, Ok) }
 
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
     public fun fromValue(`value`: String): Level = entries.firstOrNull { it.value == value } ?: Unknown(value)
   }
 

@@ -43,7 +43,6 @@ public nonisolated struct Bag: Codable, Sendable {
 public nonisolated enum ProfileState: RawRepresentable, Codable, Hashable, Sendable {
     case inProgress
     case in_Progress
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

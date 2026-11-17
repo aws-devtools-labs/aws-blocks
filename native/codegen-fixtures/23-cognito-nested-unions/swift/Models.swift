@@ -5,7 +5,6 @@ import BlocksRuntime
 public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hashable, Sendable {
     case admins
     case users
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -27,7 +26,6 @@ public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hash
 
 public nonisolated enum AuthenticatedUserSignInProvider: RawRepresentable, Codable, Hashable, Sendable {
     case password
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -94,7 +92,6 @@ public nonisolated enum CodeDeliveryDetailsDeliveryMedium: RawRepresentable, Cod
     case sms
     case email
     case phoneNumber
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {

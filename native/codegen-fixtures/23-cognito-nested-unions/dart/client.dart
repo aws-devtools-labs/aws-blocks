@@ -30,9 +30,7 @@ enum CodeDeliveryDetailsDeliveryMediumKnown implements CodeDeliveryDetailsDelive
   String toJson() => name;
 }
 
-/// A `CodeDeliveryDetailsDeliveryMedium` value this client was generated without.
 final class CodeDeliveryDetailsDeliveryMediumUnknown implements CodeDeliveryDetailsDeliveryMedium {
-  /// The value as the server sent it.
   final String value;
 
   const CodeDeliveryDetailsDeliveryMediumUnknown(this.value);
@@ -114,9 +112,7 @@ enum AuthenticatedUserGroupsKnown implements AuthenticatedUserGroups {
   String toJson() => name;
 }
 
-/// A `AuthenticatedUserGroups` value this client was generated without.
 final class AuthenticatedUserGroupsUnknown implements AuthenticatedUserGroups {
-  /// The value as the server sent it.
   final String value;
 
   const AuthenticatedUserGroupsUnknown(this.value);
@@ -153,9 +149,7 @@ enum AuthenticatedUserSignInProviderKnown implements AuthenticatedUserSignInProv
   String toJson() => name;
 }
 
-/// A `AuthenticatedUserSignInProvider` value this client was generated without.
 final class AuthenticatedUserSignInProviderUnknown implements AuthenticatedUserSignInProvider {
-  /// The value as the server sent it.
   final String value;
 
   const AuthenticatedUserSignInProviderUnknown(this.value);
@@ -302,9 +296,7 @@ enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResult
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown implements CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(this.value);
@@ -343,9 +335,7 @@ enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignIn
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown implements CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(this.value);
@@ -388,9 +378,7 @@ enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSig
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown implements CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown(this.value);
@@ -989,14 +977,11 @@ class CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep extends Co
   String toString() => 'CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep(codeDeliveryDetails: $codeDeliveryDetails)';
 }
 
-/// A `ContinueSignInCognitoConfirmSignInResultNextStep` arm this client was generated without.
 final class ContinueSignInCognitoConfirmSignInResultNextStepUnknown extends ContinueSignInCognitoConfirmSignInResultNextStep {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const ContinueSignInCognitoConfirmSignInResultNextStepUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['name'] as String;
 
   @override
@@ -1036,9 +1021,7 @@ enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextSte
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown implements CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(this.value);
@@ -1077,9 +1060,7 @@ enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultN
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown implements CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(this.value);
@@ -1122,9 +1103,7 @@ enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResu
   String toJson() => name;
 }
 
-/// A `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges` value this client was generated without.
 final class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown implements CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges {
-  /// The value as the server sent it.
   final String value;
 
   const CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown(this.value);
@@ -1723,14 +1702,11 @@ class CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep extends ContinueS
   String toString() => 'CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep(codeDeliveryDetails: $codeDeliveryDetails)';
 }
 
-/// A `ContinueSignInCognitoSignInResultNextStep` arm this client was generated without.
 final class ContinueSignInCognitoSignInResultNextStepUnknown extends ContinueSignInCognitoSignInResultNextStep {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const ContinueSignInCognitoSignInResultNextStepUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['name'] as String;
 
   @override
@@ -1749,7 +1725,6 @@ final class ContinueSignInCognitoSignInResultNextStepUnknown extends ContinueSig
 
 
 
-/// [json] with every map and list in it unmodifiable, at any depth.
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
       for (final e in json.entries) e.key: _blocksFrozen(e.value),
@@ -1845,14 +1820,11 @@ class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
   String toString() => 'SignedInCognitoConfirmSignInResult(user: $user)';
 }
 
-/// A `CognitoConfirmSignInResult` arm this client was generated without.
 final class CognitoConfirmSignInResultUnknown extends CognitoConfirmSignInResult {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const CognitoConfirmSignInResultUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['status'] as String;
 
   @override
@@ -1951,14 +1923,11 @@ class SignedInCognitoSignInResult extends CognitoSignInResult {
   String toString() => 'SignedInCognitoSignInResult(user: $user)';
 }
 
-/// A `CognitoSignInResult` arm this client was generated without.
 final class CognitoSignInResultUnknown extends CognitoSignInResult {
-  /// The object as the server sent it.
   final Map<String, dynamic> json;
 
   const CognitoSignInResultUnknown(this.json);
 
-  /// The discriminator value that names no known arm.
   String get discriminator => json['status'] as String;
 
   @override

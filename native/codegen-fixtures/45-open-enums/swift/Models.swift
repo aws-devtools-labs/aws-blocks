@@ -4,7 +4,6 @@ import Foundation
 public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
     case red
     case blue
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -27,7 +26,6 @@ public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
 public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
     case kind
     case other
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -53,7 +51,6 @@ public nonisolated enum LabelsCase: RawRepresentable, Codable, Hashable, Sendabl
     case fooBar
     case fooBar_3
     case foo_bar
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -83,7 +80,6 @@ public nonisolated enum LabelsFallback: RawRepresentable, Codable, Hashable, Sen
     case unknown
     case unknownValue
     case unknownValue_2
-    /// A value this client was generated without, as the server sent it.
     case unknownValue2(String)
 
     public init(rawValue: String) {
@@ -108,7 +104,6 @@ public nonisolated enum LabelsFallback: RawRepresentable, Codable, Hashable, Sen
 public nonisolated enum LabelsMaybe: RawRepresentable, Codable, Hashable, Sendable {
     case yes
     case no
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -131,7 +126,6 @@ public nonisolated enum LabelsMaybe: RawRepresentable, Codable, Hashable, Sendab
 public nonisolated enum LabelsSpelling: RawRepresentable, Codable, Hashable, Sendable {
     case unknown
     case unKnown
-    /// A value this client was generated without, as the server sent it.
     case unknownValue(String)
 
     public init(rawValue: String) {
@@ -192,7 +186,6 @@ public nonisolated enum Mode: String, Codable, Sendable {
 public nonisolated enum NodeKind: RawRepresentable, Codable, Hashable, Sendable {
     case leaf
     case branch
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -225,7 +218,6 @@ public nonisolated struct Node: Codable, Sendable {
 public nonisolated enum Size: RawRepresentable, Codable, Hashable, Sendable {
     case small
     case large
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -249,7 +241,6 @@ public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {
     case todo
     case inProgress
     case done
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -274,7 +265,6 @@ public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {
 public nonisolated enum TaskLabels: RawRepresentable, Codable, Hashable, Sendable {
     case red
     case green
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -297,7 +287,6 @@ public nonisolated enum TaskLabels: RawRepresentable, Codable, Hashable, Sendabl
 public nonisolated enum TaskPhase: RawRepresentable, Codable, Hashable, Sendable {
     case companion
     case other
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -320,7 +309,6 @@ public nonisolated enum TaskPhase: RawRepresentable, Codable, Hashable, Sendable
 public nonisolated enum TaskPriority: RawRepresentable, Codable, Hashable, Sendable {
     case low
     case high
-    /// A value this client was generated without, as the server sent it.
     case unknown(String)
 
     public init(rawValue: String) {
@@ -343,7 +331,6 @@ public nonisolated enum TaskPriority: RawRepresentable, Codable, Hashable, Senda
 public nonisolated enum TaskSource: RawRepresentable, Codable, Hashable, Sendable {
     case web
     case unknown
-    /// A value this client was generated without, as the server sent it.
     case unknownValue(String)
 
     public init(rawValue: String) {

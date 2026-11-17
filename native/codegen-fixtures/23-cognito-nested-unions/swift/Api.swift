@@ -79,7 +79,6 @@ public final nonisolated class Api: Sendable {
                     case sms
                     case totp
                     case email
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -114,7 +113,6 @@ public final nonisolated class Api: Sendable {
                 public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
                     case totp
                     case email
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -188,7 +186,6 @@ public final nonisolated class Api: Sendable {
                     case emailOtp
                     case smsOtp
                     case webAuthn
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -284,7 +281,6 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
-                /// An arm this client was generated without: the object as the server sent it.
                 case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
@@ -357,7 +353,6 @@ public final nonisolated class Api: Sendable {
                     }
                 }
 
-                /// The discriminator of an arm this client was generated without; nil for a known arm.
                 public var unknownDiscriminator: String? {
                     guard case .unknown(.dictionary(let object)) = self,
                           case .string(let tag)? = object["name"] else { return nil }
@@ -401,7 +396,6 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable, Sendable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
-            /// An arm this client was generated without: the object as the server sent it.
             case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -423,7 +417,6 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            /// The discriminator of an arm this client was generated without; nil for a known arm.
             public var unknownDiscriminator: String? {
                 guard case .unknown(.dictionary(let object)) = self,
                       case .string(let tag)? = object["status"] else { return nil }
@@ -493,7 +486,6 @@ public final nonisolated class Api: Sendable {
                     case sms
                     case totp
                     case email
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -528,7 +520,6 @@ public final nonisolated class Api: Sendable {
                 public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
                     case totp
                     case email
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -602,7 +593,6 @@ public final nonisolated class Api: Sendable {
                     case emailOtp
                     case smsOtp
                     case webAuthn
-                    /// A value this client was generated without, as the server sent it.
                     case unknown(String)
 
                     public init(rawValue: String) {
@@ -698,7 +688,6 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
-                /// An arm this client was generated without: the object as the server sent it.
                 case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
@@ -771,7 +760,6 @@ public final nonisolated class Api: Sendable {
                     }
                 }
 
-                /// The discriminator of an arm this client was generated without; nil for a known arm.
                 public var unknownDiscriminator: String? {
                     guard case .unknown(.dictionary(let object)) = self,
                           case .string(let tag)? = object["name"] else { return nil }
@@ -815,7 +803,6 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable, Sendable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
-            /// An arm this client was generated without: the object as the server sent it.
             case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -837,7 +824,6 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            /// The discriminator of an arm this client was generated without; nil for a known arm.
             public var unknownDiscriminator: String? {
                 guard case .unknown(.dictionary(let object)) = self,
                       case .string(let tag)? = object["status"] else { return nil }

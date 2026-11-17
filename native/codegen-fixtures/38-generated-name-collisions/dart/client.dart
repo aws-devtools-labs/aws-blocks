@@ -134,9 +134,7 @@ enum ProfileStateKnown implements ProfileState {
   String toJson() => _toJsonMap[this]!;
 }
 
-/// A `ProfileState` value this client was generated without.
 final class ProfileStateUnknown implements ProfileState {
-  /// The value as the server sent it.
   final String value;
 
   const ProfileStateUnknown(this.value);
