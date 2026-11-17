@@ -137,10 +137,9 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 defaults: { ...BlocksPresets.production, logRetention: RetentionDays.ONE_MONTH };
 ```
 
-A `Logger` no longer reconfigures retention — the compute owns the single,
-framework-owned handler log group. Per-compute retention (a `logRetention` prop
-on the compute) arrives with the public compute-configuration surface; until
-then, `defaults.logRetention` is the retention knob.
+A `Logger` does not configure retention — the compute owns the single,
+framework-owned handler log group. To override the default for one compute, set
+`logRetention` on that `Compute`.
 
 ## Local Development
 

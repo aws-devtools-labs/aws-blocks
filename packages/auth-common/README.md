@@ -172,7 +172,7 @@ document.body.appendChild(
 );
 ```
 
-When no fallback is provided the container renders nothing while signed out (backward-compatible).
+When no fallback is provided the container renders nothing while signed out.
 
 ## MfaSettings
 
@@ -393,7 +393,7 @@ Returned by `getAuthState()` and `setAuthState()`.
 | `user` | `AuthUser?` | Present when `state === 'signedIn'` |
 | `actions` | `AuthAction[]` | Available actions from this state |
 | `error` | `string?` | Error from the last action |
-| `errorName` | `string?` | Machine-readable name of the last action's error, mirroring the thrown `ApiError`'s `name` (e.g. `'InvalidCredentialsException'`). Branch on it with `hasAuthError(state, name)` instead of matching the human-facing `error`. Absent on success or a generic `ApiError`. |
+| `errorName` | `string?` | Machine-readable name of the last action's error, mirroring the thrown `ApiError`'s `name` (e.g. `'NotAuthorizedException'`). Branch on it with `hasAuthError(state, name)` instead of matching the human-facing `error`. Absent on success or a generic `ApiError`. |
 | `retriable` | `boolean?` | The last action failed recoverably: resubmit on the **same** state (preserving hidden fields such as `session`) and show `error` inline, instead of restarting the flow. |
 
 ### `AuthAction`
