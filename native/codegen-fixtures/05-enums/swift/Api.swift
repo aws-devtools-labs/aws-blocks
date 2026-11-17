@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func setStatus(status: SetStatus.Status) async throws -> SetStatus.Result {
         let request = BlocksRequest(method: "api.setStatus", params: [status], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.setStatus") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.setStatus") }
         return try JSONDecoder().decode(SetStatus.Result.self, from: result)
     }
 

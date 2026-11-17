@@ -172,7 +172,7 @@ class WebSocketSession {
     @discardableResult
     func acquire(wsUrl: String, token: String, listener: WebSocketDelegate) throws -> WebSocketConnection {
         guard let url = URL(string: wsUrl) else {
-            throw RealtimeError.websocket("Invalid WebSocket URL: \(wsUrl)", nil)
+            throw RealtimeError.connectionFailed("Invalid WebSocket URL: \(wsUrl)", nil)
         }
 
         lock.lock()

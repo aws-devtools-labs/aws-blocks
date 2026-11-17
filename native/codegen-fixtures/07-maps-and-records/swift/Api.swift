@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getScores() async throws -> [String: Double] {
         let request = BlocksRequest(method: "api.getScores", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getScores") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getScores") }
         return try JSONDecoder().decode([String: Double].self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func signUp(input: SignUp.Input) async throws -> SignUp.Result {
         let request = BlocksRequest(method: "api.signUp", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.signUp") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.signUp") }
         return try JSONDecoder().decode(SignUp.Result.self, from: result)
     }
 

@@ -36,7 +36,13 @@ final class SessionGate: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
         try state.withLock { try $0.begin() }
         defer { invalidate(if: state.withLock { $0.end() }) }
-        return try await session.data(for: request)
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // URLSession reports a cancelled calling task as `URLError(.cancelled)`. Surface it as
+            // the structured-concurrency error, so a caller's `catch is CancellationError` works.
+            throw CancellationError()
+        }
     }
 
     /// Rejects later sends; an owned session is invalidated once no send is in flight.

@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getSession() async throws -> GetSession.Result {
         let request = BlocksRequest(method: "api.getSession", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getSession") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSession") }
         return try JSONDecoder().decode(GetSession.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getOtherSession() async throws -> GetOtherSession.Result {
         let request = BlocksRequest(method: "api.getOtherSession", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getOtherSession") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getOtherSession") }
         return try JSONDecoder().decode(GetOtherSession.Result.self, from: result)
     }
 
