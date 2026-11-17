@@ -320,7 +320,7 @@ export type {
  * new data, use `KVStore`.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-kv-store`.
  *
  * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
  *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the

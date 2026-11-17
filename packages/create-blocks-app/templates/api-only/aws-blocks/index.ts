@@ -80,8 +80,8 @@ const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(
 // ─── Health probe ────────────────────────────────────────────────────────────
 // Public — no auth. Load balancers and uptime monitors send a plain `GET` and
 // can't speak JSON-RPC, so the probe is a RawRoute (full HTTP control) rather
-// than an API method. It touches no data. See RawRoute in
-// node_modules/@aws-blocks/blocks/README.md for path parameters and wildcards.
+// than an API method. It touches no data. `npx --no -- cdk-blocks docs RawRoute`
+// prints its docs, with path parameters and wildcards.
 // RawRoute responses are JSON and `no-store` by default, so a probe never sees a cached "ok".
 new RawRoute(scope, 'healthz', {
   method: 'GET',
