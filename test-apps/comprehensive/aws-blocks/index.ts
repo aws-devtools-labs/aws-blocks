@@ -14,6 +14,7 @@ import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinP
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
+import { Dashboard } from '@aws-blocks/bb-dashboard';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -79,6 +80,11 @@ function parseStoredRecord<T>(key: string, raw: string | null): T | null {
 // ============================================================================
 // Building Block Instances
 // ============================================================================
+
+if (e2eBuild) {
+  new Dashboard(scope, 'ops-dashboard', { routePath: '/ops/dashboard' });
+  new Dashboard(scope, 'billing-dashboard', { routePath: '/billing/dashboard' });
+}
 
 // KVStore - Simple key-value storage
 const store = new KVStore(scope, 'store', {});

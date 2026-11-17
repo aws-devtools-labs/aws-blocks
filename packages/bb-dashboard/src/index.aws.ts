@@ -5,12 +5,12 @@
  * AWS runtime entry point for Dashboard BB.
  *
  * Registers a RawRoute that 302-redirects to the CloudWatch Dashboard URL.
- * The URL is injected via the `BB_DASHBOARD_URL` environment variable by the
- * CDK layer at deploy time.
+ * The URL is injected via a dashboard-scoped config key by the CDK layer at
+ * deploy time; the legacy `BB_DASHBOARD_URL` key remains a fallback.
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
+import { BB_DASHBOARD_URL_ENV, dashboardUrlConfigKey, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -51,7 +51,7 @@ export class Dashboard extends Scope {
 					? `${scope.id}-${id}`
 					: id;
 		this.dashboardName = (options?.dashboardName ?? id).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255);
-		this.url = process.env[BB_DASHBOARD_URL_ENV] ?? null;
+		this.url = process.env[dashboardUrlConfigKey(this.fullId)] ?? process.env[BB_DASHBOARD_URL_ENV] ?? null;
 		registerSdkIdentifiers(this.fullId, { dashboardName: this.dashboardName });
 
 		const routePath = options?.routePath;

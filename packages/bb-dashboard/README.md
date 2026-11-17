@@ -188,6 +188,15 @@ const dashboard = new Dashboard(scope, 'dashboard', {
 // GET /ops/dashboard → 302 → https://<region>.console.aws.amazon.com/cloudwatch/...
 ```
 
+For multiple dashboards, give each a different route path (or disable its route
+with `routePath: false`). Each route redirects to its own dashboard, and each
+instance's `url` property refers to that same dashboard:
+
+```typescript
+new Dashboard(scope, 'operations', { routePath: '/ops/dashboard' });
+new Dashboard(scope, 'billing', { routePath: '/billing/dashboard' });
+```
+
 ## Log Group
 
 Each compute's log section queries that compute's own handler log group (the
