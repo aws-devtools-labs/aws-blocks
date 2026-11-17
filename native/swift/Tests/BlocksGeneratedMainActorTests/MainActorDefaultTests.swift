@@ -72,7 +72,7 @@ final nonisolated class MainActorDefaultTests: XCTestCase {
             _ = try await oidc.signIn(provider: model.provider, relayTo: "app://auth", launcher: RefusedLauncher())
             XCTFail("expected a connection error")
         } catch {
-            guard case .callbackError(let detail)? = error as? OIDCError else {
+            guard case .callbackError(let detail, _)? = error as? OIDCError else {
                 return XCTFail("expected OIDCError.callbackError, got \(error)")
             }
             XCTAssertTrue(detail.contains("Failed to fetch authorize params"), detail)

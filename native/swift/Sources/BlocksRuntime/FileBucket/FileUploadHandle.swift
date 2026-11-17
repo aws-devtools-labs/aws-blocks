@@ -109,6 +109,11 @@ public final class FileUploadHandle: Sendable {
             throw error
         } catch let error as TransferableError {
             throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
             throw FileTransferError(
                 message: "Upload failed: \(error.localizedDescription)",
@@ -159,6 +164,11 @@ public final class FileUploadHandle: Sendable {
             throw error
         } catch let error as TransferableError {
             throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
             throw FileTransferError(
                 message: "Upload failed: \(error.localizedDescription)",

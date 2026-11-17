@@ -159,14 +159,112 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
-    func testA2xxEnvelopeWithNoResultIsATransportError() async throws {
+    func testA2xxEnvelopeWithNoResultIsAVoidSuccess() async throws {
+        // A void handler on current core answers this: `JSON.stringify` drops `result: undefined`.
         let client = makeClient(status: 200, body: "{\"jsonrpc\":\"2.0\",\"id\":1}")
+        let result = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+        XCTAssertNil(result)
+    }
+
+    func testA2xxEnvelopeWithANullResultIsAVoidSuccess() async throws {
+        // What an older core answered for a void handler.
+        let client = makeClient(status: 200, body: "{\"jsonrpc\":\"2.0\",\"result\":null,\"id\":1}")
+        let result = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+        XCTAssertNil(result)
+    }
+
+    func testA2xxJSONObjectThatIsNotAnEnvelopeIsATransportError() async throws {
+        for body in ["{\"id\":1}", "{\"jsonrpc\":\"1.0\",\"id\":1}", "{\"result\":{\"a\":1}}", "[]"] {
+            let client = makeClient(status: 200, body: body)
+            do {
+                _ = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+                XCTFail("expected a TransportError for \(body)")
+            } catch let error as TransportError {
+                XCTAssertEqual(error.statusCode, 200, body)
+                XCTAssertEqual(error.message, "Response was not a JSON-RPC envelope", body)
+            }
+        }
+    }
+
+    // MARK: - Cancellation
+
+    func testACancelledRequestThrowsCancellationErrorNotTransportError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HangingURLProtocol.self]
+        let client = BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        let started = expectation(description: "request started")
+        HangingURLProtocol.onStart = { started.fulfill() }
+
+        let task = Task {
+            try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+        }
+        await fulfillment(of: [started], timeout: 10)
+        task.cancel()
         do {
-            _ = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+            _ = try await task.value
+            XCTFail("expected CancellationError")
+        } catch is CancellationError {
+            // The request was in flight when its task was cancelled.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    func testACancelledRawRouteThrowsCancellationError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HangingURLProtocol.self]
+        let client = BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        let started = expectation(description: "request started")
+        HangingURLProtocol.onStart = { started.fulfill() }
+
+        let task = Task {
+            try await client.postRawRoute(path: "/auth/exchange", body: [:])
+        }
+        await fulfillment(of: [started], timeout: 10)
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected CancellationError")
+        } catch is CancellationError {
+            // The request was in flight when its task was cancelled.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    // MARK: - Raw-route errors
+
+    func testARawRouteNonJSONErrorBodyIsATransportError() async throws {
+        let client = makeClient(status: 502, body: "<html>Bad Gateway</html>")
+        do {
+            _ = try await client.postRawRoute(path: "/auth/exchange", body: [:])
             XCTFail("expected a TransportError")
         } catch let error as TransportError {
-            XCTAssertEqual(error.statusCode, 200)
-            XCTAssertEqual(error.message, "Missing result field in JSON-RPC response")
+            XCTAssertEqual(error.statusCode, 502)
+            XCTAssertEqual(error.message, "HTTP 502")
+        }
+    }
+
+    func testARawRouteJSONErrorBodyKeepsTheServersMessageUnchanged() async throws {
+        let client = makeClient(status: 403, body: "{\"name\":\"RelayNotAllowed\",\"error\":\"That relay is not allowed.\"}")
+        do {
+            _ = try await client.postRawRoute(path: "/auth/authorize-params/google", body: [:])
+            XCTFail("expected an ApiError")
+        } catch let error as ApiError {
+            XCTAssertEqual(error.status, 403)
+            XCTAssertEqual(error.name, "RelayNotAllowed")
+            XCTAssertEqual(error.message, "That relay is not allowed.")
+        }
+    }
+
+    func testARawRouteJSONErrorBodyWithNoTextFallsBackToTheStatus() async throws {
+        let client = makeClient(status: 500, body: "{\"name\":\"Boom\"}")
+        do {
+            _ = try await client.postRawRoute(path: "/x", body: [:])
+            XCTFail("expected an ApiError")
+        } catch let error as ApiError {
+            XCTAssertEqual(error.name, "Boom")
+            XCTAssertEqual(error.message, "HTTP 500")
         }
     }
 

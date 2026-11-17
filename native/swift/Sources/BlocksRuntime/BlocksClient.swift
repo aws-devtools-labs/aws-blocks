@@ -150,6 +150,8 @@ public final class BlocksClient: Sendable {
             (data, response) = try await gate.send(urlRequest)
         } catch let error as ClientClosedError {
             throw error
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw TransportError(
                 message: error.localizedDescription,
@@ -197,22 +199,19 @@ public final class BlocksClient: Sendable {
             throw TransportError(message: message, statusCode: status)
         }
 
-        guard let json = responseJson else {
+        // Only a JSON object that declares `jsonrpc: "2.0"` is an envelope.
+        guard let json = responseJson, json["jsonrpc"] as? String == "2.0" else {
             throw TransportError(message: "Response was not a JSON-RPC envelope", statusCode: status)
         }
 
-        // Check for null result
-        if json["result"] is NSNull {
+        // An explicit `null` result, or none at all: a void handler answers
+        // `{"jsonrpc":"2.0","id":1}` because `JSON.stringify` drops `result: undefined`. Both are
+        // `nil`; a method that returns a value fails on that through the generated null guard.
+        guard let result = json["result"], !(result is NSNull) else {
             return nil
         }
 
         // Re-serialize just the "result" value to Data for the caller to decode
-        guard let result = json["result"] else {
-            throw TransportError(
-                message: "Missing result field in JSON-RPC response",
-                statusCode: status
-            )
-        }
 
         // JSONSerialization only accepts arrays/objects as top-level values.
         // For primitives (String, Number, Bool), wrap in a JSON fragment manually.
@@ -292,6 +291,8 @@ public final class BlocksClient: Sendable {
             (data, response) = try await gate.send(urlRequest)
         } catch let error as ClientClosedError {
             throw error
+        } catch let error as CancellationError {
+            throw error
         } catch {
             throw TransportError(
                 message: error.localizedDescription,
@@ -312,18 +313,24 @@ public final class BlocksClient: Sendable {
                 // message, so `error` is a name only beside `error_description` or when it reads
                 // like a code (no spaces). Known approximation: a nameless one-word message
                 // (`{ error: 'Unauthorized' }`) reads as a code and becomes the error name.
-                let errorBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                let blocksName = errorBody?["name"] as? String
-                let error = errorBody?["error"] as? String
-                let description = errorBody?["error_description"] as? String
+                //
+                // A body that is not a JSON object (a gateway's HTML 502, say) is a transport
+                // failure, as on the RPC path; only a JSON object is the server's own answer.
+                guard let errorBody = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                    throw TransportError(
+                        message: "HTTP \(httpResponse.statusCode)",
+                        statusCode: httpResponse.statusCode
+                    )
+                }
+                let blocksName = errorBody["name"] as? String
+                let error = errorBody["error"] as? String
+                let description = errorBody["error_description"] as? String
                 let errorIsCode = blocksName == nil
                     && error.map { description != nil || !$0.contains(" ") } == true
                 let name = blocksName ?? (errorIsCode ? error : nil)
-                // A body with only `error_description` keeps it as the detail.
-                let detail = errorIsCode ? description : (error ?? description)
-                let reason = [name, detail].compactMap { $0 }.joined(separator: ": ")
+                // The server's own text, unchanged: its `error`, else its `error_description`.
                 throw ApiError(
-                    message: "\(path) answered HTTP \(httpResponse.statusCode)" + (reason.isEmpty ? "" : " (\(reason))"),
+                    message: error ?? description ?? "HTTP \(httpResponse.statusCode)",
                     status: httpResponse.statusCode,
                     name: name
                 )

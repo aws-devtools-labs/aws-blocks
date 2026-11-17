@@ -38,7 +38,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
             if (300 ..< 400).contains(httpResponse.statusCode) {
                 guard let location = httpResponse.value(forHTTPHeaderField: "Location"),
                       let next = URL(string: location, relativeTo: current) else {
-                    throw OIDCError.callbackError("Redirect without Location at \(current)")
+                    throw OIDCError.callbackError("Redirect without Location at \(current)", nil)
                 }
                 let resolved = next.absoluteURL
                 if resolved.scheme == callbackScheme {
@@ -49,10 +49,11 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
             }
 
             throw OIDCError.callbackError(
-                "Expected redirect chain to reach \(callbackScheme):// but got HTTP \(httpResponse.statusCode) at \(current)"
+                "Expected redirect chain to reach \(callbackScheme):// but got HTTP \(httpResponse.statusCode) at \(current)",
+                nil
             )
         }
-        throw OIDCError.callbackError("Too many redirects without reaching \(callbackScheme)://")
+        throw OIDCError.callbackError("Too many redirects without reaching \(callbackScheme)://", nil)
     }
 }
 

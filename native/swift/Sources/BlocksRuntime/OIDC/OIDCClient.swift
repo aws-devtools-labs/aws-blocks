@@ -179,11 +179,14 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
         } catch let error as ClientClosedError {
             throw error
+        } catch let error as CancellationError {
+            throw error
         } catch let error as OIDCError {
             throw error
         } catch {
             throw OIDCError.callbackError(
-                "Failed to fetch authorize params: \((error as? BlocksError)?.message ?? error.localizedDescription)"
+                "Failed to fetch authorize params: \((error as? BlocksError)?.message ?? error.localizedDescription)",
+                error
             )
         }
 
@@ -191,7 +194,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
               let clientId = paramsJSON["clientId"] as? String,
               let scopes = paramsJSON["scopes"] as? [String],
               let signedState = paramsJSON["state"] as? String else {
-            throw OIDCError.callbackError("authorize-params response: \(paramsJSON)")
+            throw OIDCError.callbackError("authorize-params response: \(paramsJSON)", nil)
         }
         let nonce = paramsJSON["nonce"] as? String
 
@@ -236,7 +239,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         if let error = resultParams["error"] {
             let desc = resultParams["error_description"] ?? ""
-            throw OIDCError.callbackError("\(error): \(desc)")
+            throw OIDCError.callbackError("\(error): \(desc)", nil)
         }
 
         guard let code = resultParams["code"] else {
@@ -301,6 +304,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             json = try await client.postRawRoute(path: exchangePath, body: body)
         } catch let error as ClientClosedError {
             throw error
+        } catch let error as CancellationError {
+            throw error
         } catch let error as OIDCError {
             throw error
         } catch {
@@ -350,6 +355,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         } catch let error as ClientClosedError {
             // A closed client says nothing about the session, so the tokens stay.
             throw error
+        } catch let error as CancellationError {
+            // Nor does a cancelled caller.
+            throw error
         } catch {
             await clearTokens()
             emit(.signedOut)
@@ -398,6 +406,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
                 // The tokens stay for a new Blocks to restore.
                 emit(.signedOut)
                 return
+            } catch is CancellationError {
+                // A cancelled caller says nothing about the session either; the tokens stay.
+                emit(.signedOut)
+                return
             } catch {
                 await clearTokens()
                 emit(.signedOut)
@@ -434,7 +446,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             do {
                 try await refresh()
             } catch {
-                // Only a closed client throws here, and its expired token is no use.
+                // Only a closed client or a cancelled caller throws here, and the expired token is no use.
                 return nil
             }
             return await storedToken("access_token")
@@ -446,6 +458,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         do {
             try await refresh()
         } catch is ClientClosedError {
+            return
+        } catch is CancellationError {
             return
         } catch {
             await clearTokens()
@@ -646,7 +660,10 @@ public enum OIDCError: BlocksError {
     case stateMismatch
     case missingAuthorizationCode
     case malformedExchangeResponse
-    case callbackError(String)
+    /// The sign-in callback failed: the IdP reported an error, or the authorize parameters could not
+    /// be fetched. When a request failed, its `ApiError` or `TransportError` is the cause, so the
+    /// app can tell a retry-later failure from a misconfigured one.
+    case callbackError(String, Error?)
     /// The exchange or sign-out call was rejected. The server's error is the cause.
     case exchangeFailed(String, Error?)
     /// The user dismissed the sign-in flow. A `BrowserLauncher` throws this.
@@ -664,7 +681,7 @@ public enum OIDCError: BlocksError {
             return "Missing authorization code in callback URL"
         case .malformedExchangeResponse:
             return "Malformed exchange response — missing accessToken or refreshToken"
-        case .callbackError(let detail):
+        case .callbackError(let detail, _):
             return "OIDC callback error: \(detail)"
         case .exchangeFailed(let detail, _):
             return "OIDC exchange failed: \(detail)"
@@ -675,7 +692,7 @@ public enum OIDCError: BlocksError {
 
     public var underlyingError: Error? {
         switch self {
-        case .exchangeFailed(_, let error): return error
+        case .callbackError(_, let error), .exchangeFailed(_, let error): return error
         default: return nil
         }
     }

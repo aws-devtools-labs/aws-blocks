@@ -33,3 +33,18 @@ final class MockURLProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+/// Starts a request and never answers it, so a test can cancel the calling task while the
+/// request is in flight. `onStart` runs once the request has begun loading.
+final class HangingURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var onStart: (() -> Void)?
+
+    override static func canInit(with request: URLRequest) -> Bool { true }
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        HangingURLProtocol.onStart?()
+    }
+
+    override func stopLoading() {}
+}

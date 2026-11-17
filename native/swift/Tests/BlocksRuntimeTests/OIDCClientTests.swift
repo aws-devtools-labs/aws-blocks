@@ -286,9 +286,7 @@ final class OIDCClientTests: XCTestCase {
             }
             XCTAssertEqual(error.status, 400)
             XCTAssertEqual(error.name, "IdpErrorException")
-            XCTAssertTrue(error.message.contains("HTTP 400"), error.message)
-            XCTAssertTrue(error.message.contains("IdpErrorException"), error.message)
-            XCTAssertTrue(error.message.contains("refused the sign-in"), error.message)
+            XCTAssertEqual(error.message, "The sign-in provider refused the sign-in.")
         } catch {
             XCTFail("Expected ApiError, got \(error)")
         }
@@ -313,7 +311,7 @@ final class OIDCClientTests: XCTestCase {
                 return XCTFail("Expected ApiError cause, got \(outer)")
             }
             XCTAssertEqual(error.name, "invalid_grant")
-            XCTAssertTrue(error.message.contains("unknown or expired code"), error.message)
+            XCTAssertEqual(error.message, "invalid_grant")
         } catch {
             XCTFail("Expected ApiError, got \(error)")
         }
@@ -360,7 +358,7 @@ final class OIDCClientTests: XCTestCase {
                 return XCTFail("Expected ApiError cause, got \(outer)")
             }
             XCTAssertNil(error.name)
-            XCTAssertTrue(error.message.hasSuffix("HTTP 400 (unknown or expired code)"), error.message)
+            XCTAssertEqual(error.message, "unknown or expired code")
         } catch {
             XCTFail("Expected ApiError, got \(error)")
         }
@@ -387,7 +385,7 @@ final class OIDCClientTests: XCTestCase {
                 return XCTFail("Expected ApiError cause, got \(outer)")
             }
             XCTAssertNil(error.name)
-            XCTAssertTrue(error.message.contains("(Missing required fields)"), error.message)
+            XCTAssertEqual(error.message, "Missing required fields")
         } catch {
             XCTFail("Expected ApiError, got \(error)")
         }
@@ -417,7 +415,7 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
-    func testExchangeSurfacesAnHTTPErrorWithANonJSONBody() async {
+    func testExchangeSurfacesANonJSONErrorBodyAsATransportError() async {
         OIDCMockURLProtocol.handler = { request in
             (errorResponse(for: request.url!, status: 502), Data("<html>Bad Gateway</html>".utf8))
         }
@@ -428,13 +426,12 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected ApiError")
+            XCTFail("Expected TransportError")
         } catch let outer as OIDCError {
-            guard let error = outer.underlyingError as? ApiError else {
-                return XCTFail("Expected ApiError cause, got \(outer)")
+            guard let error = outer.underlyingError as? TransportError else {
+                return XCTFail("Expected TransportError cause, got \(outer)")
             }
-            XCTAssertEqual(error.status, 502)
-            XCTAssertNil(error.name)
+            XCTAssertEqual(error.statusCode, 502)
         } catch {
             XCTFail("Expected ApiError, got \(error)")
         }
@@ -843,10 +840,12 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=s"))
             XCTFail("Expected OIDCError.callbackError")
         } catch let error as OIDCError {
-            guard case .callbackError(let detail) = error else {
+            guard case .callbackError(let detail, let cause) = error else {
                 return XCTFail("Expected callbackError, got \(error)")
             }
             XCTAssertTrue(detail.contains("Failed to fetch authorize params"), detail)
+            XCTAssertEqual((cause as? ApiError)?.status, 500)
+            XCTAssertTrue(error.underlyingError is ApiError)
         } catch {
             XCTFail("Expected OIDCError, got \(error)")
         }
