@@ -11,8 +11,8 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { KVStore as AwsKVStore } from './index.aws.js';
-import { KVStore } from './index.mock.js';
+import type { KVStore as AwsKVStore, LegacyKVStore as AwsLegacyKVStore } from './index.aws.js';
+import { KVStore, LegacyKVStore } from './index.mock.js';
 
 /** A schema with the given input and output types; the validator never runs here. */
 declare function schemaOf<In, Out = In>(): StandardSchemaV1<In, Out>;
@@ -27,6 +27,12 @@ const _sameQuery: Same<KVStore<string>['query'], AwsKVStore<string>['query']> = 
 void _sameGet;
 void _samePut;
 void _sameQuery;
+const _sameLegacyGet: Same<LegacyKVStore<string>['get'], AwsLegacyKVStore<string>['get']> = true;
+const _sameLegacyScan: Same<LegacyKVStore<string>['scan'], AwsLegacyKVStore<string>['scan']> = true;
+const _sameLegacyDelete: Same<LegacyKVStore<string>['delete'], AwsLegacyKVStore<string>['delete']> = true;
+void _sameLegacyGet;
+void _sameLegacyScan;
+void _sameLegacyDelete;
 
 // biome-ignore lint/correctness/noUnusedVariables: compile-only contract, never called
 async function _contract() {
@@ -337,6 +343,21 @@ async function _contract() {
 		{ ifValueEquals: { name: 'A', email: 'a@example.com', version: 1 } },
 	);
 
+	// ── 6. LegacyKVStore: the store of a release up to 0.4.0 ────────────────────
+	const oldProfiles = new LegacyKVStore<Profile>(scope, 'old-profiles', { ttl: true, removalPolicy: 'retain' });
+	const oldProfile: Profile | null = await oldProfiles.get('k', { consistentRead: false });
+	const oldPage = oldProfiles.scan({ limit: 10, cursor: nextCursor });
+	for await (const { key, value, expiresAt } of oldPage) {
+		const stringKey: string = key;
+		await profiles.put(stringKey, value, { ifNotExists: true, expiresAt });
+	}
+	void oldPage.cursor;
+	await oldProfiles.delete('k');
+	// @ts-expect-error LegacyKVStore does not write
+	await oldProfiles.put('k', oldProfile);
+	// @ts-expect-error the options are those of a release up to 0.4.0, which has no `protection`
+	new LegacyKVStore(scope, 'bad', { protection: 'retained' });
+
 	// A rewrite keeps the expiry of each item.
 	for await (const { key, value, expiresAt } of cache.scan()) {
 		await cache.put(key, value.trim(), { ifValueEquals: value, expiresAt });
@@ -345,7 +366,7 @@ async function _contract() {
 	void user;
 }
 
-test('the public types compile with their 49 rejections', () => {
+test('the public types compile with their 51 rejections', () => {
 	// The contract above is checked by the compiler; this test only records that the file built.
 	assert.strictEqual(typeof _contract, 'function');
 });

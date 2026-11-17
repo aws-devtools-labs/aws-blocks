@@ -69,6 +69,8 @@ const store = new KVStore(scope, id, options?)
 | `KVStore.fromExisting(tableName)` | `ExternalTableRef` | Refer to a DynamoDB table that exists. |
 | `KVStore.fromKmsKey(keyArn)` | `ExternalKmsKeyRef` | Refer to a KMS key that exists. |
 
+For an app that has a `KVStore` from release 0.4.0 or earlier, see [Upgrade from release 0.4.0 or earlier](#upgrade-from-release-040-or-earlier).
+
 `Results` is an `AsyncIterable` of `{ key, value, expiresAt }` entries with one more property, `cursor`. `expiresAt` is present when the item has an expiry. Collect it with `await Array.fromAsync(results)` or read it with `for await`.
 
 **Runtime only.** The data methods run at request time. Call them inside an `ApiNamespace` method, a `RawRoute` handler, a job handler, or a runtime script. Do not call them at the top level of `aws-blocks/index.ts`. Top-level code runs during CDK synth, where a data method throws an `Error` that reads `KVStore.<method>() cannot be called during CDK synth`. You can construct the block at module scope.
@@ -446,6 +448,99 @@ for await (const { value, expiresAt } of todos.scan()) {
 }
 ```
 
+## Upgrade from release 0.4.0 or earlier
+
+A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a `KVStore` of this release cannot take over the table of such a store. The deploy fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`, and the table keeps its items.
+
+`LegacyKVStore` is the store of such a release, for the time of the upgrade. It reads the old table, and deletes from it. It does not write. You copy the items into a `KVStore` with a new id, in your own code, at a time that you choose.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `get(key, options?)` | `Promise<T \| null>` | Read one value of the old store. A consistent read by default. |
+| `scan(options?)` | `Results` | Read every entry of the old store, with its expiry. Takes `limit`, `cursor`, and `includeExpired`. |
+| `delete(key)` | `Promise<void>` | Remove a key from the old store. |
+
+### Step 1. Declare both stores, and deploy
+
+Change the class on the line of the old store. Keep its id and its options. Add the new store with a new id.
+
+```typescript
+import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
+
+interface Prefs {
+	theme: string;
+}
+
+// Release 0.4.0:
+//   const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
+const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
+const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
+```
+
+The deploy creates the table of `prefs`. It does not change the table of `oldPrefs`. The app's role keeps read and delete access to that table, and loses write access.
+
+`LegacyKVStore` takes the options that `KVStore` took in release 0.4.0: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`, `table`, `schema`, and `logger`. Keep each option that the old store had, with its value, also a `KVStore.fromExisting()` table and a `KVStore.fromKmsKey()` key. The block declares the old table from them, and a changed or missing option makes CloudFormation change that table.
+
+### Step 2. Copy the items
+
+Run the copy in a handler or a job. `ifNotExists` keeps a value that the app wrote to the new store since the deploy, and it makes the copy safe to run again.
+
+```typescript
+for await (const { key, value, expiresAt } of oldPrefs.scan()) {
+	try {
+		await prefs.put(key, value, { ifNotExists: true, expiresAt });
+	} catch (e: unknown) {
+		// The new store has this key. Its value is the newer one.
+		if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+	}
+}
+```
+
+For a store that is too large for one run, copy one page in each run of a job (`AsyncJob`), and pass the cursor to the next run. The copy is done when the cursor is `undefined`.
+
+```typescript
+let copyCursor: string | undefined;
+const oldPage = oldPrefs.scan({ limit: 500, cursor: copyCursor });
+for await (const { key, value, expiresAt } of oldPage) {
+	try {
+		await prefs.put(key, value, { ifNotExists: true, expiresAt });
+	} catch (e: unknown) {
+		if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+	}
+}
+copyCursor = oldPage.cursor;
+```
+
+Until the copy is done, the new store does not hold every item, and the old store still holds the old value of each key. Use the two stores in this order:
+
+```typescript
+// Read: the new store first, then the old one.
+const alicePrefs = (await prefs.get('alice')) ?? (await oldPrefs.get('alice'));
+
+// Write: the new store, then delete the key in the old store.
+await prefs.put('alice', { theme: 'dark' }, { ttlSeconds: 3600 });
+await oldPrefs.delete('alice');
+
+// Delete: the old store first, then the new one.
+await oldPrefs.delete('alice');
+await prefs.delete('alice');
+```
+
+The old value of a key shows again whenever only the new store loses the key. A write deletes the key in the old store for that reason: without it, the old value comes back when the new one expires. A delete starts with the old store for the same reason: if the second call fails, the key is still in the new store, and you can delete again.
+
+### Step 3. Remove the old store, and deploy
+
+When the copy is done, remove the `LegacyKVStore` line and the code of step 2, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A table that is retained, which is the default of the production preset, stays in your account until you delete it.
+
+### What to know before you start
+
+- **The table name changes with the id.** An alarm, a dashboard, or a policy of yours that names the table must follow.
+- **A `scan` or a `query` of the new store is not complete until the copy is done.** Only a read by key can fall back to the old store.
+- **A delete or a write can lose a race with the copy.** The copy holds a page of items while it writes them. A key that the app deletes at that moment, or writes with an expiry that passes at that moment, can come back with its old value. If that matters, stop those calls while the copy runs.
+- **A value that this release does not store fails the `put`** with `ValidationFailedException`: an object with a top-level field that starts with `_bkv_`, or with a field named `__proto__`. Change the value in the copy.
+- **Cost.** The copy reads every item of the old table once, and uses one write unit for each item of 1 KB or less.
+- **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.bb-data/`, so the same steps run on the dev server. It does not change that file until a `delete`.
+
 ## Best practices
 
 - Declare a `key` for anything that you list.
@@ -497,4 +592,4 @@ const audit = new KVStore(scope, 'audit', {
 
 ## Local development
 
-The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. Delete it with `rm -rf .bb-data`. The data file is `store.json`, with a version field. The mock converts the file of an earlier release (`store.json` of `KVStore`, `data.json` of `DistributedTable`) when it first loads it. It renames a file that it cannot read to `store.json.bak` and logs a warning; it does not write over it. The mock applies the schema, the conditions, expiry, the 400 KB limit, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
+The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. Delete it with `rm -rf .bb-data`. The data file is `store.json`, with a version field. The mock converts the file of an earlier release (`store.json` of `KVStore`, `data.json` of `DistributedTable`) when it first loads it. It keeps a copy of a converted `store.json` as `store.json.bak`. It renames a file that it cannot read to `store.json.bak` and logs a warning; it does not write over it. The mock applies the schema, the conditions, expiry, the 400 KB limit, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.

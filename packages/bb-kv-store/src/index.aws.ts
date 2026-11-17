@@ -21,21 +21,19 @@ import {
 	createReader,
 	decodeCursor,
 	deleteCondition,
-	encodeCursor,
 	type Item,
 	type KeyModel,
 	type KeyValue,
 	keyCondition,
 	keyOfItem,
-	liveItems,
 	normalizeKey,
 	normalizeLimit,
-	PagedResults,
 	planQuery,
 	prepareItem,
 	presentOptions,
 	putCondition,
 	type Reader,
+	requestResults,
 	resolveKeyModel,
 	serializeKey,
 } from './item.js';
@@ -61,6 +59,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
+export { LegacyKVStore } from './legacy.aws.js';
 export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -476,25 +475,11 @@ export class KVStore<
 		indexName: string | undefined,
 		includeExpired: boolean,
 	): Results<Out, K> {
-		const model = this.model;
-		return new PagedResults<Entry<Out, K>>(
-			async function* () {
-				let exclusiveStartKey: Record<string, unknown> | undefined = startKey;
-				let count = 0;
-				do {
-					const result = await send(exclusiveStartKey, limit === undefined ? undefined : limit - count);
-					const items = (result.Items ?? []) as Item[];
-					// One page of DynamoDB items becomes one page of live items; the
-					// clock is read once for the page.
-					const live = includeExpired ? items : liveItems(model, items);
-					count += live.length;
-					yield live;
-					exclusiveStartKey = result.LastEvaluatedKey;
-				} while (exclusiveStartKey && (limit === undefined || count < limit));
-			},
+		return requestResults<Entry<Out, K>>(
+			this.model,
 			this.reader.entry,
-			limit,
-			(item) => encodeCursor(model, indexName, item),
+			{ limit, startKey, indexName, includeExpired },
+			send,
 		);
 	}
 

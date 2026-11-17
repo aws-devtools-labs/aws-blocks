@@ -164,6 +164,7 @@ export type {
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreOptions,
 	PutBatchEntry,
 	PutOptions as KVPutOptions,
 	QueryOptions,
@@ -174,7 +175,7 @@ export type {
 	ValueOf,
 	Where,
 } from '@aws-blocks/bb-kv-store';
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+export { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {

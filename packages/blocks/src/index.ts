@@ -293,6 +293,7 @@ export type {
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreOptions,
 	PutBatchEntry,
 	PutOptions as KVPutOptions,
 	QueryOptions,
@@ -319,6 +320,19 @@ export type {
  * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
  */
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+/**
+ * **The store of a `KVStore` release up to 0.4.0, for an upgrade.**
+ *
+ * Reads the table of that store and deletes from it. It does not write. Use it
+ * only to move the data of an app that has a `KVStore` from such a release:
+ * change the class on the line of the old store, keep its id and its options,
+ * add a `KVStore` with a new id, and copy the items in your own code. For new
+ * data, use `KVStore`.
+ *
+ * Package: `@aws-blocks/bb-kv-store`
+ * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
+ */
+export { LegacyKVStore } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
 /**
  * **Structured logging with consistent JSON format, log levels, and contextual metadata.**

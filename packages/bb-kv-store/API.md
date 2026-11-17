@@ -143,6 +143,30 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
 } | SchemaOptions<In, Out, K, I>);
 
 // @public
+export class LegacyKVStore<T = string> extends Scope {
+    constructor(scope: ScopeParent, id: string, options?: LegacyKVStoreOptions<T>);
+    // (undocumented)
+    readonly bbName = "KVStore";
+    delete(key: string): Promise<void>;
+    get(key: string, options?: GetOptions): Promise<T | null>;
+    scan(options?: ScanOptions): Results<T, undefined>;
+}
+
+// @public
+export interface LegacyKVStoreOptions<T = string> {
+    deletionProtection?: boolean;
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+    logger?: ChildLogger;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
+    removalPolicy?: 'destroy' | 'retain';
+    schema?: StandardSchemaV1<T>;
+    table?: ExternalTableRef;
+    ttl?: boolean;
+}
+
+// @public
 export type NumberField<In, Out> = IsRecord<Out> extends true ? {
     [P in SharedField<In, Out>]-?: FieldIf<P, NonNullable<Out[P]> | NonNullable<In[P]>, number, number>;
 }[SharedField<In, Out>] : never;

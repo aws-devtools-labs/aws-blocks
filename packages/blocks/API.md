@@ -101,6 +101,8 @@ import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStoreOptions } from '@aws-blocks/bb-kv-store';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -440,6 +442,10 @@ export { KVStore }
 export { KVStoreErrors }
 
 export { KVStoreOptions }
+
+export { LegacyKVStore }
+
+export { LegacyKVStoreOptions }
 
 export { LifecycleRule }
 
