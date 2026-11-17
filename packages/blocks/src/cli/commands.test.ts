@@ -13,13 +13,15 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
 import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
-import { redactArgs } from './commands.js';
+import { DEV_RESTART_POLICY, decideDevRestart, redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
 import {
 	DEV_OPTIONS_ENV,
 	DEV_STATE,
 	DEV_UNDER_WATCH_ENV,
+	devCrashCode,
+	devCrashState,
 	type RunnerName,
 	runnerPath,
 	TSX_IMPORT_ENV,
@@ -971,6 +973,106 @@ describe('lifecycle commands', () => {
 		const sigkill = await dev(DEV_STATE.running, { code: null, signal: 'SIGKILL' });
 		assert.strictEqual(sigkill.code, 1);
 		assert.match(sigkill.stderr, /^Error: cdk-blocks dev failed \(signal SIGKILL\)\./);
+	});
+
+	it('restarts the dev server of cdk-blocks dev when it crashed after it started, and stops after the restart budget', {
+		timeout: 60_000,
+	}, async () => {
+		const cwd = fixtureApp();
+		const crashThen = (results: (Partial<ChildResult> | 'crash')[]) => {
+			let spawns = 0;
+			return runCli(['dev'], {
+				cwd,
+				onSpawn: (spec) => {
+					const result = results[Math.min(spawns++, results.length - 1)];
+					if (result !== 'crash') return result;
+					// The runner recorded the crash and SIGTERMed tsx watch, which exits 143.
+					writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+					return { code: 143 };
+				},
+			});
+		};
+		// One crash, then `cdk-blocks dev stop` ends the restarted session cleanly.
+		const restarted = await crashThen(['crash', { code: 0 }]);
+		assert.strictEqual(restarted.code, 0, restarted.stderr);
+		assert.strictEqual(restarted.spawned.length, 2);
+		assert.match(
+			restarted.stderr,
+			/⚠️ {2}The dev server crashed \(exit code 1\); restarting it in 500 ms \(restart 1 of 5 within 60 s\)\./,
+		);
+		// The restart runs the same tsx watch command with the same failure file.
+		assert.deepStrictEqual(restarted.spawned[1]?.args, restarted.spawned[0]?.args);
+		assert.strictEqual(
+			restarted.spawned[1]?.env.BLOCKS_DEV_FAILURE_FILE,
+			restarted.spawned[0]?.env.BLOCKS_DEV_FAILURE_FILE,
+		);
+		// A crash with a stop that the CLI made, or a Ctrl-C, at the same time: no restart.
+		const stoppedCrash = await runCli(['dev'], {
+			cwd,
+			onSpawn: (spec) => {
+				writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+				return { code: 143, stopped: true };
+			},
+		});
+		assert.deepStrictEqual([stoppedCrash.code, stoppedCrash.spawned.length], [0, 1], stoppedCrash.stderr);
+		const interruptedCrash = await runCli(['dev'], {
+			cwd,
+			onSpawn: (spec) => {
+				writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+				return { code: 130, interrupted: true };
+			},
+		});
+		assert.deepStrictEqual(
+			[interruptedCrash.code, interruptedCrash.spawned.length],
+			[130, 1],
+			interruptedCrash.stderr,
+		);
+		// A backend that crashes again after every restart: 5 restarts, then the 6th crash ends cdk-blocks dev.
+		const looping = await crashThen(['crash']);
+		assert.strictEqual(looping.code, 1);
+		assert.strictEqual(looping.spawned.length, DEV_RESTART_POLICY.maxRestarts + 1);
+		assert.deepStrictEqual(
+			[...looping.stderr.matchAll(/restarting it in (\d+) ms/g)].map((m) => Number(m[1])),
+			[500, 1000, 2000, 4000, 5000],
+		);
+		assert.match(
+			looping.stderr,
+			/Error: cdk-blocks dev ended: its dev server crashed 6 times within 60 s, so it was not restarted again\. Fix the error in its output above, then run .*cdk-blocks dev again\./,
+		);
+	});
+
+	it('decides a dev server restart from the restarts within the window, with a doubling, capped backoff', () => {
+		const policy = { maxRestarts: 3, windowMs: 10_000, backoffMs: 100, maxBackoffMs: 250 };
+		assert.deepStrictEqual(decideDevRestart([], 1000, policy), { restart: true, delayMs: 100, recent: [1000] });
+		assert.deepStrictEqual(decideDevRestart([1000], 2000, policy), {
+			restart: true,
+			delayMs: 200,
+			recent: [1000, 2000],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000], 3000, policy), {
+			restart: true,
+			delayMs: 250,
+			recent: [1000, 2000, 3000],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 4000, policy), {
+			restart: false,
+			delayMs: 0,
+			recent: [1000, 2000, 3000],
+		});
+		// Restarts older than the window no longer count: a backend that crashes once in a while always restarts.
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 12_500, policy), {
+			restart: true,
+			delayMs: 200,
+			recent: [3000, 12_500],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 60_000, policy), {
+			restart: true,
+			delayMs: 100,
+			recent: [60_000],
+		});
+		assert.strictEqual(devCrashCode(devCrashState(7)), 7);
+		assert.strictEqual(devCrashCode(DEV_STATE.running), undefined);
+		assert.strictEqual(devCrashCode(undefined), undefined);
 	});
 
 	it('exits 143 when a forwarded SIGTERM ends a deploy or a destroy, and 130 on an abort by SIGINT', async () => {
