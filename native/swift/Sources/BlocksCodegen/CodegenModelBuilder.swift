@@ -224,6 +224,7 @@ public struct CodegenModelBuilder {
         }
         var sharedTypes: [NestedTypeNode] = []
         var sharedSchemas: [String: TypeRef] = [:]
+        var namingWarnings: [String] = []
 
         for method in rpcModel.methods {
             let parts = method.name.split(separator: ".", maxSplits: 1)
@@ -271,6 +272,14 @@ public struct CodegenModelBuilder {
                 guard let typeName = param.typeName,
                       isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas)
                 else {
+                    // Spec order decides which shape gets a contested name, so say which parameter lost it.
+                    if let typeName = param.typeName {
+                        let reason = sharedSchemas[typeName] != nil ? "a parameter of another shape took that name first"
+                            : isValidSwiftIdentifier(typeName) ? "another type has that name" : "it isn't a Swift identifier"
+                        namingWarnings.append(
+                            "swift: parameter '\(param.name)' of \(method.name) keeps its own nested type, not \(typeName): \(reason)."
+                        )
+                    }
                     let resolved = resolveNested()
                     return OperationParameter(name: param.name, type: resolved, required: param.required)
                 }
@@ -379,7 +388,8 @@ public struct CodegenModelBuilder {
             declaredTransferableBindings: rpcModel.declaredTransferableBindings,
             unboundTransferableCauses: rpcModel.unboundTransferableCauses,
             nativeCatalogWarnings: rpcModel.nativeCatalogWarnings,
-            sharedTypes: sharedTypes
+            sharedTypes: sharedTypes,
+            namingWarnings: namingWarnings
         )
     }
 

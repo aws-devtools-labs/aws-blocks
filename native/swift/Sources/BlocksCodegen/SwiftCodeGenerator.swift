@@ -150,7 +150,7 @@ public struct SwiftCodeGenerator {
 
         // Diagnostics are emitted here (not in the builder) so the model name uses
         // the same `operationQualifiedNames` authority that drives emission.
-        var warnings: [String] = model.nativeCatalogWarnings
+        var warnings: [String] = model.nativeCatalogWarnings + model.namingWarnings
 
         // Default server name for init parameter default
         let serverNames = serverPropertyNames(model.servers)

@@ -107,6 +107,9 @@ final class SharedUnionTypeNameTests: XCTestCase {
 
         assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
         assertContains(output.models, "public nonisolated struct AuthActionInput: Codable, Sendable {")
+        XCTAssertEqual(output.warnings, [
+            "swift: parameter 'input' of alphaAuth.setAuthState keeps its own nested type, not AuthActionInput: another type has that name."
+        ])
     }
 
     func testADifferentShapeUnderTheSameNameKeepsItsNestedInput() throws {
@@ -115,6 +118,11 @@ final class SharedUnionTypeNameTests: XCTestCase {
 
         XCTAssertEqual(count("public func setAuthState(input: AuthActionInput) async throws -> String {", in: output.api), 1)
         XCTAssertEqual(count("public func setAuthState(input: SetAuthState.Input) async throws -> String {", in: output.api), 1)
+        // Spec order decides which one keeps the name, so the other is reported.
+        XCTAssertEqual(output.warnings, [
+            "swift: parameter 'input' of zetaAuth.setAuthState keeps its own nested type, not AuthActionInput:"
+                + " a parameter of another shape took that name first."
+        ])
     }
 
     func testAReservedNameKeepsTheNestedInput() throws {

@@ -621,13 +621,16 @@ public struct CodegenModel {
     /// with their variants nested inside (`AuthActionInput`, `AuthActionInput.SignIn`), and shared by every
     /// operation that takes one, in every namespace.
     let sharedTypes: [NestedTypeNode]
+    /// One `swift:` line per named union parameter that keeps its operation's nested type instead.
+    let namingWarnings: [String]
 
     init(
         apiNamespaces: [APINamespace], typeDefinitions: [TypeDefinition], servers: [ServerDefinition],
         declaredTransferableBindings: [String: DeclaredTransferableBinding], unboundTransferableCauses: [String: String],
-        nativeCatalogWarnings: [String], sharedTypes: [NestedTypeNode] = []
+        nativeCatalogWarnings: [String], sharedTypes: [NestedTypeNode] = [], namingWarnings: [String] = []
     ) {
         self.sharedTypes = sharedTypes
+        self.namingWarnings = namingWarnings
         self.apiNamespaces = apiNamespaces
         self.typeDefinitions = typeDefinitions
         self.servers = servers
