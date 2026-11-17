@@ -1441,7 +1441,6 @@ export class Hosting extends Construct {
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
             certificate: cfOverRouter.certificate,
-            ...(cfOverRouter.allowPlainHttp !== undefined ? { allowPlainHttp: cfOverRouter.allowPlainHttp } : {}),
             ...(cfOverRouter.features?.router ? { features: cfOverRouter.features.router } : {}),
           }
         : toL3FrontDoor(nonStacked(props.frontDoor), l3Settings),

@@ -406,13 +406,6 @@ export type StackedRouterDoorOptions = {
   internal?: boolean;
   /** The router's certificate (HTTPS :443 from the edge); needs `features.domain`. */
   certificate?: ICertificate;
-  /**
-   * The stacked door's opt-out of `OriginSecretOverPlainHttpError` (see
-   * `CloudFrontOverRouterFrontDoor.allowPlainHttp` on `@aws-blocks/core`
-   * `Hosting`). The edge enforces it; the router only carries it.
-   * @default false
-   */
-  allowPlainHttp?: boolean;
   /** The router's settings (its `domain` is the name the edge connects to). */
   features?: AlbDoorFeatures;
 };
@@ -596,7 +589,7 @@ const DOOR_OPTION_KEYS: Readonly<Record<FrontDoorKind | 'stackedRouter', readonl
   alb: ['vpc', 'internal', 'certificate', 'allowPlainHttp'],
   apiGateway: ['api', 'certificate'],
   custom: ['door', 'wiringCheck', 'allowPlainHttp'],
-  stackedRouter: ['vpc', 'internal', 'certificate', 'allowPlainHttp'],
+  stackedRouter: ['vpc', 'internal', 'certificate'],
 };
 
 /** The keys each object-shaped setting takes inside `frontDoor.features` (unknown keys fail synth). */
