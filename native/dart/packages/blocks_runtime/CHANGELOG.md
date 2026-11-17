@@ -36,7 +36,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
     for a method with no return value, still returns null.
   - A call through a `BlocksClient` after `close()` throws a
     `ClientClosedException` and sends nothing. It used to throw the HTTP
-    client's `ClientException`.
+    client's `ClientException`. So does every call of an `OidcClient` that a
+    generated client hydrated from that `BlocksClient`'s result, such as the
+    one `getClient()` returns, and closing the `BlocksClient` closes that
+    `OidcClient`'s HTTP client too. An `OidcClient` built with its own
+    `httpClient`, or from a descriptor the app built, is not affected.
   - A failed `FileUploadHandle.upload` or `FileDownloadHandle.download` throws
     a `FileTransferException` with the HTTP status as `statusCode`, or a null
     `statusCode` and the HTTP client's error as `cause` when no response

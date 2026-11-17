@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_exception.dart';
+import 'client_lifetime.dart';
 import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
@@ -26,7 +27,7 @@ class BlocksClient {
 
   int _nextId = 1;
 
-  bool _closed = false;
+  final ClientLifetime _lifetime = ClientLifetime();
 
   BlocksClient({
     required this.baseUrl,
@@ -130,7 +131,7 @@ class BlocksClient {
   }
 
   void _ensureOpen() {
-    if (_closed) throw const ClientClosedException();
+    if (_lifetime.isClosed) throw const ClientClosedException();
   }
 
   /// The URL a call to [method] is POSTed to: `{baseUrl}/{namespace}`, where
@@ -207,7 +208,11 @@ class BlocksClient {
     }
     // An envelope with no `result` is a method with no return value: the
     // server leaves `result` out for `Promise<void>`.
-    return json['result'];
+    final value = json['result'];
+    // An OIDC client hydrated from this result shares this client's closed
+    // state. Skip the walk for a body that holds no descriptor.
+    if (response.body.contains('oidc')) linkOidcDescriptors(value, _lifetime);
+    return value;
   }
 
   /// The message a non-JSON-RPC error body carries: a string `error`, else a
@@ -223,10 +228,12 @@ class BlocksClient {
   /// Closes the underlying HTTP client and frees resources.
   ///
   /// A [call] after this throws a [ClientClosedException] without sending
-  /// anything. Closing twice does nothing more.
+  /// anything, and so does every call of an `OidcClient` a generated client
+  /// hydrated from one of this client's results, whose own HTTP client is
+  /// closed too. Closing twice does nothing more.
   void close() {
-    if (_closed) return;
-    _closed = true;
+    if (_lifetime.isClosed) return;
+    _lifetime.close();
     _httpClient.close();
   }
 }

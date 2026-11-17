@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_exception.dart';
+import 'client_lifetime.dart';
 import 'browser_launcher.dart';
 import 'loopback_session.dart';
 import 'oidc_auth_state.dart';
@@ -174,6 +175,16 @@ class OidcClient implements AuthProvider {
   OidcAuthState _authState = OidcLoading();
   Completer<void>? _refreshCompleter;
 
+  /// The closed state of the `BlocksClient` this client was hydrated from,
+  /// when it was (see [fromJson]); null for any other client.
+  ClientLifetime? _lifetime;
+
+  /// Throws a [ClientClosedException] when the `BlocksClient` this client
+  /// was hydrated from has been closed.
+  void _ensureOpen() {
+    if (_lifetime?.isClosed ?? false) throw const ClientClosedException();
+  }
+
   OidcClient({
     required this.exchangePath,
     required this.refreshPath,
@@ -295,6 +306,7 @@ class OidcClient implements AuthProvider {
     required String redirectUri,
   }) async {
     await _ready;
+    _ensureOpen();
     final config = providerConfigs[provider];
     if (!providers.contains(provider) || config == null) {
       throw OidcUnknownProviderException(provider);
@@ -410,6 +422,7 @@ class OidcClient implements AuthProvider {
     Future<void>? cancel,
   }) async {
     await _ready;
+    _ensureOpen();
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
@@ -609,6 +622,7 @@ class OidcClient implements AuthProvider {
     String? iss,
   }) async {
     await _ready;
+    _ensureOpen();
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
@@ -708,6 +722,7 @@ class OidcClient implements AuthProvider {
   /// sign-in's.
   Future<void> refresh() async {
     await _ready;
+    _ensureOpen();
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
@@ -815,6 +830,7 @@ class OidcClient implements AuthProvider {
   /// before this version keeps its cookie after a failed sign-out.
   Future<Uri?> signOut() async {
     await _ready;
+    _ensureOpen();
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
     final http.Response response;
     try {
@@ -934,6 +950,7 @@ class OidcClient implements AuthProvider {
   /// or null, so a late answer never undoes the newer state.
   Future<OidcUser?> restore() async {
     await _ready;
+    _ensureOpen();
     final generation = _generation;
     final url = Uri.parse('$_authBaseUrl$sessionPath');
     final storedToken = await tokenStore.get(_key('access_token'));
@@ -1087,6 +1104,12 @@ class OidcClient implements AuthProvider {
   /// without a `kind` gets an empty one. `sessionCookieName`, when sent, is
   /// the block's session cookie, which [signOut] removes when the server
   /// couldn't.
+  ///
+  /// A [descriptor] taken as is from a `BlocksClient.call` result, with no
+  /// [httpClient] passed, as a generated client hydrates one, ties this
+  /// client to that `BlocksClient`: once it is closed, every call here
+  /// throws a [ClientClosedException], and this client's own HTTP client is
+  /// closed too. Any other client is closed only by its owner.
   static OidcClient fromJson(
     Map<String, dynamic> descriptor, {
     required String baseUrl,
@@ -1115,7 +1138,7 @@ class OidcClient implements AuthProvider {
     final providerConfigs = configsJson.map(
       (k, v) => MapEntry(k, ProviderConfig.fromJson(v as Map<String, dynamic>)),
     );
-    return OidcClient(
+    final client = OidcClient(
       exchangePath: exchangePath,
       refreshPath:
           descriptor['refreshPath'] as String? ?? '$exchangePath/refresh',
@@ -1136,6 +1159,18 @@ class OidcClient implements AuthProvider {
       sessionStore: sessionStore,
       httpClient: httpClient,
     ).._keyPrefix = '$base/';
+    // A descriptor from a `BlocksClient` result, hydrated without an HTTP
+    // client of the caller's, as a generated client does: this client lives
+    // as long as that one. Its calls throw `ClientClosedException` once that
+    // client is closed, and its own HTTP client is closed with it.
+    final lifetime = httpClient == null
+        ? descriptorLifetimes[descriptor]
+        : null;
+    if (lifetime != null) {
+      client._lifetime = lifetime;
+      lifetime.closeWith(client._httpClient);
+    }
+    return client;
   }
 
   /// [path] up to its last `/`, or `''` when it has none.

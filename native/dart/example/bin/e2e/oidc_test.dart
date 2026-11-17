@@ -383,6 +383,28 @@ void main() async {
     check(false, 'desktop loopback sign-in threw: $e');
   }
 
+  // An OidcClient hydrated from a BlocksClient's result, as the generated
+  // client does, stops with it.
+  group('OIDC: a hydrated client stops when its BlocksClient is closed');
+  final raw = BlocksClient(
+    baseUrl: rpcUrl,
+    sessionStore: InMemorySessionStore(),
+  );
+  final hydrated = OidcClient.fromJson(
+    await raw.call('oidcAuthApi.getClient', []) as Map<String, dynamic>,
+    baseUrl: raw.baseUrl,
+    tokenStore: raw.tokenStore,
+    sessionStore: raw.sessionStore,
+  );
+  check(await hydrated.restore() == null, 'restore() works while open');
+  raw.close();
+  try {
+    await hydrated.restore();
+    check(false, 'restore() after close() throws');
+  } on ClientClosedException {
+    check(true, 'restore() after close() throws ClientClosedException');
+  }
+
   httpClient.close();
   printResults();
 }
