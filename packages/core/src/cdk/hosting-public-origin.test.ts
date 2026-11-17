@@ -92,7 +92,11 @@ type Tier = 'cloudfront' | 'apigateway';
  * `sandbox` synthesizes a sandbox deploy (`sandboxMode` context): a plain-HTTP ALB door with an API
  * fails synth in production (`PlainHttpFrontDoorError`).
  */
-const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor'], sandbox = false) => {
+const synth = async (
+	tier: Tier,
+	frontDoor: HostingProps['frontDoor'] | ((stack: cdk.Stack) => HostingProps['frontDoor']),
+	sandbox = false,
+) => {
 	const app = new cdk.App(sandbox ? { context: { sandboxMode: 'true' } } : undefined);
 	const stack = await BlocksStack.create(app, `Origin${tier}`, {
 		backendHandlerPath: join(fixtures, 'handler.js'),
@@ -102,7 +106,13 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor'], sandbox =
 		apiFrontDoor: tier,
 		env: { account: '111111111111', region: 'us-west-2' },
 	});
-	const hostingProps: HostingProps = { root, buildOutputDir: 'dist', framework: 'spa', api: stack, frontDoor };
+	const hostingProps: HostingProps = {
+		root,
+		buildOutputDir: 'dist',
+		framework: 'spa',
+		api: stack,
+		frontDoor: typeof frontDoor === 'function' ? frontDoor(stack) : frontDoor,
+	};
 	new Hosting(stack, 'Hosting', hostingProps);
 	const template = Template.fromStack(stack);
 	const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
@@ -137,6 +147,51 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		assert.strictEqual((await synth('apigateway', { kind: 'alb' }, true)).allowPlainHttp, undefined);
 		assert.strictEqual((await synth('apigateway', { kind: 'alb', allowPlainHttp: true }, true)).allowPlainHttp, undefined);
 		assert.strictEqual((await synth('apigateway', { kind: 'apiGateway' })).allowPlainHttp, undefined);
+	});
+
+	// The registration rule needs both the opt-out AND a door that serves plain HTTP: an opted-out door
+	// whose public origin is HTTPS registers nothing, so `Auth` keeps `Secure`.
+	describe('`allowPlainHttp: true` registers BLOCKS_ALLOW_PLAIN_HTTP only where the public origin is plain HTTP', () => {
+		const domain = { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' };
+		test('an ALB with a `certificate` and `features.domain` serves HTTPS: nothing is registered', async () => {
+			const r = await synth('apigateway', (stack) => ({
+				kind: 'alb',
+				allowPlainHttp: true,
+				certificate: cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+					stack,
+					'Cert',
+					'arn:aws:acm:us-west-2:111111111111:certificate/c',
+				),
+				features: { domain },
+			}));
+			assert.match(r.publicOrigin ?? '', /https:\/\/app\.example\.com/);
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
+
+		test('the stacked door: its public origin is the HTTPS edge, so nothing is registered', async () => {
+			const r = await synth('apigateway', { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true });
+			assert.doesNotMatch(r.publicOrigin ?? '', /"http:\/\/"/);
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
+
+		// A literal url: the scheme of a token url (`Fn.join`) is not readable at synth.
+		const customDoor = (scheme: 'http' | 'https') =>
+			defineFrontDoor({
+				service: `custom-${scheme}`,
+				build(scope, { origins }) {
+					new Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
+					for (const api of origins.api ? [origins.api] : []) cf.recordWired(api, api.paths);
+					return { url: `${scheme}://proxy.example.com` };
+				},
+			});
+		test('a custom door returning an `http://` url: registered', async () => {
+			const r = await synth('apigateway', { kind: 'custom', door: customDoor('http'), allowPlainHttp: true });
+			assert.strictEqual(r.allowPlainHttp, 'true');
+		});
+		test('a custom door returning an `https://` url: nothing is registered', async () => {
+			const r = await synth('apigateway', { kind: 'custom', door: customDoor('https'), allowPlainHttp: true });
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
 	});
 
 	test("ALB without a certificate under 'apigateway': the ALB is the public origin", async () => {

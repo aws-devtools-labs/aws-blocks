@@ -1677,7 +1677,10 @@ export class Hosting extends Construct {
       // app over plain HTTP and opted out (synth already failed for one that
       // didn't), so every other deploy's config is unchanged and `Auth` fails
       // closed. The stacked door's public origin is its HTTPS edge: its opt-out
-      // is for the edge → router hop only, and needs no entry.
+      // is for the edge → router hop only, and needs no entry. An opted-out door
+      // that serves HTTPS (an ALB with a `certificate`, a custom door returning an
+      // `https://` url) registers nothing either, so `Auth` keeps `Secure`: keep the
+      // `servesPlainHttp` check, `doorAllowsPlainHttp` alone is not enough.
       const door = nonStacked(props.frontDoor);
       const doorAllowsPlainHttp =
         typeof door === 'object' && (door.kind === 'alb' || door.kind === 'custom') && door.allowPlainHttp === true;
