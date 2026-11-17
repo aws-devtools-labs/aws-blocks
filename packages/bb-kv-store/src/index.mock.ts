@@ -360,7 +360,9 @@ export class KVStore<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async deleteBatch(keys: KeyOf<Out, K>[]): Promise<void> {
-		for (const key of keys) this.data.delete(serializeKey(this.model, normalizeKey(this.model, key)));
+		// Check every key first, so that one bad key does not leave the batch half applied.
+		const keyStrs = keys.map((key) => serializeKey(this.model, normalizeKey(this.model, key)));
+		for (const keyStr of keyStrs) this.data.delete(keyStr);
 		this.flushToDisk();
 	}
 

@@ -517,3 +517,11 @@ test('CDK: calling a runtime data method throws an actionable error (not a crypt
 		);
 	}
 });
+
+test('CDK: indexes given as an array fail the synth, with the error of the runtimes', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new KVStore(parent, 'users', { schema: userSchema, indexes: [{ partitionKey: 'email' }] } as never),
+		/InvalidQueryException: indexes must be an object keyed by index name, .*\(received an array\)$/,
+	);
+});

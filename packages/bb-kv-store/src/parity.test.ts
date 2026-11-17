@@ -667,3 +667,108 @@ describe('readValidation behaves identically on the mock and the AWS runtime', (
 		await rejects(strict.store.get({ id: 'o1' }), KVStoreErrors.ValidationFailed);
 	});
 });
+
+// A bad `order`, an unknown index, a bad `indexes` option, a batch with one bad
+// key, and the message of a failed condition. Each fails the same way in both
+// runtimes, and the AWS runtime fails before it calls DynamoDB.
+
+describe('a bad order, an unknown index and a bad indexes option fail the same way in both runtimes', () => {
+	const schema = z.object({ handle: z.string(), postId: z.string(), status: z.string().optional() });
+	const options = {
+		schema,
+		key: { partitionKey: 'handle', sortKey: 'postId' },
+		indexes: { byStatus: { partitionKey: 'status', sortKey: 'postId' } },
+	};
+	const where = { handle: { equals: 'a' } };
+
+	/** Run `call` on a mock store and on an AWS store. Both reject with the same InvalidQuery message, and DynamoDB gets no call. */
+	async function rejectsOnBoth(id: string, storeOptions: any, call: (store: any) => unknown): Promise<string> {
+		const aws = awsStore(id, storeOptions);
+		const messages: string[] = [];
+		for (const store of [mockStore(id, storeOptions), aws.store]) {
+			messages.push((await rejects(() => call(store), KVStoreErrors.InvalidQuery)).message);
+		}
+		assert.equal(messages[0], messages[1]);
+		assert.equal(aws.sent.length, 0);
+		return messages[0];
+	}
+
+	test("query() rejects an order other than 'asc' and 'desc'", async () => {
+		assert.match(
+			await rejectsOnBoth('order-text', options, (store) => Array.fromAsync(store.query({ where, order: 'DESC' }))),
+			/query\(\) order must be 'asc' or 'desc' \(received 'DESC'\)$/,
+		);
+		assert.match(
+			await rejectsOnBoth('order-number', options, (store) => Array.fromAsync(store.query({ where, order: -1 }))),
+			/\(received number\)$/,
+		);
+	});
+
+	test('an order of null or undefined reads ascending, and desc reads descending', async () => {
+		const mock = mockStore('order-ok', options);
+		await mock.put({ handle: 'a', postId: 'p1' }, {});
+		await mock.put({ handle: 'a', postId: 'p2' }, {});
+		const postIds = async (order: unknown) =>
+			(await Array.fromAsync(mock.query({ where, order }))).map((entry: any) => entry.key.postId);
+		assert.deepEqual(await postIds(null), ['p1', 'p2']);
+		assert.deepEqual(await postIds(undefined), ['p1', 'p2']);
+		assert.deepEqual(await postIds('desc'), ['p2', 'p1']);
+
+		const { store, input } = awsStore('order-ok', options, () => ({ Items: [] }));
+		await Array.fromAsync(store.query({ where, order: null }));
+		await Array.fromAsync(store.query({ where, order: 'desc' }));
+		assert.notEqual(input(0).ScanIndexForward, false);
+		assert.equal(input(1).ScanIndexForward, false);
+	});
+
+	test('query() on an unknown index lists the declared indexes', async () => {
+		const call = (store: any) =>
+			Array.fromAsync(store.query({ index: 'byStats', where: { status: { equals: 'open' } } }));
+		assert.match(
+			await rejectsOnBoth('index-list', options, call),
+			/Index 'byStats' not found; declared indexes: 'byStatus'$/,
+		);
+		const { indexes: _indexes, ...noIndexes } = options;
+		assert.match(
+			await rejectsOnBoth('index-none', noIndexes, call),
+			/Index 'byStats' not found; declared indexes: none$/,
+		);
+	});
+
+	test('the constructor rejects indexes given as an array, and takes null as no indexes', async () => {
+		const arrayIndexes = { ...options, indexes: [{ partitionKey: 'status', sortKey: 'postId' }] };
+		const messages: string[] = [];
+		for (const build of [() => mockStore('indexes-array', arrayIndexes), () => awsStore('indexes-array', arrayIndexes)]) {
+			messages.push((await rejects(build, KVStoreErrors.InvalidQuery)).message);
+		}
+		assert.equal(messages[0], messages[1]);
+		assert.match(messages[0], /indexes must be an object keyed by index name, .*\(received an array\)$/);
+
+		mockStore('indexes-null', { ...options, indexes: null });
+		awsStore('indexes-null', { ...options, indexes: null });
+	});
+
+	test('a deleteBatch() with one bad key deletes nothing', async () => {
+		const keys = [{ handle: 'a', postId: 'p1' }, 'b'];
+		const mock = mockStore('batch-one-bad-key', options);
+		await mock.put({ handle: 'a', postId: 'p1' }, {});
+		await rejects(mock.deleteBatch(keys), KVStoreErrors.InvalidQuery);
+		assert.notEqual(await mock.get({ handle: 'a', postId: 'p1' }), null);
+
+		const aws = awsStore('batch-one-bad-key', options);
+		await rejects(aws.store.deleteBatch(keys), KVStoreErrors.InvalidQuery);
+		assert.equal(aws.sent.length, 0);
+	});
+
+	test('a failed condition has the same message in both runtimes, and the message names the error', async () => {
+		const mock = mockStore('conflict-message');
+		await mock.put('k', 'v');
+		const aws = awsStore('conflict-message', undefined, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		for (const store of [mock, aws.store]) {
+			const error = await rejects(store.put('k', 'v2', { ifNotExists: true }), KVStoreErrors.ConditionalCheckFailed);
+			assert.equal(error.message, 'ConditionalCheckFailedException: The conditional request failed');
+		}
+	});
+});

@@ -351,7 +351,7 @@ Match an error by name with `isBlocksError`.
 |----------|--------------|-------------|
 | `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
-| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, and a sort condition that does not exist), an unknown index, a bad `limit`, a bad cursor, or `ifValueEquals` with an object. |
+| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, and a sort condition that does not exist), an unknown index, an `order` that is not `'asc'` or `'desc'`, a bad `limit`, a bad cursor, an `indexes` option that is not an object, or `ifValueEquals` with an object. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
 

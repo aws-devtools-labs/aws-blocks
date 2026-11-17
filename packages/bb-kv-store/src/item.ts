@@ -143,6 +143,10 @@ function keyType(model: KeyModel, field: string): 'S' | 'N' {
 /** Build the key model from the constructor options. */
 export function resolveKeyModel(options: unknown): KeyModel {
 	const { schema, key, indexes, ttl } = looseOptions(options);
+	// An array of index configs would declare indexes named '0', '1', and so on.
+	if (indexes !== undefined && indexes !== null && !isPlainObject(indexes)) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.indexesMustBeObject(describe(indexes)));
+	}
 	return {
 		table: key ? { partitionKey: key.partitionKey, sortKey: key.sortKey } : { partitionKey: PK_ATTRIBUTE },
 		declared: key !== undefined,
@@ -740,13 +744,29 @@ interface LooseQueryOptions {
 }
 
 /**
+ * The sort order of a `query`. `undefined` and `null` mean ascending.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the order is anything other than `'asc'` or `'desc'`
+ *   (for example `'DESC'`), which would otherwise sort ascending without a sign.
+ */
+function normalizeOrder(order: unknown): 'asc' | 'desc' {
+	if (order === undefined || order === null || order === 'asc') return 'asc';
+	if (order === 'desc') return 'desc';
+	throw blocksError(
+		KVStoreErrors.InvalidQuery,
+		KVStoreMessages.orderInvalid(typeof order === 'string' ? `'${order}'` : describe(order)),
+	);
+}
+
+/**
  * Resolve a `query` call against the key model, checking it the same way in
  * both runtimes.
  *
  * @throws {KVStoreErrors.InvalidQuery} If `index` is unknown, if the store has no declared key and no
  *   `index` is given, if `where` is missing or lacks `{ equals }` on the partition field, if the
  *   partition value or a sort operand does not have the type of its field, if the sort condition
- *   is not one known condition, if `limit` is not a positive integer, or if the cursor does not
+ *   is not one known condition, if `limit` is not a positive integer, if `order` is not `'asc'` or
+ *   `'desc'`, or if the cursor does not
  *   belong to this store, index, and partition.
  * @throws {KVStoreErrors.ValidationFailed} If the partition value or a sort operand is an empty string.
  */
@@ -756,7 +776,12 @@ export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 	let key: KeyAttributes | undefined;
 	if (indexName !== undefined) {
 		key = model.indexes[indexName];
-		if (!key) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.indexNotFound(indexName));
+		if (!key) {
+			throw blocksError(
+				KVStoreErrors.InvalidQuery,
+				KVStoreMessages.indexNotFound(indexName, Object.keys(model.indexes)),
+			);
+		}
 	} else {
 		if (!model.declared) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.queryNeedsKeyOrIndex);
 		key = model.table;
@@ -775,7 +800,7 @@ export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 		pkValue,
 		sort: key.sortKey ? planSort(model, key.sortKey, options.where[key.sortKey]) : undefined,
 		limit: normalizeLimit(options.limit),
-		order: options.order === 'desc' ? 'desc' : 'asc',
+		order: normalizeOrder(options.order),
 		startKey: decodeCursor(model, options.cursor, indexName, { field: key.partitionKey, value: pkValue }),
 	};
 }

@@ -43,7 +43,8 @@ export const KVStoreErrors = {
 	 * The call has the wrong shape and was rejected before reaching DynamoDB: a
 	 * key of the wrong shape, a missing `where` clause, a partition key not
 	 * given as `{ equals: value }`, a partition value or a sort operand of the
-	 * wrong type, an unknown index, a `limit` that is not a positive integer, more than one sort-key
+	 * wrong type, an unknown index, an `order` other than `'asc'` / `'desc'`, `indexes` declared as
+	 * something other than an object keyed by index name, a `limit` that is not a positive integer, more than one sort-key
 	 * condition, a sort condition that does not exist, an empty `ifFieldEquals`, `ifValueEquals` with an object value,
 	 * or a cursor that does not decode or belongs to another store, index, or
 	 * partition. These are all caller bugs — something the caller can fix by
@@ -123,7 +124,7 @@ export function blocksError(name: KVStoreErrorName, message: string): Error {
  * decides this from the conditions the caller set on that specific put/delete.
  */
 export function conditionalCheckFailed(retriable: boolean, cause?: unknown): ApiError {
-	return new ApiError('The conditional request failed', 409, {
+	return new ApiError(`${KVStoreErrors.ConditionalCheckFailed}: The conditional request failed`, 409, {
 		name: KVStoreErrors.ConditionalCheckFailed,
 		cause,
 		retriable,
@@ -136,7 +137,11 @@ export function conditionalCheckFailed(retriable: boolean, cause?: unknown): Api
  * assert the same wording against both.
  */
 export const KVStoreMessages = {
-	indexNotFound: (index: string | undefined) => `Index '${index}' not found`,
+	indexNotFound: (index: string | undefined, declared: readonly string[]) =>
+		`Index '${index}' not found; declared indexes: ${declared.length > 0 ? declared.map((name) => `'${name}'`).join(', ') : 'none'}`,
+	indexesMustBeObject: (received: string) =>
+		`indexes must be an object keyed by index name, for example indexes: { byStatus: { partitionKey: 'status', sortKey: 'createdAt' } } (received ${received})`,
+	orderInvalid: (received: string) => `query() order must be 'asc' or 'desc' (received ${received})`,
 	whereRequired: (pkField: string) => `query() requires a 'where' clause with partition key field '${pkField}'`,
 	partitionKeyEqualsRequired: (pkField: string) =>
 		`query() requires '${pkField}: { equals: value }' in the where clause (partition key must be an exact match)`,
