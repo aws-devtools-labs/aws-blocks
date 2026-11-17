@@ -16,6 +16,7 @@ In your app module's `build.gradle.kts`:
 
 ```kotlin
 plugins {
+    id("org.jetbrains.kotlin.plugin.serialization") version "<kotlin version>"
     id("com.aws.blocks.kotlin") version "<version>"
 }
 ```
