@@ -57,10 +57,7 @@ every call through it, including `Blocks()` when that is the spec's first server
 from the local dev server, `HTTP 403` from a deployed API Gateway).
 
 Code generation rejects an override that does not parse, has no `http://` or `https://` scheme or
-no host, or carries a query or fragment, and one that has no RPC path (nothing but slashes and dot
-segments) unless the spec declares a non-empty `x-blocks-endpoint`, in which case the endpoint is
-joined to the URL with one `/`. A spec whose RPC is served at the origin itself declares
-`"x-blocks-endpoint": "/"`; an empty value counts as none.
+no host, carries a query or fragment, or has no RPC path (nothing but slashes and dot segments).
 
 The spec carries the dev server's `local` by default (`sandbox` while `npm run sandbox` proxies
 through it), or the deployed `sandbox`/`production` server when the spec is generated with
