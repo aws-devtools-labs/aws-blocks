@@ -17,7 +17,7 @@ import 'token_store.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
 ///
-/// [signIn], [signInRelay] and [exchange] take a provider by the name the
+/// [signInDirect], [signIn] and [exchange] take a provider by the name the
 /// backend knows it by. A generated client whose spec names a method's
 /// providers returns a `TypedOidcClient` instead, the same client with those
 /// methods narrowed to an enum of that method's providers, so a provider the
@@ -255,11 +255,11 @@ class OidcClient implements AuthProvider {
 
   /// Signs in with [provider] through the direct custom-scheme flow, with
   /// [redirectUri] as the IdP `redirect_uri`. Most IdPs reject a custom-scheme
-  /// `redirect_uri`; [signInRelay] is the flow that works with them.
+  /// `redirect_uri`; [signIn] is the flow that works with them.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], or [providerConfigs] has no entry for it.
-  Future<OidcUser> signIn(
+  Future<OidcUser> signInDirect(
     String provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
@@ -325,7 +325,7 @@ class OidcClient implements AuthProvider {
 
   /// Server-relay sign-in flow (aligns with the Kotlin Android SDK).
   ///
-  /// Unlike [signIn] (the direct custom-scheme flow), this path:
+  /// Unlike [signInDirect] (the direct custom-scheme flow), this path:
   /// 1. POSTs to `{authorizeParamsBasePath}/<provider>` with a locally
   ///    generated CSRF value and [relayTo], receiving a server-signed `state`
   ///    envelope.
@@ -342,7 +342,7 @@ class OidcClient implements AuthProvider {
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider].
-  Future<OidcUser> signInRelay(
+  Future<OidcUser> signIn(
     String provider, {
     required BrowserLauncher launcher,
     required String relayTo,
@@ -475,7 +475,7 @@ class OidcClient implements AuthProvider {
   // --- Token exchange ---
 
   /// Exchanges an authorization [code] from [provider] for the signed-in
-  /// user, at [exchangePath]. [signIn] and [signInRelay] call it; call it
+  /// user, at [exchangePath]. [signInDirect] and [signIn] call it; call it
   /// directly only when the app ran the authorize step itself.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
@@ -901,8 +901,8 @@ class OidcClient implements AuthProvider {
     // Every route is found from the exchange route, so without it the
     // client can't work. A field the runtime can derive or do without falls
     // back to the `Auth` block's own value instead of failing the call that
-    // returned it. Missing provider configs only fail `signIn` for that
-    // provider; `signInRelay` reads the provider's authorize params from the
+    // returned it. Missing provider configs only fail `signInDirect` for that
+    // provider; `signIn` reads the provider's authorize params from the
     // server.
     final exchangePath = requireDescriptorField<String>(
       descriptor,

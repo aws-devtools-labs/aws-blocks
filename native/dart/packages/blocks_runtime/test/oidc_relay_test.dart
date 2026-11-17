@@ -135,7 +135,7 @@ void main() {
     });
   });
 
-  group('signInRelay', () {
+  group('signIn', () {
     test(
       'fetches authorize params and builds the correct authorize URL',
       () async {
@@ -180,7 +180,7 @@ void main() {
           },
         );
 
-        final user = await client.signInRelay(
+        final user = await client.signIn(
           'google',
           launcher: launcher,
           relayTo: _relayTo,
@@ -244,7 +244,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(exchangeBody!['iss'], 'https://idp.example.com');
       expect(exchangeBody!['code'], 'c');
@@ -302,7 +302,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       // Auth routes resolve at the origin (.../prod), NOT under /aws-blocks/api.
       expect(
@@ -376,7 +376,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(
         authParamsUrls.single,
@@ -433,11 +433,7 @@ void main() {
           },
         );
 
-        await client.signInRelay(
-          'google',
-          launcher: launcher,
-          relayTo: _relayTo,
-        );
+        await client.signIn('google', launcher: launcher, relayTo: _relayTo);
         expect(exchangeBody!.containsKey('iss'), isFalse);
       },
     );
@@ -482,7 +478,7 @@ void main() {
           },
         );
 
-        final user = await client.signInRelay(
+        final user = await client.signIn(
           'google',
           launcher: launcher,
           relayTo: _relayTo,
@@ -506,11 +502,7 @@ void main() {
         final launcher = FakeLauncher(onLaunch: (_, __) => Uri.parse(_relayTo));
 
         expect(
-          () => client.signInRelay(
-            'unknown',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('unknown', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcUnknownProviderException>().having(
               (e) => e.provider,
@@ -546,8 +538,7 @@ void main() {
       );
 
       expect(
-        () =>
-            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+        () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
         throwsA(
           isA<OidcCallbackException>().having(
             (e) => e.message,
@@ -591,11 +582,7 @@ void main() {
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -635,11 +622,7 @@ void main() {
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -683,7 +666,7 @@ void main() {
           );
 
           await expectLater(
-            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+            client.signIn('google', launcher: launcher, relayTo: _relayTo),
             throwsA(
               isA<OidcCallbackException>().having(
                 (e) => e.message,
@@ -728,7 +711,7 @@ void main() {
         );
 
         await expectLater(
-          client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+          client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -759,11 +742,7 @@ void main() {
         final launcher = FakeLauncher(onLaunch: (_, __) => Uri.parse(_relayTo));
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(isA<OidcCallbackException>()),
         );
       },
@@ -791,8 +770,7 @@ void main() {
       );
 
       expect(
-        () =>
-            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+        () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
         throwsA(isA<OidcCancelledException>()),
       );
     });
@@ -825,11 +803,7 @@ void main() {
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -892,7 +866,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(session.cookies['blocks_session'], 'sess-abc-123');
       expect(session.cookieHeader, contains('blocks_session=sess-abc-123'));
@@ -948,7 +922,7 @@ void main() {
             );
           },
         );
-        await oidc.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+        await oidc.signIn('google', launcher: launcher, relayTo: _relayTo);
 
         // Now a BlocksClient sharing the same SessionStore makes an RPC call.
         String? sentCookie;

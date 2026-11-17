@@ -12,14 +12,14 @@ This package is used by generated client code produced by `blocks_codegen`. You 
 
 ## Typed OIDC providers
 
-`OidcClient`'s `signIn`, `signInRelay` and `exchange` take a provider by the name the backend knows it by. `TypedOidcClient<P extends OidcProvider>` is an extension type over an `OidcClient` that narrows those three methods to providers of type `P`. A generated client returns one, with `P` an enum it generates from the spec's provider names, so passing a provider that client doesn't have is a compile error:
+`OidcClient`'s `signInDirect`, `signIn` and `exchange` take a provider by the name the backend knows it by. `TypedOidcClient<P extends OidcProvider>` is an extension type over an `OidcClient` that narrows those three methods to providers of type `P`. A generated client returns one, with `P` an enum it generates from the spec's provider names, so passing a provider that client doesn't have is a compile error:
 
 ```dart
 // AuthApiGetClientProvider is the enum blocks_codegen generates for a
 // method `auth.getClient` whose spec names its providers.
 final TypedOidcClient<AuthApiGetClientProvider> oidc =
     await blocks.auth.getClient();
-await oidc.signInRelay(
+await oidc.signIn(
   AuthApiGetClientProvider.google,
   launcher: launcher,
   relayTo: 'com.example.app://auth',

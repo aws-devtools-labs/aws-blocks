@@ -306,7 +306,7 @@ void main() {
     });
   });
 
-  group('OidcClient signIn', () {
+  group('OidcClient signInDirect', () {
     test('a callback with no state when none is stored throws the state '
         'error', () async {
       final store = InMemoryTokenStore();
@@ -329,7 +329,7 @@ void main() {
       );
 
       await expectLater(
-        client.signIn(
+        client.signInDirect(
           'google',
           launcher: _StateDroppingLauncher(store),
           redirectUri: 'myapp://auth',

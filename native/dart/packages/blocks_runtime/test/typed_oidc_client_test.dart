@@ -118,12 +118,12 @@ OidcClient _client(
 
 void main() {
   group('TypedOidcClient', () {
-    test('signInRelay forwards the provider name and every argument', () async {
+    test('signIn forwards the provider name and every argument', () async {
       final backend = _backend();
       final typed = TypedOidcClient<TestProvider>(_client(backend.client));
       final launcher = _relayLauncher();
 
-      final user = await typed.signInRelay(
+      final user = await typed.signIn(
         TestProvider.loginGov,
         launcher: launcher,
         relayTo: _relayTo,
@@ -143,38 +143,41 @@ void main() {
       expect(launcher.authorizeUrl, isNotNull);
     });
 
-    test('signIn forwards the provider name and every argument', () async {
-      final backend = _backend();
-      final typed = TypedOidcClient<TestProvider>(_client(backend.client));
-      // The direct flow checks the state it generated, so echo it back.
-      final launcher = _Launcher(
-        (url) => {'code': 'c', 'state': url.queryParameters['state']!},
-      );
+    test(
+      'signInDirect forwards the provider name and every argument',
+      () async {
+        final backend = _backend();
+        final typed = TypedOidcClient<TestProvider>(_client(backend.client));
+        // The direct flow checks the state it generated, so echo it back.
+        final launcher = _Launcher(
+          (url) => {'code': 'c', 'state': url.queryParameters['state']!},
+        );
 
-      await typed.signIn(
-        TestProvider.loginGov,
-        launcher: launcher,
-        redirectUri: 'myapp://callback',
-      );
+        await typed.signInDirect(
+          TestProvider.loginGov,
+          launcher: launcher,
+          redirectUri: 'myapp://callback',
+        );
 
-      // provider: picks that provider's config, and reaches the exchange.
-      expect(
-        launcher.authorizeUrl!.queryParameters['client_id'],
-        'cid-login.gov',
-      );
-      expect(_bodyOf(backend.requests.single)['provider'], 'login.gov');
-      // redirectUri: the IdP redirect_uri, the callback scheme and the
-      // exchange's callbackUrl.
-      expect(
-        launcher.authorizeUrl!.queryParameters['redirect_uri'],
-        'myapp://callback',
-      );
-      expect(launcher.callbackScheme, 'myapp');
-      expect(
-        _bodyOf(backend.requests.single)['callbackUrl'],
-        'myapp://callback',
-      );
-    });
+        // provider: picks that provider's config, and reaches the exchange.
+        expect(
+          launcher.authorizeUrl!.queryParameters['client_id'],
+          'cid-login.gov',
+        );
+        expect(_bodyOf(backend.requests.single)['provider'], 'login.gov');
+        // redirectUri: the IdP redirect_uri, the callback scheme and the
+        // exchange's callbackUrl.
+        expect(
+          launcher.authorizeUrl!.queryParameters['redirect_uri'],
+          'myapp://callback',
+        );
+        expect(launcher.callbackScheme, 'myapp');
+        expect(
+          _bodyOf(backend.requests.single)['callbackUrl'],
+          'myapp://callback',
+        );
+      },
+    );
 
     test('exchange forwards the provider name and every argument', () async {
       final backend = _backend();
@@ -232,7 +235,7 @@ void main() {
         _client(_backend().client, providers: const ['google']),
       );
       expect(
-        () => typed.signInRelay(
+        () => typed.signIn(
           TestProvider.github,
           launcher: _relayLauncher(),
           relayTo: _relayTo,
@@ -253,7 +256,7 @@ void main() {
         _client(backend.client),
       );
 
-      await asClient.signInRelay(
+      await asClient.signIn(
         'google',
         launcher: _relayLauncher(),
         relayTo: _relayTo,
@@ -261,7 +264,7 @@ void main() {
       expect(_bodyOf(backend.requests.last)['provider'], 'google');
 
       expect(
-        () => asClient.signInRelay(
+        () => asClient.signIn(
           'nope',
           launcher: _relayLauncher(),
           relayTo: _relayTo,
@@ -344,7 +347,7 @@ void main() {
               _client(backend.client, providers: const ['google']),
             );
         await expectLater(
-          () => widened.signInRelay(
+          () => widened.signIn(
             const _Other('okta'),
             launcher: _relayLauncher(),
             relayTo: _relayTo,
@@ -356,12 +359,12 @@ void main() {
     );
   });
 
-  group('OidcClient.signIn', () {
+  group('OidcClient.signInDirect', () {
     test('throws OidcUnknownProviderException for a provider it does not '
         'list, rather than failing a null check', () {
       final client = _client(_backend().client, providers: const ['google']);
       expect(
-        () => client.signIn(
+        () => client.signInDirect(
           'github',
           launcher: _relayLauncher(),
           redirectUri: 'myapp://callback',
@@ -389,7 +392,7 @@ void main() {
         httpClient: _backend().client,
       );
       expect(
-        () => client.signIn(
+        () => client.signInDirect(
           'google',
           launcher: _relayLauncher(),
           redirectUri: 'myapp://callback',

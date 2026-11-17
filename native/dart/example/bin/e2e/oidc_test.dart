@@ -5,7 +5,7 @@
 /// test-apps/native-bindings' `auth-oidc` block (`Auth` with the local stub
 /// IdP).
 ///
-/// It drives the real `OidcClient.signInRelay` flow headlessly — no device, no
+/// It drives the real `OidcClient.signIn` flow headlessly — no device, no
 /// real IdP — by replacing the browser with an HTTP-driven [BrowserLauncher]
 /// that follows the redirect chain the stub IdP produces (it auto-approves),
 /// capturing the final custom-scheme relay redirect.
@@ -188,24 +188,20 @@ void main() async {
     check(false, 'authorize-params signed state envelope decodes — threw: $e');
   }
 
-  // A2 — signInRelay completes; /exchange returns the user and its Set-Cookie
+  // A2 — signIn completes; /exchange returns the user and its Set-Cookie
   // is captured into the (persistent) SessionStore.
-  group('OIDC: signInRelay completes + session cookie captured');
+  group('OIDC: signIn completes + session cookie captured');
   OidcUser? user;
   try {
-    user = await oidc.signInRelay(
-      _provider,
-      launcher: launcher,
-      relayTo: _relayTo,
-    );
+    user = await oidc.signIn(_provider, launcher: launcher, relayTo: _relayTo);
     final cookieCaptured =
         session.cookies.isNotEmpty && session.cookieHeader != null;
     check(
       user.userId.isNotEmpty && cookieCaptured,
-      'signInRelay returned user ${user.userId} and set the session cookie',
+      'signIn returned user ${user.userId} and set the session cookie',
     );
   } catch (e) {
-    check(false, 'signInRelay completes + cookie captured — threw: $e');
+    check(false, 'signIn completes + cookie captured — threw: $e');
     stderr.writeln('  launcher trace:\n    ${launcher.trace.join('\n    ')}');
   }
 

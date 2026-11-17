@@ -4,6 +4,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 
 ### Breaking
 
+- `OidcClient.signIn` is now the relay sign-in that was `signInRelay`, the
+  flow the client a block's `getClient()` returns is for, as in Kotlin and
+  Swift. The direct custom-scheme flow that was `signIn` is now
+  `signInDirect`. `TypedOidcClient` renames both the same way. Rename
+  `signIn` calls to `signInDirect`, then `signInRelay` calls to `signIn`.
 - An `OidcClient` from a block's `getClient()` (or `OidcClient.fromJson`) stores
   its tokens and sign-in state under keys prefixed with the directory of the
   block's `exchangePath`, such as `/aws-blocks/auth/access_token`, so the
@@ -96,7 +101,7 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   added to `authStateChanges`, or `OidcLoading` before the first one. An app can
   read it once, such as on launch after `restore()`, without subscribing to the
   stream. This matches Kotlin's `authState.value`.
-- `OidcClient.signInRelay` checks the callback's `state` and the CSRF value in
+- `OidcClient.signIn` checks the callback's `state` and the CSRF value in
   its envelope before it reads an IdP `error`. A redirect to the app's scheme
   that didn't come from this sign-in now fails the state check instead of
   reporting an IdP error.
@@ -113,7 +118,7 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   strip one trailing `/aws-blocks/api`, so a base URL that repeated it
   (`…/aws-blocks/api/aws-blocks/api`) sent auth requests under the RPC path.
 - Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
-  `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider of
+  `OidcClient` whose `signInDirect`, `signIn` and `exchange` take a provider of
   type `P` (and send its `providerName`) instead of a name, so a typo or a
   provider the client doesn't have is a compile error. Generated clients return
   one for a method whose spec names its providers. It is the same object as the
@@ -122,11 +127,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   takes names again. `OidcClient` itself is unchanged.
 - Add `OidcProvider`, the interface a provider type implements: `providerName`
   is the name the backend knows the provider by.
-- `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider its
-  descriptor doesn't list or has no config for, as `signInRelay` does. It used
-  to fail a null check. A client whose `providerConfigs` has the provider but
-  whose `providers` doesn't, such as `OidcClient(providers: const [],
-  providerConfigs: {'google': …})`, used to sign in and now throws.
+- `OidcClient.signInDirect` throws `OidcUnknownProviderException` for a provider
+  its descriptor doesn't list or has no config for, as `signIn` does. It used to
+  fail a null check. A client whose `providerConfigs` has the provider but whose
+  `providers` doesn't, such as `OidcClient(providers: const [], providerConfigs:
+  {'google': …})`, used to sign in and now throws.
 - `OidcClient.exchange` throws `OidcUnknownProviderException` for a provider its
   descriptor doesn't list, before sending anything, as Kotlin's does. It used to
   post the name to the backend, which rejected it with an

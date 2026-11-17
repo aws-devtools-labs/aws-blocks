@@ -215,8 +215,8 @@ class TransferableType extends ResolvedType {
   /// provider names it lists, in spec order without duplicates; null for any
   /// other transferable, or for an `oidc/client` that names none.
   ///
-  /// A `TypedOidcClient<P>` only ever takes a `P` (in `signIn`,
-  /// `signInRelay` and `exchange`), never returns one, so its argument is
+  /// A `TypedOidcClient<P>` only ever takes a `P` (in `signInDirect`,
+  /// `signIn` and `exchange`), never returns one, so its argument is
   /// narrowed to these values rather than generated as a model, and isn't in
   /// [typeArgs].
   final List<String>? oidcProviders;
