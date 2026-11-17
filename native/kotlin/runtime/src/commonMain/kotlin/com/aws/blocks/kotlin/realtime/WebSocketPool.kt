@@ -218,8 +218,12 @@ internal class WebSocketPool(
             if (connection.subscriptions.isNotEmpty()) {
                 if (wasActive && connection.subscriptions.none { it.channel == subscription.channel }) {
                     // Queued while holding the lock, so it stays ahead of a later subscribe to
-                    // the same channel. If the socket can't take it, the socket is going away
-                    // and the server drops the subscription when it does.
+                    // the same channel. trySend fails when the socket is closing, and then the
+                    // server drops the subscription when the socket goes. It also fails when the
+                    // session's outgoing buffer (8 frames) is full. That loss is accepted: the
+                    // server keeps delivering the channel, and the pool drops those messages
+                    // because no subscription is left to route them to. Sending from a launched
+                    // coroutine instead would lose the ordering against a later subscribe.
                     connection.session.outgoing.trySend(Frame.Text(unsubscribeMessage(subscription.channel)))
                 }
                 return
@@ -355,5 +359,6 @@ internal class WebSocketPool(
         connections.size
     }
 
-    private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    private fun JsonObject.string(name: String): String? =
+        (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
 }

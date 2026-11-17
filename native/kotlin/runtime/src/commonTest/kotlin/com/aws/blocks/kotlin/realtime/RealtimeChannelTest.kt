@@ -139,7 +139,8 @@ class RealtimeChannelTest {
     private fun platformCause(error: Throwable): Throwable? =
         generateSequence(error.cause) { it.cause }.firstOrNull { it !is RealtimeConnectionException }
 
-    private fun causes(error: Throwable): List<String?> = generateSequence(error.cause) { it.cause }.map { it.message }.toList()
+    private fun causes(error: Throwable): List<String?> =
+        generateSequence(error.cause) { it.cause }.map { it.message }.toList()
 
     /** Collects [flow] into a list, keeping how it ended. */
     private fun <T> TestScope.collecting(flow: Flow<T>): Pair<MutableList<T>, Deferred<Throwable?>> {
