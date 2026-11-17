@@ -680,3 +680,25 @@ describe('parity: the mock and the AWS runtime agree', () => {
 		}
 	});
 });
+
+// ── The deprecation ─────────────────────────────────────────────────────────
+
+describe('LegacyKVStore is deprecated in every entry point', () => {
+	const dist = join(import.meta.dirname, '..');
+
+	test('each declaration has the @deprecated tag, and the tag points to the upgrade section of the README', () => {
+		for (const file of ['legacy/aws.d.ts', 'legacy/mock.d.ts', 'legacy/cdk.d.ts', 'index.browser.d.ts']) {
+			const text = readFileSync(join(dist, file), 'utf8');
+			const at = text.indexOf('export declare class LegacyKVStore');
+			assert.ok(at > 0, `${file} declares the class`);
+			const doc = text.slice(text.lastIndexOf('/**', at), at);
+			assert.match(doc, /@deprecated[\s\S]*README\.md#upgrade-from-release-040-or-earlier/, file);
+		}
+	});
+
+	test('the README has the section that the tag names', () => {
+		const readme = readFileSync(join(dist, '..', 'README.md'), 'utf8');
+		assert.match(readme, /^## Upgrade from release 0\.4\.0 or earlier$/m);
+		assert.match(readme, /`LegacyKVStore` is deprecated and frozen\./);
+	});
+});

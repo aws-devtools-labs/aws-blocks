@@ -454,6 +454,8 @@ A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. Thi
 
 `LegacyKVStore` is the store of such a release, for the time of the upgrade. It has the data methods of that store over the old table: `get`, `put`, `delete`, and `scan`. So the code that calls the store runs as before. You copy the items into a `KVStore` with a new id, in your own code, at a time that you choose.
 
+`LegacyKVStore` is deprecated and frozen. It is only for this upgrade: it has the API of release 0.4.0, it gets no new features, and a later release can remove it. Use `KVStore` for new data, and remove the `LegacyKVStore` from your app when the copy is done.
+
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `get(key, options?)` | `Promise<T \| null>` | Read one value of the old store. A consistent read by default. |

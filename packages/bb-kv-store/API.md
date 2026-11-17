@@ -142,7 +142,7 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
     readValidation?: undefined;
 } | SchemaOptions<In, Out, K, I>);
 
-// @public
+// @public @deprecated
 export class LegacyKVStore<T = string> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: LegacyKVStoreOptions<T>);
     // (undocumented)

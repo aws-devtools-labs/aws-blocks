@@ -20,6 +20,12 @@ import { RELEASE_PK, RELEASE_TTL } from './layout.js';
  * logical id, so CloudFormation sees the table that it has and does not
  * change it. The app's role gets the grant of that release on the table, read
  * and write, so its policy does not change either.
+ *
+ * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
+ *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ *   0.4.0 or earlier":
+ *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  */
 export class LegacyKVStore extends BuildingBlockScope {
 	private table: ITable;

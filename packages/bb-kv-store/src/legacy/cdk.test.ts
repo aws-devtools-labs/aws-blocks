@@ -4,7 +4,7 @@
 /**
  * CDK-side tests for LegacyKVStore: the table is declared as release 0.4.0
  * declares it, under the logical id that a store with the same id has, and the
- * app's role gets read and delete access only.
+ * app's role gets the grant of that release.
  */
 import assert from 'node:assert';
 import { test } from 'node:test';

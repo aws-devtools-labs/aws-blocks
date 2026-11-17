@@ -50,6 +50,12 @@ const MAX_ITEM_BYTES = 400 * 1024;
  * with its items. The app's role keeps read and write access to it. Locally,
  * it reads the data file of the old store, `.bb-data/{fullId}/store.json`.
  *
+ * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
+ *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ *   0.4.0 or earlier":
+ *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
+ *
  * @example
  * ```typescript
  * // Release 0.4.0: const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });

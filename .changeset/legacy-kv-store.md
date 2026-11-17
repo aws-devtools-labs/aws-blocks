@@ -17,4 +17,6 @@ const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
 
 The deploy does not change the old table. `LegacyKVStore` has the data methods of that store, `get`, `put`, `delete`, and `scan`, so the code that calls the store runs as before. Move the writes of the app to the new store, and then copy the items in your own code, with `scan` of the old store and `put` with `ifNotExists` into the new one. Then remove the `LegacyKVStore` and deploy: the old table leaves the stack, by its removal policy.
 
-The README section "Upgrade from release 0.4.0 or earlier" has the steps and what to know before you start.
+`LegacyKVStore` is deprecated and frozen. It has the `@deprecated` tag, so an editor marks each use. It has the API of release 0.4.0 and gets no new features. Use it only for this upgrade, and remove it when the copy is done.
+
+The README section "Upgrade from release 0.4.0 or earlier" has the steps and what to know before you start. The guide `docs/guides/upgrading-older-apps.md` starts from the CloudFormation error.
