@@ -213,4 +213,76 @@ class BlocksClientTest {
         e.statusCode shouldBe null
         e.cause!!.message shouldBe "Connection refused"
     }
+
+    private val request = BlocksRequest(method = "api.x", params = emptyList(), id = 1)
+
+    @Test
+    fun `a 2xx JSON object that is not an envelope is a TransportException`() = runTest {
+        val e = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.OK, """{"status":"ok"}""").execute(request)
+        }
+        e.statusCode shouldBe 200
+        e.message shouldBe "Missing result field in JSON-RPC response"
+    }
+
+    @Test
+    fun `a 2xx JSON array is a TransportException`() = runTest {
+        val e = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.OK, """[1,2,3]""").execute(request)
+        }
+        e.statusCode shouldBe 200
+        e.message shouldBe "Response was not a JSON-RPC envelope"
+    }
+
+    @Test
+    fun `an error envelope populates the name and retriable and keeps the message verbatim`() = runTest {
+        val body = """{"jsonrpc":"2.0","error":{"code":400,"message":"Wrong code, try again","data":{"name":"CodeMismatchException","retriable":true}},"id":1}"""
+        val e = assertFailsWith<ApiException> {
+            clientAnswering(HttpStatusCode.OK, body).execute(request)
+        }
+        e.name shouldBe "CodeMismatchException"
+        e.retriable shouldBe true
+        e.message shouldBe "Wrong code, try again"
+        e.status shouldBe 400
+    }
+
+    @Test
+    fun `retriable counts only a JSON boolean`() = runTest {
+        for (retriable in listOf("\"true\"", "1", "null")) {
+            val body = """{"jsonrpc":"2.0","error":{"code":400,"message":"m","data":{"name":"N","retriable":$retriable}},"id":1}"""
+            val e = assertFailsWith<ApiException> {
+                clientAnswering(HttpStatusCode.OK, body).execute(request)
+            }
+            e.retriable shouldBe false
+        }
+    }
+
+    @Test
+    fun `a gateway message body becomes the TransportException message`() = runTest {
+        val e = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.GatewayTimeout, """{"message":"Endpoint request timed out"}""")
+                .execute(request)
+        }
+        e.statusCode shouldBe 504
+        e.message shouldBe "Endpoint request timed out"
+    }
+
+    @Test
+    fun `a gateway message wins over an error string and an empty one falls through`() = runTest {
+        val both = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.TooManyRequests, """{"message":"Too Many Requests","error":"other"}""")
+                .execute(request)
+        }
+        both.message shouldBe "Too Many Requests"
+
+        val empty = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.Forbidden, """{"message":"","error":"Forbidden"}""").execute(request)
+        }
+        empty.message shouldBe "Forbidden"
+
+        val neither = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.Forbidden, """{"message":"","error":""}""").execute(request)
+        }
+        neither.message shouldBe "HTTP 403"
+    }
 }

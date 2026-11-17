@@ -101,14 +101,19 @@ class BlocksClient internal constructor(
                 message,
                 rpcStatus(code),
                 (data?.get("name") as? JsonPrimitive)?.contentOrNull ?: reservedRpcErrorName(code),
-                (data?.get("retriable") as? JsonPrimitive)?.booleanOrNull == true,
+                // Only a JSON boolean counts; booleanOrNull would also read the string "true".
+                (data?.get("retriable") as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true,
             )
         }
 
         if (!response.status.isSuccess()) {
-            // Not a JSON-RPC error (a gateway or route error such as `{ "error": "Not Found" }`,
-            // or no JSON at all): a transport failure.
-            val message = (errorElement as? JsonPrimitive)?.contentOrNull ?: "HTTP ${response.status.value}"
+            // Not a JSON-RPC error (a gateway or route error such as `{ "error": "Not Found" }`
+            // or API Gateway's `{ "message": "Too Many Requests" }`, or no JSON at all): a
+            // transport failure. A non-empty string `message` wins, then a string `error`.
+            fun text(element: JsonElement?) =
+                (element as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+            val message = text(responseJson?.get("message")) ?: text(errorElement)
+                ?: "HTTP ${response.status.value}"
             throw TransportException(message, response.status.value)
         }
 
