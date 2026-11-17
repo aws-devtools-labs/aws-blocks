@@ -222,7 +222,9 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
         // unless that config already bundles the dependencies itself.
         const outcome = bridge.outcome();
         const appBundlesItself = bridge.mode === 'user' && config.vite?.ssr?.noExternal === true;
-        if (!outcome.applied && !appBundlesItself) throw bridgeNotAppliedError(cmd);
+        if (!outcome.applied && !appBundlesItself) {
+          throw bridgeNotAppliedError(cmd, buildCommand !== undefined && buildCommand.length > 0);
+        }
         builtNodeMode = outcome.nodeMode;
       }
     } finally {
@@ -851,17 +853,26 @@ const runAstroBuild = (
   return cmd;
 };
 
-/** The build exited 0 without loading the bridge config passed with `--config`. */
-const bridgeNotAppliedError = (cmd: string[]): HostingError =>
+/**
+ * The build exited 0 without loading the bridge config passed with `--config`.
+ * `fromOption` is whether the command came from the adapter's `buildCommand`
+ * option rather than from the app's `build` script.
+ */
+const bridgeNotAppliedError = (cmd: string[], fromOption: boolean): HostingError =>
   new HostingError('AstroBuildConfigNotAppliedError', {
     message:
       `The Astro build (\`${cmd.join(' ')}\`) did not use the config passed with \`--config\`, ` +
       'so its server output would import packages from node_modules, which is not deployed.',
-    resolution:
-      'The build command did not pass `--config` through to `astro build`. ' +
-      '`npm run build -- --config <file>` passes it only when the `build` script in package.json ' +
-      'ends with `astro build`. Make your `build` script end with `astro build`, or remove it ' +
-      'to let Hosting run `npx astro build --config <file>`.',
+    resolution: fromOption
+      ? 'The `buildCommand` option did not pass `--config` through to `astro build`. Hosting ' +
+        'appends `-- --config <file>` to it, so the command must hand the arguments after `--` ' +
+        'on to `astro build` (as `npm run build` does when the script ends with `astro build`; ' +
+        '`npx astro build` does not). Change `buildCommand`, or remove it to let Hosting run ' +
+        'the `build` script, or `npx astro build --config <file>` when there is none.'
+      : 'The build command did not pass `--config` through to `astro build`. ' +
+        '`npm run build -- --config <file>` passes it only when the `build` script in package.json ' +
+        'ends with `astro build`. Make your `build` script end with `astro build`, or remove it ' +
+        'to let Hosting run `npx astro build --config <file>`.',
   });
 
 /**

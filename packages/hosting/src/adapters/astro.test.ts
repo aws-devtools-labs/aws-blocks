@@ -546,6 +546,11 @@ void describe('astroAdapter — build of an app that configures its own adapter'
     });
   });
 
+  afterEach(() => {
+    mock.restoreAll();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('bundles every dependency into the server output of an app that wires @astrojs/node', () => {
     writeConfig('@astrojs/node');
 
@@ -625,6 +630,21 @@ void describe('astroAdapter — build of an app that configures its own adapter'
       },
     );
     assert.strictEqual(fs.existsSync(path.join(tmp, '.hosting')), false, 'the bridge is still removed');
+  });
+
+  it('names the buildCommand option when that command does not pass --config through', () => {
+    writeConfig('@astrojs/node');
+    buildBehavior = { ignoreConfig: true };
+
+    assert.throws(
+      () => astroAdapter({ projectDir: tmp, skipBuild: false, buildCommand: ['npx', 'astro', 'build'] }),
+      (error: HostingError) => {
+        assert.strictEqual(error.code, 'AstroBuildConfigNotAppliedError');
+        assert.match(error.resolution, /The `buildCommand` option did not pass `--config`/);
+        assert.doesNotMatch(error.resolution, /Make your `build` script/);
+        return true;
+      },
+    );
   });
 
   it('passes --config to the npx astro build fallback without --, which Astro ignores', () => {
