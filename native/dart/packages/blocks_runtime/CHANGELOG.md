@@ -9,6 +9,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the sign-out below.
   been replaced by a `Set-Cookie` since; those users are signed out once and
   sign in again. A stored cookie record without a `secure` field is read as
   `Secure`.
+- `BlocksClient` now sends `x-blocks-user-agent` on web too, so a browser
+  app's RPC calls appear in client traffic metrics. The web build dropped the
+  header because the Blocks server's CORS preflight did not allow it, which
+  `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
+  (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
+  download and the WebSocket upgrade are unchanged.
 
 ## 0.2.0
 
