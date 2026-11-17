@@ -151,6 +151,40 @@ const crud = db.crud({
 //   crud.listPosts(), crud.getPost(id), ...
 ```
 
+**Row-level security is the only thing that scopes these handlers to the calling user.** Every CRUD call runs inside `withRLS()` as the `authenticated` role, and Postgres filters rows only on a table with RLS enabled and policies defined. On a table without RLS, every signed-in user can read, change and delete every row through CRUD.
+
+Turn on enforcement so CRUD refuses such tables instead of serving them:
+
+```typescript
+const db = new Database(scope, 'db', {
+  migrationsPath: './migrations',
+  schema: tableMeta,
+  rlsPolicy: 'enforce',
+});
+```
+
+With `rlsPolicy: 'enforce'`, each CRUD handler checks the live table before its first read or write. If RLS isn't enabled, or the `authenticated` role is exempt from it (it owns the table, directly or through role membership, without `FORCE ROW LEVEL SECURITY`, or has `BYPASSRLS`), the call fails with `DatabaseErrors.RowLevelSecurityRequired` and runs no query. The server log names the table and the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` to run. A refused table is checked again on the next call, so the fix takes effect without a restart. A table that passed is cached for the life of the database connection: if you later disable RLS on it, warm instances keep serving it until they recycle. `bb-data pull` sets `rlsPolicy: 'enforce'` for you.
+
+The table metadata can also record RLS per table with `rowLevelSecurity` (`bb-data pull` writes it):
+
+| `rowLevelSecurity` | CRUD behavior |
+|---|---|
+| `true` | The live table is checked as with `rlsPolicy: 'enforce'`, so a table whose RLS was disabled after the metadata was generated is refused. |
+| `false` | Refused. |
+| omitted | Runs, and logs a warning if the live table has no RLS. Set `rlsPolicy: 'enforce'` to refuse instead. |
+
+To serve a table to every signed-in user on purpose, prefer an explicit policy (`CREATE POLICY "shared" ON <table> FOR ALL TO authenticated USING (true) WITH CHECK (true);`). If the table must stay without RLS, acknowledge it per call, which skips the check for the listed tables only:
+
+```typescript
+const crud = db.crud({
+  tables: ['users', 'countries'],
+  auth: async () => ({ userId: (await auth.requireAuth(context)).userId }),
+  dangerouslyAllowWithoutRowLevelSecurity: ['countries'],
+});
+```
+
+`rlsPolicy` applies only to `db.crud()`. Raw `db.query()`, `db.execute()` and `db.transaction()` don't use RLS unless you call them on `db.withRLS({ userId })`.
+
 ## Connecting to an Existing Database
 
 ```typescript
@@ -267,6 +301,14 @@ next statement fails as `QueryFailed`. Catch them outside `transaction()`, or
 wrap the statement in a savepoint (`SAVEPOINT s` … `ROLLBACK TO SAVEPOINT s`) if
 the transaction should continue.
 
+A `ConnectionFailed` that takes about nine seconds every time, rather than once
+around a rotation, means the credential is wrong rather than mid-rotation: the
+engine cannot tell the two apart, so it retries both. The log line
+`credential still refused after 3 attempts` names the time spent on each one.
+Check that the secret belongs to this cluster, that the app's role still has
+`rds-data` and `secretsmanager:GetSecretValue`, and, with a customer-managed
+key, that the key policy allows the account's principals.
+
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
@@ -280,10 +322,15 @@ the transaction should continue.
   cluster is synthesized without the `StorageEncrypted` property (an existing,
   unencrypted cluster is left untouched) and a synth warning explains how to opt
   in. The key is **imported** (Blocks can't modify its policy), so its policy
-  must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
-  (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
-  principal that reads the credentials secret over the Data API. The key must be in
-  the **same account and region** as the cluster.
+  must allow the account's IAM principals to use it (the default key policy does,
+  through the account root; a policy that enumerates principals must name the
+  deploying principal, the app runtime's role, the migration Lambda's role and
+  the rotation Lambda's role): the deploying principal needs `kms:CreateGrant` +
+  `kms:DescribeKey` (RDS uses a grant to encrypt the storage volume), and Blocks
+  grants `kms:Decrypt` (via Secrets Manager) to the app runtime and the
+  migration Lambda, which read the credentials secret over the Data API. The app
+  runtime's role is the shared Blocks execution role, which is also the container
+  task role. The key must be in the **same account and region** as the cluster.
 - **Automated backups** — on by default, retained **15 days**, which is also the
   point-in-time-recovery window. Controlled by the single `pointInTimeRecovery`
   option (mirrors every other Blocks block): `true` enables the 15-day window,
@@ -295,16 +342,79 @@ the transaction should continue.
   Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
   set; otherwise it uses the account default.
 - **VPC** — Private subnets (isolated, no NAT)
-- **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
-  wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
-  secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
-- **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
-- **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+- **Secrets Manager** — Auto-generated credentials, **rotated automatically every
+  30 days under the `production` preset** (off under `sandbox`, where a teardown
+  would wait on the rotation Lambda's network interfaces and the stack would pay
+  for an endpoint it never benefits from; `secretRotation: true` opts in) by
+  AWS's PostgreSQL single-user rotation function (a Serverless
+  Application Repository app: an AWS-maintained Lambda placed in the cluster's
+  VPC). The password is rotated in place: the secret keeps its ARN, and the app
+  never reads the password itself (the Data API reads the secret for it), so a
+  rotation needs no redeploy. Every rotation, scheduled ones included, has a
+  window in which the cluster already accepts the new password while the secret
+  still holds the old one, usually 1-3 seconds and occasionally up to about 18;
+  a query in that window is refused, so `Database` retries it for up to nine
+  seconds, and a longer window surfaces as a retriable `ConnectionFailed`.
+  Inside a transaction it is not retried, so the refusal reaches you and you
+  retry the transaction.
+  A credential that is wrong rather than mid-rotation looks the same, so those
+  calls take the full nine seconds before failing instead of failing fast, and
+  they keep paying it for as long as the credential stays wrong. A request pays
+  it once however many statements it issues, because the refusal ends the
+  request and statements you run together overlap; measured at 9.0 s for three
+  sequential statements and 9.0 s for three parallel ones. Only a handler that
+  catches each refusal and runs the next statement anyway stacks the waits, at
+  27.0 s for three, which is where API Gateway's 29-second request ceiling
+  comes into reach. Your app's own log says which it was: it carries one line
+  per attempt and a `credential still refused` line naming the time spent.
+  The first rotation runs during the deploy, which waits (up to five minutes)
+  for it to finish.
+  `secretRotation: { intervalDays: n }` changes the interval;
+  `secretRotation: false` turns it off. The secret is encrypted with your
+  `storageEncryptionKeyArn` when one is supplied; the rotation Lambda is then
+  granted `kms:Decrypt`, `kms:DescribeKey` and `kms:GenerateDataKey` on that key
+  (key-policy requirement as above).
 
-> **Access model:** the database is reached exclusively over the RDS Data API
-> (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
-> IAM authentication (`iamAuthentication`) is therefore intentionally left off — it
-> does not apply to the Data API access path.
+  > **What rotation requires to deploy.** The rotation function comes from the
+  > Serverless Application Repository, so a stack with rotation on carries the
+  > `AWS::Serverless-2016-10-31` transform. CloudFormation expands it using the
+  > stack's **CloudFormation execution role**, which therefore needs
+  > `serverlessrepo:GetApplication` and
+  > `serverlessrepo:CreateCloudFormationTemplate`: the default CDK bootstrap grants
+  > both through `AdministratorAccess`, but a bootstrap narrowed with
+  > `--cloudformation-execution-policies` may not, and the deploy then fails while
+  > expanding the transform. You do not pass `CAPABILITY_AUTO_EXPAND` yourself —
+  > the CDK CLI always sends it. The application is published in the `aws`,
+  > `aws-cn` and `aws-us-gov` partitions only, so rotation cannot deploy in any
+  > other partition: set `secretRotation: false` there. A stack with a concrete
+  > region fails at synth with that message; an environment-agnostic stack (no
+  > `env`) leaves the partition unresolved until deploy, so nothing catches it at
+  > synth. The transform does not affect the sandbox dev loop: `npm run sandbox`
+  > hotswaps a handler change exactly as before, because hotswap reads the
+  > unexpanded template.
+- **Secrets Manager VPC endpoint** — in the Database's own VPC (isolated, no NAT)
+  an interface endpoint gives the rotation Lambda its only path to the Secrets
+  Manager API (billed hourly per AZ, ~$7.20/month per AZ in us-east-1, two AZs).
+  In a shared VPC (`defaults.vpc`), Blocks already provisions this endpoint for
+  the Data API and the rotation Lambda shares it. If you manage the endpoints
+  yourself (`provisionEndpoints: false`), your Secrets Manager endpoint's security
+  group must allow inbound 443 from the rotation Lambda's security group; synth
+  warns (`blocks:vpc:endpoint-client-unadmitted`) with the group to admit, and the
+  stack outputs that group's id under a name ending in `RotationSgId` (emitted
+  for any `Database` in a shared VPC, whoever owns the endpoints). The group is
+  created by the first deploy, so that deploy's rotation fails and waits five
+  minutes; add the rule and Secrets Manager's own reattempt then succeeds. See
+  `VPC.md` for the sequence and for how to acknowledge the warning afterwards.
+- **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
+- **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app
+  runtime and the migration Lambda; with a `storageEncryptionKeyArn`, also
+  `kms:Decrypt` on that key, scoped to use through Secrets Manager
+
+> **Access model:** the app reaches the database exclusively over the RDS Data API
+> (HTTPS + Secrets Manager credentials), never a raw Postgres socket; the only
+> socket client is the rotation Lambda, which signs in with the password it is
+> rotating. Database-level IAM authentication (`iamAuthentication`) is therefore
+> intentionally left off — it does not apply to the Data API access path.
 >
 > **Enabling encryption on an existing unencrypted cluster requires a
 > replacement — and a replacement is destructive.** RDS cannot encrypt an
@@ -415,6 +525,11 @@ interface DatabaseOptions {
   connection?: ExternalDatabaseRef;
   /** Schema metadata for crud() support. */
   schema?: TableSchema;
+  /**
+   * 'enforce' makes db.crud() refuse, before any query, a table that has no
+   * row-level security in effect for the `authenticated` role. See "CRUD Handlers".
+   */
+  rlsPolicy?: 'enforce';
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
   /**
@@ -430,9 +545,10 @@ interface DatabaseOptions {
    * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
    * context flag. When omitted, encryption follows that flag — on with the
    * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
-   * imported, so its policy must already grant the deploying principal
-   * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
-   * reading the credentials secret; it must be in the same account + region.
+   * imported, so its policy must allow the account's IAM principals to use it
+   * (the default key policy does): the deploying principal needs `kms:CreateGrant`
+   * + `kms:DescribeKey`, and Blocks grants `kms:Decrypt` to the principals reading
+   * the credentials secret; it must be in the same account + region.
    */
   storageEncryptionKeyArn?: string;
   /**
@@ -442,6 +558,14 @@ interface DatabaseOptions {
    * automated backups). When omitted, follows `defaults.pointInTimeRecovery`.
    */
   pointInTimeRecovery?: boolean | { retentionDays: number };
+  /**
+   * Automatic rotation of the credentials secret. `true` rotates every 30 days;
+   * `{ intervalDays: n }` every n days (1–1000, the upper bound being Secrets
+   * Manager's limit rather than a recommendation); `false` turns it off. When
+   * omitted, follows `defaults.secretRotation` (on under `production`, off
+   * under `sandbox`).
+   */
+  secretRotation?: boolean | { intervalDays: number };
 }
 ```
 

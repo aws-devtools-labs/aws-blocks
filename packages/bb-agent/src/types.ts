@@ -101,22 +101,29 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	/**
 	 * How an `inferenceOnly` agent keys the session a `conversationId` selects.
 	 *
-	 * - `'shared'` (default): the session is keyed by the `conversationId` alone. Anyone who
-	 *   passes the same id continues (or `resume()`s) that session and receives its channel,
-	 *   so don't let callers choose the id.
-	 * - `'user'`: the session is keyed by the `userId` together with the `conversationId`, and the
+	 * - `'user'` (default): the session is keyed by the `userId` together with the `conversationId`, and the
 	 *   Realtime channel is scoped to the `userId`. A caller who passes another user's
 	 *   `conversationId` gets a separate, empty session of their own and never sees the other
 	 *   user's chunks. `stream()`, `resume()` and `getChannel()` then require `options.userId`
 	 *   (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without it.
+	 * - `'shared'`: the session is keyed by the `conversationId` alone. Anyone who
+	 *   passes the same id continues that session, and anyone who passes the same `channelId`
+	 *   receives its chunks. Only safe when your app never lets a caller choose the
+	 *   `conversationId` or `channelId` (for example, the server generates them and keeps them
+	 *   to itself). `resume()` throws `AgentErrors.InvalidUsage` in this mode: a session with no
+	 *   owner can't tell who may approve its pending tool calls. For the same reason, the
+	 *   constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or
+	 *   `interrupt`.
 	 *
-	 * Switching an existing agent from `'shared'` to `'user'` starts new sessions: sessions stored
-	 * under the bare `conversationId` are not resumed.
+	 * Switching an existing agent between `'shared'` and `'user'` starts new sessions: sessions stored
+	 * under the other key are not resumed. Earlier releases keyed every `inferenceOnly` session by the
+	 * bare `conversationId`; those sessions are not resumed under `'user'`, and `'shared'` keys
+	 * sessions the same way.
 	 *
 	 * Ignored when persistence is enabled (`inferenceOnly` unset or `false`): those agents always
 	 * check that the `userId` owns the conversation and scope channels to the user.
 	 *
-	 * @default 'shared'
+	 * @default 'user'
 	 */
 	sessionScope?: 'shared' | 'user';
 	model?: {
@@ -271,7 +278,15 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	name?: string;
 	description: string;
 	parameters: TParams;
-	/** When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`. */
+	/**
+	 * When true, the agent pauses for user approval before executing this tool. Defaults to false. Mutually exclusive with `interrupt`.
+	 *
+	 * Set it to `true` on any tool with side effects (one that writes data, sends a message, spends
+	 * money or calls an external system on the user's behalf). With the default, the model can call
+	 * the tool whenever it decides to, including when an instruction in a tool result or other content
+	 * the user didn't write tells it to; the tool's `parameters` schema bounds the arguments, not the
+	 * decision to call it. Read-only tools can usually keep the default.
+	 */
 	needsApproval?: boolean;
 	/** When true (and `needsApproval` is true), user can respond "trust" to auto-approve this tool for the rest of the conversation. */
 	trustable?: boolean;
@@ -421,13 +436,16 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 	conversationId?: string;
 	/**
 	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
-	 * With persistence the chunks are published on this channel scoped to `userId`; subscribe with
+	 * With persistence, and on an `inferenceOnly` agent with the default `sessionScope: 'user'`,
+	 * the chunks are published on this channel scoped to `userId`; subscribe with
 	 * `getChannel(channelId, { userId })`.
 	 */
 	channelId?: string;
 	/**
-	 * User ID for conversation scoping. Required when persistence is enabled (take it from the
-	 * authenticated session); defaults to 'anonymous' only for `inferenceOnly` agents.
+	 * User ID for conversation scoping. Required when persistence is enabled, and for an
+	 * `inferenceOnly` agent with the default `sessionScope: 'user'` (take it from the
+	 * authenticated session); defaults to 'anonymous' only for an `inferenceOnly` agent with
+	 * `sessionScope: 'shared'`.
 	 */
 	userId?: string;
 	/**

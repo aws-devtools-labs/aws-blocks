@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
@@ -11,11 +11,13 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
+import { createDeployRecorder } from './deploy-history.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
-import { OUTPUTS_FILE } from './deploy-outputs.js';
-import { log } from './log.js';
+import { BACKEND_OUTPUT_KEY, OUTPUTS_FILE } from './deploy-outputs.js';
+import { ignoreClosedOutput, log } from './log.js';
+import { migrateLegacyDeployedConfig, writeDeployedConfig } from './deployed-config.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -229,8 +231,27 @@ export function makeInvalidationProbe(
 }
 
 export async function deploy(options: DeployOptions) {
+  // A closed terminal (SIGHUP, then EIO) or output pipe must not end the deploy (see ignoreClosedOutput).
+  ignoreClosedOutput();
+  // Structured deploy history (.blocks/deploy-history.jsonl) is the primary
+  // source for the dashboard's deployments view: IN_PROGRESS at start, one
+  // terminal record (same id) at the end. Best-effort, never fails a deploy.
+  const recorder = createDeployRecorder(options.projectRoot, 'production');
+  recorder.start();
+  try {
+    const result = await runDeploy(options);
+    recorder.succeed();
+    return result;
+  } catch (error) {
+    recorder.fail(error);
+    throw error;
+  }
+}
+
+async function runDeploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     log.progress('🏗️  Preparing deployment...');
+    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
 
     // Resolve the liveness-wait config: an explicit option wins, else read the
     // flags from argv so the thin template wrapper needs no arg plumbing. Only
@@ -354,8 +375,8 @@ export async function deploy(options: DeployOptions) {
     // than relying on the write order of the outputs file. Falls back to the
     // first group so a single-stack app is unchanged.
     const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
-    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
-    const apiUrl = stackOutputs.ApiUrl;
+    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.[BACKEND_OUTPUT_KEY]) ?? stackGroups[0] ?? ['', {}];
+    const apiUrl = stackOutputs[BACKEND_OUTPUT_KEY];
 
     // Pair the frontend URL, build id, and invalidation id from the SAME
     // Hosting output group (see resolveHostingOutputs). `--wait-live` targets a
@@ -370,11 +391,8 @@ export async function deploy(options: DeployOptions) {
     }
     options.onDeployed?.({ stack, apiUrl, hostingUrl });
     
-    // Write config.json with API endpoint
-    const config: Record<string, string> = { apiUrl, environment: 'production' };
-    const outDir = join(options.projectRoot, '.blocks-sandbox');
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'config.json'), JSON.stringify(config, null, 2));
+    // Record the API URL for explicit production targets, never in the dev server's config.json (see deployedConfigFile).
+    writeDeployedConfig(join(options.projectRoot, '.blocks-sandbox'), 'production', apiUrl);
 
     console.log('\n✅ Deployment complete!');
     console.log(`\n📡 API URL: ${apiUrl}`);

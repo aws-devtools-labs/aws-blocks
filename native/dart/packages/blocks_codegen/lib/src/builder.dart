@@ -1282,8 +1282,12 @@ class CodegenModelBuilder {
     final lines = <String>[];
     for (final union in unions) {
       final renamed = <String>[];
+      // Arm names this union has claimed, so a second arm of the same union
+      // that generates the same name (`Foo` and `foo`) is renamed too.
+      final claimed = <String>{};
       for (final v in union.variants) {
-        if (owners.putIfAbsent(v.className, () => union.name) == union.name) {
+        if (owners.putIfAbsent(v.className, () => union.name) == union.name &&
+            claimed.add(v.className)) {
           continue;
         }
         final key = keys[union];
@@ -1301,6 +1305,7 @@ class CodegenModelBuilder {
         renamed.add('${v.className} -> $name');
         v.className = name;
         owners[name] = union.name;
+        claimed.add(name);
       }
       if (renamed.isEmpty) continue;
       lines.add(

@@ -22,7 +22,9 @@
  *
  * The router admits only this edge: it hands over (in its `originHandle`) the
  * origin-verify header every request must carry, which the edge sets as the
- * origin's custom headers, and — for an internal ALB — the balancer itself,
+ * origin's custom headers (never over a plain-HTTP hop to an internet-facing
+ * router outside a sandbox: that fails synth, see `assertSecretHopEncrypted`),
+ * and — for an internal ALB — the balancer itself,
  * which the edge reaches through a CloudFront VPC origin and admits into the
  * balancer's security group (the VPC origin's `CloudFront-VPCOrigins-Service-SG`,
  * looked up after the distribution, since CloudFormation doesn't return it).
@@ -51,6 +53,8 @@
 import { Annotations, Duration } from 'aws-cdk-lib';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
+import { HostingError } from '../hosting_error.js';
+import { isSandboxDeploy } from './deploy_stage.js';
 import {
   AllowedMethods,
   type BehaviorOptions,
@@ -98,23 +102,65 @@ export type CloudFrontEdgeDoorResult = FrontDoorResult & {
   staticFunction?: CloudFrontFunction;
 };
 
+/**
+ * Require an HTTPS hop, or a CloudFront VPC origin (an internal router, on the
+ * AWS network), before attaching the router's required headers (its
+ * origin-verify secret) to the edge → router origin.
+ *
+ * A production deploy fails synth, so the secret is never sent. A sandbox
+ * deploy (`sandboxMode` context) synthesizes with a warning
+ * (`@aws-blocks/hosting:OriginSecretOverPlainHttp`): it is disposable, and the
+ * router rejects every request without the header, so dropping it would
+ * leave the sandbox unreachable.
+ *
+ * @throws HostingError('OriginSecretOverPlainHttpError') for that hop outside a sandbox.
+ */
+const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['originHandle']): void => {
+  if (handle.protocol === 'https' || handle.privateLoadBalancer) return;
+  const headers = Object.keys(handle.customHeaders ?? {}).join(', ');
+  const message =
+    `The stacked door's CloudFront edge would send the router's required headers (${headers}) over plain HTTP ` +
+    "to the internet-facing router's public addresses, unencrypted.";
+  const resolution =
+    'Give the router a `certificate` and `features.router.domain` so the edge → router hop is HTTPS :443, or set ' +
+    '`internal: true` so the edge reaches the router through a CloudFront VPC origin on the AWS network.';
+  if (!isSandboxDeploy(scope)) {
+    throw new HostingError('OriginSecretOverPlainHttpError', {
+      message: `${message} A production deploy refuses to send it.`,
+      resolution: `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns.`,
+    });
+  }
+  Annotations.of(scope).addWarningV2(
+    '@aws-blocks/hosting:OriginSecretOverPlainHttp',
+    `${message} This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
+  );
+};
+
 /** The built-in CloudFront edge of the stacked door. */
 export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, CloudFrontEdgeDoorResult>({
   service: 'cloudfront-edge',
 
-  /** @throws Error when there is no `upstream` door to front. */
+  /**
+   * @throws Error when there is no `upstream` door to front.
+   * @throws HostingError('OriginSecretOverPlainHttpError') when the router requires headers (its origin-verify
+   *   secret) over a plain-HTTP hop to an internet-facing router, outside a sandbox deploy.
+   */
   build(scope, input) {
     const router = input.upstream;
     if (!router) {
       throw new Error('cloudfront-edge door: the stacked edge needs the router door it fronts as `upstream`.');
     }
     const handle = router.originHandle;
-    // The headers the router requires on every request (its origin-verify secret).
-    const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     // The edge → router hop uses the router listener's protocol and port: HTTP
     // :80, or HTTPS :443 when the router has a certificate. (For HTTPS, the
     // certificate must cover the name CloudFront connects to.)
     const https = handle.protocol === 'https';
+    // The headers the router requires on every request (its origin-verify
+    // secret). Over plain HTTP to an internet-facing router they would cross
+    // the internet in cleartext, so that hop fails synth (see
+    // `assertSecretHopEncrypted`). A router that requires none has nothing to protect.
+    if (Object.keys(handle.customHeaders ?? {}).length > 0) assertSecretHopEncrypted(scope, handle);
+    const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     const protocolPolicy = https ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY;
     const routerPort = https ? 443 : 80;
     const origin = handle.privateLoadBalancer

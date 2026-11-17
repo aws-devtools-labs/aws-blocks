@@ -44,6 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
+import { isSandboxDeploy } from './deploy_stage.js';
 import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
@@ -114,6 +115,8 @@ export type { SkewProtectionConfig } from './skew_protection.js';
 // well before it so the operator can split the stack before a deploy fails.
 const CFN_MAX_RESOURCES_PER_STACK = 500;
 const CFN_RESOURCE_WARNING_THRESHOLD = 450;
+/** Stable id of the plain-HTTP front-door warning; also the `acknowledgeWarning` id. */
+const PLAIN_HTTP_FRONT_DOOR_WARNING_ID = '@aws-blocks/hosting:PlainHttpFrontDoor';
 
 // ---- Public types ----
 
@@ -2106,22 +2109,57 @@ export class HostingConstruct extends Construct {
         });
       }
       // A door served over plain HTTP with an API: sign-in, cookies and every
-      // RPC travel in cleartext between the browser and the door.
-      // (The stacked door's router isn't the public address: the core warns about its hop.)
+      // RPC travel in cleartext between the browser and the door, so it fails
+      // synth outside a sandbox. The `'none'` door warns even without an API:
+      // it can never serve over TLS, so the pages and scripts themselves
+      // travel in cleartext.
+      // (The stacked door's router isn't the public address: its edge checks the hop.)
       // The S3 website's URL is a token at synth, so its handle's protocol says it.
       const plainHttp = built.url.startsWith('http://') || built.originHandle.protocol === 'http';
-      if (plainHttp && props.backendApi && !stackedRouter) {
-        Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:PlainHttpFrontDoor',
-          `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
-            'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
-            (isNone
-              ? ''
-              : '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ') +
-            (isNone
-              ? 'Use the CloudFront door for HTTPS.'
-              : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),
-        );
+      if (plainHttp && (props.backendApi || isNone) && !stackedRouter) {
+        if (isNone) {
+          // `'none'` may be chosen on purpose (testing, public non-interactive
+          // content), so its message names how to acknowledge it. It serves no
+          // same-origin API, so it warns in every stage.
+          Annotations.of(this).addWarningV2(
+            PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+            "The 'none' front door serves the app from the public S3 website endpoint over plain HTTP " +
+              '(an S3 website has no TLS), so the HTML and scripts can be read or altered in transit — ' +
+              'even when the app calls an HTTPS API cross-origin, a tampered script sees everything the user enters. ' +
+              'Use the CloudFront door for HTTPS. If serving over plain HTTP is intended, acknowledge it with ' +
+              `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_FRONT_DOOR_WARNING_ID}')\`.`,
+          );
+        } else {
+          // A plain-HTTP door with a same-origin API: sign-in, session cookies
+          // and every RPC cross the network unencrypted. A production deploy
+          // fails synth; a sandbox deploy (`sandboxMode` context) only warns.
+          // Worded by kind: only the ALB door has a `certificate` to give.
+          const exposure =
+            'the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted.';
+          const { message, resolution } =
+            resolved.kind === 'custom'
+              ? {
+                  message: `The 'custom' front door's URL is \`http://\`, so ${exposure}`,
+                  resolution:
+                    'Serve the custom door over HTTPS (return an `https://` url), or use the CloudFront or stacked door.',
+                }
+              : {
+                  message: `The '${resolved.kind}' front door serves the app over plain HTTP (no certificate), so ${exposure}`,
+                  resolution:
+                    'Give the ALB door a `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront or stacked door.',
+                };
+          if (!isSandboxDeploy(this)) {
+            throw new HostingError('PlainHttpFrontDoorError', {
+              message: `${message} A production deploy refuses to serve it.`,
+              resolution: `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns.`,
+            });
+          }
+          Annotations.of(this).addWarningV2(
+            PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+            `${message} \`Auth\` drops \`Secure\` from its session cookie behind such a door so that sign-in still works. ` +
+              `This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
+          );
+        }
       }
       this.distributionUrl = built.url;
       this.frontDoor = { service, url: built.url, originHandle: built.originHandle };
@@ -3154,7 +3192,7 @@ const assertAlbCertificateHasDomain = (
       "own name, so the app is browsed at your domain — and the app's URL (its trusted origin and CORS origin) must be that domain.",
     resolution:
       "Add `frontDoor.features.domain` (`domainName`, plus `hostedZone` / `hostedZoneId` for the DNS records), " +
-      'or remove `certificate` to serve plain HTTP at the ALB name.',
+      'or remove `certificate` to serve plain HTTP at the ALB name (with an API, a sandbox deploy only).',
   });
 };
 

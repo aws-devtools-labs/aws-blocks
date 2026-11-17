@@ -313,7 +313,8 @@ cp .env.production.example .env.production
 Set \`SUPABASE_DB_URL\` to your **production** database's connection string. The port is
 normalized automatically at runtime (transaction pooler in Lambda), so you don't need to
 pick it manually. **Use a separate Supabase project or branch — never your dev database**;
-a handler with \`rlsPolicy: 'bypass'\` has full access.
+raw \`db.query()\` / \`db.execute()\` / \`db.transaction()\` calls bypass row-level
+security and have full access to it.
 
 ### 3. Set your other production secrets
 
@@ -353,7 +354,7 @@ npm run deploy
 
 ### 6. Verify production
 
-When deploy finishes it prints your live **API URL** and frontend URL (also written to \`.blocks-sandbox/config.json\`). Open the app, sign in, and call an API method — you should see RLS-filtered results, the same as local.
+When deploy finishes it prints your live **API URL** and frontend URL (the API URL is also recorded in \`.blocks-sandbox/config.production.json\`). Open the app, sign in, and call an API method — you should see RLS-filtered results, the same as local.
 
 **Rotating the database password:** update \`SUPABASE_DB_URL\` in \`.env.production\` and re-run \`npm run deploy\`. The declared value is written to SSM and wins over any manual, out-of-band edit.
 

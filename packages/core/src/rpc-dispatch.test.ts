@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-blocks/hosting';
 import { ApiNamespace } from './api.js';
-import { isApiNamespace, isDispatchableExport, isScopeLike, resolveApiNamespace, resolveApiMethod, rpcErrorHttpStatus, httpErrorStatusExports } from './rpc-dispatch.js';
+import { isApiNamespace, isDispatchableExport, isScopeLike, markServerOnlyFunction, resolveApiNamespace, resolveApiMethod, rpcErrorHttpStatus, httpErrorStatusExports } from './rpc-dispatch.js';
 import { ApiError, blocksError } from './errors.js';
 
 const scope = { id: 'app' };
@@ -96,6 +96,17 @@ describe('resolveApiMethod', () => {
   it('exposes no method of a Building Block instance a handler returns', () => {
     class Block { readonly id = 'notes'; readonly fullId = 'app-notes'; async get() { return 'stored'; } }
     assert.strictEqual(resolveApiMethod(new Block(), 'get'), undefined);
+  });
+
+  it('refuses a server-only function wherever it was copied to', () => {
+    const serverOnly = async () => 'admin';
+    markServerOnlyFunction(serverOnly);
+    const source = { serverOnly };
+    assert.strictEqual(resolveApiMethod({ ...source }, 'serverOnly'), undefined);
+    assert.strictEqual(resolveApiMethod(Object.assign({}, source), 'serverOnly'), undefined);
+    assert.strictEqual(resolveApiMethod({ renamed: serverOnly }, 'renamed'), undefined);
+    assert.strictEqual(isDispatchableExport('serverOnly', serverOnly), false);
+    assert.ok(resolveApiMethod({ async plain() { return 1; } }, 'plain'));
   });
 });
 

@@ -19,8 +19,15 @@
  * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
  * The runners pass the same `tsx` loader to core's client-generation worker
  * through `BLOCKS_TSX_IMPORT`, so an app without its own `tsx` works there too.
+ *
+ * `tsx` compiles a file with the options of the `tsconfig.json` in the working
+ * directory, and only when that config lists the file. A root that only lists
+ * project references (the Vite templates, create-vite apps) lists none, so when
+ * the backend is a project of its own (`aws-blocks/tsconfig.json`), the runners
+ * point `tsx` at it through `TSX_TSCONFIG_PATH` (see {@link tsxTsconfigEnv}).
  */
 
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -54,6 +61,23 @@ export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
 
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
+
+/** The environment variable that names the `tsconfig.json` that `tsx` compiles the app's files with. */
+export const TSX_TSCONFIG_ENV = 'TSX_TSCONFIG_PATH';
+
+/**
+ * The environment that points the runners' `tsx` at the backend's own TypeScript
+ * project, `aws-blocks/tsconfig.json`, when the app has one: otherwise `tsx`
+ * reads the root `tsconfig.json`, which in a Vite template only lists project
+ * references, so a backend file would run without its `jsx` or `paths`. The
+ * deploy bundling (esbuild) uses the nearest `tsconfig.json`, the same file.
+ * A `TSX_TSCONFIG_PATH` already set in `env` is left as it is.
+ */
+export function tsxTsconfigEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	if (env[TSX_TSCONFIG_ENV]) return {};
+	const backend = join(root, 'aws-blocks', 'tsconfig.json');
+	return existsSync(backend) ? { [TSX_TSCONFIG_ENV]: backend } : {};
+}
 
 export type RunnerName = 'dev-server' | 'sandbox' | 'sandbox-destroy' | 'deploy' | 'destroy' | 'generate-spec';
 

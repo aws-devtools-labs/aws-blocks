@@ -647,7 +647,7 @@ describe('DistributedTable', () => {
 			await assert.rejects(
 				// @ts-expect-error — 'nonexistent' is not a defined index name
 				async () => { for await (const _ of table.query({ index: 'nonexistent', where: { userId: { equals: 'u1' } } })) {} },
-				/Index 'nonexistent' not found/,
+				/Index 'nonexistent' not found; declared indexes: 'byUser'$/,
 			);
 		});
 
@@ -951,6 +951,22 @@ describe('DistributedTable', () => {
 			const _badKey: Parameters<typeof table.delete>[0] = {};
 		});
 
+		test('get and delete reject a string or partial key at runtime instead of matching nothing', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'A', createdAt: 1000 });
+			const isInvalidQuery = (err: unknown) => isBlocksError(err, DistributedTableErrors.InvalidQuery);
+			// @ts-expect-error — the key must be an object, not the partition key value
+			await assert.rejects(() => table.get('u1'), isInvalidQuery);
+			// @ts-expect-error — a composite key needs its sort key too
+			await assert.rejects(() => table.get({ userId: 'u1' }), isInvalidQuery);
+			// @ts-expect-error — a composite key needs its sort key too
+			await assert.rejects(() => table.delete({ userId: 'u1' }), isInvalidQuery);
+			assert.equal((await table.get({ userId: 'u1', createdAt: 1000 }))?.name, 'A', 'the rejected delete removed nothing');
+		});
+
 		test('query rejects at runtime for nonexistent index', async () => {
 			const table = new DistributedTable(testScope(), 'users', {
 				schema: userSchema,
@@ -959,7 +975,7 @@ describe('DistributedTable', () => {
 			await assert.rejects(
 				// @ts-expect-error — table has no indexes, testing runtime rejection
 				async () => { for await (const _ of table.query({ index: 'doesNotExist', where: { userId: { equals: 'u1' } } })) {} },
-				/Index 'doesNotExist' not found/,
+				/Index 'doesNotExist' not found; declared indexes: none$/,
 			);
 		});
 	});

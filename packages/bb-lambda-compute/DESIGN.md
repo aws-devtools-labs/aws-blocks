@@ -133,8 +133,9 @@ from options:
   only a `LambdaCompute` constructed after the derivation sees it. Creating and
   wiring the VPC (endpoints, subnet roles) is core's job; this package only
   consumes the context.
-- **CORS origins.** A non-empty `defaults.allowedOrigins` (origin patterns —
-  regular expressions, not literal origins) is set on the function as
+- **CORS origins.** A non-empty `defaults.allowedOrigins` (plain origins,
+  matched exactly and case-insensitively, or regex patterns with escaped dots;
+  core validates the entries at synth) is set on the function as
   `CORS_ALLOWED_ORIGINS`, comma-joined to match how the runtime's
   `getCorsPatterns()` parses it. The `production` preset allows no origins, so
   the variable is absent there unless the app sets its own.

@@ -1,6 +1,5 @@
 dist
 node_modules
-build-temp
 .blocks-sandbox
 cdk.out/
 aws-blocks/client.js

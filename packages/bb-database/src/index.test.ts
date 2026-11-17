@@ -9,7 +9,7 @@ import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { MIGRATION_VALIDATION_ERROR_NAME, PERMISSION_ERROR_NAME } from './errors.js';
-import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
+import { Database, DatabaseCluster, DatabaseErrors, sql, type Transaction } from './index.mock.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
 import { internalAccess } from './runtime/internal.js';
 import { migrations, tempDir } from './test-support/fixtures.js';
@@ -180,6 +180,33 @@ describe('Database (owned DSQL cluster)', () => {
 		);
 		assert.strictEqual(attempts, 2, 'the simulated conflict hit the first attempt of the app transaction');
 		assert.ok(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'x'}`));
+	});
+
+	// The callback arms the commit of its own transaction on each of its first `conflicts` runs.
+	const insertAfterConflicts = (db: Database, id: string, conflicts: number) => {
+		const counter = { attempts: 0 };
+		const run = async (tx: Transaction) => {
+			if (counter.attempts++ < conflicts) simulateConflict(db);
+			await tx.execute(sql`INSERT INTO t VALUES (${id})`);
+		};
+		return { counter, run };
+	};
+
+	test('retryOnConflict commits a callback that conflicts maxRetries times, and throws on one conflict more', async () => {
+		const db = owned({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
+		const within = insertAfterConflicts(db, 'within', 1);
+		await db.transaction(within.run, { retryOnConflict: true, maxRetries: 1 });
+		assert.strictEqual(within.counter.attempts, 2, 'one conflict, then the run that commits');
+		assert.ok(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'within'}`));
+
+		const beyond = insertAfterConflicts(db, 'beyond', 2);
+		await assert.rejects(db.transaction(beyond.run, { retryOnConflict: true, maxRetries: 1 }), (e: unknown) => {
+			assert.ok(isBlocksError(e, DatabaseErrors.SerializationFailure));
+			assert.ok(e instanceof ApiError && e.status === 409 && e.retriable);
+			return true;
+		});
+		assert.strictEqual(beyond.counter.attempts, 2, 'the first run and one retry, no more');
+		assert.strictEqual(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'beyond'}`), null, 'rolled back');
 	});
 
 	test('the 3,000-row limit is enforced per auto-commit statement too', async () => {

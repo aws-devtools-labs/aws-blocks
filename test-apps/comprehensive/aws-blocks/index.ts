@@ -610,6 +610,12 @@ export const realtime = new Realtime(scope, 'collab', {
 // Database - SQL database (Aurora Serverless v2 via Data API)
 const db = new Database(scope, 'db', {
   migrationsPath: './aws-blocks/migrations',
+  // `true` because this app runs on the sandbox preset, which leaves rotation
+  // off; the rotation path needs a deploy to be covered at all. It is covered
+  // here, at the cost of the rotation Lambda's network interfaces slowing this
+  // lane's teardown, because the vpc-smoke lane that also asserts it does not
+  // run yet (issue #987). Move it there once that lane is back on.
+  secretRotation: true,
 });
 
 // DistributedDatabase - Aurora DSQL (serverless, multi-region PostgreSQL)
@@ -1955,6 +1961,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return descriptor as unknown as typeof ch;
   },
 
+  async realtimeGetPrincipalChannel(subChannel: string, principal: string) {
+    return realtime.getChannel('cursors', subChannel, { principal });
+  },
+
+  async realtimeGetMismatchedPrincipalChannel(subChannel: string, channelPrincipal: string, connectionPrincipal: string) {
+    // A handle whose channel token is bound to `channelPrincipal` but whose connect token is
+    // bound to `connectionPrincipal`: what a client holding someone else's channel token sends.
+    const channelHandle = await realtime.getChannel('cursors', subChannel, { principal: channelPrincipal });
+    const connectionHandle = await realtime.getChannel('cursors', subChannel, { principal: connectionPrincipal });
+    const descriptor = channelHandle.toJSON();
+    descriptor.connectToken = connectionHandle.toJSON().connectToken;
+    return descriptor as unknown as typeof channelHandle;
+  },
+
+  async realtimeRevokeBetweenHandles(subChannel: string, principal: string) {
+    // `stale` carries a channel token minted before revokeAccess() on a connect token minted
+    // after it, so the subscribe-time check (not the connect-time one) is what refuses it.
+    const before = await realtime.getChannel('cursors', subChannel, { principal });
+    await realtime.revokeAccess(principal);
+    // Revocation compares whole seconds; wait one out before minting the new handle.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const fresh = await realtime.getChannel('cursors', subChannel, { principal });
+    const stale = before.toJSON();
+    stale.connectToken = fresh.toJSON().connectToken;
+    return { stale: stale as unknown as typeof fresh, fresh };
+  },
+
   async realtimeGetPoisonedChannel(subChannel: string) {
     // Return a channel descriptor with a bad token — middleware hydrates it normally,
     // but the WS server / AppSync will reject the invalid token on subscribe.
@@ -2893,9 +2926,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { deleted: true };
   },
 
-  async agentInferenceOnly(message: string) {
-    const result = await inferenceAgent.stream(message);
+  async agentInferenceOnly(message: string, conversationId?: string) {
+    // An inferenceOnly agent scopes its sessions and channels to the caller by default
+    // (sessionScope: 'user'), so it takes the session user's id like a persistent agent.
+    const user = await auth.getCurrentUser(context);
+    const result = await inferenceAgent.stream(message, { conversationId, userId: user?.userSub ?? 'anonymous' });
     return { channelId: result.channelId };
+  },
+
+  async agentInferenceOnlyGetChannel(channelId: string) {
+    const user = await auth.getCurrentUser(context);
+    return { channel: await inferenceAgent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
@@ -2940,7 +2981,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async agentPresetStream(presetName: string, message: string) {
     const presetAgent = presetAgents[presetName];
     if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
-    const result = await presetAgent.stream(message);
+    const result = await presetAgent.stream(message, { userId: 'test-user' });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },
@@ -3156,7 +3197,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbAgentToolSearch(message: string) {
     // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
     // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
-    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const result = await kbToolAgent.stream(message, { userId: 'test-user', context: { folder: 'faq' } });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },

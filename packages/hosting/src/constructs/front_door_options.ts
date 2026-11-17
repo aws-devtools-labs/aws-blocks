@@ -354,6 +354,11 @@ export type AlbDoorOptions<TDomain = HostingDomainConfig> = {
    * It must cover `features.domain`, which is required with it: a certificate
    * can't cover the ALB's own `*.elb.amazonaws.com` name, so the app is
    * reached at the custom domain.
+   *
+   * Without it the ALB serves plain HTTP :80. With an API, that is
+   * sandbox-only: a production deploy fails synth (`PlainHttpFrontDoorError`),
+   * and a sandbox deploy (`sandboxMode` context) warns
+   * (`@aws-blocks/hosting:PlainHttpFrontDoor`).
    */
   certificate?: ICertificate;
   /** The settings the app asks the ALB door for. */
@@ -445,6 +450,11 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    * cross-origin), image optimization or TLS; an app with a server fails synth
    * (use `'cloudfront'` or `{ kind: 'alb' }`). `s3-website` is the internal
    * mechanism, not a front door. It takes no settings.
+   *
+   * Because the site is served without TLS, `'none'` always warns at synth
+   * (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
+   * If that is intended, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`.
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>

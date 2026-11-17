@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -323,6 +323,49 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every template e2e test calls the dev server it reuses, or TEST_URL, never a URL a deploy recorded', () => {
+    // The Node client resolves BLOCKS_API_URL before it reads .blocks-sandbox/config.json. A test that
+    // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;';
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const source = readFileSync(testPath, 'utf-8');
+      // The awaited import loads the client; `let app: typeof import('aws-blocks')` is only a type.
+      const load = source.indexOf("await import('aws-blocks')");
+      if (load === -1) continue; // builds its own client from the server's URL (nextjs)
+      const pinned = source.indexOf(pin);
+      if (pinned === -1 || pinned > load) problems.push(`${entry.name}: does not set BLOCKS_API_URL before it loads the client`);
+      // A dev server that inherits BLOCKS_API_URL runs in sandbox mode, proxying to that URL (here: itself).
+      if (pinned !== -1 && pinned < source.indexOf("server = spawn('npm'")) {
+        problems.push(`${entry.name}: sets BLOCKS_API_URL before it starts the dev server, which then inherits it`);
+      }
+      if (!source.includes("const testUrl = process.env.TEST_URL?.replace(/\\/$/, '') || undefined;")) {
+        problems.push(`${entry.name}: does not read TEST_URL`);
+      }
+      if (!source.includes('if (!testUrl && !await isServerRunning(serverPort))')) {
+        problems.push(`${entry.name}: starts a dev server although TEST_URL names a deployed app`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it("every template's cdk watch ignores the generated aws-blocks/client.js", () => {
+    // cdk-blocks deploy regenerates it; a running cdk-blocks sandbox then started a watch synth, and the deploy failed
+    // on CDK's cdk.out lock (JW-02). The deployed backend does not use the browser client.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const cdkJson = join(templatesDir, entry.name, 'cdk.json');
+      if (!entry.isDirectory() || !existsSync(cdkJson)) continue;
+      const exclude: string[] = JSON.parse(readFileSync(cdkJson, 'utf-8')).watch?.exclude ?? [];
+      if (!exclude.includes('aws-blocks/client.js')) problems.push(`${entry.name}: watch.exclude lacks aws-blocks/client.js`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('every template e2e suite can run again and again against one running dev server', () => {
     // AGENTS.md's iteration loop reruns `npm run test:e2e` against a running server. The
     // realtime client keeps its socket to that server open, so the run must exit when the
@@ -508,7 +551,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(packageJson.scripts['blocks:stop'], 'cdk-blocks dev stop');
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
-      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      // generateClient: false keeps the overlay's own aws-blocks/client.js (Cognito token,
+      // amplify_outputs.json API URL) instead of the dev server's generic one.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
       const dev = await resolvedDevConfig(tmpDir);
       assert.strictEqual(dev.frontendCommand, undefined);
       assert.strictEqual(dev.port, 3001);
@@ -518,6 +563,10 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+      // With `next` installed, the app's tsconfig.json checks aws-blocks/ (next build ignores
+      // project references), so the backend gets no project of its own and the steps say so.
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
       // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
       assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
       assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
@@ -718,6 +767,36 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('a stackId derived from a name that starts with "aws" gets the app- prefix, in any letter case', () => {
+    const names: [name: string, expected: RegExp][] = [
+      ['aws-blocks-wt-cmp-bbdata', /^app-aws-blocks-w-[0-9a-f]{6}$/],
+      ['AWS-Thing', /^app-AWS-Thing-[0-9a-f]{6}$/],
+      ['Awsome', /^app-Awsome-[0-9a-f]{6}$/],
+      ['@aws/shop', /^app-aws-shop-[0-9a-f]{6}$/],
+      // Unchanged: the name does not start with "aws".
+      ['awesome-app', /^awesome-app-[0-9a-f]{6}$/],
+      ['my-aws-app', /^my-aws-app-[0-9a-f]{6}$/],
+      ['my-cool-app', /^my-cool-app-[0-9a-f]{6}$/],
+    ];
+    for (const [name, expected] of names) {
+      const stackId = generateStackId(name);
+      assert.match(stackId, expected, `${name} -> ${stackId}`);
+    }
+  });
+
+  it('a fresh app in a directory whose name starts with "aws" gets a stackId that does not', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'create-blocks-app-aws-name-'));
+    const appDir = join(parent, 'aws-blocks-wt-cmp-bbdata');
+    try {
+      const result = run([appDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(appDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.match(config.stackId, /^app-aws-blocks-w-[0-9a-f]{6}$/);
+    } finally {
+      rmSync(parent, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('detects existing project when target dir is an explicit named directory', () => {
     const tmpDir = join(__dirname, '../.test-named-existing');
     mkdirSync(tmpDir, { recursive: true });
@@ -857,6 +936,62 @@ describe('create-blocks-app auto-detection', () => {
     assert.ok(checked.includes('default'), `checked: ${checked.join(', ')}`);
   });
 
+  it('gives an existing project the backend\'s own tsconfig and prints the reference steps, leaving its tsconfig alone', () => {
+    const backendTsconfig = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+    // `default` ships aws-blocks/tsconfig.json; `backend` does not, so the default template's is copied.
+    for (const template of ['default', 'backend']) {
+      const tmpDir = join(__dirname, `../.test-existing-tsconfig-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+      const tsconfig = '{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }\n';
+      writeFileSync(join(tmpDir, 'tsconfig.json'), tsconfig);
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), backendTsconfig, template);
+        assert.strictEqual(readFileSync(join(tmpDir, 'tsconfig.json'), 'utf-8'), tsconfig, `${template}: the project's own tsconfig.json changed`);
+        assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/, template);
+        assert.match(result.stdout, /`tsc -b --force` instead of `tsc`/, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
+  it('gives an existing Next.js project no backend tsconfig, since next build ignores project references', () => {
+    const tmpDir = join(__dirname, '../.test-existing-tsconfig-nextjs');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0', dependencies: { next: '*' } }));
+    try {
+      // `default` ships aws-blocks/tsconfig.json; in a Next.js project nothing would build it, and
+      // esbuild and editors would read it instead of the app's tsconfig.json (and its "paths").
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'index.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
+      assert.doesNotMatch(result.stdout, /"references"/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
+    const tmpDir = join(__dirname, '../.test-amplify-tsconfig');
+    mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+    writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const expected = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+      assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), expected);
+      assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('defaults to the default template when no --template is given for an existing project', () => {
     const tmpDir = join(__dirname, '../.test-existing-default-template');
     mkdirSync(tmpDir, { recursive: true });
@@ -957,6 +1092,22 @@ describe('create-blocks-app auto-detection', () => {
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('rewrites @aws-blocks/* placeholders to file: paths when run from the monorepo', () => {
+    // The published-registry path (caret ranges) is covered by published-layout.test.ts.
+    const packagesDir = join(__dirname, '../..');
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-file-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.dependencies['@aws-blocks/blocks'], `file:${packagesDir}/blocks`);
+      assert.strictEqual(pkg.dependencies['@aws-blocks/hosting'], `file:${packagesDir}/hosting`);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

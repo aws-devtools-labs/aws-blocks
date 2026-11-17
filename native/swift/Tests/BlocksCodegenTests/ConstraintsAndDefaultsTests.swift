@@ -277,4 +277,45 @@ final class ConstraintsAndDefaultsTests: XCTestCase {
         XCTAssertTrue(all.contains("v.range(of: \"^[a-z]+$\", options: .regularExpression)"),
                       "Should validate unwrapped optional against pattern")
     }
+
+    /// A component schema whose fields carry the given `properties` JSON, returned from one method.
+    private func componentSpec(properties: String) -> String {
+        """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "components": { "schemas": { "Widget": {
+                "type": "object",
+                "properties": \(properties),
+                "required": ["code"]
+            }}},
+            "methods": [{
+                "name": "api.get",
+                "params": [],
+                "result": { "name": "GetResult", "schema": { "$ref": "#/components/schemas/Widget" } }
+            }]
+        }
+        """
+    }
+
+    func testModelValidationImportsRuntime() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string", "minLength": 2 } }"#))
+        XCTAssertTrue(out.models.contains("throw CodegenError.validation("),
+                      "Model validation should reach Models.swift")
+        XCTAssertTrue(out.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"),
+                      "Models.swift names CodegenError, so it must import BlocksRuntime")
+    }
+
+    func testModelUnknownFieldImportsRuntime() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string" }, "extra": { "type": "array" } }"#))
+        XCTAssertTrue(out.models.contains("JSONValue"), "An array without items should decode as [JSONValue]")
+        XCTAssertTrue(out.models.hasPrefix("import Foundation\nimport BlocksRuntime\n"),
+                      "Models.swift names JSONValue, so it must import BlocksRuntime")
+    }
+
+    func testModelWithoutRuntimeSymbolsOmitsRuntimeImport() throws {
+        let out = try generate(componentSpec(properties: #"{ "code": { "type": "string" } }"#))
+        XCTAssertFalse(out.models.contains("import BlocksRuntime"),
+                       "Models.swift naming no runtime symbol should import Foundation only")
+    }
 }

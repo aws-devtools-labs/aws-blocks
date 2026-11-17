@@ -1268,6 +1268,24 @@ export interface UserAttribute {
 	mutable?: boolean;
 	/** Whether the attribute is required at sign-up. @default false */
 	required?: boolean;
+	/**
+	 * Whether end users may set this attribute themselves: at self sign-up,
+	 * through `updateUserAttributes`, and in the new-password step of
+	 * `confirmSignIn`. @default true
+	 *
+	 * Set `false` for any attribute your app uses for authorization (a role,
+	 * a tenant id, a plan tier). The block's app clients then leave it out of
+	 * their write attributes, so Cognito refuses an end-user write, and `Auth`
+	 * rejects one with `NotAuthorizedException` before calling Cognito,
+	 * locally too. Set it server-side instead: `admin.createUser` for a new
+	 * user, `admin.updateUserAttributes` for one who already exists. Can't be combined with
+	 * `required: true`, which has no effect on a custom attribute.
+	 *
+	 * A provider's `attributeMapping` can't map onto it (refused at
+	 * construction): the mapping would write the provider's claim on every
+	 * federated sign-in, replacing a value set server-side.
+	 */
+	userWritable?: boolean;
 }
 
 /** Settings for {@link CognitoAuthOptions.users}. */
@@ -2735,6 +2753,25 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
 		username: string,
 		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [init?: AdminCreateInit<O>]>
 	): Promise<AdminUser<O>>;
+	/**
+	 * Set attributes on an existing user (`AdminUpdateUserAttributes`). The
+	 * server-side way to give a user a `userWritable: false` attribute (a role,
+	 * a tenant id, a plan tier) after they signed up; IAM-authorized, so it may
+	 * also mark an email / phone verified. Names are bare or `custom:`-prefixed,
+	 * as in `createUser`. A changed email / phone is unverified unless the same
+	 * call sets its `*_verified` flag (Cognito then sends a verification code;
+	 * the local runtime sends none). An empty `attributes` makes no call.
+	 *
+	 * @throws {ApiError} 404 `UserNotFoundException` when `username` does not exist.
+	 * @throws {ApiError} 400 `InvalidParameterException` for an attribute the pool does not have, a non-string or
+	 *   over-long value, or an immutable attribute.
+	 * @throws {ApiError} 400 `AliasExistsException` when the email / phone is another user's sign-in alias.
+	 */
+	updateUserAttributes(
+		username: string,
+		attributes: Partial<Record<AttrOf<O>, string>>,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
+	): Promise<void>;
 	/** Delete `username` from the pool. Their existing sessions end at the next refresh. */
 	deleteUser(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
 	/** Disable `username`: sign-in is refused and existing sessions end at the next refresh. */
@@ -2827,6 +2864,11 @@ export type AdminDisabled = {
 	): never;
 	listUsersInGroup(group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	createUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	updateUserAttributes(
+		username: string,
+		attributes: unknown,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
 	deleteUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	disableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	enableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
@@ -2875,6 +2917,11 @@ export type AdminDisabledOnBuiltin = {
 	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	updateUserAttributes(
+		username: string,
+		attributes: unknown,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
+	): never;
 	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;

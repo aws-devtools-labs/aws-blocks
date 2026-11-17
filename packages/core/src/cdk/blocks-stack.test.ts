@@ -651,3 +651,83 @@ describe('create() without defaults (apps from older templates)', () => {
 		await assert.rejects(() => BlocksBackend.create(stack, 'NoDefaultsBackend', propsWithoutDefaults()), assertMissingDefaultsError);
 	});
 });
+
+// `defaults.allowedOrigins` is checked at synth by the same validator the
+// runtime uses, so an entry the runtime would ignore fails `cdk synth` instead.
+describe('create() validates defaults.allowedOrigins', () => {
+	const propsWithOrigins = (allowedOrigins: string[]) => ({
+		backendHandlerPath: handlerPath,
+		backendCDKPath: factoryBackendPath,
+		defaultComputeFactory: stubComputeFactory,
+		defaults: { ...BlocksPresets.production, allowedOrigins },
+	});
+
+	test('BlocksStack.create() rejects a regex entry with an unescaped dot', async () => {
+		const props = propsWithOrigins(['^https://app.example\\.com$']);
+		await assert.rejects(
+			() => BlocksStack.create(new cdk.App(), 'BadOriginsStack', props),
+			/defaults\.allowedOrigins entry "\^https:\/\/app\.example\\\.com\$": has an unescaped '\.'/,
+		);
+	});
+
+	test('BlocksBackend.create() rejects a regex entry that does not compile on its own', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'Host');
+		await assert.rejects(
+			() => BlocksBackend.create(stack, 'BadOriginsBackend', propsWithOrigins(['a)|(?:.*'])),
+			/not a valid regular expression/,
+		);
+	});
+
+	test('BlocksStack.create() accepts a plain origin', async () => {
+		await BlocksStack.create(new cdk.App(), 'PlainOriginStack', propsWithOrigins(['https://app.example.com']));
+	});
+
+	test('BlocksStack.create() skips unresolved tokens', async () => {
+		const app = new cdk.App();
+		const token = cdk.Lazy.string({ produce: () => 'https://d123.cloudfront.net' });
+		await BlocksStack.create(app, 'TokenOriginStack', propsWithOrigins([token]));
+	});
+
+	test('BlocksStack.create() skips an entry with an embedded unresolved token', async () => {
+		// The encoded token sits next to literal, unescaped dots, so without the
+		// unresolved-token filter the validator would reject this entry.
+		const host = cdk.Lazy.string({ produce: () => 'x' });
+		const entry = `https://${host}.example.com`;
+		assert.ok(cdk.Token.isUnresolved(entry));
+		await BlocksStack.create(new cdk.App(), 'EmbeddedTokenOriginStack', propsWithOrigins([entry]));
+	});
+});
+
+describe('a stack name that starts with "aws" is an error at synth', () => {
+	const errorsOf = (stack: cdk.Stack) =>
+		Annotations.fromStack(stack)
+			.findError('*', Match.anyValue())
+			.map((entry) => String(entry.entry.data));
+
+	const assertRefused = (stack: cdk.Stack, name: string, groupPrefix = name) => {
+		const errors = errorsOf(stack);
+		assert.strictEqual(errors.length, 1, errors.join('\n'));
+		assert.ok(errors[0].includes(`Stack name '${name}' starts with 'aws'`), errors[0]);
+		assert.ok(errors[0].includes(`'${groupPrefix}-resources' and '${groupPrefix}-settings'`), errors[0]);
+		assert.match(errors[0], /AWS Resource Groups refuses a group name/);
+		assert.match(errors[0], /"stackId" in \.blocks\/config\.json/);
+	};
+
+	test('BlocksStack: the error names the stack and says what to change, in any letter case', async () => {
+		assertRefused(await makeStack(new cdk.App(), 'AWS-Shop', factoryBackendPath), 'AWS-Shop');
+	});
+
+	test('BlocksBackend inside such a stack gets the same error', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'aws-existing-stack');
+		await makeBackend(parent, 'Blocks', factoryBackendPath);
+		assertRefused(parent, 'aws-existing-stack', 'aws-existing-stack-Blocks');
+	});
+
+	test('a name that has "aws" after its first character has no error, and names the groups', async () => {
+		const stack = await makeStack(new cdk.App(), 'my-aws-app-prod', factoryBackendPath);
+		assert.deepStrictEqual(errorsOf(stack), []);
+		Template.fromStack(stack).hasResourceProperties('AWS::ResourceGroups::Group', {
+			Name: 'my-aws-app-prod-resources',
+		});
+	});
+});

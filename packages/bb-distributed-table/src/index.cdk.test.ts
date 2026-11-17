@@ -15,9 +15,9 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match, Annotations } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, isBlocksError, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
-import { DistributedTable } from './index.cdk.js';
+import { DistributedTable, DistributedTableErrors } from './index.cdk.js';
 
 const userSchema = z.object({
 	userId: z.string(),
@@ -455,6 +455,66 @@ test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
 	// retention follows the stack-wide default (sandbox → one week), instead of
 	// AWS's infinite default.
 	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+});
+
+test('CDK: the GSI provider waiter state machine role trusts Step Functions with aws:SourceAccount and aws:SourceArn', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::IAM::Role', {
+		AssumeRolePolicyDocument: {
+			Statement: [
+				Match.objectLike({
+					Effect: 'Allow',
+					Action: 'sts:AssumeRole',
+					Principal: { Service: 'states.amazonaws.com' },
+					Condition: {
+						StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+						ArnLike: {
+							'aws:SourceArn': {
+								'Fn::Join': [
+									'',
+									[
+										'arn:',
+										{ Ref: 'AWS::Partition' },
+										':states:',
+										{ Ref: 'AWS::Region' },
+										':',
+										{ Ref: 'AWS::AccountId' },
+										':stateMachine:*',
+									],
+								],
+							},
+						},
+					},
+				}),
+			],
+		},
+	});
+});
+
+test('CDK: indexes given as an array fail at synth instead of provisioning GSIs named "0", "1", …', () => {
+	for (const table of [undefined, DistributedTable.fromExisting('preexisting-users-table')]) {
+		const { stack, parent } = setup();
+		assert.throws(
+			() => new DistributedTable(parent, 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+				indexes: [{ partitionKey: 'email' }],
+				table,
+			}),
+			(err: unknown) => {
+				assert.ok(isBlocksError(err, DistributedTableErrors.InvalidQuery));
+				assert.match((err as Error).message, /indexes must be an object keyed by index name, e\.g\. indexes: \{ byStatus: .*got an array$/);
+				return true;
+			},
+		);
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFormation::CustomResource', 0);
+	}
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {

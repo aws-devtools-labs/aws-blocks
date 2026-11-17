@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 import type { api as apiType } from 'aws-blocks';
 import { provisionConfirmedUser } from './test-support.js';
 
@@ -24,11 +24,7 @@ import { provisionConfirmedUser } from './test-support.js';
  * the resolved API origin rather than hardcoding the localhost case.
  */
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** Whether the resolved API origin is plain-HTTP loopback (the local dev case). */
 function isHttpLocalhost(baseUrl: string): boolean {

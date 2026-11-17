@@ -14,7 +14,8 @@
 		"Regenerate from the revision that froze it (the parent of the commit that deleted packages/bb-auth-cognito): UPDATE_LEGACY_FIXTURES=1 node --test dist/legacy-fixtures.proof.test.js (in packages/bb-auth).",
 		"Updated after a later merge from main: #637's stack-level config-log bucket (ConfigLogDelivery/*: bucket, policy, auto-delete) added to each template (it differs by preset). Core creates it for every stack, whatever the auth block, so a re-freeze against the merged core yields exactly these; the pool, client and every block-owned resource are unchanged.",
 		"Also in that update: sharedResources refreshed from the merged core (each live version identical in every pair and preset): BlocksSecretProviderframeworkonEventB025B3DA, BlocksConfigBucket439874BD, BlocksConfigBucketPolicy3A1A2C90, CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536; now preset-specific and inlined per template: CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F — #637's config-bucket logging/versioning/lifecycle/TLS policy and the aws-cdk-lib bump's handler Runtime/Architectures/MemorySize.",
-		"Updated again after a further merge from main: sharedResources BlocksSecretInitFn2E010B7A gains Timeout: 120 from bb-app-setting's secret-init Lambda timeout fix, a dependency change both blocks get; nothing else moved."
+		"Updated again after a further merge from main: sharedResources BlocksSecretInitFn2E010B7A gains Timeout: 120 from bb-app-setting's secret-init Lambda timeout fix, a dependency change both blocks get; nothing else moved.",
+		"Updated on the service-principal trust branch (#1447): the SMS role trust (authpoolsmsRoleAFC0BC1C, pairs everything and mfaDefaultTypes) gains aws:SourceAccount and aws:SourceArn (arn:<partition>:cognito-idp:<region>:<account>:userpool/*) beside its sts:ExternalId, as that branch's AuthCognito synthesized it before the cutover (94a2aed1); Auth applies the same scoping (src/cdk/sms-role.ts). Nothing else moved."
 	],
 	"awsCdkLib": "2.257.0",
 	"sharedResources": {
@@ -3506,7 +3507,32 @@
 											"Action": "sts:AssumeRole",
 											"Condition": {
 												"StringEquals": {
-													"sts:ExternalId": "TestStackauthpool9A897B09"
+													"sts:ExternalId": "TestStackauthpool9A897B09",
+													"aws:SourceAccount": {
+														"Ref": "AWS::AccountId"
+													}
+												},
+												"ArnLike": {
+													"aws:SourceArn": {
+														"Fn::Join": [
+															"",
+															[
+																"arn:",
+																{
+																	"Ref": "AWS::Partition"
+																},
+																":cognito-idp:",
+																{
+																	"Ref": "AWS::Region"
+																},
+																":",
+																{
+																	"Ref": "AWS::AccountId"
+																},
+																":userpool/*"
+															]
+														]
+													}
 												}
 											},
 											"Effect": "Allow",
@@ -4230,7 +4256,32 @@
 											"Action": "sts:AssumeRole",
 											"Condition": {
 												"StringEquals": {
-													"sts:ExternalId": "TestStackauthpool9A897B09"
+													"sts:ExternalId": "TestStackauthpool9A897B09",
+													"aws:SourceAccount": {
+														"Ref": "AWS::AccountId"
+													}
+												},
+												"ArnLike": {
+													"aws:SourceArn": {
+														"Fn::Join": [
+															"",
+															[
+																"arn:",
+																{
+																	"Ref": "AWS::Partition"
+																},
+																":cognito-idp:",
+																{
+																	"Ref": "AWS::Region"
+																},
+																":",
+																{
+																	"Ref": "AWS::AccountId"
+																},
+																":userpool/*"
+															]
+														]
+													}
 												}
 											},
 											"Effect": "Allow",
@@ -9725,7 +9776,32 @@
 											"Action": "sts:AssumeRole",
 											"Condition": {
 												"StringEquals": {
-													"sts:ExternalId": "TestStackauthpool9A897B09"
+													"sts:ExternalId": "TestStackauthpool9A897B09",
+													"aws:SourceAccount": {
+														"Ref": "AWS::AccountId"
+													}
+												},
+												"ArnLike": {
+													"aws:SourceArn": {
+														"Fn::Join": [
+															"",
+															[
+																"arn:",
+																{
+																	"Ref": "AWS::Partition"
+																},
+																":cognito-idp:",
+																{
+																	"Ref": "AWS::Region"
+																},
+																":",
+																{
+																	"Ref": "AWS::AccountId"
+																},
+																":userpool/*"
+															]
+														]
+													}
 												}
 											},
 											"Effect": "Allow",
@@ -10385,7 +10461,32 @@
 											"Action": "sts:AssumeRole",
 											"Condition": {
 												"StringEquals": {
-													"sts:ExternalId": "TestStackauthpool9A897B09"
+													"sts:ExternalId": "TestStackauthpool9A897B09",
+													"aws:SourceAccount": {
+														"Ref": "AWS::AccountId"
+													}
+												},
+												"ArnLike": {
+													"aws:SourceArn": {
+														"Fn::Join": [
+															"",
+															[
+																"arn:",
+																{
+																	"Ref": "AWS::Partition"
+																},
+																":cognito-idp:",
+																{
+																	"Ref": "AWS::Region"
+																},
+																":",
+																{
+																	"Ref": "AWS::AccountId"
+																},
+																":userpool/*"
+															]
+														]
+													}
 												}
 											},
 											"Effect": "Allow",

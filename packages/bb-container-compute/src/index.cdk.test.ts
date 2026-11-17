@@ -944,6 +944,33 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 		assert.strictEqual(lambda[0].Condition, undefined);
 	});
 
+	test("the task definition's execution role trust is scoped by aws:SourceAccount and aws:SourceArn", async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'EcsExecutionTrust', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		new ContainerCompute(stack as never, 'worker', {});
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// The execution role trusts ecs-tasks only (the shared role also trusts Lambda).
+		const executionRoles = Object.values(template.findResources('AWS::IAM::Role')).filter((r) => {
+			const all = (r.Properties?.AssumeRolePolicyDocument?.Statement ?? []) as TrustStatement[];
+			return all.length > 0 && all.every(trusts('ecs-tasks.amazonaws.com'));
+		});
+		assert.strictEqual(executionRoles.length, 1, 'one task execution role');
+		const statements = executionRoles[0].Properties.AssumeRolePolicyDocument.Statement as TrustStatement[];
+		assert.strictEqual(statements.length, 1);
+		assert.deepStrictEqual(statements[0].Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
+		assert.deepStrictEqual(statements[0].Condition?.ArnLike?.['aws:SourceArn'], {
+			'Fn::Join': [
+				'',
+				['arn:', { Ref: 'AWS::Partition' }, ':ecs:', { Ref: 'AWS::Region' }, ':', { Ref: 'AWS::AccountId' }, ':*'],
+			],
+		});
+	});
+
 	test('several container computes on one role add the ecs-tasks trust once', async () => {
 		const { ecs } = await synthTrust('EcsTrustOnce', ['a', 'b', 'c']);
 		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement across three computes');

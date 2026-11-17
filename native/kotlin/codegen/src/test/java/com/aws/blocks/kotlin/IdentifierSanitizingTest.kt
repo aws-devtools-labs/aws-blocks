@@ -62,6 +62,15 @@ private fun generate(methods: List<String>, schemas: Map<String, String> = empty
  */
 class IdentifierSanitizingTest : FunSpec({
 
+    test("a type name holding a character Windows rejects in a file name is built from its words") {
+        NamingUtils.toPascalCase("cre\"ate") shouldBe "CreAte"
+        NamingUtils.toPascalCase("a*b") shouldBe "AB"
+        NamingUtils.toPascalCase("a?b") shouldBe "AB"
+        NamingUtils.toPascalCase("a|b") shouldBe "AB"
+        NamingUtils.toPascalCase("trailing ") shouldBe "Trailing"
+        NamingUtils.toPascalCase("create$") shouldBe "Create$"
+    }
+
     test("a property key with a backslash is sanitized and keeps its wire name") {
         val types = generate(
             listOf(method("api.get", result = ref("Weird"))),
