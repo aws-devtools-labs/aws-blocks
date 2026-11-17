@@ -225,6 +225,10 @@ Use `ifFieldEquals` for an object value and `ifValueEquals` for any other value.
 
 The error has a `retriable` flag. It is true when a value check took part in a failed `put`, and when a failed `delete` had a value check and no `ifExists`. Read the item again and retry. A failed `ifNotExists` or `ifExists` alone is not retriable.
 
+A conditional write is atomic for its item: no other write to that item lands between the call's check and its write. On AWS, each call is one DynamoDB `PutItem` or `DeleteItem` with a condition expression. The local mock runs the check and the write with no `await` in between, so no other request runs between them.
+
+There is no transaction across items. A batch call is not atomic on AWS: after a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database` (`@aws-blocks/bb-data`) or `DistributedDatabase` (`@aws-blocks/bb-distributed-data`).
+
 ## Read consistency
 
 `get` is a strongly consistent read by default. It returns a value that a `put` wrote a moment before. A consistent read uses twice the read capacity. Pass `{ consistentRead: false }` where a stale value is acceptable.
@@ -312,6 +316,8 @@ An index reads the same items by other fields of the value. `indexes` needs a `s
 
 - An index field holds a string or a number. The schema states which, as for a key field.
 - An index holds an item only when each indexed field is present, is not an empty string, and has the declared type. `put` rejects an empty string in an indexed field.
+- To keep an item out of an index, leave the field out. Don't set it to `null`: on AWS, DynamoDB rejects a `put` whose indexed field holds `null` or a value of the other type with a `ValidationException`. The local mock accepts that write, so the error shows only on AWS.
+- An index query returns whole items: every index the block creates holds all fields of the value. A table from `fromExisting` keeps the indexes you gave it.
 - A read from an index is eventually consistent.
 - A store can have up to 20 indexes.
 - To add or remove an index, change `indexes` and deploy. DynamoDB fills a new index from the items that exist. On a large table that takes minutes to hours.
