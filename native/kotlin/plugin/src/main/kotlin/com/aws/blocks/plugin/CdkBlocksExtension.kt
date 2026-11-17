@@ -13,7 +13,7 @@ import org.gradle.api.provider.SetProperty
  *
  * Applied via the `cdkBlocks` block in a module's `build.gradle.kts`.
  */
-abstract class AwsBlocksExtension(project: Project) {
+abstract class CdkBlocksExtension(project: Project) {
 
     /** Path to the Blocks spec file. Defaults to `rootProject.file("blocks.spec.json")`. */
     abstract val apiSpec: RegularFileProperty

@@ -77,8 +77,8 @@ private class StaleOutput(spec: String, excluded: Set<String> = emptySet()) {
 
     fun generatedApi(): String = File(outputDir, "com/example/app/Api.kt").readText()
 
-    val task: AwsBlocksCodegenTask = project.tasks
-        .register("probe", AwsBlocksCodegenTask::class.java).get().apply {
+    val task: CdkBlocksCodegenTask = project.tasks
+        .register("probe", CdkBlocksCodegenTask::class.java).get().apply {
             openRpcFile.set(File(project.projectDir, "blocks.spec.json").apply { writeText(spec) })
             packageName.set("com.example.app")
             serverOverrides.set(emptyMap<String, String>())
@@ -89,7 +89,7 @@ private class StaleOutput(spec: String, excluded: Set<String> = emptySet()) {
         }
 }
 
-class AwsBlocksCodegenTaskTest : FunSpec({
+class CdkBlocksCodegenTaskTest : FunSpec({
 
     test("a rejected spec leaves previously generated sources in place") {
         val run = StaleOutput(UNSUPPORTED_SCHEMA_VERSION)

@@ -56,7 +56,7 @@ tasks.withType<Test> {
 
 gradlePlugin {
     plugins {
-        register("aws-blocks") {
+        register("cdk-blocks") {
             id = "com.aws.blocks.kotlin"
             implementationClass = "com.aws.blocks.plugin.CdkBlocksCodegenPlugin"
         }

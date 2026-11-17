@@ -32,9 +32,9 @@ Plus **fixture-goldens**, a check-only module (not published) that compiles ever
 | Purpose | Path |
 |---------|------|
 | Plugin entry point | `plugin/src/main/kotlin/com/aws/blocks/plugin/CdkBlocksCodegenPlugin.kt` |
-| Extension DSL | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksExtension.kt` |
-| Codegen Gradle task | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksCodegenTask.kt` |
-| Dump model task | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksDumpModelTask.kt` |
+| Extension DSL | `plugin/src/main/kotlin/com/aws/blocks/plugin/CdkBlocksExtension.kt` |
+| Codegen Gradle task | `plugin/src/main/kotlin/com/aws/blocks/plugin/CdkBlocksCodegenTask.kt` |
+| Dump model task | `plugin/src/main/kotlin/com/aws/blocks/plugin/CdkBlocksDumpModelTask.kt` |
 
 ### Runtime Module (Kotlin Multiplatform)
 
@@ -108,10 +108,10 @@ cd example/kmp && ./gradlew :composeApp:desktopJar
 cd example/android && ./gradlew :app:cdkBlocksDumpModel
 
 # Check generated output location (Android)
-find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"
+find example/android/app/build/generated/source/cdk/blocks/debug -name "*.kt"
 
 # Check generated output location (KMP)
-find example/kmp/composeApp/build/generated/source/aws/blocks/commonMain -name "*.kt"
+find example/kmp/composeApp/build/generated/source/cdk/blocks/commonMain -name "*.kt"
 ```
 
 ## Module Dependency Rules
@@ -147,7 +147,7 @@ If you find yourself needing to break one of these rules, something is wrong wit
 1. Run `./gradlew :codegen:test`
 2. If the output changed: regenerate the goldens (`../codegen-fixtures/regenerate-all.sh`), then run `bash scripts/compile-fixture-goldens.sh` — the golden tests only compare text, this compiles them — and `./gradlew :fixture-goldens:roundTripFixtureGoldens`, which checks the compiled goldens read and write the wire format (CI runs both in the `fixture-goldens` job of `.github/workflows/native-kotlin-analysis.yml`)
 3. Run `cd example/android && ./gradlew clean :app:assembleDebug` — clean build ensures no stale output
-4. Inspect generated files: `find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"`
+4. Inspect generated files: `find example/android/app/build/generated/source/cdk/blocks/debug -name "*.kt"`
 5. Verify the example app still compiles and the generated API surface matches expectations
 
 ### After changing the runtime

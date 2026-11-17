@@ -24,7 +24,7 @@ import org.gradle.api.tasks.TaskAction
  * Gradle task that parses an `blocks.spec.json` file and generates Kotlin source files.
  */
 @CacheableTask
-abstract class AwsBlocksCodegenTask : DefaultTask() {
+abstract class CdkBlocksCodegenTask : DefaultTask() {
 
     /** The OpenRPC JSON file to parse. */
     @get:InputFile
