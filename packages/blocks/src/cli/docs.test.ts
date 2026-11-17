@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { type DocsIndex, type DocsRequest, loadDocs, parseSections, renderDocs } from './docs.js';
 import { CliError, ExitCode, formatError } from './errors.js';
 import { commandHelp } from './help.js';
@@ -441,6 +443,22 @@ describe('cdk-blocks docs <block>', () => {
 		);
 	});
 
+	it('rejects a name longer than any name with a short usage error, before it reaches a RegExp', () => {
+		const name = 'a'.repeat(100_000);
+		for (const request of [{}, { search: 'x' }]) {
+			assert.throws(
+				() => render([name], request),
+				(error: unknown) => {
+					assert.ok(error instanceof CliError, String(error));
+					assert.strictEqual(error.exitCode, ExitCode.Usage);
+					assert.match(error.message, /^no block, export or option named "a{40}…" \(100000 characters; /);
+					assert.ok(error.message.length < 200, error.message);
+					return true;
+				},
+			);
+		}
+	});
+
 	it('lists the doc lines that mention an unknown name', () => {
 		fails(
 			() => render(['ConditionalCheckFailed']),
@@ -580,12 +598,8 @@ describe('cdk-blocks docs <export or option>', () => {
 
 	it('reads a doc path as its block and file, and lists the names of an entry named on its own', () => {
 		assert.match(render(['bb-distributed-table/DESIGN.md']), /^# bb-distributed-table\/DESIGN\.md\n/);
-		// A path to a doc the block lacks fails rather than printing the README.
-		fails(
-			() => render(['bb-kv-store/DESIGN.md']),
-			ExitCode.Failure,
-			/^bb-kv-store has no DESIGN\.md\. Its files: /,
-		);
+		// A path to a doc the block lacks fails rather than printing the README, as a name that does not exist does.
+		fails(() => render(['bb-kv-store/DESIGN.md']), ExitCode.Usage, /^bb-kv-store has no DESIGN\.md\. Its files: /);
 		assert.match(
 			render(['node_modules/@aws-blocks/blocks/docs/bb-kv-store/README.md']),
 			/^# bb-kv-store\/README\.md\n/,
@@ -818,6 +832,10 @@ describe('cdk-blocks docs --section, bare and with a topic', () => {
 		assert.match(render(['core'], { sections: ['throw'] }), /^\(lines 12-14\)\n### Throwing$/m);
 		assert.match(render(['core'], { sections: ['test'] }), /^\(lines 15-16\)\n## Testing$/m);
 		fails(() => render(['core'], { sections: ['rrors'] }), ExitCode.Usage, /no section "rrors"/);
+		// A topic with no slug (`(`, an empty one) names no section; it is not a prefix of every slug.
+		for (const topic of ['(', '']) {
+			fails(() => render(['core'], { sections: [topic] }), ExitCode.Usage, /^core\/README\.md has no section /);
+		}
 	});
 
 	it('names a looser match as such: a heading with every word by stem, else the lines that mention every word', () => {
@@ -1121,7 +1139,7 @@ describe('cdk-blocks docs (no name)', () => {
 			assert.ok(usage.includes(`\n  ${form} `), form);
 		}
 		for (const option of ['--api', '--section <topic>', '--exports [filter...]', '--search <term>']) {
-			assert.match(usage, new RegExp(`^ {2}${option.replace(/[.[\]]/g, '\\$&')} +\\S`, 'm'), option);
+			assert.match(usage, new RegExp(`^ {2}${option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} +\\S`, 'm'), option);
 		}
 		assert.doesNotMatch(out, /--(?:source|toc|design)\b/);
 	});
@@ -1207,9 +1225,9 @@ describe('cdk-blocks docs output names no path on disk', () => {
 
 describe('cdk-blocks docs through the CLI', () => {
 	it('prints the shipped docs from any directory, and rejects --output json', async () => {
-		const run = await runCli(['docs', 'DistributedTable', '--api'], { cwd: tmpdir() });
+		const run = await runCli(['docs', 'KVStore', '--api'], { cwd: tmpdir() });
 		assert.strictEqual(run.code, 0, run.stderr);
-		assert.match(run.stdout, /^# bb-distributed-table\/API\.md\n/);
+		assert.match(run.stdout, /^# bb-kv-store\/API\.md\n/);
 		const json = await runCli(['docs', 'core', '--output', 'json'], { cwd: tmpdir() });
 		assert.strictEqual(json.code, ExitCode.Usage);
 	});
@@ -1224,11 +1242,11 @@ describe('cdk-blocks docs through the CLI', () => {
 	});
 
 	it('reads a bare --section before another option as the headings, and still parses that option', async () => {
-		const api = await runCli(['docs', 'DistributedTable', '--section', '--api'], { cwd: tmpdir() });
+		const api = await runCli(['docs', 'KVStore', '--section', '--api'], { cwd: tmpdir() });
 		assert.strictEqual(api.code, 0, api.stderr);
 		assert.match(
 			api.stdout,
-			/^bb-distributed-table\/API\.md: \d+ lines; npx --no -- cdk-blocks docs bb-distributed-table --api --section <topic>\n/,
+			/^bb-kv-store\/API\.md: \d+ lines; npx --no -- cdk-blocks docs bb-kv-store --api --section <topic>\n/,
 		);
 		const search = await runCli(['docs', 'core', '--section', '--search', 'withAuth'], { cwd: tmpdir() });
 		assert.strictEqual(search.code, 0, search.stderr);
@@ -1264,17 +1282,31 @@ describe('cdk-blocks docs through the CLI', () => {
 		}
 	});
 
+	it('finds Secret.get on the type the app reads, whatever conditions the CLI runs under', () => {
+		// Under `cdk` or `browser`, the package resolves to an entry whose types declare no SecretImpl.
+		for (const conditions of [[], ['--conditions=cdk'], ['--conditions=browser']]) {
+			const run = spawnSync(
+				process.execPath,
+				[...conditions, fileURLToPath(new URL('./bin.js', import.meta.url)), 'docs', 'Secret.get'],
+				{ cwd: tmpdir(), encoding: 'utf8' },
+			);
+			assert.strictEqual(run.status, 0, `${conditions.join(' ')}: ${run.stderr}`);
+			assert.match(run.stdout, /^get: member of SecretImpl \(the type of Secret\) \(@aws-blocks\/bb-secret\)\n/);
+		}
+	});
+
 	it("drops grep's flags and -- after --search, taking the next argument as the term", async () => {
 		for (const argv of [
-			['docs', 'DistributedTable', '--search', '-i', 'consistentRead'],
-			['docs', '--search', '-in', 'consistentRead', 'DistributedTable'],
-			['docs', 'DistributedTable', '--search', '--', 'consistentRead'],
+			['docs', 'KVStore', '--search', '-i', 'consistentRead'],
+			['docs', '--search', '-in', 'consistentRead', 'KVStore'],
+			['docs', 'KVStore', '--search', '--', 'consistentRead'],
 		]) {
 			const run = await runCli(argv, { cwd: tmpdir() });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
 			assert.match(run.stdout, /^search "consistentRead" in /, argv.join(' '));
-			assert.match(run.stdout, /^bb-distributed-table\/README\.md:\d+ /m, argv.join(' '));
-			assert.doesNotMatch(run.stdout, /^bb-kv-store\//m, argv.join(' '));
+			assert.match(run.stdout, /^bb-kv-store\/README\.md:\d+ /m, argv.join(' '));
+			// bb-email-client's README mentions it too: the search reads only the block named.
+			assert.doesNotMatch(run.stdout, /^bb-email-client\//m, argv.join(' '));
 		}
 		const bare = await runCli(['docs', '--search', '-i'], { cwd: tmpdir() });
 		assert.strictEqual(bare.code, ExitCode.Usage);

@@ -108,7 +108,7 @@ describe('parseArgv', () => {
 		assert.strictEqual(search.flags.search, 'withAuth');
 		assert.strictEqual(search.flags.section, undefined);
 		assert.deepStrictEqual(search.positionals, ['core']);
-		const api = parseArgv(['docs', 'DistributedTable', '--section', '--api', '--section', 'queries']);
+		const api = parseArgv(['docs', 'KVStore', '--section', '--api', '--section', 'queries']);
 		assert.strictEqual(api.flags.toc, true);
 		assert.strictEqual(api.flags.api, true);
 		assert.deepStrictEqual(api.flags.section, ['queries']);

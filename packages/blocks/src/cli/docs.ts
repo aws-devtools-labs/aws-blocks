@@ -37,8 +37,8 @@ export function docsForms(command: string): string[] {
 		[
 			' <block>...',
 			[
-				"each block's README; a block is its class (DistributedTable),",
-				'its folder (bb-distributed-table) or the folder without bb-',
+				"each block's README; a block is its class (KVStore),",
+				'its folder (bb-kv-store) or the folder without bb-',
 			],
 		],
 		[
@@ -80,10 +80,12 @@ const SEARCH_LINE_LENGTH = 200;
 /** A search hit names its section by slug; `--section` takes a slug prefix, so a long one is cut. */
 const SEARCH_SLUG_LENGTH = 40;
 const LISTED_CLASSES = 4;
+/** Longer than any export, option or doc path; a longer name gets the unknown-name error before any lookup. */
+const MAX_NAME_LENGTH = 200;
 
 /** A docs folder of one block, or one of the root docs (`guide`, `troubleshooting`). */
 export interface DocsBlock {
-	/** `bb-distributed-table`, `core`, `guide`, `troubleshooting`. */
+	/** `bb-kv-store`, `core`, `guide`, `troubleshooting`. */
 	name: string;
 	purpose: string;
 	dir: string;
@@ -93,7 +95,7 @@ export interface DocsBlock {
 	main: string;
 	/** Markdown files of the block's folder (README.md, API.md, DESIGN.md, ...), `main` first. */
 	files: string[];
-	/** Class names that name the block (the vendorize map's): `cdk-blocks docs DistributedTable` prints its README. */
+	/** Class names that name the block (the vendorize map's): `cdk-blocks docs KVStore` prints its README. */
 	named: string[];
 	/** Classes shown in the listing: the named ones, else the classes (and class-like constants) it declares. */
 	classes: string[];
@@ -132,8 +134,8 @@ export interface DocsIndex {
 	members: Map<string, Declaration[]>;
 	/**
 	 * Every name `import { … } from '@aws-blocks/blocks'` takes, with the declaration it resolves to: the umbrella's
-	 * own declarations, then the names it exports one by one (`import { PutOptions as DTPutOptions } from
-	 * '@aws-blocks/bb-distributed-table'` and `export { DTPutOptions }`), then everything of the packages it
+	 * own declarations, then the names it exports one by one (`import { PutOptions as KVPutOptions } from
+	 * '@aws-blocks/bb-kv-store'` and `export { KVPutOptions }`), then everything of the packages it
 	 * re-exports whole (`export * from "@aws-blocks/core"`), each followed to the package that declares it (core's
 	 * `config` is hosting's). An earlier name shadows a later one, as in TypeScript.
 	 */
@@ -405,11 +407,41 @@ export function loadDocs(
 	};
 }
 
-/** The type file of a block's installed package: the `.d.ts` beside the file its main entry resolves to. */
+/**
+ * The type file an app's TypeScript reads for a block: the `types` of its package's `.` export, else the `.d.ts`
+ * beside the export's `default`. Read from the package's own package.json, because `require.resolve` follows the
+ * conditions this process runs with: under `--conditions=cdk` or `browser` it gives an entry whose types declare
+ * no runtime class (bb-secret's CDK entry has no SecretImpl, so `Secret.get` had no member).
+ */
 function blockTypesFile(require: NodeJS.Require, folder: string): string | undefined {
+	const name = `@aws-blocks/${folder}`;
+	let entry: string;
 	try {
-		const file = require.resolve(`@aws-blocks/${folder}`).replace(/\.c?js$/, '.d.ts');
-		return existsSync(file) ? file : undefined;
+		entry = require.resolve(name);
+	} catch {
+		return undefined;
+	}
+	const beside = (file: string) => file.replace(/\.c?js$/, '.d.ts');
+	let root = dirname(entry);
+	while (!existsSync(join(root, 'package.json')) || readPackageName(join(root, 'package.json')) !== name) {
+		const up = dirname(root);
+		if (up === root) return existsSync(beside(entry)) ? beside(entry) : undefined;
+		root = up;
+	}
+	const dot = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')).exports?.['.'] as unknown;
+	const conditions = typeof dot === 'object' && dot !== null ? (dot as Record<string, unknown>) : {};
+	const file =
+		typeof conditions.types === 'string'
+			? join(root, conditions.types)
+			: typeof conditions.default === 'string'
+				? join(root, beside(conditions.default))
+				: beside(entry);
+	return existsSync(file) ? file : undefined;
+}
+
+function readPackageName(file: string): string | undefined {
+	try {
+		return String(JSON.parse(readFileSync(file, 'utf-8')).name);
 	} catch {
 		return undefined;
 	}
@@ -716,15 +748,16 @@ export function renderDocs(index: DocsIndex, request: DocsRequest, version: stri
 	if (names.length === 0) {
 		// A bare `--section` alone asks for an overview: the list of blocks is the docs' table of contents.
 		if (request.api || request.sections.length) {
-			throw new UsageError(`name a block, for example: ${CLI} DistributedTable --api`, { hint: CLI });
+			throw new UsageError(`name a block, for example: ${CLI} KVStore --api`, { hint: CLI });
 		}
 		return listing(index, version);
 	}
-	// `--section` with several blocks reads each: `KVStore DistributedTable --section ttl`.
+	// `--section` with several blocks reads each: `KVStore FileBucket --section local`.
 	return names.map((name) => renderName(index, name, request)).join('\n');
 }
 
 function renderName(index: DocsIndex, name: string, request: DocsRequest): string {
+	checkNameLength(name);
 	const block = findBlock(index, name);
 	if (!block) {
 		const decls = findDeclarations(index, name);
@@ -748,7 +781,8 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): strin
 	};
 	for (const file of files) {
 		if (!block.files.includes(file)) {
-			throw new CliError(`${block.name} has no ${file}. Its files: ${block.files.join(', ')}.`, {
+			// The same mistake as a name that does not exist, so the same exit code: 2.
+			throw new UsageError(`${block.name} has no ${file}. Its files: ${block.files.join(', ')}.`, {
 				hint: `${CLI} ${block.name}${block.files.includes('API.md') ? ' --api' : ''}`,
 			});
 		}
@@ -811,7 +845,7 @@ function docHeader(doc: string): string {
 
 /**
  * `section()`, or when the block has no such section, the same error naming the other blocks whose README has a
- * heading for it (`DistributedTable --section transaction`: bb-data has "Transactions").
+ * heading for it (`KVStore --section transaction`: bb-data has "Transactions").
  */
 function withOtherBlocks<T>(index: DocsIndex, block: DocsBlock, wanted: string, section: () => T): T {
 	try {
@@ -894,7 +928,7 @@ function entryListing(index: DocsIndex, name: string): string | undefined {
 
 /**
  * A string a declaration's member holds (`ConditionalCheckFailedException`, the error name of
- * `DistributedTableErrors.ConditionalCheckFailed` and others): the members that hold it, and the first one's
+ * `KVStoreErrors.ConditionalCheckFailed` and others): the members that hold it, and the first one's
  * declaration. Undefined when no report declaration holds it.
  */
 function valueCard(index: DocsIndex, input: string): string | undefined {
@@ -916,6 +950,7 @@ function valueCard(index: DocsIndex, input: string): string | undefined {
  * (`--search isBlocksError isBlocksError` reads core).
  */
 function searchScope(index: DocsIndex, name: string): DocsBlock[] {
+	checkNameLength(name);
 	const block = findBlock(index, name);
 	if (block) return [block];
 	const decls = findDeclarations(index, name);
@@ -925,8 +960,20 @@ function searchScope(index: DocsIndex, name: string): DocsBlock[] {
 }
 
 /**
+ * A name longer than any export, option or doc path is none of them. Checked before a name reaches a `RegExp`,
+ * which a name of 100,000 characters makes too large to build, and the error quotes only its start.
+ */
+function checkNameLength(name: string): void {
+	if (name.length <= MAX_NAME_LENGTH) return;
+	throw new UsageError(
+		`no block, export or option named "${name.slice(0, 40)}…" (${name.length} characters; a name has at most ${MAX_NAME_LENGTH}).`,
+		{ hint: `${CLI} for the list of blocks` },
+	);
+}
+
+/**
  * Declarations named `name` (exact case first), else the declaration a public name of @aws-blocks/blocks is
- * (`DTPutOptions`), else the declarations that have a member `name`; `Owner.member` (`FileBucket.put`) is that
+ * (`KVPutOptions`), else the declarations that have a member `name`; `Owner.member` (`FileBucket.put`) is that
  * member of that declaration only, else of the nearest base it inherits the member from (`Auth.protect` is
  * AuthBase's protect), with a note that says so. `name` in the result is the name looked up (export, public or
  * member name). When the owner is an alias that leaves the member out (`Secret.put`), the block's report
@@ -1318,7 +1365,7 @@ function exportsList(index: DocsIndex, filters: string[]): string {
 		.sort(byName);
 	if (!shown.length) {
 		// No export has it, but a member or another package's name can: ConditionalCheckFailed is a member of
-		// DistributedTableErrors and the others, StandardSchemaV1 comes from @standard-schema/spec.
+		// KVStoreErrors and the others, StandardSchemaV1 comes from @standard-schema/spec.
 		const has = (n: string) => wanted.some((f) => n.toLowerCase().includes(f));
 		const members = [...index.members]
 			.filter(([m]) => has(m))
@@ -1427,7 +1474,7 @@ function listing(index: DocsIndex, version: string): string {
 
 function card(index: DocsIndex, name: string, decls: Declaration[], member: boolean): string {
 	const out: string[] = [];
-	// The blocks a class of which names the block (DistributedTable.put) come first, then the rest; at most
+	// The blocks a class of which names the block (KVStore.put) come first, then the rest; at most
 	// CARD_OWNERS print in full and the others are named, each with the lookup that prints it.
 	const named = (block: string) => index.blocks.find((b) => b.name === block)?.named ?? [];
 	const owners = [...new Set(decls.map((d) => d.block))].sort(
@@ -1448,7 +1495,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 		out.push(`${name}: member of ${shown.join(', ')} (${owners.map(packageOf).join(', ')})`);
 	} else {
 		// One line per declaration shown (once for overloads), with the name @aws-blocks/blocks exports it under
-		// (DTPutOptions for bb-distributed-table's PutOptions), or its own package when the umbrella does not.
+		// (KVPutOptions for bb-kv-store's PutOptions), or its own package when the umbrella does not.
 		const lines = new Set<string>();
 		for (const decl of decls.filter((d) => owners.slice(0, CARD_OWNERS).includes(d.block))) {
 			const refs = [...index.umbrellaExports].filter(([, v]) => v.block === decl.block && v.name === decl.name);
@@ -1619,7 +1666,7 @@ function docArgs(block: DocsBlock, file: string): string {
 
 /**
  * The section a heading names as written: its slug or title, a slug it starts, or a title with a word it starts.
- * `exact` keeps the doc's own title (level 1) at every tier (`production`: "DistributedTable: production settings")
+ * `exact` keeps the doc's own title (level 1) at every tier (`production`: "FileBucket: production settings")
  * but a subsection only by its slug or title, or a slug that a topic of several words starts (`Depth 3`: "Depth 3:
  * Fully custom UI"); one word that starts a subsection (`password`: "Password reset ends every session") is not it.
  */
@@ -1627,6 +1674,8 @@ function namedSection(text: string, wanted: string, exact = false): Section | un
 	const sections = parseSections(text);
 	const key = wanted.trim().toLowerCase();
 	const slug = slugify(key);
+	// `(` or an empty topic has no slug, and every slug starts with `''`: it names no section.
+	if (!slug) return undefined;
 	const wordStart = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(key)}`, 'iu');
 	return (
 		sections.find((s) => s.slug === slug || s.title.toLowerCase() === key) ??
@@ -1875,7 +1924,7 @@ function innermost(sections: Section[], line: number): Section | undefined {
  * more (`query` → Queries; shorter words such as `get` would land on "Getting started"); else the innermost
  * section, below the level-1 heading whose own lines are the doc's intro, of the first call (`table.get(`), then of
  * the first mention, since a list of method names (`get`, `put`, …) often comes first; else that of any mention.
- * A section found by a mention ends before its first subsection: the mention is in its own lines (DistributedTable's
+ * A section found by a mention ends before its first subsection: the mention is in its own lines (a block's
  * methods table under `## API`), which the subsections do not add to.
  */
 function sectionMentioning(text: string, words: string[]): Section | undefined {

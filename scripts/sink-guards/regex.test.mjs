@@ -30,6 +30,14 @@ const ALLOWLIST = [
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
 	},
 	{
+		at: 'packages/blocks/src/cli/docs.ts:1934',
+		reason: 'sectionMentioning(): `alternatives` is `words.map(escapeRegExp).join(\'|\')`, so each word is escaped; the scan does not follow `.map(escapeRegExp)`.',
+	},
+	{
+		at: 'packages/blocks/src/cli/docs.ts:1945',
+		reason: 'sectionMentioning(): the same escaped `alternatives` as the line above, followed by a call\'s `(`.',
+	},
+	{
 		at: 'packages/core/src/cors.ts:166',
 		reason: 'literalOriginPattern(): the origin goes through escapeOriginToPattern(), which escapes every metacharacter and anchors with ^…$.',
 	},
