@@ -154,6 +154,23 @@ describe('app-isolation rules — statements fail closed', () => {
 		}
 	});
 
+	test("named grants on layers, RDS (and its Data API) and S3 Vectors: another app's are outside, the app's own are inside", () => {
+		const grant = (action: string, resource: string) => rules(checkStatement({ Effect: 'Allow', Action: action, Resource: resource }, 'appa', 'p'));
+		const arn = (service: string, rest: string) => `arn:aws:${service}:us-east-1:111111111111:${rest}`;
+		const cases: [string, (app: string) => string][] = [
+			['lambda:GetLayerVersion', (a) => arn('lambda', `layer:${a}-deps:3`)],
+			['rds:DescribeDBClusters', (a) => arn('rds', `cluster:${a}-db`)],
+			['rds:DescribeDBInstances', (a) => arn('rds', `db:${a}-db-1`)],
+			['rds-data:ExecuteStatement', (a) => arn('rds', `cluster:${a}-db`)],
+			['s3vectors:QueryVectors', (a) => arn('s3vectors', `bucket/${a}-vectors`)],
+			['s3vectors:QueryVectors', (a) => arn('s3vectors', `bucket/${a}-vectors/index/docs`)],
+		];
+		for (const [action, resource] of cases) {
+			assert.deepStrictEqual(grant(action, resource('appb')), ['grant-outside-app'], resource('appb'));
+			assert.deepStrictEqual(grant(action, resource('appa')), [], resource('appa'));
+		}
+	});
+
 	test("another app's CDK asset bucket is outside; the app's own is inside", () => {
 		const read = (bucket: string) => ({ Effect: 'Allow', Action: 's3:GetObject', Resource: `arn:aws:s3:::${bucket}/*` });
 		assert.deepStrictEqual(checkStatement(read('cdk-appa-assets-111111111111-us-east-1'), 'appa', 'p'), []);

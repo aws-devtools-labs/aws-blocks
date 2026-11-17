@@ -193,9 +193,11 @@ const DATA_SERVICES = new Set([
 
 /**
  * Data services whose resource names the check doesn't read: named by id (DSQL
- * clusters, knowledge bases, AgentCore runtimes, KeyValueStores), or by names
- * CloudFormation generates without a `-` after the app id (ECS task-definition
- * families), or fenced by name in the platform's policies rather than here. For
+ * clusters, knowledge bases, AgentCore runtimes, KeyValueStores), matched by
+ * tag rather than name in the boundary (SNS topics, SES identities), or named by
+ * CloudFormation without a `-` after the app id (ECS task-definition families).
+ * RDS clusters and instances, the RDS Data API and S3 Vectors buckets are named
+ * `<id>-…` and read by name ({@link arnResourceName}). For
  * these, only a wildcard counts: `*`, or a resource whose name after its type
  * (`cluster/`, `cluster:`, `knowledge-base/`, `bucket/`, `identity/`, …) starts
  * with `*`.
@@ -203,12 +205,9 @@ const DATA_SERVICES = new Set([
 const WILDCARD_ONLY_SERVICES = new Set([
 	'sns',
 	'ses',
-	'rds',
-	'rds-data',
 	'dsql',
 	'bedrock',
 	'bedrock-agentcore',
-	's3vectors',
 	'ecs',
 	'cloudfront-keyvaluestore',
 ]);
@@ -297,7 +296,20 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			name = after('secret:', '\u0001');
 			break;
 		case 'lambda':
-			name = after('function:', ':');
+			// A function (`function:<name>[:qualifier]`) or a layer (`layer:<name>[:version]`).
+			name = after('function:', ':') ?? after('layer:', ':');
+			break;
+		case 'rds':
+			// A cluster or an instance (`cluster:<name>`, `db:<name>`), as the boundary fences
+			// them; the Data API names the cluster too. Other RDS resources: only a wildcard.
+			name =
+				after('cluster:', ':') ??
+				after('db:', ':') ??
+				(/^(?:[a-z][a-z-]*[/:])?\*/.test(rest) ? '*' : undefined);
+			break;
+		case 's3vectors':
+			// A vector bucket, or an index in one (`bucket/<name>[/index/<index>]`).
+			name = after('bucket/', '/');
 			break;
 		case 'logs':
 			name = after('log-group:', ':')?.replace(/^\/aws\/lambda\//, '');
