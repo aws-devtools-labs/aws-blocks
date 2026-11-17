@@ -71,6 +71,11 @@
 
 ### Other changes
 
+- The generated `Blocks` class has a `close()` that closes its
+  `BlocksClient`, as the Kotlin client's `Blocks` does. A call after it
+  throws `ClientClosedException`, and so does a call of an `OidcClient` that
+  one of its calls returned. A namespace named `close` gets the field
+  `close$`, as one named after an `Object` member does.
 - **Requires the `blocks_runtime` release with this change.**
 - A spec that names no providers, and an OIDC client inside a model, list,
   map or parameter, are still a plain `OidcClient`, unchanged.

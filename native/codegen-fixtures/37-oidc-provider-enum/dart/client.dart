@@ -64,11 +64,18 @@ class LegacyAuthApi {
 class Blocks {
   late final AuthApi auth;
   late final LegacyAuthApi legacyAuth;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     auth = AuthApi(client);
     legacyAuth = LegacyAuthApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

@@ -31,6 +31,10 @@ final channel = await blocks.api.getCursorChannel();
 channel.subscribe().listen((cursor) {
   print('${cursor.userId} moved to (${cursor.x}, ${cursor.y})');
 });
+
+// Done with the backend: free the HTTP client. Later calls throw
+// ClientClosedException.
+blocks.close();
 ```
 
 ## Packages
@@ -273,7 +277,7 @@ The enum is named `<Api class><Method>Provider`. Each value carries the name the
 |---|---|---|
 | `ApiException` | The server considered the request and said no: a JSON-RPC error at any HTTP status, or an auth route refusing a request | `message` (the server's), `status`, `name`, `retriable` |
 | `TransportException` | No usable JSON-RPC result came back: no response (refused connection, DNS, TLS, timeout), a non-2xx with no JSON-RPC error, or a body that is not a JSON-RPC envelope | `message`, `statusCode` (null when no response arrived), `cause` |
-| `ClientClosedException` | A call through a `BlocksClient` after `close()` | `message` |
+| `ClientClosedException` | A call after `Blocks.close()` (or `BlocksClient.close()`), including a call of an `OidcClient` one of its calls returned | `message` |
 | `TransferableException` | A `__blocks` descriptor could not be hydrated; `InvalidDescriptorException` names the `blocksType` and `missingField` | `message` |
 | `FileTransferException` | A file upload or download failed | `message`, `statusCode`, `cause` |
 | `RealtimeException` (sealed) | `RealtimeChannelClosedException` on a subscribe after close, `RealtimeConnectionException` when the WebSocket fails | `message`, `cause` |

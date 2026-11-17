@@ -304,11 +304,18 @@ class Servers {
 class Blocks {
   late final Api api;
   late final NsApi ns;
+  late final BlocksClient _client;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl ?? Servers.mainValX1, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
     ns = NsApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 
