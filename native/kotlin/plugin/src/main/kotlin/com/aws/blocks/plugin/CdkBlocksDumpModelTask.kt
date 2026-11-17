@@ -21,7 +21,7 @@ import org.gradle.work.DisableCachingByDefault
  * Not cacheable because output goes to stdout, not a file.
  */
 @DisableCachingByDefault(because = "Output goes to stdout, not a file — nothing to cache")
-abstract class AwsBlocksDumpModelTask : DefaultTask() {
+abstract class CdkBlocksDumpModelTask : DefaultTask() {
 
     /** The OpenRPC JSON spec file to parse and dump. */
     @get:InputFile

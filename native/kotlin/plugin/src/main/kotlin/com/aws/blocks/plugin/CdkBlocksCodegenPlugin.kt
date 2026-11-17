@@ -16,7 +16,7 @@ import org.jetbrains.kotlin.konan.target.Family
 import org.jetbrains.kotlin.konan.target.KonanTarget
 
 /**
- * Gradle plugin that registers an [AwsBlocksCodegenTask] to generate
+ * Gradle plugin that registers an [CdkBlocksCodegenTask] to generate
  * Kotlin source files from an OpenRPC spec.
  *
  * Supports three project types:
@@ -30,7 +30,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
  *     id("com.aws.blocks.kotlin")
  * }
  *
- * awsBlocks {
+ * cdkBlocks {
  *     apiSpec = file("path/to/blocks.spec.json")
  *     packageName.set("com.myapp.generated")
  * }
@@ -40,11 +40,11 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
  * }
  * ```
  */
-class AwsBlocksCodegenPlugin : Plugin<Project> {
+class CdkBlocksCodegenPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create(
-            "awsBlocks",
-            AwsBlocksExtension::class.java,
+            "cdkBlocks",
+            CdkBlocksExtension::class.java,
             project,
         )
 
@@ -57,7 +57,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             }
         }
 
-        project.tasks.register("awsBlocksDumpModel", AwsBlocksDumpModelTask::class.java) {
+        project.tasks.register("blocksDumpModel", CdkBlocksDumpModelTask::class.java) {
             it.apiSpecFile.set(extension.apiSpec)
         }
 
@@ -97,8 +97,8 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
      * are known.
      */
     private fun configureCodegenTask(
-        task: AwsBlocksCodegenTask,
-        extension: AwsBlocksExtension,
+        task: CdkBlocksCodegenTask,
+        extension: CdkBlocksExtension,
         outputDir: Provider<Directory>,
         relayToRequirement: RelayToRequirement,
     ) {
@@ -112,10 +112,10 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         task.outputDirectory.set(outputDir)
     }
 
-    private fun configureKmp(project: Project, extension: AwsBlocksExtension) {
-        val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/commonMain")
+    private fun configureKmp(project: Project, extension: CdkBlocksExtension) {
+        val outputDir = project.layout.buildDirectory.dir("generated/source/cdk/blocks/commonMain")
 
-        val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
+        val task = project.tasks.register("blocksCodegen", CdkBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
@@ -154,37 +154,37 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
         }
     }
 
-    private fun configureAndroid(project: Project, extension: AwsBlocksExtension) {
+    private fun configureAndroid(project: Project, extension: CdkBlocksExtension) {
         val androidComponents = project.extensions.getByType(AndroidComponentsExtension::class.java)
 
         injectOidcManifestPlaceholder(project, extension)
 
         androidComponents.onVariants { variant ->
             val variantName = variant.name
-            val taskName = "awsBlocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
+            val taskName = "blocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
 
             val outputDir = project.layout.buildDirectory.dir(
-                "generated/source/aws/blocks/$variantName",
+                "generated/source/cdk/blocks/$variantName",
             )
 
-            val task = project.tasks.register(taskName, AwsBlocksCodegenTask::class.java)
+            val task = project.tasks.register(taskName, CdkBlocksCodegenTask::class.java)
             task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.Required) }
 
-            variant.sources.java?.addGeneratedSourceDirectory(task, AwsBlocksCodegenTask::outputDirectory)
+            variant.sources.java?.addGeneratedSourceDirectory(task, CdkBlocksCodegenTask::outputDirectory)
         }
     }
 
-    private fun configureJvm(project: Project, extension: AwsBlocksExtension) {
-        val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/main")
+    private fun configureJvm(project: Project, extension: CdkBlocksExtension) {
+        val outputDir = project.layout.buildDirectory.dir("generated/source/cdk/blocks/main")
 
-        val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
+        val task = project.tasks.register("blocksCodegen", CdkBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         project.extensions.getByType(JavaPluginExtension::class.java)
             .sourceSets.getByName("main").java.srcDir(task.map { it.outputDirectory })
     }
 
-    private fun injectOidcManifestPlaceholder(project: Project, extension: AwsBlocksExtension) {
+    private fun injectOidcManifestPlaceholder(project: Project, extension: CdkBlocksExtension) {
         // On older AGP (through 8.9 at least) the multiplatform Android plugin's components
         // extension did not implement AndroidComponentsExtension — it extended AndroidComponents
         // and offered `onVariant`, not `onVariants` — so there is nothing of this type to find.
