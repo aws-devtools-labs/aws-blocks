@@ -83,9 +83,27 @@ class PooledConnection {
 
   /// Removes [subscriber] without calling its `onEnd`. Closes the socket when
   /// no subscriber is left.
+  ///
+  /// When [subscriber] was its channel's last subscriber and the socket stays
+  /// open for other channels, sends `{"action":"unsubscribe"}` for the
+  /// channel, so the server stops delivering it. Closing the socket ends
+  /// every subscription on the server, so no frame is needed then.
   void remove(RealtimeSubscriber subscriber) {
-    _subscribers.remove(subscriber);
-    if (_subscribers.isEmpty) _shutDown();
+    _detach(subscriber, serverEnded: false);
+  }
+
+  /// Removes [subscriber]. [serverEnded] is true when the server already
+  /// ended the channel's subscription, which needs no unsubscribe.
+  void _detach(RealtimeSubscriber subscriber, {required bool serverEnded}) {
+    if (_dead || !_subscribers.remove(subscriber)) return;
+    if (_subscribers.isEmpty) {
+      _shutDown();
+      return;
+    }
+    if (serverEnded) return;
+    final channel = subscriber.channel;
+    if (_subscribers.any((s) => s.channel == channel)) return;
+    socket.sink.add(jsonEncode({'action': 'unsubscribe', 'channel': channel}));
   }
 
   void _onFrame(dynamic data) {
@@ -118,7 +136,7 @@ class PooledConnection {
               .where((s) => s.channel == channel)
               .toList();
           for (final s in ended) {
-            remove(s);
+            _detach(s, serverEnded: true);
             s.onEnd(
               RealtimeSubscriptionEndedException(
                 channel,

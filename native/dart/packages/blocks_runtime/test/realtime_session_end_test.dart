@@ -49,6 +49,9 @@ class FakeSocket with StreamChannelMixin<dynamic> implements WebSocketChannel {
 
   List<Map<String, dynamic>> get pings =>
       sent.where((f) => f['action'] == 'ping').toList();
+
+  List<Map<String, dynamic>> get unsubscribes =>
+      sent.where((f) => f['action'] == 'unsubscribe').toList();
 }
 
 class _FakeSink implements WebSocketSink {
@@ -411,6 +414,110 @@ void main() {
 
       expect(events.map((e) => '$e'), ['data(hi)']);
       expect(sockets.single.clientClosed, isFalse);
+    });
+  });
+
+  group('unsubscribe frame', () {
+    test(
+      'is sent when a channel\'s last subscriber leaves an open socket',
+      () async {
+        final room = _channel('room');
+        final other = _channel('other');
+        addTearDown(room.close);
+        addTearDown(other.close);
+        final first = room.subscribe().listen(null);
+        final second = room.subscribe().listen(null);
+        _record(other.subscribe());
+        final socket = sockets.single;
+
+        await first.cancel();
+        expect(socket.unsubscribes, isEmpty, reason: 'room still has one');
+        await second.cancel();
+        expect(socket.unsubscribes, [
+          {'action': 'unsubscribe', 'channel': 'room'},
+        ]);
+        expect(socket.clientClosed, isFalse);
+      },
+    );
+
+    test('is sent by close() while other channels keep the socket', () async {
+      final closed = _channel('closed');
+      final other = _channel('other');
+      addTearDown(other.close);
+      _record(closed.subscribe());
+      _record(other.subscribe());
+
+      closed.close();
+      expect(sockets.single.unsubscribes, [
+        {'action': 'unsubscribe', 'channel': 'closed'},
+      ]);
+    });
+
+    test('is sent when a decode failure ends the subscription', () async {
+      final room = _channel('room');
+      final other = _channel('other');
+      addTearDown(room.close);
+      addTearDown(other.close);
+      _record(room.subscribe());
+      _record(other.subscribe());
+
+      sockets.single.send({
+        'type': 'message',
+        'channel': 'room',
+        'data': {'count': 1},
+      });
+      await pumpEventQueue();
+
+      expect(sockets.single.unsubscribes, [
+        {'action': 'unsubscribe', 'channel': 'room'},
+      ]);
+    });
+
+    test('is not sent when the last subscriber closes the socket', () async {
+      final room = _channel('room');
+      final sub = room.subscribe().listen(null);
+      final socket = sockets.single;
+
+      await sub.cancel();
+      room.close();
+      expect(socket.clientClosed, isTrue);
+      expect(socket.unsubscribes, isEmpty);
+    });
+
+    test('is not sent for a subscription the server ended', () async {
+      final ended = _channel('ended');
+      final other = _channel('other');
+      addTearDown(ended.close);
+      addTearDown(other.close);
+      _record(ended.subscribe());
+      _record(other.subscribe());
+
+      sockets.single.send({
+        'type': 'error',
+        'channel': 'ended',
+        'code': 'token_expired',
+      });
+      await pumpEventQueue();
+      ended.close();
+
+      expect(sockets.single.unsubscribes, isEmpty);
+    });
+
+    test('is not sent after the socket closed', () async {
+      final a = _channel('a');
+      final b = _channel('b');
+      addTearDown(a.close);
+      addTearDown(b.close);
+      _record(a.subscribe());
+      _record(b.subscribe());
+      final socket = sockets.single;
+
+      socket.close(1001);
+      await pumpEventQueue();
+      a.close();
+      b.close();
+
+      expect(socket.unsubscribes, isEmpty);
     });
   });
 

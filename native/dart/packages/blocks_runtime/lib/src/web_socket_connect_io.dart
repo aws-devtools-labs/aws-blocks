@@ -15,7 +15,11 @@ WebSocketChannel connectWebSocket(Uri uri, Map<String, String> headers) {
     headers: extra.isEmpty ? null : extra,
     customClient: client,
   );
-  // The upgrade detaches the socket, so closing the client leaves it open.
+  // The upgrade detaches the socket from the client, so neither closing the
+  // client nor its idleTimeout (which applies only to pooled HTTP
+  // connections) affects it. The socket has no idle timeout of its own, and
+  // no protocol-level pingInterval is set, so only the realtime pool's JSON
+  // ping keeps it busy.
   channel.ready.whenComplete(client.close).ignore();
   return channel;
 }
