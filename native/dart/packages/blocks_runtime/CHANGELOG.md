@@ -26,9 +26,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   may hold other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
   block's cookie. On a 503 `SignOutIncompleteException` (the cookie was cleared
   but the server-side session was not removed) it does the same, then throws an
-  `OidcRequestException` with that `errorName`. Any other status, or a transport
-  error, now throws: the stored tokens are cleared, but the session cookie and
-  the state are kept. It used to ignore the response and drop the logout URL.
+  `OidcRequestException` with that `errorName`. Any other status, a transport
+  error or a cancelled request does the same: it clears this block's tokens,
+  removes this block's session cookie (the descriptor's `sessionCookieName`,
+  new `OidcClient.sessionCookieName`, or with an older backend the cookie its
+  sign-in set) and emits `OidcSignedOut`, then throws. It used to ignore the response and drop the
+  logout URL.
 - `OidcClient.restore()` returns `Future<OidcUser?>` and reads the backend's
   session route (`GET <exchangePath's directory>/session`, new
   `OidcClient.sessionPath`) with the session cookie, plus the stored access

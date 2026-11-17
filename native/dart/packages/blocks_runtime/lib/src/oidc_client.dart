@@ -54,6 +54,12 @@ class OidcClient implements AuthProvider {
   /// route beside it.
   final String sessionPath;
 
+  /// The name of the block's session cookie (`auth_<block id>` for an
+  /// `Auth` block), which [signOut] removes when the server couldn't. Null
+  /// when the descriptor doesn't send it, as an older backend's doesn't; the
+  /// client then removes the cookies its own sign-in set.
+  final String? sessionCookieName;
+
   /// The auth block's default authorize-params route
   /// (`POST /aws-blocks/auth/authorize-params/<provider>`), used when neither
   /// the constructor nor the descriptor names one.
@@ -153,6 +159,7 @@ class OidcClient implements AuthProvider {
     this.authorizeParamsBasePath = defaultAuthorizeParamsBasePath,
     this.callbackPath = defaultCallbackPath,
     String? sessionPath,
+    this.sessionCookieName,
     SessionStore? sessionStore,
     http.Client? httpClient,
   }) : sessionPath =
@@ -507,11 +514,14 @@ class OidcClient implements AuthProvider {
     _generation++;
 
     // Capture the session cookie set by the backend so the owning
-    // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow).
+    // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow),
+    // and remember its name so a failed sign-out can remove it.
+    final before = sessionStore.cookies;
     sessionStore.setCookies(
       response.headers['set-cookie'],
       requestUri: responseUrl,
     );
+    await _rememberSessionCookies(before);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OidcExchangeException(
@@ -606,22 +616,28 @@ class OidcClient implements AuthProvider {
   /// otherwise the next sign-in can complete without asking the user. This
   /// client doesn't open it.
   ///
-  /// - 2xx: clears the stored tokens, emits [OidcSignedOut] and returns the
-  ///   `logoutUrl` the server sent.
+  /// Whatever the outcome, the client signs out locally: it clears this
+  /// block's stored tokens, removes this block's session cookie and emits
+  /// [OidcSignedOut]. Then:
+  ///
+  /// - 2xx: returns the `logoutUrl` the server sent.
   /// - 503 with `SignOutIncompleteException`: the server cleared the cookie
-  ///   but couldn't remove its session. Clears the stored tokens, emits
-  ///   [OidcSignedOut], then throws an [OidcRequestException] with that
-  ///   [OidcRequestException.errorName].
+  ///   but couldn't remove its session. Throws an [OidcRequestException] with
+  ///   that [OidcRequestException.errorName].
   /// - Any other status throws an [OidcRequestException], and a transport
-  ///   failure throws the HTTP client's error. Both clear the stored tokens
-  ///   but keep the session cookie and the state.
+  ///   failure or a cancelled request rethrows the HTTP client's error. The
+  ///   server may still hold the session; signing in again replaces it.
   ///
   /// A [restore] or a token refresh still in flight when the sign-out
   /// finishes doesn't apply its result.
   ///
   /// The session store is never cleared, because it may hold the cookies of
-  /// other `Auth` blocks on the same app. This block's cookie is removed by
-  /// the `Set-Cookie` the server sends on the response.
+  /// other `Auth` blocks on the same app. This block's session cookie is the
+  /// one named [sessionCookieName]: the server's `Set-Cookie` removes it on a
+  /// 2xx, and the client removes it itself otherwise. With a descriptor from
+  /// an older backend, which doesn't send [sessionCookieName], the client
+  /// removes the cookies its own sign-in set instead, so a session signed in
+  /// before this version keeps its cookie after a failed sign-out.
   Future<Uri?> signOut() async {
     await _ready;
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
@@ -634,23 +650,18 @@ class OidcClient implements AuthProvider {
         headers: _jsonHeaders(url),
         body: '{}',
       );
-    } catch (_) {
-      _generation++;
-      await _clearTokens();
-      rethrow;
+    } catch (e, stackTrace) {
+      // A transport failure or a cancelled request.
+      await _signOutLocally(url);
+      Error.throwWithStackTrace(e, stackTrace);
     }
-    _generation++;
-    await _clearTokens();
     sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
+    await _signOutLocally(url);
 
     final status = response.statusCode;
-    if (status >= 200 && status < 300) {
-      _emit(OidcSignedOut());
-      return _logoutUrl(response.body);
-    }
+    if (status >= 200 && status < 300) return _logoutUrl(response.body);
     final name = _errorName(response);
     if (status == 503 && name == 'SignOutIncompleteException') {
-      _emit(OidcSignedOut());
       throw OidcRequestException(
         'Signed out locally, but the backend could not remove its session',
         statusCode: status,
@@ -662,6 +673,53 @@ class OidcClient implements AuthProvider {
       statusCode: status,
       errorName: name,
     );
+  }
+
+  /// The [tokenStore] key, under this block's prefix, of the names of the
+  /// cookies this block's sign-in set.
+  static const _sessionCookiesKey = 'session_cookies';
+
+  /// The names of the cookies this block's sign-ins set.
+  Future<Set<String>> _sessionCookieNames() async {
+    final stored = await tokenStore.get(_key(_sessionCookiesKey));
+    if (stored == null) return {};
+    try {
+      final json = jsonDecode(stored);
+      return json is List ? json.whereType<String>().toSet() : {};
+    } on FormatException {
+      return {};
+    }
+  }
+
+  /// Records the cookies a sign-in response set or changed in
+  /// [sessionStore], compared with [before], as this block's.
+  Future<void> _rememberSessionCookies(Map<String, String> before) async {
+    if (sessionCookieName != null) return;
+    final set = [
+      for (final MapEntry(:key, :value) in sessionStore.cookies.entries)
+        if (before[key] != value) key,
+    ];
+    if (set.isEmpty) return;
+    final names = {...await _sessionCookieNames(), ...set}.toList()..sort();
+    await tokenStore.set(_key(_sessionCookiesKey), jsonEncode(names));
+  }
+
+  /// Signs out locally after a sign-out request, whatever its outcome:
+  /// removes this block's session cookie from [sessionStore] as a request to
+  /// [url] would send it ([sessionCookieName], or else the cookies its
+  /// sign-in set), clears its stored tokens and emits [OidcSignedOut].
+  Future<void> _signOutLocally(Uri url) async {
+    _generation++;
+    final names = switch (sessionCookieName) {
+      final name? => {name},
+      null => await _sessionCookieNames(),
+    };
+    for (final name in names) {
+      sessionStore.setCookies('$name=; Max-Age=0', requestUri: url);
+    }
+    await tokenStore.delete(_key(_sessionCookiesKey));
+    await _clearTokens();
+    _emit(OidcSignedOut());
   }
 
   /// The `logoutUrl` of a sign-out response body, or null when it has none.
@@ -831,7 +889,8 @@ class OidcClient implements AuthProvider {
   /// `exchangePath`, as `Auth` mounts them; so do `signOutPath`,
   /// `callbackPath` and `authorizeParamsBasePath`. Missing `providers` or
   /// `providerConfigs` mean none, and a provider config without a `kind` gets
-  /// an empty one.
+  /// an empty one. `sessionCookieName`, when sent, is the block's session
+  /// cookie, which [signOut] removes when the server couldn't.
   static OidcClient fromJson(
     Map<String, dynamic> descriptor, {
     required String baseUrl,
@@ -866,6 +925,10 @@ class OidcClient implements AuthProvider {
           descriptor['refreshPath'] as String? ?? '$exchangePath/refresh',
       sessionPath: descriptor['sessionPath'] as String? ?? '$base/session',
       signOutPath: descriptor['signOutPath'] as String? ?? '$base/signout',
+      sessionCookieName: switch (descriptor['sessionCookieName']) {
+        final String name when name.isNotEmpty => name,
+        _ => null,
+      },
       authorizeParamsBasePath:
           descriptor['authorizeParamsBasePath'] as String? ??
           '$base/authorize-params',

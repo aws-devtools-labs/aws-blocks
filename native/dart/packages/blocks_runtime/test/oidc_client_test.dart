@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
@@ -749,30 +750,28 @@ void main() {
     );
 
     for (final status in [400, 404, 500, 503]) {
-      test(
-        '$status: throws, clears tokens, keeps the cookie and state',
-        () async {
-          final t = await signOutClient(
-            (_) async => http.Response(jsonEncode({'error': 'no'}), status),
-          );
+      test('$status: signs out locally, then throws', () async {
+        final t = await signOutClient(
+          (_) async => http.Response(jsonEncode({'error': 'no'}), status),
+        );
 
-          await expectLater(
-            t.client.signOut(),
-            throwsA(
-              isA<OidcRequestException>().having(
-                (e) => e.statusCode,
-                'statusCode',
-                status,
-              ),
+        await expectLater(
+          t.client.signOut(),
+          throwsA(
+            isA<OidcRequestException>().having(
+              (e) => e.statusCode,
+              'statusCode',
+              status,
             ),
-          );
-          await Future<void>.delayed(Duration.zero);
-          expect(t.states, isEmpty);
-          expect(await t.store.get('access_token'), isNull);
-          expect(await t.store.get('refresh_token'), isNull);
-          expect(t.session.cookies['blocks_session'], 'live');
-        },
-      );
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(t.states, [isA<OidcSignedOut>()]);
+        expect(await t.store.get('access_token'), isNull);
+        expect(await t.store.get('refresh_token'), isNull);
+        // Not a cookie this client's sign-in set.
+        expect(t.session.cookies['blocks_session'], 'live');
+      });
     }
 
     test('keeps the cookies of other Auth blocks in the store', () async {
@@ -808,19 +807,175 @@ void main() {
       expect(session.cookies, isEmpty);
     });
 
-    test('a transport error throws, clears tokens, keeps the state', () async {
-      final t = await signOutClient(
-        (_) async => throw http.ClientException('offline'),
+    /// A client of the block at `/aws-blocks/auth/sso`, signed in through
+    /// its exchange, which set the block's session cookie `auth_app-sso`,
+    /// on a session store that also holds another block's cookie. Its
+    /// sign-out route is answered by [signOut].
+    Future<
+      ({
+        OidcClient client,
+        InMemoryTokenStore store,
+        InMemorySessionStore session,
+        List<OidcAuthState> states,
+      })
+    >
+    signedIn(Future<http.Response> Function() signOut) async {
+      final store = InMemoryTokenStore();
+      final session = InMemorySessionStore()
+        ..setCookies('auth_app-auth=main; Path=/', requestUri: origin);
+      final client = OidcClient.fromJson(
+        {
+          '__blocks': 'oidc/client',
+          'providers': ['google'],
+          'exchangePath': '/aws-blocks/auth/sso/exchange',
+        },
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: store,
+        sessionStore: session,
+        httpClient: MockClient((req) async {
+          if (req.url.path.endsWith('/signout')) return signOut();
+          return http.Response(
+            jsonEncode({
+              'user': {'userId': 'u1', 'username': 'alice'},
+              'accessToken': 'at',
+              'refreshToken': 'rt',
+              'expiresIn': 3600,
+            }),
+            200,
+            headers: {'set-cookie': 'auth_app-sso=sso; Path=/; HttpOnly'},
+          );
+        }),
+      );
+      await client.exchange(
+        code: 'code',
+        verifier: 'verifier',
+        callbackUrl: 'myapp://callback',
+        provider: 'google',
+        state: 'state',
+        nonce: 'nonce',
+      );
+      final states = <OidcAuthState>[];
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
+      return (client: client, store: store, session: session, states: states);
+    }
+
+    final failures = <String, (Future<http.Response> Function(), Matcher)>{
+      'a transport error': (
+        () async => throw http.ClientException('offline'),
+        isA<http.ClientException>(),
+      ),
+      'a 500': (
+        () async => http.Response(jsonEncode({'name': 'Boom'}), 500),
+        isA<OidcRequestException>().having((e) => e.statusCode, 'status', 500),
+      ),
+      'a cancelled request': (
+        () async => throw http.RequestAbortedException(),
+        isA<http.RequestAbortedException>(),
+      ),
+    };
+    for (final MapEntry(key: name, value: (answer, error))
+        in failures.entries) {
+      test('$name signs out locally, removes only this block\'s cookie, '
+          'then throws', () async {
+        final t = await signedIn(answer);
+        expect(t.session.cookies, {
+          'auth_app-auth': 'main',
+          'auth_app-sso': 'sso',
+        });
+
+        await expectLater(t.client.signOut(), throwsA(error));
+        await Future<void>.delayed(Duration.zero);
+
+        expect(t.states, [isA<OidcSignedOut>()]);
+        expect(t.client.authState, isA<OidcSignedOut>());
+        expect(await t.store.get('/aws-blocks/auth/sso/access_token'), isNull);
+        expect(await t.store.get('/aws-blocks/auth/sso/refresh_token'), isNull);
+        expect(t.session.cookies, {'auth_app-auth': 'main'});
+      });
+    }
+
+    test('a descriptor naming its session cookie removes exactly that cookie, '
+        'even after a relaunch', () async {
+      // An older client's sign-in recorded no cookie names: the app
+      // relaunches with the cookies but nothing else.
+      final store = InMemoryTokenStore();
+      final session = InMemorySessionStore()
+        ..setCookies('auth_app-auth=main; Path=/', requestUri: origin)
+        ..setCookies('auth_app-sso=sso; Path=/', requestUri: origin)
+        ..setCookies('other=keep; Path=/', requestUri: origin);
+      final client = OidcClient.fromJson(
+        {
+          '__blocks': 'oidc/client',
+          'providers': ['google'],
+          'exchangePath': '/aws-blocks/auth/sso/exchange',
+          'sessionCookieName': 'auth_app-sso',
+        },
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: store,
+        sessionStore: session,
+        httpClient: MockClient(
+          (_) async => throw http.ClientException('offline'),
+        ),
+      );
+      expect(client.sessionCookieName, 'auth_app-sso');
+
+      await expectLater(client.signOut(), throwsA(isA<http.ClientException>()));
+
+      expect(session.cookies, {'auth_app-auth': 'main', 'other': 'keep'});
+      expect(client.authState, isA<OidcSignedOut>());
+    });
+
+    test('without sessionCookieName, a relaunch keeps the cookie', () async {
+      final session = InMemorySessionStore()
+        ..setCookies('auth_app-sso=sso; Path=/', requestUri: origin);
+      final client = OidcClient.fromJson(
+        {
+          '__blocks': 'oidc/client',
+          'exchangePath': '/aws-blocks/auth/sso/exchange',
+        },
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: InMemoryTokenStore(),
+        sessionStore: session,
+        httpClient: MockClient((_) async => http.Response('{}', 500)),
+      );
+      expect(client.sessionCookieName, isNull);
+
+      await expectLater(client.signOut(), throwsA(isA<OidcRequestException>()));
+      expect(session.cookies, {'auth_app-sso': 'sso'});
+    });
+
+    test('a restore overtaken by a failed sign-out stays signed out', () async {
+      final session = Completer<http.Response>();
+      final store = InMemoryTokenStore();
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        tokenStore: store,
+        httpClient: MockClient((req) async {
+          if (req.url.path.endsWith('/session')) return session.future;
+          throw http.ClientException('offline');
+        }),
       );
 
-      await expectLater(
-        t.client.signOut(),
-        throwsA(isA<http.ClientException>()),
-      );
+      final restored = client.restore();
       await Future<void>.delayed(Duration.zero);
-      expect(t.states, isEmpty);
-      expect(await t.store.get('refresh_token'), isNull);
-      expect(t.session.cookies['blocks_session'], 'live');
+      await expectLater(client.signOut(), throwsA(isA<http.ClientException>()));
+      session.complete(
+        http.Response(
+          jsonEncode({
+            'user': {'userId': 'u1', 'username': 'a'},
+          }),
+          200,
+        ),
+      );
+
+      expect(await restored, isNull);
+      expect(client.authState, isA<OidcSignedOut>());
     });
   });
 
