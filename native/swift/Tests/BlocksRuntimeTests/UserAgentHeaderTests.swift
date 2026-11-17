@@ -10,11 +10,10 @@ import XCTest
 
 final class UserAgentHeaderTests: XCTestCase {
 
-    private final class NoopWebSocketDelegate: WebSocketDelegate {
-        func onOpen(_ webSocket: URLSessionWebSocketTask) {}
-        func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {}
-        func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {}
-        func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {}
+    private final class NoopWebSocketDelegate: RealtimeSocketListener {
+        func onOpen(_ socket: RealtimeSocket) {}
+        func onMessage(_ text: String) {}
+        func onFailure(_ error: Error) {}
     }
 
     /// True if the head has a header whose name equals `name` (case-insensitive) and value

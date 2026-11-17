@@ -46,6 +46,25 @@ final class RealtimeChannelTests: XCTestCase {
         XCTAssertNil(RealtimeFrame.payload(from: "not json", channel: "c"))
     }
 
+    func testFrameParsesErrorFrameForTheChannel() {
+        let text = #"{"type":"error","channel":"c","code":"token_expired","message":"expired"}"#
+        XCTAssertEqual(
+            RealtimeFrame.parse(text, channel: "c"),
+            .error(channel: "c", code: "token_expired", message: "expired")
+        )
+    }
+
+    func testFrameParsesErrorFrameWithoutChannelForEverySubscriber() {
+        let text = #"{"type":"error","message":"Invalid channel"}"#
+        XCTAssertEqual(RealtimeFrame.parse(text, channel: "c"), .error(channel: nil, code: nil, message: "Invalid channel"))
+        XCTAssertEqual(RealtimeFrame.parse(text, channel: "d"), .error(channel: nil, code: nil, message: "Invalid channel"))
+    }
+
+    func testFrameIgnoresErrorFrameForAnotherChannel() {
+        let text = #"{"type":"error","channel":"other","code":"access_revoked","message":"revoked"}"#
+        XCTAssertNil(RealtimeFrame.parse(text, channel: "c"))
+    }
+
     func testFromJSONParsesDescriptor() {
         let json: [String: Any] = [
             "channel": "cursors",

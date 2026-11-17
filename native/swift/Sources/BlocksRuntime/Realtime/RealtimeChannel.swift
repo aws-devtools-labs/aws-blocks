@@ -17,7 +17,39 @@ private enum RealtimeChannelWebSocketSession {
 
 /// Parsing of server WebSocket frames. Non-generic and internal so tests can
 /// exercise it without a socket.
-enum RealtimeFrame {
+enum RealtimeFrame: Equatable {
+    /// A `message` frame for the channel, with its payload bytes.
+    case message(Data)
+    /// An `error` frame for the channel (`channel` set) or for the whole socket (`channel` nil).
+    case error(channel: String?, code: String?, message: String)
+
+    /// Parses `text` as seen by a subscriber of `channel`. Returns nil for a frame the subscriber ignores: a control
+    /// frame such as `subscribe_success`, a message or error frame for another channel, or non-JSON.
+    static func parse(_ text: String, channel: String) -> RealtimeFrame? {
+        guard let raw = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              let type = json["type"] as? String else {
+            return nil
+        }
+        let frameChannel = json["channel"] as? String
+        switch type {
+        case "message":
+            guard frameChannel == channel, let data = payload(of: json) else { return nil }
+            return .message(data)
+        case "error":
+            // An error frame with no channel is about the socket, so every subscriber on it gets it.
+            if let frameChannel, frameChannel != channel { return nil }
+            let message = json["message"] as? String
+            return .error(
+                channel: frameChannel,
+                code: json["code"] as? String,
+                message: message ?? (frameChannel == nil ? "Realtime server error" : "Subscription ended")
+            )
+        default:
+            return nil
+        }
+    }
+
     /// Returns the payload bytes of a `message` frame for `channel`, or nil for
     /// any other frame (control frames such as `subscribe_success`, a different
     /// channel, or non-JSON).
@@ -27,13 +59,12 @@ enum RealtimeFrame {
     /// clients do. Reading only `payload` drops every message from AWS, which is
     /// why subscribe worked against the mock but not a deployed backend.
     static func payload(from text: String, channel: String) -> Data? {
-        guard let raw = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
-              let type = json["type"] as? String, type == "message",
-              let msgChannel = json["channel"] as? String, msgChannel == channel,
-              let payload = json["data"] ?? json["payload"] else {
-            return nil
-        }
+        guard case .message(let data) = parse(text, channel: channel) else { return nil }
+        return data
+    }
+
+    private static func payload(of json: [String: Any]) -> Data? {
+        guard let payload = json["data"] ?? json["payload"] else { return nil }
         return try? JSONSerialization.data(withJSONObject: payload)
     }
 }
@@ -56,9 +87,27 @@ enum RealtimeFrame {
 ///     print("Cursor: \(position)")
 /// }
 /// ```
+///
+/// A subscription can end while the app is still iterating: the channel token expires after about an hour, the
+/// backend revokes the user's access, or the socket drops. Each of those finishes the stream with a
+/// ``RealtimeError``. To keep receiving, call the API method that returned the channel again and subscribe to the
+/// new handle:
+///
+/// ```swift
+/// do {
+///     for try await position in channel.subscribe() { draw(position) }
+/// } catch RealtimeError.subscriptionEnded(_, "token_expired", _, _) {
+///     let fresh = try await blocks.api.realtimeGetChannel(channel: "room-1")
+///     // subscribe to `fresh`
+/// } catch RealtimeError.connectionFailed {
+///     // the socket dropped, for example while the app was in the background: get the channel again
+/// }
+/// ```
+///
+/// The SDK never repeats that call itself and does not reconnect on its own.
 public final class RealtimeChannel<T> {
 
-    private var webSocketSession: WebSocketSession { RealtimeChannelWebSocketSession.shared }
+    private let webSocketSession: WebSocketSession
 
     /// The channel name to subscribe to.
     public let channel: String
@@ -81,7 +130,7 @@ public final class RealtimeChannel<T> {
 
     private var closed = false
     private let lock = NSLock()
-    private var activeListeners: [ChannelWebSocketDelegate] = []
+    private var activeListeners: [ChannelListener<T>] = []
 
     /// Creates a RealtimeChannel.
     ///
@@ -90,15 +139,33 @@ public final class RealtimeChannel<T> {
     ///   - wsUrl: The WebSocket endpoint URL.
     ///   - token: The authentication token.
     ///   - deserializer: Function to convert raw payload bytes into instances of T.
-    public init(
+    public convenience init(
         channel: String,
         wsUrl: String,
         token: String,
         deserializer: @escaping (Data) throws -> T
     ) {
+        self.init(
+            channel: channel,
+            wsUrl: wsUrl,
+            token: token,
+            webSocketSession: RealtimeChannelWebSocketSession.shared,
+            deserializer: deserializer
+        )
+    }
+
+    /// Creates a RealtimeChannel on a given socket pool. For tests.
+    init(
+        channel: String,
+        wsUrl: String,
+        token: String,
+        webSocketSession: WebSocketSession,
+        deserializer: @escaping (Data) throws -> T
+    ) {
         self.channel = channel
         self.wsUrl = wsUrl
         self.token = token
+        self.webSocketSession = webSocketSession
         self.deserializer = deserializer
     }
 
@@ -214,9 +281,22 @@ public final class RealtimeChannel<T> {
     /// Returns an `AsyncThrowingStream` that emits typed messages received on this channel.
     ///
     /// Establishes a WebSocket connection, authenticates, and subscribes to
-    /// messages on the configured channel.
+    /// messages on the configured channel. It returns at once and does not wait for the server to confirm the
+    /// subscription, so a message published before the server confirms can be missed. A refused subscribe finishes
+    /// the stream with `RealtimeError.subscriptionEnded`.
     ///
-    /// - Throws: `RealtimeError.channelClosed` if called after `close()`.
+    /// Subscriptions on the same `wsUrl` and token share one WebSocket. While it has a subscriber, the SDK sends the
+    /// keep-alive `{"action":"ping"}` every 9 minutes, as the web client does. The server re-checks each subscription
+    /// on that ping, and that is how an expired or revoked one is reported.
+    ///
+    /// The stream finishes normally only when the app cancels its iteration or calls ``close()``. Otherwise it
+    /// finishes throwing:
+    /// - `RealtimeError.subscriptionEnded` when the server ends this channel's subscription, with the server's
+    ///   `code` (`"token_expired"`, `"access_revoked"`, `"principal_mismatch"`, or `nil` for a refused subscribe);
+    /// - `RealtimeError.connectionFailed` when the socket can't open, fails, or is closed by the server or the
+    ///   gateway, or when the server sends an error frame that names no channel;
+    /// - the deserializer's error, usually a `DecodingError`, when a message doesn't decode;
+    /// - `RealtimeError.channelClosed` if called after `close()`.
     public func subscribe() -> AsyncThrowingStream<T, Error> {
         lock.lock()
         if closed {
@@ -227,11 +307,12 @@ public final class RealtimeChannel<T> {
 
         let channelName = channel
         let channelToken = token
+        let wsUrl = wsUrl
         let deserializer = deserializer
         let webSocketSession = webSocketSession
 
         return AsyncThrowingStream { continuation in
-            let listener = ChannelWebSocketDelegate(
+            let listener = ChannelListener(
                 channelName: channelName,
                 channelToken: channelToken,
                 deserializer: deserializer,
@@ -239,26 +320,32 @@ public final class RealtimeChannel<T> {
             )
 
             self.lock.lock()
+            if self.closed {
+                self.lock.unlock()
+                continuation.finish(throwing: RealtimeError.channelClosed)
+                return
+            }
             self.activeListeners.append(listener)
             self.lock.unlock()
 
-            do {
-                try webSocketSession.acquire(wsUrl: self.wsUrl, token: self.token, listener: listener)
-            } catch {
-                continuation.finish(throwing: error)
-                return
-            }
-
+            // Set before acquiring, so every end, including one that happens during acquire, leaves the pool.
             continuation.onTermination = { @Sendable _ in
                 self.lock.lock()
                 self.activeListeners.removeAll { $0 === listener }
                 self.lock.unlock()
-                webSocketSession.release(wsUrl: self.wsUrl, token: self.token, listener: listener)
+                webSocketSession.release(wsUrl: wsUrl, token: channelToken, listener: listener)
+            }
+
+            do {
+                try webSocketSession.acquire(wsUrl: wsUrl, token: channelToken, listener: listener)
+            } catch {
+                continuation.finish(throwing: error)
             }
         }
     }
 
     /// Terminates the WebSocket connection and completes all active streams.
+    /// Each active stream finishes normally, without an error.
     /// After calling close, `subscribe()` will return a stream that immediately throws.
     public func close() {
         lock.lock()
@@ -267,8 +354,10 @@ public final class RealtimeChannel<T> {
         activeListeners.removeAll()
         lock.unlock()
 
+        // Finishing a stream runs its onTermination, which releases the listener from the pool and closes the socket
+        // when it was the last one.
         for listener in listeners {
-            webSocketSession.release(wsUrl: wsUrl, token: token, listener: listener)
+            listener.finish()
         }
     }
 }
@@ -277,18 +366,16 @@ extension RealtimeChannel: Encodable {}
 
 extension RealtimeChannel: Decodable where T: Decodable {}
 
-// MARK: - ChannelWebSocketDelegate
+// MARK: - ChannelListener
 
-/// Internal listener that bridges WebSocketSession events into an AsyncThrowingStream.
-/// Uses closure-based type erasure instead of unsafeBitCast.
-private class ChannelWebSocketDelegate: WebSocketDelegate {
+/// Bridges one pooled socket's events into one subscriber's `AsyncThrowingStream`.
+private final class ChannelListener<T>: RealtimeSocketListener {
     private let channelName: String
     private let channelToken: String
-    private let onPayload: (Data) -> Void
-    private let onError: (Error) -> Void
-    private let onComplete: () -> Void
+    private let deserializer: (Data) throws -> T
+    private let continuation: AsyncThrowingStream<T, Error>.Continuation
 
-    init<T>(
+    init(
         channelName: String,
         channelToken: String,
         deserializer: @escaping (Data) throws -> T,
@@ -296,24 +383,16 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
     ) {
         self.channelName = channelName
         self.channelToken = channelToken
-        // Type-erase via closures — safe, no unsafeBitCast
-        self.onPayload = { data in
-            do {
-                let message = try deserializer(data)
-                continuation.yield(message)
-            } catch {
-                continuation.finish(throwing: error)
-            }
-        }
-        self.onError = { error in
-            continuation.finish(throwing: error)
-        }
-        self.onComplete = {
-            continuation.finish()
-        }
+        self.deserializer = deserializer
+        self.continuation = continuation
     }
 
-    func onOpen(_ webSocket: URLSessionWebSocketTask) {
+    /// Ends the stream normally. Used by `RealtimeChannel.close()`.
+    func finish() {
+        continuation.finish()
+    }
+
+    func onOpen(_ socket: RealtimeSocket) {
         let subscribeMsg = """
         {"action":"subscribe","channel":"\(channelName)","token":"\(channelToken)"}
         """
@@ -322,27 +401,44 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         // (`--self init-only`) removes an explicit `self.` outside initializers.
         let channel = channelName
         logger.debug("WS opened, subscribing to channel \(channel)")
-        webSocket.send(.string(subscribeMsg)) { error in
-            if let error {
+        Task {
+            do {
+                try await socket.send(subscribeMsg)
+            } catch {
+                // The receive loop reports the socket failure that caused this.
                 logger.error("Failed to send subscribe: \(error.localizedDescription)")
             }
         }
     }
 
-    func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
+    func onMessage(_ text: String) {
         // Message bodies are application data; log their size, not their content.
         logger.debug("WS message: \(text.utf8.count) bytes")
-        guard let payloadData = RealtimeFrame.payload(from: text, channel: channelName) else { return }
-        onPayload(payloadData)
+        switch RealtimeFrame.parse(text, channel: channelName) {
+        case .message(let data):
+            do {
+                continuation.yield(try deserializer(data))
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        case .error(let channel?, let code, let message):
+            logger.debug("Subscription to \(channel) ended: \(code ?? "no code")")
+            continuation.finish(throwing: RealtimeError.subscriptionEnded(
+                channel: channel,
+                code: code,
+                message: message,
+                underlyingError: nil
+            ))
+        case .error(nil, _, let message):
+            logger.error("Realtime server error: \(message)")
+            continuation.finish(throwing: RealtimeError.connectionFailed(message, nil))
+        case nil:
+            break
+        }
     }
 
-    func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
+    func onFailure(_ error: Error) {
         logger.error("WS failure: \(error.localizedDescription)")
-        onError(RealtimeError.connectionFailed("WebSocket failure", error))
-    }
-
-    func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {
-        logger.debug("WS closed: \(code) \(reason)")
-        onComplete()
+        continuation.finish(throwing: RealtimeError.connectionFailed("WebSocket failure", error))
     }
 }

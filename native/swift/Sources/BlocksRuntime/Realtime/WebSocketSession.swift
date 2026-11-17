@@ -11,6 +11,7 @@ import os
 private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "WebSocketSession")
 
 /// A managed WebSocket wrapper that tracks its connection key for session release.
+@available(*, deprecated, message: "Not used by RealtimeChannel. It will be removed in a future release.")
 public class WebSocketConnection {
     public let task: URLSessionWebSocketTask
     public let key: String
@@ -22,6 +23,7 @@ public class WebSocketConnection {
 }
 
 /// Callback interface for WebSocket events.
+@available(*, deprecated, message: "Not used by RealtimeChannel. It will be removed in a future release.")
 public protocol WebSocketDelegate: AnyObject {
     func onOpen(_ webSocket: URLSessionWebSocketTask)
     func onMessage(_ webSocket: URLSessionWebSocketTask, text: String)
@@ -29,92 +31,134 @@ public protocol WebSocketDelegate: AnyObject {
     func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String)
 }
 
-/// Reference-counted session that shares a single WebSocket connection
-/// per unique `wsUrl+token` combination, dispatching events to all
-/// registered delegates.
-///
-/// When the last delegate is removed, the underlying WebSocket is closed.
-class WebSocketSession {
+// MARK: - Socket abstraction
 
-    // MARK: - DispatchingListener
+/// The socket operations the pool uses. `URLSessionWebSocketTask` backs it in the app; tests pass a fake.
+protocol RealtimeSocket: AnyObject {
+    func resume()
+    /// Sends a text frame.
+    func send(_ text: String) async throws
+    /// Waits for the next frame. Returns `nil` for a frame that carries no text. Throws when the socket fails or
+    /// closes, including a close by the server or the gateway.
+    func receive() async throws -> String?
+    /// Closes the socket from this side.
+    func cancel(reason: String)
+}
 
-    private class DispatchingListener {
-        private var listeners: [WebSocketDelegate] = []
-        private var openWebSocket: URLSessionWebSocketTask?
-        private let lock = NSLock()
+/// Receives the events of one pooled socket.
+protocol RealtimeSocketListener: AnyObject {
+    /// The socket is open, or was already open when the listener joined. Send the subscribe frame here.
+    func onOpen(_ socket: RealtimeSocket)
+    /// A text frame arrived. Every listener on the socket gets every frame.
+    func onMessage(_ text: String)
+    /// The socket failed or was closed by the other side. The pool has already dropped it.
+    func onFailure(_ error: Error)
+}
 
-        func add(_ listener: WebSocketDelegate) {
-            lock.lock()
-            listeners.append(listener)
-            let webSocket = openWebSocket
-            lock.unlock()
+/// `RealtimeSocket` over `URLSessionWebSocketTask`.
+final class URLSessionRealtimeSocket: RealtimeSocket {
+    let task: URLSessionWebSocketTask
 
-            if let webSocket {
-                listener.onOpen(webSocket)
-            }
-        }
+    init(task: URLSessionWebSocketTask) {
+        self.task = task
+    }
 
-        func remove(_ listener: WebSocketDelegate) {
-            lock.lock()
-            listeners.removeAll { $0 === listener }
-            lock.unlock()
-        }
+    func resume() {
+        task.resume()
+    }
 
-        func listenerCount() -> Int {
-            lock.lock()
-            defer { lock.unlock() }
-            return listeners.count
-        }
+    func send(_ text: String) async throws {
+        try await task.send(.string(text))
+    }
 
-        func dispatchOpen(_ webSocket: URLSessionWebSocketTask) {
-            lock.lock()
-            openWebSocket = webSocket
-            let snapshot = listeners
-            lock.unlock()
-            for delegate in snapshot {
-                delegate.onOpen(webSocket)
-            }
-        }
-
-        func dispatchMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
-            lock.lock()
-            let snapshot = listeners
-            lock.unlock()
-            for delegate in snapshot {
-                delegate.onMessage(webSocket, text: text)
-            }
-        }
-
-        func dispatchFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
-            lock.lock()
-            let snapshot = listeners
-            lock.unlock()
-            for delegate in snapshot {
-                delegate.onFailure(webSocket, error: error)
-            }
-        }
-
-        func dispatchClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {
-            lock.lock()
-            openWebSocket = nil
-            let snapshot = listeners
-            lock.unlock()
-            for delegate in snapshot {
-                delegate.onClosed(webSocket, code: code, reason: reason)
-            }
+    func receive() async throws -> String? {
+        switch try await task.receive() {
+        case .string(let text):
+            return text
+        case .data(let data):
+            return String(data: data, encoding: .utf8)
+        @unknown default:
+            return nil
         }
     }
 
+    func cancel(reason: String) {
+        task.cancel(with: .normalClosure, reason: Data(reason.utf8))
+    }
+}
+
+/// Reference-counted pool that shares one WebSocket per `wsUrl` and token, and dispatches its frames to every
+/// registered listener.
+///
+/// While a socket has a listener, the pool sends the JSON keep-alive `{"action":"ping"}` every
+/// ``keepAliveInterval``. The server re-checks the socket's subscriptions only on that message, and ends an expired
+/// or revoked one with an error frame. A socket that fails or closes is dropped from the pool, so the next
+/// `acquire` opens a new one. When the last listener is released, the socket is closed.
+class WebSocketSession {
+
+    /// The keep-alive interval, 9 minutes, as the web client sends it. API Gateway closes a socket after 10 minutes
+    /// with no traffic.
+    static let keepAliveInterval: UInt64 = 9 * 60 * 1_000_000_000
+
+    /// The keep-alive frame. The server's subscription re-check runs only on this JSON message, so a protocol-level
+    /// WebSocket ping does not replace it.
+    static let pingFrame = #"{"action":"ping"}"#
+
     // MARK: - ConnectionEntry
 
-    private class ConnectionEntry {
-        let task: URLSessionWebSocketTask
-        let dispatcher: DispatchingListener
+    private final class ConnectionEntry {
+        let socket: RealtimeSocket
+        private var listeners: [RealtimeSocketListener] = []
+        private var isOpen = false
+        private let lock = NSLock()
         var receiveLoop: Task<Void, Never>?
+        var keepAlive: Task<Void, Never>?
 
-        init(task: URLSessionWebSocketTask, dispatcher: DispatchingListener) {
-            self.task = task
-            self.dispatcher = dispatcher
+        init(socket: RealtimeSocket) {
+            self.socket = socket
+        }
+
+        /// Adds `listener` and returns whether the socket is already open, in which case the caller calls `onOpen`.
+        func add(_ listener: RealtimeSocketListener) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            listeners.append(listener)
+            return isOpen
+        }
+
+        /// Removes `listener` and returns whether it was present.
+        func remove(_ listener: RealtimeSocketListener) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            let before = listeners.count
+            listeners.removeAll { $0 === listener }
+            return listeners.count != before
+        }
+
+        var isEmpty: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return listeners.isEmpty
+        }
+
+        /// Marks the socket open and returns the listeners to notify.
+        func markOpen() -> [RealtimeSocketListener] {
+            lock.lock()
+            defer { lock.unlock() }
+            isOpen = true
+            return listeners
+        }
+
+        var snapshot: [RealtimeSocketListener] {
+            lock.lock()
+            defer { lock.unlock() }
+            return listeners
+        }
+
+        func stop(reason: String) {
+            receiveLoop?.cancel()
+            keepAlive?.cancel()
+            socket.cancel(reason: reason)
         }
     }
 
@@ -122,100 +166,147 @@ class WebSocketSession {
 
     private var connections: [String: ConnectionEntry] = [:]
     private let lock = NSLock()
-    private let session: URLSession
+    private let makeSocket: (URLRequest) -> RealtimeSocket
+    private let sleep: @Sendable (UInt64) async throws -> Void
 
-    init(session: URLSession = BlocksRuntimeSession.shared) {
-        self.session = session
+    /// - Parameters:
+    ///   - session: The `URLSession` that opens sockets.
+    convenience init(session: URLSession = BlocksRuntimeSession.shared) {
+        self.init(
+            makeSocket: { URLSessionRealtimeSocket(task: session.webSocketTask(with: $0)) },
+            sleep: { try await Task.sleep(nanoseconds: $0) }
+        )
+    }
+
+    /// - Parameters:
+    ///   - makeSocket: Opens a socket for a handshake request. Tests pass a fake.
+    ///   - sleep: Waits for a number of nanoseconds and throws when cancelled. Tests pass a manual clock.
+    init(
+        makeSocket: @escaping (URLRequest) -> RealtimeSocket,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void
+    ) {
+        self.makeSocket = makeSocket
+        self.sleep = sleep
     }
 
     private func key(_ wsUrl: String, _ token: String) -> String {
         "\(wsUrl)|\(token)"
     }
 
-    // MARK: - Receive loop
+    // MARK: - Receive loop and keep-alive
 
-    private func startReceiveLoop(entry: ConnectionEntry) {
-        entry.receiveLoop = Task {
-            let webSocket = entry.task
-
-            // Notify delegates that connection is open
-            entry.dispatcher.dispatchOpen(webSocket)
+    private func start(_ entry: ConnectionEntry, key: String) {
+        let sleep = sleep
+        entry.receiveLoop = Task { [weak self] in
+            let socket = entry.socket
+            for listener in entry.markOpen() {
+                listener.onOpen(socket)
+            }
 
             while !Task.isCancelled {
                 do {
-                    let message = try await webSocket.receive()
-                    switch message {
-                    case .string(let text):
-                        entry.dispatcher.dispatchMessage(webSocket, text: text)
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            entry.dispatcher.dispatchMessage(webSocket, text: text)
-                        }
-                    @unknown default:
-                        break
+                    guard let text = try await socket.receive() else { continue }
+                    for listener in entry.snapshot {
+                        listener.onMessage(text)
                     }
                 } catch {
-                    if !Task.isCancelled {
-                        entry.dispatcher.dispatchFailure(webSocket, error: error)
+                    if Task.isCancelled { return }
+                    // Drop the dead socket before telling listeners, so a subscribe made in response opens a new one.
+                    self?.drop(entry, key: key)
+                    for listener in entry.snapshot {
+                        listener.onFailure(error)
                     }
-                    break
+                    return
+                }
+            }
+        }
+        entry.keepAlive = Task {
+            let socket = entry.socket
+            while true {
+                do {
+                    try await sleep(Self.keepAliveInterval)
+                } catch {
+                    return
+                }
+                if Task.isCancelled { return }
+                do {
+                    try await socket.send(Self.pingFrame)
+                } catch {
+                    // A failed send means the socket is going away; the receive loop reports it.
+                    logger.debug("Keep-alive ping failed: \(error.localizedDescription)")
                 }
             }
         }
     }
 
-    // MARK: - Public API
+    /// Removes `entry` from the pool if it is still the pooled socket for `key`, and stops it.
+    private func drop(_ entry: ConnectionEntry, key: String) {
+        lock.lock()
+        if connections[key] === entry {
+            connections.removeValue(forKey: key)
+        }
+        lock.unlock()
+        entry.keepAlive?.cancel()
+        entry.socket.cancel(reason: "Connection failed")
+    }
 
-    /// Acquires a shared WebSocket connection for the given endpoint and token.
-    /// If a connection already exists, adds the delegate to receive dispatched events.
-    /// Otherwise, creates a new WebSocket connection.
-    @discardableResult
-    func acquire(wsUrl: String, token: String, listener: WebSocketDelegate) throws -> WebSocketConnection {
+    // MARK: - API
+
+    /// Adds `listener` to the pooled socket for the endpoint and token, opening one if none is pooled.
+    ///
+    /// - Throws: `RealtimeError.connectionFailed` if `wsUrl` is not a URL.
+    func acquire(wsUrl: String, token: String, listener: RealtimeSocketListener) throws {
         guard let url = URL(string: wsUrl) else {
             throw RealtimeError.connectionFailed("Invalid WebSocket URL: \(wsUrl)", nil)
         }
 
-        lock.lock()
         let connectionKey = key(wsUrl, token)
-
+        lock.lock()
         if let existing = connections[connectionKey] {
-            existing.dispatcher.add(listener)
+            // Join under the pool lock, so a concurrent release can't close the socket between lookup and join.
+            let open = existing.add(listener)
             lock.unlock()
-            return WebSocketConnection(task: existing.task, key: connectionKey)
+            if open {
+                listener.onOpen(existing.socket)
+            }
+            return
         }
-
-        let dispatcher = DispatchingListener()
-        dispatcher.add(listener)
 
         // Set User-Agent on the handshake because caller-supplied sessions may omit it.
         var request = URLRequest(url: url)
         request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
-        let wsTask = session.webSocketTask(with: request)
-        let entry = ConnectionEntry(task: wsTask, dispatcher: dispatcher)
+        let entry = ConnectionEntry(socket: makeSocket(request))
+        _ = entry.add(listener)
         connections[connectionKey] = entry
         lock.unlock()
 
-        wsTask.resume()
-        startReceiveLoop(entry: entry)
-
-        return WebSocketConnection(task: wsTask, key: connectionKey)
+        entry.socket.resume()
+        start(entry, key: connectionKey)
     }
 
-    /// Removes a delegate from the connection identified by the given endpoint and token.
-    /// Closes the WebSocket when no delegates remain.
-    func release(wsUrl: String, token: String, listener: WebSocketDelegate) {
-        lock.lock()
+    /// Removes `listener` from the pooled socket it joined. Closes that socket, and stops its keep-alive, when no
+    /// listeners remain. A listener whose socket was already dropped is a no-op.
+    func release(wsUrl: String, token: String, listener: RealtimeSocketListener) {
         let connectionKey = key(wsUrl, token)
-        guard let entry = connections[connectionKey] else {
+        lock.lock()
+        guard let entry = connections[connectionKey], entry.remove(listener) else {
             lock.unlock()
             return
         }
-        entry.dispatcher.remove(listener)
-        if entry.dispatcher.listenerCount() <= 0 {
-            entry.receiveLoop?.cancel()
-            entry.task.cancel(with: .normalClosure, reason: Data("All channels released".utf8))
+        let close = entry.isEmpty
+        if close {
             connections.removeValue(forKey: connectionKey)
         }
         lock.unlock()
+        if close {
+            entry.stop(reason: "All channels released")
+        }
+    }
+
+    /// The number of pooled sockets. For tests.
+    var connectionCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return connections.count
     }
 }
