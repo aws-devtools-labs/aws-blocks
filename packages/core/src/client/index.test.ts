@@ -387,6 +387,10 @@ describe('ApiNamespaceClient — non-JSON-RPC response bodies', () => {
     assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', id: 1 }), 200), undefined);
   });
 
+  it('resolves a void result sent as `"result": null` to null', async () => {
+    assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: null, id: 1 }), 200), null);
+  });
+
   it('resolves a valid result envelope sent with a custom non-200 status', async () => {
     assert.deepStrictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: { queued: true }, id: 1 }), 202), { queued: true });
     assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: 'teapot', id: 1 }), 418), 'teapot');

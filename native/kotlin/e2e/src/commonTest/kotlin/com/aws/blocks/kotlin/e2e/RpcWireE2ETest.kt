@@ -53,6 +53,15 @@ class RpcWireE2ETest {
     }
 
     /**
+     * The server answers a method that returns nothing with `"result": null`. A response with no
+     * `result` field made the client throw "Missing result field in JSON-RPC response".
+     */
+    @Test
+    fun voidMethodReturns() = runTest {
+        api.voidResult()
+    }
+
+    /**
      * A spec's method name is sent exactly. The server has no method without a dot: it answers
      * one with `InvalidRequest`, so a hand-written spec's dotless `ping` can't reach an AWS
      * Blocks backend from any client. The base generator sent it as `_default.ping`, which the
