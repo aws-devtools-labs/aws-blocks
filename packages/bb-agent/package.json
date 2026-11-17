@@ -21,7 +21,10 @@
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/index.mock.js",
+    "./dist/agentcore-entry.js"
+  ],
   "files": [
     "dist",
     "MODELS.md",
