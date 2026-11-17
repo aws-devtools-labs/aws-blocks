@@ -98,16 +98,7 @@ Keep the old table with `LegacyKVStore`, and move its items to a `KVStore` with 
 
    Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete` and `scan` of release 0.4.0, so code that still calls the old store keeps working.
 
-2. Point the app at the new store. Read the new store first and fall back to the old one. Write to the new store, then delete the key in the old one:
-
-   ```ts
-   const value = (await prefs.get(key)) ?? (await oldPrefs.get(key));
-
-   await prefs.put(key, next);
-   await oldPrefs.delete(key);
-   ```
-
-3. Copy the items, in a handler or a job. `ifNotExists` keeps a value the app wrote to the new store in the meantime, and makes the copy safe to run again:
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` doesn't copy for you. A copy reads each entry with its expiry and writes it to the new store, and `ifNotExists` makes it safe to run again:
 
    ```ts
    for await (const { key, value, expiresAt } of oldPrefs.scan()) {
@@ -119,7 +110,9 @@ Keep the old table with `LegacyKVStore`, and move its items to a `KVStore` with 
    }
    ```
 
-4. When the copy is done, remove the `LegacyKVStore` line and the fallback from step 2, and deploy. The old table leaves the stack: a table with a removal policy of `destroy` is deleted, and a retained table (the default of the production preset) stays in your account until you delete it.
+   The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) has steps that are suitable for some migrations, and what to check before you use them.
+
+3. When the data is in the new store, remove the `LegacyKVStore` line and any read of the old store, and deploy. The old table leaves the stack: a table with a removal policy of `destroy` is deleted, and a retained table (the default of the production preset) stays in your account until you delete it.
 
 `LegacyKVStore` is deprecated and frozen: it exists only for this upgrade, it has the API of release 0.4.0, and it gets no new features. Use `KVStore` for anything new. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) has the options to keep, a paged copy for a large store, and what to know before you start, such as that the table name changes with the id.
 

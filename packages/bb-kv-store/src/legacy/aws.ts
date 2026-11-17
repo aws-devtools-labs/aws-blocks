@@ -100,7 +100,7 @@ export class LegacyKVStore<T = string> extends Scope {
 	 *
 	 * @example
 	 * ```typescript
-	 * // While the copy runs, a read falls back to the old store.
+	 * // While the app reads both stores, a read can fall back to the old store.
 	 * const value = (await prefs.get(key)) ?? (await oldPrefs.get(key));
 	 * ```
 	 */
@@ -121,9 +121,9 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * condition is set.
 	 *
 	 * It is here so that the code that writes the old store runs unchanged
-	 * until you move it. Move the writes to the new store before you start the
-	 * copy: the copy reads each key once, so a value that goes to the old store
-	 * after that does not reach the new one.
+	 * until you move it. The block does not carry a write to the new store: a
+	 * value that goes to the old store after your copy read its key does not
+	 * reach the new one.
 	 *
 	 * @param key - The string key.
 	 * @param value - The value. With a `schema`, it is validated before the write.
@@ -228,11 +228,12 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * Delete a key of the old store. A key that does not exist is not an error,
 	 * unless `ifExists` is set.
 	 *
-	 * Use it while the copy runs. Where the app deletes a key, delete it in the
-	 * old store first, and then in the new one, so that the copy and a read that
-	 * falls back to the old store do not bring it back. Where the app writes a
-	 * key to the new store, delete it in the old store after the write, so that
-	 * the old value does not show again when the new one expires.
+	 * While the app reads both stores, a key that leaves the new store while
+	 * the old store has it comes back through the copy, and through a read that
+	 * falls back to the old store. An app that deletes a key can delete it in
+	 * the old store first, and then in the new one. An app that writes a key
+	 * with an expiry to the new store can delete it in the old store after the
+	 * write, so that the old value does not show again when the new one expires.
 	 *
 	 * @param key - The string key.
 	 * @param conditions - `ifExists` and `ifValueEquals`, the conditions of the release. With both, both must hold.

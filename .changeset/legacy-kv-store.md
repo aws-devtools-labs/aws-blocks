@@ -15,7 +15,7 @@ const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
 const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
 ```
 
-The deploy does not change the old table. `LegacyKVStore` has the data methods of that store, `get`, `put`, `delete`, and `scan`, so the code that calls the store runs as before. Move the writes of the app to the new store, and then copy the items in your own code, with `scan` of the old store and `put` with `ifNotExists` into the new one. Then remove the `LegacyKVStore` and deploy: the old table leaves the stack, by its removal policy.
+The deploy does not change the old table. `LegacyKVStore` has the data methods of that store, `get`, `put`, `delete`, and `scan`, so the code that calls the store runs as before. Migrate the data to the new store however is appropriate for your app. A copy is a `scan` of the old store, which gives each entry with its expiry, and a `put` into the new one. Then remove the `LegacyKVStore` and deploy: the old table leaves the stack, by its removal policy.
 
 `LegacyKVStore` is deprecated and frozen. It has the `@deprecated` tag, so an editor marks each use. It has the API of release 0.4.0 and gets no new features. Use it only for this upgrade, and remove it when the copy is done.
 

@@ -452,9 +452,9 @@ for await (const { value, expiresAt } of todos.scan()) {
 
 A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a `KVStore` of this release cannot take over the table of such a store. The deploy fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`, and the table keeps its items.
 
-`LegacyKVStore` is the store of such a release, for the time of the upgrade. It has the data methods of that store over the old table: `get`, `put`, `delete`, and `scan`. So the code that calls the store runs as before. You copy the items into a `KVStore` with a new id, in your own code, at a time that you choose.
+`LegacyKVStore` is the store of such a release, for the time of the upgrade. It has the data methods of that store over the old table: `get`, `put`, `delete`, and `scan`. So the code that calls the store runs as before. You migrate the data into a `KVStore` with a new id, in your own code, however is appropriate for your app.
 
-`LegacyKVStore` is deprecated and frozen. It is only for this upgrade: it has the API of release 0.4.0, it gets no new features, and a later release can remove it. Use `KVStore` for new data, and remove the `LegacyKVStore` from your app when the copy is done.
+`LegacyKVStore` is deprecated and frozen. It is only for this upgrade: it has the API of release 0.4.0, it gets no new features, and a later release can remove it. Use `KVStore` for new data, and remove the `LegacyKVStore` from your app when the data is in the new store.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -486,18 +486,34 @@ The deploy creates the table of `prefs`. It does not change the table of `oldPre
 
 `LegacyKVStore` takes the options that `KVStore` took in release 0.4.0: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`, `table`, `schema`, and `logger`. Keep each option that the old store had, with its value, also a `KVStore.fromExisting()` table and a `KVStore.fromKmsKey()` key. The block declares the old table from them, and a changed or missing option makes CloudFormation change that table.
 
-### Step 2. Copy the items
+### Step 2. Migrate the data
 
-Move the writes of the app to the new store before you start the copy. The copy reads each key of the old store once, so a value that goes to the old store after that does not reach the new store.
+Migrate the data however is appropriate for your app. The block does not copy the items, and it does not carry a write from one store to the other.
 
-Run the copy in a handler or a job. `ifNotExists` keeps a value that the app wrote to the new store since the deploy, and it makes the copy safe to run again.
+Steps that are suitable for some migrations are as follows:
+
+1. Deploy the app with reads that try the new store first and then the old one, and with writes that go to the new store.
+2. Copy the items of the old store to the new store, in a handler or a job.
+3. When the copy is done, remove the reads of the old store.
+
+The reads and the writes of step 1:
+
+```typescript
+// A read: the new store first, then the old one.
+const alicePrefs = (await prefs.get('alice')) ?? (await oldPrefs.get('alice'));
+
+// A write goes to the new store.
+await prefs.put('alice', { theme: 'dark' });
+```
+
+The copy of step 2. `scan` gives each entry with its expiry. `ifNotExists` keeps a value that the new store has, so the copy is safe to run again.
 
 ```typescript
 for await (const { key, value, expiresAt } of oldPrefs.scan()) {
 	try {
 		await prefs.put(key, value, { ifNotExists: true, expiresAt });
 	} catch (e: unknown) {
-		// The new store has this key. Its value is the newer one.
+		// The new store has this key.
 		if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
 	}
 }
@@ -518,34 +534,22 @@ for await (const { key, value, expiresAt } of oldPage) {
 copyCursor = oldPage.cursor;
 ```
 
-Until the copy is done, the new store does not hold every item, and the old store still holds the old value of each key. Use the two stores in this order:
+These steps do not fit every app. While the app reads both stores:
 
-```typescript
-// Read: the new store first, then the old one.
-const alicePrefs = (await prefs.get('alice')) ?? (await oldPrefs.get('alice'));
-
-// Write: the new store, then delete the key in the old store.
-await prefs.put('alice', { theme: 'dark' }, { ttlSeconds: 3600 });
-await oldPrefs.delete('alice');
-
-// Delete: the old store first, then the new one.
-await oldPrefs.delete('alice');
-await prefs.delete('alice');
-```
-
-The old value of a key shows again whenever only the new store loses the key. A write deletes the key in the old store for that reason: without it, the old value comes back when the new one expires. A delete starts with the old store for the same reason: if the second call fails, the key is still in the new store, and you can delete again.
+- A read that falls back to the old store returns the old value of a key that the new store does not have. This is the case after a delete, and after a value with an expiry expires.
+- A condition on the new store does not see the old store. A `put` with `ifNotExists` goes ahead for a key that only the old store has.
+- A `scan` or a `query` of the new store is not complete until the copy is done. Only a read by key can fall back to the old store.
+- A delete or a write can lose a race with the copy. The copy holds a page of items while it writes them. A key that the app deletes at that moment, or writes with an expiry that passes at that moment, can come back with its old value.
 
 ### Step 3. Remove the old store, and deploy
 
-When the copy is done, remove the `LegacyKVStore` line and the code of step 2, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A table that is retained, which is the default of the production preset, stays in your account until you delete it.
+When the data is in the new store, remove the `LegacyKVStore` line and the code that reads the old store, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A table that is retained, which is the default of the production preset, stays in your account until you delete it.
 
 ### What to know before you start
 
 - **The table name changes with the id.** An alarm, a dashboard, or a policy of yours that names the table must follow.
-- **A `scan` or a `query` of the new store is not complete until the copy is done.** Only a read by key can fall back to the old store.
-- **A delete or a write can lose a race with the copy.** The copy holds a page of items while it writes them. A key that the app deletes at that moment, or writes with an expiry that passes at that moment, can come back with its old value. If that matters, stop those calls while the copy runs.
 - **A value that this release does not store fails the `put`** with `ValidationFailedException`: an object with a top-level field that starts with `_bkv_`, or with a field named `__proto__`. Change the value in the copy.
-- **Cost.** The copy reads every item of the old table once, and uses one write unit for each item of 1 KB or less.
+- **Cost.** A copy reads every item of the old table once, and uses one write unit for each item of 1 KB or less.
 - **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.bb-data/`, so the same steps run on the dev server. It does not change that file until a `put` or a `delete`.
 
 ## Best practices
