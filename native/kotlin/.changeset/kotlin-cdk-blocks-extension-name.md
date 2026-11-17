@@ -5,8 +5,8 @@
 Rename the Gradle plugin's extension, tasks, and types to `CdkBlocks`
 
 The configuration block the codegen plugin registers is now `cdkBlocks { }` instead of
-`awsBlocks { }`, and its tasks are `cdkBlocksCodegen`, `cdkBlocksCodegen<Variant>`, and
-`cdkBlocksDumpModel`. Every module applying `com.aws.blocks.kotlin` must rename its block, and
+`awsBlocks { }`, and its tasks are `blocksCodegen`, `blocksCodegen<Variant>`, and
+`blocksDumpModel`. Every module applying `com.aws.blocks.kotlin` must rename its block, and
 any build invoking a task by name — a CI step, a script, a `dependsOn`, a `tasks.named` lookup —
 must use the new name.
 

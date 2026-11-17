@@ -43,7 +43,7 @@ class CodegenWarningLogTest : FunSpec({
         val result = GradleRunner.create()
             .withProjectDir(root)
             .withPluginClasspath(injectedClasspath())
-            .withArguments("cdkBlocksCodegen", "--offline")
+            .withArguments("blocksCodegen", "--offline")
             .build()
 
         // The `w: ` prefix is the task's own forwarding, so this pins the log hop too.

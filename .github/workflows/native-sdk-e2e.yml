@@ -265,7 +265,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew cdkBlocksCodegen
+        run: ./gradlew blocksCodegen
 
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
@@ -878,7 +878,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew cdkBlocksCodegen
+        run: ./gradlew blocksCodegen
 
       - name: Run Kotlin E2E against sandbox
         working-directory: native/kotlin/e2e
