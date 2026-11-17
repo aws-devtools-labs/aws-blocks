@@ -70,12 +70,12 @@ including the iOS `Info.plist` entry, is in [OIDC](oidc.md#registering-the-relay
 
 | Task | Description |
 |------|-------------|
-| `awsBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `awsBlocksCodegenDebug`) |
-| `awsBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `awsBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
+| `cdkBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `cdkBlocksCodegenDebug`) |
+| `cdkBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
+| `cdkBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
 
 Codegen runs automatically as a dependency of compilation, so a normal build does not need to
-invoke these directly. `awsBlocksDumpModel` is the one to reach for when the generated API does not
+invoke these directly. `cdkBlocksDumpModel` is the one to reach for when the generated API does not
 match what you expected from the spec.
 
 ## One spec per compilation scope

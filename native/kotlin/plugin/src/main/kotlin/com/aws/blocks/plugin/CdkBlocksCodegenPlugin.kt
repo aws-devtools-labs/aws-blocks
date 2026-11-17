@@ -39,7 +39,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
  * }
  * ```
  */
-class AwsBlocksCodegenPlugin : Plugin<Project> {
+class CdkBlocksCodegenPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create(
             "cdkBlocks",
@@ -56,7 +56,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
             }
         }
 
-        project.tasks.register("awsBlocksDumpModel", AwsBlocksDumpModelTask::class.java) {
+        project.tasks.register("cdkBlocksDumpModel", AwsBlocksDumpModelTask::class.java) {
             it.apiSpecFile.set(extension.apiSpec)
         }
 
@@ -114,7 +114,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
     private fun configureKmp(project: Project, extension: AwsBlocksExtension) {
         val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/commonMain")
 
-        val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
+        val task = project.tasks.register("cdkBlocksCodegen", AwsBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
@@ -152,7 +152,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             val variantName = variant.name
-            val taskName = "awsBlocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
+            val taskName = "cdkBlocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
 
             val outputDir = project.layout.buildDirectory.dir(
                 "generated/source/aws/blocks/$variantName",
@@ -168,7 +168,7 @@ class AwsBlocksCodegenPlugin : Plugin<Project> {
     private fun configureJvm(project: Project, extension: AwsBlocksExtension) {
         val outputDir = project.layout.buildDirectory.dir("generated/source/aws/blocks/main")
 
-        val task = project.tasks.register("awsBlocksCodegen", AwsBlocksCodegenTask::class.java)
+        val task = project.tasks.register("cdkBlocksCodegen", AwsBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         project.extensions.getByType(JavaPluginExtension::class.java)

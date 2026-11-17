@@ -31,7 +31,7 @@ Plus **fixture-goldens**, a check-only module (not published) that compiles ever
 
 | Purpose | Path |
 |---------|------|
-| Plugin entry point | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksCodegenPlugin.kt` |
+| Plugin entry point | `plugin/src/main/kotlin/com/aws/blocks/plugin/CdkBlocksCodegenPlugin.kt` |
 | Extension DSL | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksExtension.kt` |
 | Codegen Gradle task | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksCodegenTask.kt` |
 | Dump model task | `plugin/src/main/kotlin/com/aws/blocks/plugin/AwsBlocksDumpModelTask.kt` |
@@ -96,7 +96,7 @@ one exists.
 
 ```bash
 # Generate code for the Android example app (debug variant)
-cd example/android && ./gradlew :app:awsBlocksCodegenDebug
+cd example/android && ./gradlew :app:cdkBlocksCodegenDebug
 
 # Build the Android example app (triggers codegen automatically)
 cd example/android && ./gradlew :app:assembleDebug
@@ -105,7 +105,7 @@ cd example/android && ./gradlew :app:assembleDebug
 cd example/kmp && ./gradlew :composeApp:desktopJar
 
 # Dump the intermediate model (useful for debugging spec interpretation)
-cd example/android && ./gradlew :app:awsBlocksDumpModel
+cd example/android && ./gradlew :app:cdkBlocksDumpModel
 
 # Check generated output location (Android)
 find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"
@@ -133,13 +133,13 @@ If you find yourself needing to break one of these rules, something is wrong wit
 ### After changing the parser (`OpenRpcParser`)
 
 1. Run `./gradlew :codegen:test` to verify parsing still works
-2. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` to verify the model looks correct
+2. Run `cd example/android && ./gradlew :app:cdkBlocksDumpModel` to verify the model looks correct
 3. Run `cd example/android && ./gradlew :app:assembleDebug` to verify generated code compiles
 
 ### After changing the model builder (`CodegenModelBuilder`)
 
 1. Run `./gradlew :codegen:test`
-2. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` — inspect type definitions, namespaces, relationships
+2. Run `cd example/android && ./gradlew :app:cdkBlocksDumpModel` — inspect type definitions, namespaces, relationships
 3. Run `cd example/android && ./gradlew :app:assembleDebug` to verify end-to-end
 
 ### After changing the generator (`KotlinCodeGenerator`)
@@ -164,6 +164,6 @@ If you find yourself needing to break one of these rules, something is wrong wit
 
 ### After updating the spec file
 
-1. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` to verify parsing
+1. Run `cd example/android && ./gradlew :app:cdkBlocksDumpModel` to verify parsing
 2. Run `cd example/android && ./gradlew clean :app:assembleDebug`
 3. Fix any compilation errors in the example app from changed API signatures

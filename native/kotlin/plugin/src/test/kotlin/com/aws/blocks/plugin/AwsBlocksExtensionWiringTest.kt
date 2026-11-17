@@ -31,7 +31,7 @@ class AwsBlocksExtensionWiringTest : FunSpec({
             oidc { it.relayTo = "com.probe.app://auth/callback" }
         }
 
-        val task = project.tasks.getByName("awsBlocksCodegen") as AwsBlocksCodegenTask
+        val task = project.tasks.getByName("cdkBlocksCodegen") as AwsBlocksCodegenTask
         task.openRpcFile.get().asFile.name shouldBe "probe.spec.json"
         task.packageName.get() shouldBe "com.probe.gen"
         task.serverOverrides.get() shouldBe mapOf("local" to "http://127.0.0.1:1")
@@ -47,7 +47,7 @@ class AwsBlocksExtensionWiringTest : FunSpec({
         project.extensions.getByType(AwsBlocksExtension::class.java)
             .excludeNativePackages.set(setOf("example-iot-native"))
 
-        val task = project.tasks.getByName("awsBlocksCodegen") as AwsBlocksCodegenTask
+        val task = project.tasks.getByName("cdkBlocksCodegen") as AwsBlocksCodegenTask
         task.excludeNativePackages.get() shouldBe setOf("example-iot-native")
         task.outputDirectory.get().asFile.path shouldEndWith "generated/source/aws/blocks/commonMain"
     }

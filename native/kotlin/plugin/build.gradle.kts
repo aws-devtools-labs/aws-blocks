@@ -58,7 +58,7 @@ gradlePlugin {
     plugins {
         register("aws-blocks") {
             id = "com.aws.blocks.kotlin"
-            implementationClass = "com.aws.blocks.plugin.AwsBlocksCodegenPlugin"
+            implementationClass = "com.aws.blocks.plugin.CdkBlocksCodegenPlugin"
         }
     }
 }
