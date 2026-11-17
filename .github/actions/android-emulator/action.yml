@@ -62,7 +62,8 @@ runs:
       shell: bash
       env:
         INPUT_SCRIPT: ${{ inputs.script }}
-      run: printf '%s\n' "$INPUT_SCRIPT" > "${{ steps.paths.outputs.script }}"
+        SCRIPT_PATH: ${{ steps.paths.outputs.script }}
+      run: printf '%s\n' "$INPUT_SCRIPT" > "$SCRIPT_PATH"
 
     # The udev rule is what the emulator-runner's own README prescribes: the
     # hosted runner ships /dev/kvm owned by a group the job's user is not in.
