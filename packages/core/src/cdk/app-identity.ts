@@ -10,6 +10,7 @@
  * @internal
  */
 
+import { createHash } from 'node:crypto';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
@@ -132,6 +133,18 @@ function nameCloudFrontForApp(stack: cdk.Stack, id: string): void {
 const LAYER_NAME_MAX = 140;
 
 /**
+ * `<id>-<logical id>`, cut to the layer-name limit. When it has to be cut, the
+ * end becomes a hash of the whole logical id, so two long logical ids that
+ * share a prefix past the limit still get distinct names.
+ */
+function layerName(id: string, logicalId: string): string {
+	const full = `${id}-${logicalId}`;
+	if (full.length <= LAYER_NAME_MAX) return full;
+	const hash = createHash('sha256').update(logicalId).digest('hex').slice(0, 8);
+	return `${full.slice(0, LAYER_NAME_MAX - hash.length - 1)}-${hash}`;
+}
+
+/**
  * Name every Lambda layer in the app's stack `<id>-<logical id>` when it has no
  * name of its own. CDK's layers (e.g. the AWS CLI layer `BucketDeployment`
  * uses) otherwise get CloudFormation-generated names that don't carry the app's
@@ -150,7 +163,7 @@ function nameLayersForApp(stack: cdk.Stack, id: string): void {
 			node.addPropertyOverride(
 				'LayerName',
 				cdk.Lazy.string({
-					produce: () => `${id}-${layerStack.resolve(node.logicalId)}`.slice(0, LAYER_NAME_MAX),
+					produce: () => layerName(id, layerStack.resolve(node.logicalId) as string),
 				}),
 			);
 		},
