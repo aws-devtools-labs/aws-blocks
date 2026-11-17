@@ -28,10 +28,10 @@ public struct OIDCUser: Sendable, Equatable, Codable {
 
     public static func fromJSON(_ json: [String: Any]) throws -> OIDCUser {
         guard let userId = json["userId"] as? String else {
-            throw OIDCError.malformedDescriptor("userId")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "userId")
         }
         guard let username = json["username"] as? String else {
-            throw OIDCError.malformedDescriptor("username")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "username")
         }
         let groups = (json["groups"] as? [String]) ?? []
         return OIDCUser(userId: userId, username: username, groups: groups)
@@ -54,16 +54,16 @@ public struct OIDCProviderConfig: Sendable, Equatable, Codable {
 
     public static func fromJSON(_ json: [String: Any]) throws -> OIDCProviderConfig {
         guard let authorizeUrl = json["authorizeUrl"] as? String else {
-            throw OIDCError.malformedDescriptor("authorizeUrl")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "authorizeUrl")
         }
         guard let clientId = json["clientId"] as? String else {
-            throw OIDCError.malformedDescriptor("clientId")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "clientId")
         }
         guard let scopes = json["scopes"] as? [String] else {
-            throw OIDCError.malformedDescriptor("scopes")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "scopes")
         }
         guard let kind = json["kind"] as? String else {
-            throw OIDCError.malformedDescriptor("kind")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "kind")
         }
         return OIDCProviderConfig(
             authorizeUrl: authorizeUrl,

@@ -19,7 +19,7 @@ public final nonisolated class Api: Sendable {
         if let int { _params.append(int) }
         let request = BlocksRequest(method: "api.getDoc", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getDoc") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getDoc") }
         return try JSONDecoder().decode(Doc.self, from: result)
     }
 
@@ -27,7 +27,7 @@ public final nonisolated class Api: Sendable {
     public func putExtras(extras: Extras) async throws -> Extras {
         let request = BlocksRequest(method: "api.putExtras", params: [extras], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.putExtras") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.putExtras") }
         return try JSONDecoder().decode(Extras.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
     public func getLevel() async throws -> Level {
         let request = BlocksRequest(method: "api.getLevel", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getLevel") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getLevel") }
         return try JSONDecoder().decode(Level.self, from: result)
     }
 }

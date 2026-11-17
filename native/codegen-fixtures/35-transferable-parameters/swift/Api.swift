@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func relay(feed: RealtimeChannel<Note>) async throws -> String {
         let request = BlocksRequest(method: "api.relay", params: [feed], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relay") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relay") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -27,7 +27,7 @@ public final nonisolated class Api: Sendable {
         if let feed { _params.append(feed) }
         let request = BlocksRequest(method: "api.relayIfAny", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relayIfAny") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relayIfAny") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
     public func relayOrNull(feed: RealtimeChannel<Note>?) async throws -> String {
         let request = BlocksRequest(method: "api.relayOrNull", params: [feed], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relayOrNull") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relayOrNull") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -43,7 +43,7 @@ public final nonisolated class Api: Sendable {
     public func relayAll(feeds: [RealtimeChannel<Note>], byRoom: [String: RealtimeChannel<Note>]) async throws -> String {
         let request = BlocksRequest(method: "api.relayAll", params: [feeds, byRoom], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relayAll") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relayAll") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -51,7 +51,7 @@ public final nonisolated class Api: Sendable {
     public func relayInline(feed: RealtimeChannel<RelayInline.FeedMessage>) async throws -> String {
         let request = BlocksRequest(method: "api.relayInline", params: [feed], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relayInline") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relayInline") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -59,7 +59,7 @@ public final nonisolated class Api: Sendable {
     public func share(download: FileDownloadHandle, upload: FileUploadHandle) async throws -> String {
         let request = BlocksRequest(method: "api.share", params: [download, upload], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.share") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.share") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -67,7 +67,7 @@ public final nonisolated class Api: Sendable {
     public func forward(bundle: Bundle) async throws -> String {
         let request = BlocksRequest(method: "api.forward", params: [bundle], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.forward") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.forward") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
