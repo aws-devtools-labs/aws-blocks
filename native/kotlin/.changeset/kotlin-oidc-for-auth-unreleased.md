@@ -1,4 +1,5 @@
 ---
+
 ---
 
 No release: this removes `OidcClient.forAuth`, which was added after 0.2.0 and never released, along
