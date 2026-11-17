@@ -13,6 +13,7 @@ import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.exceptions.isBlocksError
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonNull
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -165,13 +166,17 @@ class BlocksClientTest {
     }
 
     @Test
-    fun `a 2xx envelope with no result is a TransportException`() = runTest {
-        val e = assertFailsWith<TransportException> {
-            clientAnswering(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":1}""")
-                .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
-        }
-        e.statusCode shouldBe 200
-        e.message shouldBe "Missing result field in JSON-RPC response"
+    fun `a 2xx envelope with no result is a void success`() = runTest {
+        val result = clientAnswering(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":1}""")
+            .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        result shouldBe JsonNull
+    }
+
+    @Test
+    fun `a 2xx envelope with a null result is a void success`() = runTest {
+        val result = clientAnswering(HttpStatusCode.OK, """{"jsonrpc":"2.0","result":null,"id":1}""")
+            .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        result shouldBe JsonNull
     }
 
     @Test
@@ -222,7 +227,15 @@ class BlocksClientTest {
             clientAnswering(HttpStatusCode.OK, """{"status":"ok"}""").execute(request)
         }
         e.statusCode shouldBe 200
-        e.message shouldBe "Missing result field in JSON-RPC response"
+        e.message shouldBe "Response was not a JSON-RPC envelope"
+    }
+
+    @Test
+    fun `a 2xx object whose jsonrpc is not 2_0 is a TransportException`() = runTest {
+        val e = assertFailsWith<TransportException> {
+            clientAnswering(HttpStatusCode.OK, """{"jsonrpc":"1.0","result":1,"id":1}""").execute(request)
+        }
+        e.message shouldBe "Response was not a JSON-RPC envelope"
     }
 
     @Test

@@ -15,6 +15,7 @@ import io.ktor.http.isSuccess
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -117,18 +118,22 @@ class BlocksClient internal constructor(
             throw TransportException(message, response.status.value)
         }
 
-        if (responseJson == null) {
+        // An envelope is a JSON object whose `jsonrpc` is the string "2.0"; any other 2xx body
+        // (an HTML page, an arbitrary object, an array) is not a JSON-RPC response at all.
+        val isEnvelope = (responseJson?.get("jsonrpc") as? JsonPrimitive)
+            ?.let { it.isString && it.content == "2.0" } == true
+        if (responseJson == null || !isEnvelope) {
             throw TransportException(
                 "Response was not a JSON-RPC envelope",
                 response.status.value,
             )
         }
 
-        return responseJson["result"]
-            ?: throw TransportException(
-                "Missing result field in JSON-RPC response",
-                response.status.value,
-            )
+        // A void handler's envelope has no `result` key (core serializes `result: undefined`,
+        // which JSON.stringify drops), and a newer core sends `"result": null`. Both are a
+        // successful call with no value; a method with a non-null return type fails through the
+        // generated null-result guard instead.
+        return responseJson["result"] ?: JsonNull
     }
 }
 

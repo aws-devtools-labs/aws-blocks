@@ -16,4 +16,4 @@ Breaking:
 
 New types: `TransportException`, `ClientClosedException`, `FileTransferException`, `RealtimeException`, `RealtimeChannelClosedException` and `RealtimeConnectionException`.
 
-Also: a gateway's `{"message": ...}` body is the `TransportException` message, a refused OIDC exchange or authorize-params request carries the backend's `name` and `status` as an `ApiException` `cause`, `OidcCallbackException` gains a `cause`, and `retriable` is true only for a JSON boolean.
+Also: a JSON-RPC envelope (`"jsonrpc": "2.0"`) with no `result` is a successful call with no value, so a void method succeeds; any other 2xx body is a `TransportException`. A gateway's `{"message": ...}` body is the `TransportException` message, a refused OIDC exchange or authorize-params request carries the backend's `name` and `status` as an `ApiException` `cause`, `OidcCallbackException` gains a `cause`, and `retriable` is true only for a JSON boolean.
