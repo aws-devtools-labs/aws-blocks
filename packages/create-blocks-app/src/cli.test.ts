@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -57,7 +57,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, auth-oidc, agent, cron, observability, amplify, demo/);
     assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
@@ -271,6 +271,7 @@ describe('create-blocks-app template metadata', () => {
       observability: { port: 3001, frontend: false },
       nextjs: frontend,
       auth: frontend,
+      'auth-oidc': frontend,
       agent: frontend,
       bare: frontend,
       default: frontend,
@@ -295,7 +296,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, auth: vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, auth: vite, 'auth-oidc': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
@@ -767,6 +768,36 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('a stackId derived from a name that starts with "aws" gets the app- prefix, in any letter case', () => {
+    const names: [name: string, expected: RegExp][] = [
+      ['aws-blocks-wt-cmp-bbdata', /^app-aws-blocks-w-[0-9a-f]{6}$/],
+      ['AWS-Thing', /^app-AWS-Thing-[0-9a-f]{6}$/],
+      ['Awsome', /^app-Awsome-[0-9a-f]{6}$/],
+      ['@aws/shop', /^app-aws-shop-[0-9a-f]{6}$/],
+      // Unchanged: the name does not start with "aws".
+      ['awesome-app', /^awesome-app-[0-9a-f]{6}$/],
+      ['my-aws-app', /^my-aws-app-[0-9a-f]{6}$/],
+      ['my-cool-app', /^my-cool-app-[0-9a-f]{6}$/],
+    ];
+    for (const [name, expected] of names) {
+      const stackId = generateStackId(name);
+      assert.match(stackId, expected, `${name} -> ${stackId}`);
+    }
+  });
+
+  it('a fresh app in a directory whose name starts with "aws" gets a stackId that does not', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'create-blocks-app-aws-name-'));
+    const appDir = join(parent, 'aws-blocks-wt-cmp-bbdata');
+    try {
+      const result = run([appDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(appDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.match(config.stackId, /^app-aws-blocks-w-[0-9a-f]{6}$/);
+    } finally {
+      rmSync(parent, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('detects existing project when target dir is an explicit named directory', () => {
     const tmpDir = join(__dirname, '../.test-named-existing');
     mkdirSync(tmpDir, { recursive: true });
@@ -1037,6 +1068,8 @@ describe('create-blocks-app auto-detection', () => {
       const construct =
         /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
       if (!construct) continue;
+      // A `store: 'builtin'` block creates no user pool, and rejects `users` options.
+      if (/store: 'builtin'/.test(construct[1])) continue;
       checked++;
       if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
         offenders.push(name);

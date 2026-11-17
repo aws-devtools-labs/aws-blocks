@@ -317,7 +317,11 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         let subscribeMsg = """
         {"action":"subscribe","channel":"\(channelName)","token":"\(channelToken)"}
         """
-        logger.debug("WS opened, sending: \(subscribeMsg)")
+        // The subscribe message carries the channel token, so the log names the channel only.
+        // Bound locally: os.Logger interpolation is an escaping autoclosure, and SwiftFormat
+        // (`--self init-only`) removes an explicit `self.` outside initializers.
+        let channel = channelName
+        logger.debug("WS opened, subscribing to channel \(channel)")
         webSocket.send(.string(subscribeMsg)) { error in
             if let error {
                 logger.error("Failed to send subscribe: \(error.localizedDescription)")
@@ -326,7 +330,8 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
     }
 
     func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
-        logger.debug("WS message: \(text)")
+        // Message bodies are application data; log their size, not their content.
+        logger.debug("WS message: \(text.utf8.count) bytes")
         guard let payloadData = RealtimeFrame.payload(from: text, channel: channelName) else { return }
         onPayload(payloadData)
     }
