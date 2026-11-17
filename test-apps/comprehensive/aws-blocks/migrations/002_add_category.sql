@@ -1,1 +1,0 @@
-ALTER TABLE test_items ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'general';

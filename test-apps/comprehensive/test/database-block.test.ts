@@ -7,8 +7,10 @@ import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { type ClusterType, DatabaseErrors } from '@aws-blocks/bb-database';
 import type { api as apiType } from 'aws-blocks';
 
-// Compile-time assertions (same pattern as database.test.ts). The cluster
-// descriptor's `kind` must survive the RPC boundary as the block's `ClusterType`.
+// Compile-time assertions. `Equal` is the standard invariant type-equality check;
+// `Expect` only accepts `true`, so an inexact type makes the harness `tsc --noEmit`
+// (run before deploy) fail. The cluster descriptor's `kind` must survive the RPC
+// boundary as the block's `ClusterType`.
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 type Info = Awaited<ReturnType<typeof apiType.dbxInfo>>;
@@ -28,6 +30,10 @@ type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>
 type _Validated = Expect<Equal<Validated, { id: string; name: string; value: number; category: string }>>;
 type Added = NonNullable<Awaited<ReturnType<typeof apiType.dbxaAdd>>>;
 type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
+// A Kysely projection on the DSQL block must surface exactly `{ id; name; value }` through the
+// RPC boundary: an unknown column, or a regression in the dialect's row typing, fails to compile.
+type DbxKyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
+type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; value: number }>>;
 
 export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
@@ -53,6 +59,19 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.ok((await api.dbxList()).some((r) => r.id === id));
       assert.strictEqual(await api.dbxGet('nonexistent'), null);
       await api.dbxDelete(id);
+    });
+
+    test('dbx - update returns the affected row count and changes the row', async () => {
+      const api = getApi();
+      const id = `x-u-${Date.now().toString(36)}`;
+      await api.dbxInsert(id, 'bob', 50);
+      try {
+        assert.strictEqual((await api.dbxUpdate(id, 999)).rowCount, 1);
+        assert.strictEqual((await api.dbxGet(id))?.value, 999);
+        assert.strictEqual((await api.dbxUpdate(`${id}-missing`, 1)).rowCount, 0, 'no row matched');
+      } finally {
+        await api.dbxDelete(id);
+      }
     });
 
     test('dbx - transaction commits a transfer and rolls back on failure', async () => {
@@ -129,11 +148,71 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
             assert.ok(e instanceof ApiError);
             assert.strictEqual(e.status, 409);
             assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
+            assert.strictEqual(e.retriable, false, 'a duplicate key is deterministic, so it is not retriable');
             return true;
           },
         );
       } finally {
         await api.dbxDelete(id);
+      }
+    });
+
+    // A statement the cluster rejects for something the caller did, thrown out of the handler uncaught:
+    // the client must be able to branch on the name, and the message must not carry the row's values.
+    test('dbx - a not-null violation reaches the client as a named QueryFailed without row values', async () => {
+      const api = getApi();
+      const id = `x-nn-${Date.now().toString(36)}`;
+      await assert.rejects(
+        () => api.dbxNotNullViolation(id),
+        (e: unknown) => {
+          assert.ok(e instanceof ApiError, `expected ApiError, got ${e}`);
+          assert.ok(isBlocksError(e, DatabaseErrors.QueryFailed), `expected QueryFailed, got ${e.name}`);
+          assert.ok(!e.message.includes(id), `the message must not quote the row: ${e.message}`);
+          return true;
+        },
+      );
+      assert.strictEqual(await api.dbxGet(id), null, 'nothing was inserted');
+    });
+
+    test('dbx - Kysely through DatabaseDialect on a DSQL cluster: typed insert, select and delete', async () => {
+      const api = getApi();
+      const id = `x-ky-${Date.now().toString(36)}`;
+      const row = await api.dbxKyselyInsertAndGet(id, 'kysely-test', 142);
+      try {
+        assert.deepStrictEqual(row, { id, name: 'kysely-test', value: 142, category: 'kysely' });
+        const rows = await api.dbxKyselySelect(100);
+        assert.deepStrictEqual(rows.find((r) => r.id === id), { id, name: 'kysely-test', value: 142 });
+        assert.ok(!(await api.dbxKyselySelect(143)).some((r) => r.id === id), 'the typed where clause filtered the row out');
+      } finally {
+        assert.deepStrictEqual(await api.dbxKyselyDelete(id), { deleted: 1 });
+      }
+      assert.strictEqual(await api.dbxGet(id), null);
+    });
+
+    test('dbx - a Kysely transaction commits a transfer, and rolls back atomically when it throws', async () => {
+      const api = getApi();
+      const a = `x-kt-${Date.now().toString(36)}-a`;
+      const b = `x-kt-${Date.now().toString(36)}-b`;
+      await api.dbxInsert(a, 'sender', 500);
+      await api.dbxInsert(b, 'receiver', 0);
+      try {
+        assert.deepStrictEqual(await api.dbxKyselyTransfer(a, b, 200, false), { success: true });
+        assert.strictEqual((await api.dbxGet(a))?.value, 300);
+        assert.strictEqual((await api.dbxGet(b))?.value, 200);
+        // The callback throws after the debit and the credit: neither may be kept.
+        await assert.rejects(
+          () => api.dbxKyselyTransfer(a, b, 200, true),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError);
+            assert.strictEqual(e.status, 409, 'the ApiError the callback threw passes through');
+            return true;
+          },
+        );
+        assert.strictEqual((await api.dbxGet(a))?.value, 300, 'the debit was rolled back');
+        assert.strictEqual((await api.dbxGet(b))?.value, 200, 'the credit was rolled back');
+      } finally {
+        await api.dbxDelete(a);
+        await api.dbxDelete(b);
       }
     });
 
