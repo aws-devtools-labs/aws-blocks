@@ -656,3 +656,17 @@ export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
 	 */
 	ifValueEquals?: T;
 };
+
+/**
+ * Conditions of `LegacyKVStore.delete`: the conditions that `delete` took in a
+ * release up to 0.4.0. When both are set, both must hold.
+ */
+export type LegacyKVStoreDeleteOptions<T = unknown> = {
+	/** Only delete if the key exists. */
+	ifExists?: boolean;
+	/**
+	 * Only delete if the current value serializes equal to this value. The
+	 * compare is on the JSON text, so the order of the keys of an object matters.
+	 */
+	ifValueEquals?: T;
+};

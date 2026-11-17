@@ -102,6 +102,7 @@ import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
 import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStoreDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { LegacyKVStoreOptions } from '@aws-blocks/bb-kv-store';
 import { LegacyKVStorePutOptions } from '@aws-blocks/bb-kv-store';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
@@ -445,6 +446,8 @@ export { KVStoreErrors }
 export { KVStoreOptions }
 
 export { LegacyKVStore }
+
+export { LegacyKVStoreDeleteOptions }
 
 export { LegacyKVStoreOptions }
 

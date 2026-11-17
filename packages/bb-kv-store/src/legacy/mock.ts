@@ -12,6 +12,7 @@ import { loadReleaseFile, saveReleaseFile } from '../mock-file.js';
 import type {
 	Entry,
 	GetOptions,
+	LegacyKVStoreDeleteOptions,
 	LegacyKVStoreOptions,
 	LegacyKVStorePutOptions,
 	Results,
@@ -22,6 +23,7 @@ import {
 	RELEASE_MODEL,
 	RELEASE_PK,
 	RELEASE_VALUE,
+	releaseDelete,
 	releaseEntry,
 	releaseKey,
 	releaseLiveValue,
@@ -200,7 +202,8 @@ export class LegacyKVStore<T = string> extends Scope {
 	}
 
 	/**
-	 * Delete a key of the old store. A key that does not exist is not an error.
+	 * Delete a key of the old store. A key that does not exist is not an error,
+	 * unless `ifExists` is set.
 	 *
 	 * Use it while the copy runs. Where the app deletes a key, delete it in the
 	 * old store first, and then in the new one, so that the copy and a read that
@@ -209,8 +212,11 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * the old value does not show again when the new one expires.
 	 *
 	 * @param key - The string key.
+	 * @param conditions - `ifExists` and `ifValueEquals`, the conditions of the release. With both, both must hold.
 	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
 	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a condition is set and does not hold. Status 409.
+	 *   Retriable when `ifValueEquals` is set without `ifExists`.
 	 *
 	 * @example
 	 * ```typescript
@@ -218,7 +224,15 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * await prefs.delete(key);
 	 * ```
 	 */
-	async delete(key: string): Promise<void> {
-		if (this.data.delete(releaseKey(key))) saveReleaseFile(this.dataDir, this.data.values());
+	async delete(key: string, conditions?: LegacyKVStoreDeleteOptions<T>): Promise<void> {
+		const plan = releaseDelete(key, presentOptions(conditions));
+		const existing = this.data.get(plan.pk);
+		// `ifExists` and `ifValueEquals` compose with AND, as in the release. A
+		// value check on a key that does not exist fails, as on DynamoDB.
+		if (plan.ifExists && existing === undefined) throw conditionalCheckFailed(plan.retriable);
+		if (plan.ifValue !== undefined && existing?.[RELEASE_VALUE] !== plan.ifValue) {
+			throw conditionalCheckFailed(plan.retriable);
+		}
+		if (this.data.delete(plan.pk)) saveReleaseFile(this.dataDir, this.data.values());
 	}
 }

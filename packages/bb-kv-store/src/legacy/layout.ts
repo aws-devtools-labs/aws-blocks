@@ -14,7 +14,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { blocksError, KVStoreErrors, validateSchema } from '../errors.js';
 import { type Item, itemExpired, type KeyModel, normalizeKey } from '../item.js';
 import { resolveTtlEpochSeconds } from '../ttl.js';
-import type { Entry, LegacyKVStorePutOptions } from '../types.js';
+import type { Entry, LegacyKVStoreDeleteOptions, LegacyKVStorePutOptions } from '../types.js';
 
 /** The key attribute of the layout. */
 export const RELEASE_PK = 'pk';
@@ -123,4 +123,35 @@ export async function releaseWrite<In, Out>(
 	const expected: unknown = options?.ifValueEquals === undefined ? undefined : JSON.stringify(options.ifValueEquals);
 	const ifValue = typeof expected === 'string' ? expected : undefined;
 	return { item, ifAbsent: options?.ifNotExists === true, ifValue, retriable: ifValue !== undefined };
+}
+
+/** The key that a `delete` of the old store removes, and the conditions that it removes it under. */
+export interface ReleaseDelete {
+	/** The key, checked. */
+	pk: string;
+	/** `ifExists`: the delete goes ahead only if the key exists. */
+	ifExists: boolean;
+	/** `ifValueEquals` as JSON text: the delete goes ahead only if the stored `value` equals it. */
+	ifValue: string | undefined;
+	/**
+	 * Whether a failed condition is a conflict that a new read and a new try can
+	 * pass: true for a value check alone, false when `ifExists` took part.
+	 */
+	retriable: boolean;
+}
+
+/**
+ * Check a `delete` of the old store. Both runtimes call it first. The
+ * conditions are those of the release, and both must hold when both are set.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
+ * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string.
+ */
+export function releaseDelete(key: unknown, conditions: LegacyKVStoreDeleteOptions | undefined): ReleaseDelete {
+	const pk = releaseKey(key);
+	const ifExists = conditions?.ifExists === true;
+	const expected: unknown =
+		conditions?.ifValueEquals === undefined ? undefined : JSON.stringify(conditions.ifValueEquals);
+	const ifValue = typeof expected === 'string' ? expected : undefined;
+	return { pk, ifExists, ifValue, retriable: ifValue !== undefined && !ifExists };
 }

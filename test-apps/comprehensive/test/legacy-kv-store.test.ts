@@ -120,7 +120,7 @@ export function legacyKvStoreTests(getApi: () => typeof apiType) {
       assert.deepStrictEqual(await api.legacyDelete(`legacy-${Date.now().toString(36)}`), { success: true });
     });
 
-    test('a put writes a value that a get reads back; ifNotExists does not replace it', async () => {
+    test('a put writes a value that a get reads back; ifNotExists does not replace it; a delete with ifExists needs the key', async () => {
       const api = getApi();
       const key = `legacy-put-${Date.now().toString(36)}`;
       await api.legacyPut(key, ADA, { ifNotExists: true, ttlSeconds: 3600 });
@@ -129,8 +129,9 @@ export function legacyKvStoreTests(getApi: () => typeof apiType) {
       assert.deepStrictEqual(await api.legacyGet(key), ADA);
       await api.legacyPut(key, GRACE);
       assert.deepStrictEqual(await api.legacyGet(key), GRACE);
-      await api.legacyDelete(key);
+      await api.legacyDelete(key, { ifExists: true });
       assert.strictEqual(await api.legacyGet(key), null);
+      await expectError(api.legacyDelete(key, { ifExists: true }), ConditionalCheckFailed);
     });
   });
 }

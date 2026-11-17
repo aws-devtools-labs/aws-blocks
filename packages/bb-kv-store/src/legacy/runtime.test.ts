@@ -328,6 +328,40 @@ describe('mock: put writes as a release up to 0.4.0 writes', () => {
 	});
 });
 
+describe('mock: delete takes the conditions of a release up to 0.4.0', () => {
+	test('ifExists fails for a key that the store does not hold, and passes for one that it holds', async () => {
+		const old = new LegacyKVStore<string>(testScope(), 'prefs');
+		await old.put('k', 'v');
+		const missing: any = await rejects(
+			() => old.delete('other', { ifExists: true }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([missing.status, missing.retriable], [409, false]);
+		await old.delete('k', { ifExists: true });
+		assert.equal(await old.get('k'), null);
+	});
+
+	test('ifValueEquals compares the JSON text; with ifExists, both must hold', async () => {
+		const old = new LegacyKVStore<unknown>(testScope(), 'prefs');
+		await old.put('k', { v: 1 });
+		const stale: any = await rejects(
+			() => old.delete('k', { ifValueEquals: { v: 2 } }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([stale.status, stale.retriable], [409, true]);
+		const both: any = await rejects(
+			() => old.delete('k', { ifExists: true, ifValueEquals: { v: 2 } }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([both.status, both.retriable], [409, false]);
+		// A value check on a key that the store does not hold fails too.
+		await rejects(() => old.delete('other', { ifValueEquals: { v: 1 } }), KVStoreErrors.ConditionalCheckFailed);
+		assert.deepEqual(await old.get('k'), { v: 1 });
+		await old.delete('k', { ifExists: true, ifValueEquals: { v: 1 } });
+		assert.equal(await old.get('k'), null);
+	});
+});
+
 // ── The AWS runtime ─────────────────────────────────────────────────────────
 
 describe('aws: reads the table of a release up to 0.4.0', () => {
@@ -384,6 +418,39 @@ describe('aws: reads the table of a release up to 0.4.0', () => {
 		const { store, input } = awsStore();
 		await store.delete('a');
 		assert.deepEqual(input(), { Key: { pk: 'a' } });
+	});
+
+	test('delete sends ifExists and ifValueEquals as one condition, joined with AND, and gives a failed one as a 409', async () => {
+		const { store, input } = awsStore();
+		await store.delete('a', { ifExists: true });
+		await store.delete('a', { ifValueEquals: { n: 1 } });
+		await store.delete('a', { ifExists: true, ifValueEquals: 'old' });
+		assert.deepEqual(input(0), {
+			Key: { pk: 'a' },
+			ConditionExpression: 'attribute_exists(#pk)',
+			ExpressionAttributeNames: { '#pk': 'pk' },
+		});
+		assert.deepEqual(input(1), {
+			Key: { pk: 'a' },
+			ConditionExpression: '#value = :expected',
+			ExpressionAttributeNames: { '#value': 'value' },
+			ExpressionAttributeValues: { ':expected': JSON.stringify({ n: 1 }) },
+		});
+		assert.deepEqual(input(2), {
+			Key: { pk: 'a' },
+			ConditionExpression: 'attribute_exists(#pk) AND #value = :expected',
+			ExpressionAttributeNames: { '#pk': 'pk', '#value': 'value' },
+			ExpressionAttributeValues: { ':expected': JSON.stringify('old') },
+		});
+
+		const conflict = awsStore(undefined, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		const failed: any = await rejects(
+			() => conflict.store.delete('a', { ifValueEquals: 'old' }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([failed.status, failed.retriable], [409, true]);
 	});
 
 	test('put writes the item of the release: pk, the JSON text, and ttl only with an expiry', async () => {
@@ -583,5 +650,33 @@ describe('parity: the mock and the AWS runtime agree', () => {
 				[409, false],
 			],
 		);
+	});
+
+	test('delete: a failed condition is the same 409, with the same message and the same retriable flag', async () => {
+		const mock: any = new LegacyKVStore(testScope(), 'prefs');
+		await mock.put('k', 'v');
+		const aws = awsStore(undefined, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		const cases: [Record<string, unknown>, string, boolean][] = [
+			[{ ifExists: true }, 'missing', false],
+			[{ ifValueEquals: 'other' }, 'k', true],
+			[{ ifExists: true, ifValueEquals: 'other' }, 'k', false],
+		];
+		for (const [conditions, key, retriable] of cases) {
+			const errors: any[] = [];
+			for (const store of [mock, aws.store] as any[]) {
+				errors.push(await rejects(() => store.delete(key, conditions), KVStoreErrors.ConditionalCheckFailed));
+			}
+			assert.equal(errors[0].message, errors[1].message);
+			assert.deepEqual(
+				errors.map((error) => [error.status, error.retriable]),
+				[
+					[409, retriable],
+					[409, retriable],
+				],
+				JSON.stringify(conditions),
+			);
+		}
 	});
 });

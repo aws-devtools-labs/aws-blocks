@@ -11,6 +11,7 @@ import { decodeCursor, type Item, normalizeLimit, presentOptions, requestResults
 import type {
 	Entry,
 	GetOptions,
+	LegacyKVStoreDeleteOptions,
 	LegacyKVStoreOptions,
 	LegacyKVStorePutOptions,
 	Results,
@@ -21,6 +22,7 @@ import {
 	RELEASE_MODEL,
 	RELEASE_PK,
 	RELEASE_VALUE,
+	releaseDelete,
 	releaseEntry,
 	releaseKey,
 	releaseLiveValue,
@@ -217,7 +219,8 @@ export class LegacyKVStore<T = string> extends Scope {
 	}
 
 	/**
-	 * Delete a key of the old store. A key that does not exist is not an error.
+	 * Delete a key of the old store. A key that does not exist is not an error,
+	 * unless `ifExists` is set.
 	 *
 	 * Use it while the copy runs. Where the app deletes a key, delete it in the
 	 * old store first, and then in the new one, so that the copy and a read that
@@ -226,8 +229,11 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * the old value does not show again when the new one expires.
 	 *
 	 * @param key - The string key.
+	 * @param conditions - `ifExists` and `ifValueEquals`, the conditions of the release. With both, both must hold.
 	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
 	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a condition is set and does not hold. Status 409.
+	 *   Retriable when `ifValueEquals` is set without `ifExists`.
 	 *
 	 * @example
 	 * ```typescript
@@ -235,12 +241,37 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * await prefs.delete(key);
 	 * ```
 	 */
-	async delete(key: string): Promise<void> {
-		await this.docClient.send(
-			new DeleteCommand({
-				TableName: getSdkIdentifiers(this).tableName,
-				Key: { [RELEASE_PK]: releaseKey(key) },
-			}),
-		);
+	async delete(key: string, conditions?: LegacyKVStoreDeleteOptions<T>): Promise<void> {
+		const plan = releaseDelete(key, presentOptions(conditions));
+		// `ifExists` and `ifValueEquals` compose with AND, as in the release.
+		const parts: string[] = [];
+		const names: Record<string, string> = {};
+		if (plan.ifExists) {
+			parts.push('attribute_exists(#pk)');
+			names['#pk'] = RELEASE_PK;
+		}
+		if (plan.ifValue !== undefined) {
+			parts.push('#value = :expected');
+			names['#value'] = RELEASE_VALUE;
+		}
+		try {
+			await this.docClient.send(
+				new DeleteCommand({
+					TableName: getSdkIdentifiers(this).tableName,
+					Key: { [RELEASE_PK]: plan.pk },
+					...(parts.length > 0 && {
+						ConditionExpression: parts.join(' AND '),
+						ExpressionAttributeNames: names,
+					}),
+					...(plan.ifValue !== undefined && { ExpressionAttributeValues: { ':expected': plan.ifValue } }),
+				}),
+			);
+		} catch (err: unknown) {
+			// A failed condition is a 409 with the name of the block, as on a KVStore.
+			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(plan.retriable, err);
+			}
+			throw err;
+		}
 	}
 }

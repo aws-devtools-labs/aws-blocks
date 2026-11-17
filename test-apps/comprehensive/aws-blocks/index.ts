@@ -1321,8 +1321,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async legacyDelete(key: string) {
-    await legacyStore.delete(key);
+  async legacyDelete(key: string, conditions?: { ifExists?: boolean }) {
+    await legacyStore.delete(key, conditions);
     return { success: true };
   },
 

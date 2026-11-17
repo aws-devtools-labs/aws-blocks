@@ -164,6 +164,7 @@ export type {
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreDeleteOptions,
 	LegacyKVStoreOptions,
 	LegacyKVStorePutOptions,
 	PutBatchEntry,

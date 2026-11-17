@@ -357,6 +357,7 @@ async function _contract() {
 	await oldProfiles.delete('k');
 	if (oldProfile) {
 		await oldProfiles.put('k', oldProfile, { ifNotExists: true, ifValueEquals: oldProfile, ttlSeconds: 60 });
+		await oldProfiles.delete('k', { ifExists: true, ifValueEquals: oldProfile });
 	}
 	// @ts-expect-error the value of LegacyKVStore.put has the value type of the store
 	await oldProfiles.put('k', 'text');

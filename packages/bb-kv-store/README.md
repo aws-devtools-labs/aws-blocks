@@ -459,9 +459,9 @@ A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. Thi
 | `get(key, options?)` | `Promise<T \| null>` | Read one value of the old store. A consistent read by default. |
 | `put(key, value, options?)` | `Promise<void>` | Write one value to the old store, as the release does. Takes `ttlSeconds` or `expiresAt`, and the conditions `ifNotExists` and `ifValueEquals`. |
 | `scan(options?)` | `Results` | Read every entry of the old store, with its expiry. Takes `limit`, `cursor`, and `includeExpired`. |
-| `delete(key)` | `Promise<void>` | Remove a key from the old store. |
+| `delete(key, conditions?)` | `Promise<void>` | Remove a key from the old store. Takes the conditions `ifExists` and `ifValueEquals`. |
 
-`put` validates the value with the `schema`, and takes the options of release 0.4.0. With both conditions, the write goes ahead if the key is absent or its value matches. `delete` takes no condition.
+`put` validates the value with the `schema`, and takes the options of release 0.4.0. With both conditions, the write goes ahead if the key is absent or its value matches. `delete` takes the conditions of that release too. With both, both must hold.
 
 ### Step 1. Declare both stores, and deploy
 

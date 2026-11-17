@@ -147,11 +147,17 @@ export class LegacyKVStore<T = string> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: LegacyKVStoreOptions<T>);
     // (undocumented)
     readonly bbName = "KVStore";
-    delete(key: string): Promise<void>;
+    delete(key: string, conditions?: LegacyKVStoreDeleteOptions<T>): Promise<void>;
     get(key: string, options?: GetOptions): Promise<T | null>;
     put(key: string, value: T, options?: LegacyKVStorePutOptions<T>): Promise<void>;
     scan(options?: ScanOptions): Results<T, undefined>;
 }
+
+// @public
+export type LegacyKVStoreDeleteOptions<T = unknown> = {
+    ifExists?: boolean;
+    ifValueEquals?: T;
+};
 
 // @public
 export interface LegacyKVStoreOptions<T = string> {
