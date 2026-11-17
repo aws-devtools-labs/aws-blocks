@@ -78,6 +78,7 @@ Local development works the same way. The mock keeps the sessions in `.bb-data/<
 
 Your pool and your users survive, **provided the block's id is unchanged**. Their sessions do not: [the session store](#the-session-store) is a new table, so each user signs in once. Under `BlocksPresets.production` the session secret changes too: see ["The session secret moves to Secrets Manager"](#the-session-secret-moves-to-secrets-manager) below.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-cognito -->
 ```ts
 // Before (AuthCognito)
 import { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
@@ -148,6 +149,7 @@ To keep the key across the switch, set `secretsStore: 'ssm'` **before** the firs
 
 Direct providers keep their identity: `userId` is still `` `${iss}:${sub}` ``. Nothing in AWS is destroyed, and no Cognito pool is created. The old session cookie is ignored, so each user signs in once more after the deploy. The session store is a new table, and the old `sessions` table leaves the stack ([The session store](#the-session-store)).
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-oidc -->
 ```ts
 // Before (AuthOIDC)
 import { AuthOIDC, google, github, customOidc, relayOrigin, stubIdp } from '@aws-blocks/bb-auth-oidc';
@@ -326,6 +328,7 @@ Before relying on it, check the username format for one real user in the Cognito
 
 **There is no migration path.** Cognito can't import `AuthBasic`'s bcrypt password hashes, so every existing user must **sign up again** after the switch. The codemod rewrites the code and marks every `AuthBasic` block with a TODO, but the decision to switch is yours.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-basic -->
 ```ts
 // Before (AuthBasic)
 import { AuthBasic, AuthBasicErrors } from '@aws-blocks/bb-auth-basic';

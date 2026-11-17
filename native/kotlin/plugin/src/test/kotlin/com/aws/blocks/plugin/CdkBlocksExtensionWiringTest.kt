@@ -16,13 +16,13 @@ private fun jvmProject(): Project = project("java-library", "org.jetbrains.kotli
 
 private fun kmpProject(): Project = project("org.jetbrains.kotlin.multiplatform")
 
-class AwsBlocksExtensionWiringTest : FunSpec({
+class CdkBlocksExtensionWiringTest : FunSpec({
 
     // Android needs AGP, unreachable under ProjectBuilder; KMP's relayToRequirement is
     // a placeholder afterEvaluate replaces. Neither is asserted.
     test("every extension input reaches the JVM codegen task") {
         val project = jvmProject()
-        project.extensions.getByType(AwsBlocksExtension::class.java).apply {
+        project.extensions.getByType(CdkBlocksExtension::class.java).apply {
             apiSpec.set(project.layout.projectDirectory.file("probe.spec.json"))
             packageName.set("com.probe.gen")
             serverOverrides.set(mapOf("local" to "http://127.0.0.1:1"))
@@ -31,7 +31,7 @@ class AwsBlocksExtensionWiringTest : FunSpec({
             oidc { it.relayTo = "com.probe.app://auth/callback" }
         }
 
-        val task = project.tasks.getByName("awsBlocksCodegen") as AwsBlocksCodegenTask
+        val task = project.tasks.getByName("blocksCodegen") as CdkBlocksCodegenTask
         task.openRpcFile.get().asFile.name shouldBe "probe.spec.json"
         task.packageName.get() shouldBe "com.probe.gen"
         task.serverOverrides.get() shouldBe mapOf("local" to "http://127.0.0.1:1")
@@ -39,16 +39,16 @@ class AwsBlocksExtensionWiringTest : FunSpec({
         task.visibility.get() shouldBe GeneratedVisibility.Internal
         task.relayTo.get() shouldBe "com.probe.app://auth/callback"
         task.relayToRequirement.get() shouldBe RelayToRequirement.NotNeeded
-        task.outputDirectory.get().asFile.path shouldEndWith "generated/source/aws/blocks/main"
+        task.outputDirectory.get().asFile.path shouldEndWith "generated/source/cdk/blocks/main"
     }
 
     test("excludeNativePackages set on the extension reaches the KMP codegen task") {
         val project = kmpProject()
-        project.extensions.getByType(AwsBlocksExtension::class.java)
+        project.extensions.getByType(CdkBlocksExtension::class.java)
             .excludeNativePackages.set(setOf("example-iot-native"))
 
-        val task = project.tasks.getByName("awsBlocksCodegen") as AwsBlocksCodegenTask
+        val task = project.tasks.getByName("blocksCodegen") as CdkBlocksCodegenTask
         task.excludeNativePackages.get() shouldBe setOf("example-iot-native")
-        task.outputDirectory.get().asFile.path shouldEndWith "generated/source/aws/blocks/commonMain"
+        task.outputDirectory.get().asFile.path shouldEndWith "generated/source/cdk/blocks/commonMain"
     }
 })

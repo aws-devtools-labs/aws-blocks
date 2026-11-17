@@ -47,6 +47,7 @@ object ClassNames {
     val anyProvider = ClassName("com.aws.blocks.kotlin.oidc", "AnyProvider")
     val realtimeChannel = ClassName("com.aws.blocks.kotlin.realtime", "RealtimeChannel")
     val unknownTransferable = ClassName("com.aws.blocks.kotlin", "UnknownTransferable")
+    val transportException = ClassName("com.aws.blocks.kotlin.exceptions", "TransportException")
 }
 
 object MemberNames {

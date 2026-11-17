@@ -1,12 +1,12 @@
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.exceptions.BlocksException
-import io.kotest.assertions.throwables.shouldThrow
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 class BlocksTest {
 
@@ -41,11 +41,13 @@ class BlocksTest {
         val blocks = Blocks(server)
         blocks.close()
 
-        val failure = shouldThrow<BlocksException> {
+        val failure = assertFailsWith<ClientClosedException> {
             blocks.client().execute(BlocksRequest(method = "api.list", params = emptyList(), id = 1))
         }
 
-        failure.message!! shouldContain "closed"
+        failure.message shouldBe CLOSED_MESSAGE
+        // Still catchable as the umbrella type.
+        (failure is BlocksException) shouldBe true
     }
 
     @Test

@@ -321,7 +321,7 @@ flowchart LR
 - **Generated locally.** `generate-spec-cli.ts` (`blocks-generate-spec`, the `spec` script in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
 - **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
 - **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
-- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `awsBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
+- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `cdkBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
 
 ### `db pull`: spec values from database schema
 

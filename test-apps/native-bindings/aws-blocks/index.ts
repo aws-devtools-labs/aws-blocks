@@ -595,6 +595,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   /**
+   * Returns nothing. The server answers `"result": null`; a response with no `result` field
+   * made the Kotlin and Swift clients throw "Missing result field" on every void call
+   * (native e2e: Swift `RpcWireE2ETests`, Kotlin `RpcWireE2ETest`, Dart `rpc_wire_test.dart`).
+   */
+  async voidResult(): Promise<void> {},
+
+  /**
    * A rest parameter typed as a tuple, as `...args: Parameters<typeof table.put>` forwards a
    * Building Block's parameters. Its elements are positional params (`label`, `count`), so a
    * native client sends `["x", 2]` and `args` is `["x", 2]`; one that sent the tuple as a single

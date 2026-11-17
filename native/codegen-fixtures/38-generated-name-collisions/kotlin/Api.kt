@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Double
 import kotlin.String
@@ -31,42 +32,49 @@ public class Api(
     }
     val request_2 = BlocksRequest(method = "api.send", params = args_2, id = BlocksRequest.nextId())
     val result = client.execute(request_2)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.send")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getProfile(profile: Profile): Profile {
     val request = BlocksRequest(method = "api.getProfile", params = listOf(BlocksJson.encodeToJsonElement(profile)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getProfile")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun one(): One.Result {
     val request = BlocksRequest(method = "api.one", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.one")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun two(): Two.Result {
     val request = BlocksRequest(method = "api.two", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.two")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun relay(client: String): String {
     val request = BlocksRequest(method = "api.relay", params = listOf(JsonPrimitive(client)), id = BlocksRequest.nextId())
     val result = this.client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.relay")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun putBag(bag: Bag): Bag {
     val request = BlocksRequest(method = "api.putBag", params = listOf(BlocksJson.encodeToJsonElement(bag)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.putBag")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getWeird(weird: Weird): Weird {
     val request = BlocksRequest(method = "api.getWeird", params = listOf(BlocksJson.encodeToJsonElement(weird)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getWeird")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
