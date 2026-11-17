@@ -78,8 +78,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
 
         val overrides = serverOverrides.getOrElse(emptyMap())
         val specUrls = model.servers.associate { it.name to it.url }
-        val hasEndpoint = !model.endpoint.isNullOrEmpty()
-        overrides.forEach { (name, url) -> validateServerUrl(name, url, specUrls[name], hasEndpoint) }
+        overrides.forEach { (name, url) -> validateServerUrl(name, url, specUrls[name]) }
 
         // Merge server overrides from the extension DSL into the parsed model.
         // Overrides replace servers with the same name; new names are appended.
@@ -123,17 +122,16 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
     }
 
     /**
-     * The generated `Servers` constant is a server URL as given, or that URL joined
-     * with a non-empty `x-blocks-endpoint` when the spec declares one, and the client
-     * posts to it with `/<namespace>` appended. An override the client could not post
-     * RPC to is rejected here, where the spec is known; the rules a user sees are
-     * listed on [AwsBlocksExtension.servers]. The host is read from the raw authority
-     * because `URI.host` is null for a host the RFC rejects but resolvers accept, such
-     * as one with an underscore. [specUrl] is the spec's URL for the same server name,
-     * the one to point the user at: a stage prefix such as `/prod` cannot be derived
-     * from the origin alone.
+     * The generated `Servers` constant is a server URL as given, and the client posts
+     * to it with `/<namespace>` appended. An override the client could not post RPC to
+     * is rejected here, where the spec is known; the rules a user sees are listed on
+     * [AwsBlocksExtension.servers]. The host is read from the raw authority because
+     * `URI.host` is null for a host the RFC rejects but resolvers accept, such as one
+     * with an underscore. [specUrl] is the spec's URL for the same server name, the one
+     * to point the user at: a stage prefix such as `/prod` cannot be derived from the
+     * origin alone.
      */
-    private fun validateServerUrl(name: String, url: String, specUrl: String?, hasEndpoint: Boolean) {
+    private fun validateServerUrl(name: String, url: String, specUrl: String?) {
         val fix = if (specUrl != null) {
             "the spec declares \"$name\" as \"$specUrl\""
         } else {
@@ -167,7 +165,6 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
                     "A server URL is the RPC base the client posts to, so give the URL without them ($fix).",
             )
         }
-        if (hasEndpoint) return
         // `path` decodes `%2F` and `%2E` to `/` and `.`, so an encoded-only path is rejected
         // like a bare one; tests pin `/%2F` and `/%2E`, so the filter must not be relaxed.
         val segments = uri.normalize().path.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }
@@ -175,8 +172,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         throw GradleException(
             "awsBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
                 "under /aws-blocks/api, not at the origin, so every call through this server fails. " +
-                "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/aws-blocks/api\" ($fix), " +
-                "or declare a non-empty x-blocks-endpoint in the spec.",
+                "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/aws-blocks/api\" ($fix).",
         )
     }
 }
