@@ -92,6 +92,10 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+// The native apps' OIDC client for federated sign-in. This block has no federated providers yet,
+// so its client signs in with none. To offer one, add it to `new Auth(...)` and list the Swift
+// demo's relay URL, `blocksdemo://auth`, in `redirects.allowedRelayOrigins`.
+export const oidcAuthApi = auth.createOidcApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getValue(key: string) {

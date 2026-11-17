@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import AuthenticationServices
+import BlocksRuntime
 import SwiftUI
 
 // MARK: - Configuration
@@ -33,6 +35,8 @@ final class AppState: ObservableObject {
     var authApi: AuthApi { blocks.authApi }
 
     @Published var authState: AuthState?
+    /// The providers the OIDC client signs in with: one sign-in button each.
+    @Published var federatedProviders: [String] = []
     @Published var error: String?
 
     var isSignedIn: Bool {
@@ -46,7 +50,47 @@ final class AppState: ObservableObject {
     func refreshAuth() async {
         do {
             authState = try await authApi.getAuthState()
+            federatedProviders = try await oidc().providers
             error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Where the backend relays a federated sign-in back to. The backend lists it in
+    /// `redirects.allowedRelayOrigins`.
+    static let relayTo = "blocksdemo://auth"
+
+    /// The `Auth` block's OIDC client from `oidcAuthApi.getClient()`, fetched on first use and kept
+    /// for the app's lifetime. It carries the block's routes and provider ids.
+    private var oidcClient: OIDCClient<String>?
+
+    private func oidc() async throws -> OIDCClient<String> {
+        if let oidcClient {
+            return oidcClient
+        }
+        let client = try await blocks.oidcAuthApi.getClient()
+        oidcClient = client
+        return client
+    }
+
+    /// A provider's sign-in button: sign in through the backend's relay, then read the new state.
+    func federatedSignIn(provider: String) async {
+        do {
+            _ = try await oidc().signIn(provider: provider, relayTo: Self.relayTo, launcher: WebAuthenticationLauncher())
+            await refreshAuth()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// A federated user's `signOut` action: sign out, open the provider's logout page, then read the new state.
+    func federatedSignOut() async {
+        do {
+            if let logoutURL = try await oidc().signOut() {
+                await UIApplication.shared.open(logoutURL)
+            }
+            await refreshAuth()
         } catch {
             self.error = error.localizedDescription
         }
@@ -59,6 +103,43 @@ final class AppState: ObservableObject {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Browser launcher
+
+/// Opens the identity provider in `ASWebAuthenticationSession` and returns the relayed callback URL.
+final class WebAuthenticationLauncher: NSObject, BrowserLauncher, ASWebAuthenticationPresentationContextProviding,
+    @unchecked Sendable {
+    /// Held while the sheet is open.
+    private var session: ASWebAuthenticationSession?
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        try await present(authorizeURL, callbackScheme: callbackScheme)
+    }
+
+    @MainActor
+    private func present(_ authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        defer { session = nil }
+        return try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: callbackScheme) { url, error in
+                if let url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cancelled))
+                }
+            }
+            session.presentationContextProvider = self
+            self.session = session
+            session.start()
+        }
+    }
+
+    @MainActor
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first ?? ASPresentationAnchor()
     }
 }
 

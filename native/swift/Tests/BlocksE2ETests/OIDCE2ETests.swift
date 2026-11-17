@@ -69,9 +69,9 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
 }
 
 /// OIDC server-relay E2E tests against the `auth-oidc` block: authorize-params, the IdP redirect
-/// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie)
-/// and an authenticated RPC. The client comes from the backend's `oidcAuthApi.getClient()`
-/// (`Auth.createOidcApi()`), typed by the block's provider ids.
+/// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie),
+/// an authenticated RPC, session restore and sign-out. The client comes from the backend's
+/// `oidcAuthApi.getClient()` (`Auth.createOidcApi()`), typed by the block's provider ids.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
 /// on a sandbox deployment (the native-bindings test app always deploys as one), so
@@ -104,6 +104,7 @@ final class OIDCE2ETests: BlocksE2ETestCase {
 
         let user = try await oidc.signIn(provider: .google, relayTo: relayTo, launcher: launcher)
         XCTAssertFalse(user.userId.isEmpty, "signInRelay returned a user")
+        XCTAssertEqual(user.signInProvider, provider)
 
         let currentUser = try await api.oidcRequireAuth()
         XCTAssertFalse(currentUser.userId.isEmpty)
@@ -117,10 +118,44 @@ final class OIDCE2ETests: BlocksE2ETestCase {
 
         _ = try await oidc.signIn(provider: .google, relayTo: relayTo, launcher: launcher)
 
-        let result = try await api.oidcSignOut()
-        XCTAssertTrue(result.success)
+        let logoutURL = try await oidc.signOut()
+        XCTAssertNotNil(logoutURL, "the stub IdP has a logout URL")
 
         let authed = try await api.oidcCheckAuth()
         XCTAssertFalse(authed)
+    }
+
+    /// The native flow: the sign-in button comes from the OIDC client's typed `providers`, and the
+    /// `Auth` sign-in state machine says whether the user is signed in, before and after.
+    func testFederatedSignInThroughTheAuthStateMachine() async throws {
+        let oidc = try await getOidcClient()
+        let signedOut = try await blocks.oidcAuthStateApi.getAuthState()
+        XCTAssertEqual(signedOut.state, .signedOut)
+        // The backend can serve more providers than google, so check for google rather than an exact list.
+        let buttons = oidc.providers.compactMap(OidcAuthApi.GetClient.Provider.init(rawValue:))
+        XCTAssertTrue(buttons.contains(.google), "a button per provider includes google: \(buttons)")
+
+        let user = try await oidc.signIn(provider: .google, relayTo: relayTo, launcher: HttpRelayLauncher())
+
+        let signedIn = try await blocks.oidcAuthStateApi.getAuthState()
+        XCTAssertEqual(signedIn.state, .signedIn)
+        XCTAssertEqual(signedIn.user?.userId, user.userId)
+
+        // A relaunch: a fresh `Blocks` shares the Keychain cookie store and restores the session.
+        let relaunched = Blocks(server: Self.server)
+        defer { relaunched.close() }
+        let restoredClient = try await relaunched.oidcAuthApi.getClient()
+        let restored = try await restoredClient.restore()
+        XCTAssertEqual(restored?.userId, user.userId)
+        let restoredState = await restoredClient.authState
+        XCTAssertEqual(restoredState, restored.map(OIDCAuthState.signedIn))
+
+        let logoutURL = try await restoredClient.signOut()
+        XCTAssertNotNil(logoutURL, "the stub IdP has a logout URL")
+
+        let afterSignOut = try await restoredClient.restore()
+        XCTAssertNil(afterSignOut)
+        let finalState = try await blocks.oidcAuthStateApi.getAuthState()
+        XCTAssertEqual(finalState.state, .signedOut)
     }
 }
