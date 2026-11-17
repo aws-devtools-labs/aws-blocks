@@ -19,6 +19,7 @@ import {
 	appIdProblem,
 	checkApiChild,
 	checkResourcePolicy,
+	checkResourcePolicyPrincipals,
 	checkRole,
 	isResourcePolicyType,
 	checkScopeFullId,
@@ -202,6 +203,25 @@ function blocksUnder(root: Construct): { node: IConstruct; fullId: string }[] {
 }
 
 /**
+ * The stacks of the app that owns `root`: its own stack, and every other stack in
+ * the same stage named `<id>` or `<id>-…` (Hosting's helper stacks, the
+ * `<id>-edge` stack). A stack outside the prefix is reported on its own.
+ */
+function appStacks(root: Construct, id: string): cdk.Stack[] {
+	const rootStack = cdk.Stack.of(root);
+	const stage = cdk.Stage.of(root);
+	const others = (stage?.node.findAll() ?? []).filter(
+		(n): n is cdk.Stack =>
+			cdk.Stack.isStack(n) &&
+			n !== rootStack &&
+			cdk.Stage.of(n) === stage &&
+			!cdk.Token.isUnresolved(n.stackName) &&
+			(n.stackName === id || n.stackName.startsWith(`${id}-`)),
+	);
+	return [rootStack, ...others];
+}
+
+/**
  * Every app-isolation violation for `root`, given the roles AWS Blocks created
  * for it (`roles`, already finalized) and a renderer for their template
  * properties. Must run at synthesis (from the IAM report's hook), after every
@@ -269,6 +289,19 @@ export function collectAppViolations(
 		} else if (type.startsWith('AWS::ApiGateway')) {
 			// A stage, route or deployment on an API outside the app's own template.
 			violations.push(...checkApiChild(type, render(node), app.id, node.node.path, parametersOf(cdk.Stack.of(node))));
+		}
+	}
+
+	// Who each resource policy lets in, in every stack of the app: the root's, and
+	// the helper stacks beside it (Hosting's support and `<id>-edge` stacks), which
+	// carry the app's name.
+	for (const stack of appStacks(root, app.id)) {
+		const account = cdk.Token.isUnresolved(stack.account) ? undefined : stack.account;
+		for (const node of stack.node.findAll()) {
+			if (!cdk.CfnResource.isCfnResource(node) || cdk.Stack.of(node) !== stack) continue;
+			violations.push(
+				...checkResourcePolicyPrincipals(node.cfnResourceType, render(node), app.id, node.node.path, parametersOf(stack), account),
+			);
 		}
 	}
 

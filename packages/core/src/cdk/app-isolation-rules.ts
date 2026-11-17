@@ -669,6 +669,169 @@ export function checkResourcePolicy(
 	return out;
 }
 
+/**
+ * Resource types whose policy document lets principals in, and the property that
+ * holds it. `AWS::Lambda::Permission` and `AWS::Lambda::LayerVersionPermission`
+ * name their one principal directly and are read by {@link checkResourcePolicyPrincipals}.
+ */
+const POLICY_DOCUMENT_OF: Record<string, string> = {
+	'AWS::S3::BucketPolicy': 'PolicyDocument',
+	'AWS::SQS::QueuePolicy': 'PolicyDocument',
+	'AWS::SNS::TopicPolicy': 'PolicyDocument',
+	'AWS::SecretsManager::ResourcePolicy': 'ResourcePolicy',
+	'AWS::KMS::Key': 'KeyPolicy',
+	'AWS::ApiGateway::RestApi': 'Policy',
+};
+
+/** Condition keys that, matched to the app's own ARNs, pin an "everyone" principal to this app. */
+const APP_ARN_CONDITION_KEYS = new Set(['aws:sourcearn', 'aws:principalarn']);
+
+/** Whether an ARN (rendered) is one of the app's own: a reference to its template, or a name under its prefix. */
+function isOwnArn(value: unknown, id: string, parameters: ReadonlySet<string>): boolean {
+	const rendered = renderResource(value, parameters);
+	if (rendered.kind === 'own') return true;
+	if (rendered.kind === 'unresolvable') return false;
+	const iamRole = /^arn:[^:]*:iam::[^:]*:role\/(?:.*\/)?([^/]+)$/.exec(rendered.arn);
+	const name = iamRole ? iamRole[1] : arnResourceName(rendered.arn)?.name;
+	if (name === undefined) return false;
+	if (name.startsWith(TOKEN)) return true;
+	const literal = name.split(TOKEN)[0];
+	return !literal.startsWith('*') && isUnderAppPrefix(literal, id, iamRole ? undefined : arnResourceName(rendered.arn)?.service);
+}
+
+/**
+ * Whether a statement's `Condition` pins it to this app: `aws:SourceArn` or
+ * `aws:PrincipalArn` matched (`ArnEquals`, `ArnLike`, `StringEquals`,
+ * `StringLike`) only to the app's own ARNs, or `aws:PrincipalTag/app` equal to
+ * the app id. The account (`aws:SourceAccount`, `aws:PrincipalAccount`, an
+ * organization) isn't enough: every app on the platform shares it.
+ */
+function conditionPinsToApp(condition: unknown, id: string, parameters: ReadonlySet<string>): boolean {
+	if (!condition || typeof condition !== 'object') return false;
+	for (const [operator, entries] of Object.entries(condition as Record<string, unknown>)) {
+		if (!/^(ArnEquals|ArnLike|StringEquals|StringLike)$/.test(operator) || !entries || typeof entries !== 'object') continue;
+		for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
+			const values = asList(value as unknown);
+			if (values.length === 0) continue;
+			const k = key.toLowerCase();
+			if (APP_ARN_CONDITION_KEYS.has(k) && values.every((v) => isOwnArn(v, id, parameters))) return true;
+			if (k === `aws:principaltag/${APP_TAG_KEY}` && values.every((v) => v === id)) return true;
+		}
+	}
+	return false;
+}
+
+/** Why an `AWS` principal value isn't this app's, or `undefined` when it is. */
+function awsPrincipalOutsideApp(value: unknown, id: string, parameters: ReadonlySet<string>, account?: string): string | undefined {
+	// `{ Ref: 'AWS::AccountId' }`: this account, which leaves the decision to IAM (and the boundary).
+	if (value && typeof value === 'object' && (value as { Ref?: unknown }).Ref === 'AWS::AccountId') return undefined;
+	const rendered = renderResource(value, parameters);
+	if (rendered.kind === 'own') return undefined;
+	if (rendered.kind === 'unresolvable') return JSON.stringify(value);
+	const v = rendered.arn;
+	if (v === '*') return '*';
+	if (/^\d{12}$/.test(v)) return v === account ? undefined : v;
+	const m = /^arn:[^:]*:iam::([^:]*):(.*)$/.exec(v);
+	if (!m) return v;
+	const [, principalAccount, resource] = m;
+	// A pseudo-parameter account renders as `*`; a literal one must be the stack's.
+	if (principalAccount !== '*' && principalAccount !== account) return v;
+	if (resource === 'root') return undefined;
+	return isOwnArn(value, id, parameters) ? undefined : v;
+}
+
+/**
+ * The principals in one statement that aren't this app's (for an `Allow`; a
+ * `Deny` lets no one in). With `everyoneIsPublic`, everyone (`*`) is a public
+ * endpoint's anonymous callers, not a principal to fence.
+ */
+function statementOutsiders(
+	statement: unknown,
+	id: string,
+	parameters: ReadonlySet<string>,
+	account?: string,
+	everyoneIsPublic = false,
+): string[] {
+	if (!statement || typeof statement !== 'object') return [];
+	const st = statement as { Effect?: unknown; Principal?: unknown; NotPrincipal?: unknown; Condition?: unknown };
+	if (st.Effect !== 'Allow') return [];
+	if (st.NotPrincipal !== undefined) return ['everyone except the NotPrincipal list'];
+	const pinned = conditionPinsToApp(st.Condition, id, parameters) || everyoneIsPublic;
+	if (st.Principal === '*') return pinned ? [] : ['*'];
+	if (!st.Principal || typeof st.Principal !== 'object') return [];
+	const out: string[] = [];
+	for (const [kind, values] of Object.entries(st.Principal as Record<string, unknown>)) {
+		if (kind === 'Service') continue;
+		for (const v of asList(values as unknown)) {
+			const outsider =
+				kind === 'AWS'
+					? everyoneIsPublic && v === '*'
+						? undefined
+						: awsPrincipalOutsideApp(v, id, parameters, account)
+					: renderResource(v, parameters).kind === 'own'
+						? undefined
+						: `${kind} ${JSON.stringify(v)}`;
+			if (outsider !== undefined && !(pinned && !everyoneIsPublic)) out.push(outsider);
+		}
+	}
+	return out;
+}
+
+/**
+ * `resource-policy-outside-app` for a resource policy that lets in someone who
+ * isn't this app: everyone (`*`), another account, another app's role,
+ * `NotPrincipal`, a federated or canonical user that isn't the app's own, or a
+ * public Lambda function URL. A service principal is fine (the service-principal
+ * check covers its source conditions), and so is this account's root, which
+ * leaves the decision to IAM and the boundary. "Everyone" is fine only when a
+ * condition pins it to the app's own ARNs or app tag, or on an API Gateway REST
+ * API, where it means a public API's anonymous callers. Covers Lambda and layer
+ * permissions, and bucket, queue, topic, secret, KMS key and API Gateway REST
+ * API policies, in every stack the report reads.
+ */
+export function checkResourcePolicyPrincipals(
+	type: string,
+	props: Record<string, unknown>,
+	id: string,
+	where: string,
+	parameters: ReadonlySet<string> = new Set(),
+	account?: string,
+): AppViolation[] {
+	let outsiders: string[];
+	if (type === 'AWS::Lambda::Permission' || type === 'AWS::Lambda::LayerVersionPermission') {
+		const principal = props.Principal;
+		if (typeof principal === 'string' && /\.amazonaws\.com(\.cn)?$/.test(principal)) return [];
+		// A function URL that requires IAM auth still needs the caller's own IAM permission.
+		if (principal === '*' && props.FunctionUrlAuthType === 'AWS_IAM') return [];
+		const pinned = isOwnArn(props.SourceArn, id, parameters);
+		const outsider = principal === '*' ? '*' : awsPrincipalOutsideApp(principal, id, parameters, account);
+		outsiders = outsider !== undefined && !(principal === '*' && pinned) ? [outsider] : [];
+	} else {
+		const key = POLICY_DOCUMENT_OF[type];
+		if (!key) return [];
+		const document = props[key] as { Statement?: unknown } | undefined;
+		// A REST API's policy lets in `*` for a public API (Hosting's origin-verify policy
+		// does, and denies requests without CloudFront's secret header): anonymous web
+		// callers aren't IAM principals, and runtime API calls aren't isolated (README,
+		// Limits). Another account or another app's role there is still flagged.
+		const everyoneIsPublic = type === 'AWS::ApiGateway::RestApi';
+		outsiders = asList(document?.Statement as unknown).flatMap((st) =>
+			statementOutsiders(st, id, parameters, account, everyoneIsPublic),
+		);
+	}
+	if (outsiders.length === 0) return [];
+	return [
+		{
+			rule: 'resource-policy-outside-app',
+			path: where,
+			message:
+				`${where} (${type}) lets in ${[...new Set(outsiders)].join(', ')}, which isn't this app. Grant this ` +
+				"app's own roles (or a service), or pin the statement to this app with aws:SourceArn or aws:PrincipalArn " +
+				`on its own ARNs, or aws:PrincipalTag/app = "${id}".`,
+		},
+	];
+}
+
 /** AWS managed policies too broad for an app role on a shared account. */
 const BROAD_MANAGED_POLICY = /:aws:policy\/(AdministratorAccess|PowerUserAccess|IAMFullAccess|ReadOnlyAccess|[A-Za-z0-9]*FullAccess)$/;
 
