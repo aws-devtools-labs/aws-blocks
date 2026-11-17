@@ -260,15 +260,9 @@ describe('AWS admin — revokeUserSessions', () => {
 		const carolSid = await signInAs(h, carol, 'carol');
 		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await h.auth.admin.revokeUserSessions('alice');
-		// The first command is the audit lookup (unanswered here, so the record has no `sub`).
-		assert.deepStrictEqual(
-			h.sent.map((c) => c.name),
-			['AdminGetUserCommand', 'AdminUserGlobalSignOutCommand'],
-		);
-		assert.deepStrictEqual(h.sent[1], {
-			name: 'AdminUserGlobalSignOutCommand',
-			input: { UserPoolId: TEST_POOL_ID, Username: 'alice' },
-		});
+		assert.deepStrictEqual(h.sent, [
+			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'alice' } },
+		]);
 		assert.strictEqual(await h.lookupSession(aliceSid), null);
 		assert.ok(await h.lookupSession(carolSid));
 		assert.strictEqual(await alice.request((ctx) => h.auth.getCurrentUser(ctx)), null);

@@ -432,8 +432,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		this.log = config.logger ?? new Logger(this, 'logger', { level: 'error' });
 		// `audit: true` gets its own `info` logger, so records are written however
 		// quiet `logger` is.
-		this.audit =
-			config.audit === true ? new Logger(this, 'audit', { level: 'info' }) : config.audit || null;
+		this.audit = config.audit === true ? new Logger(this, 'audit', { level: 'info' }) : config.audit || null;
 		this.sessionTtlSeconds = config.session?.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
 		this.crossDomain = config.session?.crossDomain ?? false;
 		this.sessions = new SessionStore(this, this.sessionTtlSeconds);
@@ -1571,6 +1570,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 						resolveSignInMode(this.config.users?.signInWith),
 						this.config.users?.caseSensitive !== false,
 					),
+				auditEnabled: this.audit !== null,
 				audit: (record) => this.auditEvent(record),
 				validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
 			}),

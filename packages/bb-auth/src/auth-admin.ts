@@ -53,6 +53,8 @@ export interface AdminDeps<O extends AuthOptions> {
 	readAttributes(attrs: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>>;
 	/** Delete every session row of `username` (`SessionStore.deleteByUsername`). */
 	deleteSessionsOf(username: string): Promise<number>;
+	/** Whether the `audit` option is on; the lookup that feeds a record is skipped when it is off. */
+	auditEnabled: boolean;
 	/** Write an audit record (the `audit` option); a no-op when it is off. */
 	audit(record: Omit<AuthAuditRecord, 'block'>): void;
 	/**
@@ -217,11 +219,14 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 		revokeUserSessions: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;
 			return run('lifecycle', async (n) => {
-				// Record the user by `sub`: `username` may be a sign-in email.
-				const sub = await n.admin
-					.getUser(username)
-					.then((u) => u?.userSub)
-					.catch(() => undefined);
+				// Record the user by `sub`: `username` may be a sign-in email. The lookup costs
+				// Cognito calls, so it runs only when a record will be written.
+				const sub = deps.auditEnabled
+					? await n.admin
+							.getUser(username)
+							.then((u) => u?.userSub)
+							.catch(() => undefined)
+					: undefined;
 				try {
 					await n.admin.globalSignOut(username);
 					// Make the revocation immediate: the session rows would otherwise stay

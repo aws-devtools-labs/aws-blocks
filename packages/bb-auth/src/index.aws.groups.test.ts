@@ -417,8 +417,18 @@ describe('AWS admin surface — command shapes', () => {
 		assert.strictEqual(h.sent[1].input.PaginationToken, 'p2');
 	});
 
-	test('revokeUserSessions looks the user up, then sends AdminUserGlobalSignOut', async () => {
+	test('revokeUserSessions sends only AdminUserGlobalSignOut when audit is off', async () => {
 		const h = makeAwsAuth({ admin: {} });
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
+		await h.auth.admin.revokeUserSessions('bob');
+		assert.deepStrictEqual(h.sent, [
+			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
+		]);
+	});
+
+	test('with audit on, revokeUserSessions looks the user up, then sends AdminUserGlobalSignOut', async () => {
+		const audit = captureLogger();
+		const h = makeAwsAuth({ admin: {}, audit: audit.logger });
 		h.on('AdminGetUserCommand', () => ({ Username: 'bob', UserAttributes: [{ Name: 'sub', Value: 'sub-bob' }] }));
 		h.on('AdminListGroupsForUserCommand', () => ({ Groups: [] }));
 		h.on('AdminUserGlobalSignOutCommand', () => ({}));
@@ -429,5 +439,9 @@ describe('AWS admin surface — command shapes', () => {
 			{ name: 'AdminListGroupsForUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 		]);
+		assert.deepStrictEqual(
+			audit.entries.map((e) => e.context?.sub),
+			['sub-bob'],
+		);
 	});
 });
