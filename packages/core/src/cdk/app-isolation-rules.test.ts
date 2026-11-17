@@ -9,6 +9,7 @@ import {
 	RESERVED_APP_ID_PREFIXES,
 	RESERVED_APP_IDS,
 	checkApiChild,
+	checkPhysicalName,
 	checkResourcePolicy,
 	checkResourcePolicyPrincipals,
 	checkRole,
@@ -307,6 +308,42 @@ describe('app-isolation rules — resource policies and trust', () => {
 		assert.deepStrictEqual(rules(checkRole(role({ AWS: 'arn:aws:iam::222222222222:root' }), 'appa', 'p', false)), ['role-trust-not-service']);
 		assert.deepStrictEqual(rules(checkRole(role('*'), 'appa', 'p', false)), ['role-trust-not-service']);
 		assert.deepStrictEqual(checkRole(role({ Service: 'lambda.amazonaws.com' }), 'appa', 'p', false), []);
+	});
+});
+
+describe('app-isolation rules — names the app gives its own resources', () => {
+	const check = (type: string, props: Record<string, unknown>) => rules(checkPhysicalName(type, props, 'appa', 'p'));
+
+	test("a literal name outside the prefix on a name-fenced type is flagged; the app's own, or a generated one, is not", () => {
+		const cases: [string, string, string, string][] = [
+			['AWS::DynamoDB::Table', 'TableName', 'appb-items', 'appa-items'],
+			['AWS::SQS::Queue', 'QueueName', 'appb-jobs', 'appa-jobs'],
+			['AWS::S3::Bucket', 'BucketName', 'appb-files', 'appa-files'],
+			['AWS::Lambda::Function', 'FunctionName', 'appb-handler', 'appa-handler'],
+			['AWS::Lambda::LayerVersion', 'LayerName', 'appb-deps', 'appa-deps'],
+			['AWS::SSM::Parameter', 'Name', '/appb-setting', '/appa/setting'],
+			['AWS::Logs::LogGroup', 'LogGroupName', '/aws/lambda/appb-handler', '/aws/lambda/appa-handler'],
+			['AWS::RDS::DBCluster', 'DBClusterIdentifier', 'appb-db', 'appa-db'],
+			['AWS::RDS::DBInstance', 'DBInstanceIdentifier', 'appb-db-1', 'appa-db-1'],
+			['AWS::Events::Rule', 'Name', 'appb-nightly', 'appa-nightly'],
+			['AWS::Scheduler::Schedule', 'Name', 'appb-report', 'appa-report'],
+		];
+		for (const [type, prop, outside, own] of cases) {
+			assert.deepStrictEqual(check(type, { [prop]: outside }), ['scope-outside-app'], `${type} ${outside}`);
+			assert.deepStrictEqual(check(type, { [prop]: own }), [], `${type} ${own}`);
+			assert.deepStrictEqual(check(type, {}), [], `${type} with a generated name`);
+		}
+	});
+
+	test('a table named <id> without the hyphen is outside (only SSM takes the bare id); a name with a reference is not judged', () => {
+		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: 'appa' }), ['scope-outside-app']);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: 'appa' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/blocks/appa/config/x' }), []);
+		assert.deepStrictEqual(check('AWS::Logs::LogGroup', { LogGroupName: '/aws/rds/cluster/appa-db/postgresql' }), []);
+		assert.deepStrictEqual(check('AWS::RDS::DBCluster', { DBClusterIdentifier: 'APPA-DB' }), [], 'RDS lowercases identifiers');
+		const withRef = { 'Fn::Join': ['-', [{ Ref: 'AWS::StackName' }, 'items']] };
+		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: withRef }), []);
+		assert.deepStrictEqual(check('AWS::Kinesis::Stream', { Name: 'appb-events' }), [], 'not a name-fenced type');
 	});
 });
 

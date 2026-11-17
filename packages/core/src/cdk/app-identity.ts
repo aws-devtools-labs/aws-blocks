@@ -18,6 +18,7 @@ import {
 	type AppViolation,
 	appIdProblem,
 	checkApiChild,
+	checkPhysicalName,
 	checkResourcePolicy,
 	checkResourcePolicyPrincipals,
 	checkRole,
@@ -292,15 +293,18 @@ export function collectAppViolations(
 		}
 	}
 
-	// Who each resource policy lets in, in every stack of the app: the root's, and
+	// Who each resource policy lets in, and the names the app gives its own
+	// resources, in every stack of the app: the root's, and
 	// the helper stacks beside it (Hosting's support and `<id>-edge` stacks), which
 	// carry the app's name.
 	for (const stack of appStacks(root, app.id)) {
 		const account = cdk.Token.isUnresolved(stack.account) ? undefined : stack.account;
 		for (const node of stack.node.findAll()) {
 			if (!cdk.CfnResource.isCfnResource(node) || cdk.Stack.of(node) !== stack) continue;
+			const props = render(node);
 			violations.push(
-				...checkResourcePolicyPrincipals(node.cfnResourceType, render(node), app.id, node.node.path, parametersOf(stack), account),
+				...checkResourcePolicyPrincipals(node.cfnResourceType, props, app.id, node.node.path, parametersOf(stack), account),
+				...checkPhysicalName(node.cfnResourceType, props, app.id, node.node.path),
 			);
 		}
 	}

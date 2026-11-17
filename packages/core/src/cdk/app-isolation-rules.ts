@@ -832,6 +832,79 @@ export function checkResourcePolicyPrincipals(
 	];
 }
 
+/**
+ * Name-fenced resource types: the property holding the name the app may give a
+ * resource, and the service whose name rule applies ({@link isUnderAppPrefix}).
+ * The boundary and execution policy match these by `<id>-…` (parameters also by
+ * `<id>` and `<id>/…`), so a name outside that is refused at deploy time.
+ */
+const PHYSICAL_NAME_OF: Record<string, readonly [property: string, service: string]> = {
+	'AWS::DynamoDB::Table': ['TableName', 'dynamodb'],
+	'AWS::DynamoDB::GlobalTable': ['TableName', 'dynamodb'],
+	'AWS::SQS::Queue': ['QueueName', 'sqs'],
+	'AWS::S3::Bucket': ['BucketName', 's3'],
+	'AWS::Lambda::Function': ['FunctionName', 'lambda'],
+	'AWS::Lambda::LayerVersion': ['LayerName', 'lambda'],
+	'AWS::SSM::Parameter': ['Name', 'ssm'],
+	'AWS::Logs::LogGroup': ['LogGroupName', 'logs'],
+	'AWS::RDS::DBCluster': ['DBClusterIdentifier', 'rds'],
+	'AWS::RDS::DBInstance': ['DBInstanceIdentifier', 'rds'],
+	'AWS::S3Vectors::VectorBucket': ['VectorBucketName', 's3vectors'],
+	'AWS::Events::Rule': ['Name', 'events'],
+	'AWS::Events::EventBus': ['Name', 'events'],
+	'AWS::Scheduler::Schedule': ['Name', 'scheduler'],
+};
+
+/** Whether `name`, given to a resource of `service`, is one the platform's policies let this app create. */
+function isOwnPhysicalName(service: string, name: string, id: string): boolean {
+	switch (service) {
+		case 'logs':
+			// Lambda's and RDS's log groups carry the function's or cluster's name.
+			return isUnderAppPrefix(name.replace(/^\/aws\/(lambda|rds\/cluster)\//, ''), id);
+		case 'ssm':
+			// Hosting's config() values and CDK's Lambda@Edge ARNs are the app's own too.
+			return (
+				isUnderAppPrefix(name, id, 'ssm') ||
+				name.replace(/^\//, '').startsWith(`blocks/${id}/`) ||
+				new RegExp(`^/?cdk/EdgeFunctionArn/[^/]+/${id}/`).test(name)
+			);
+		case 'rds':
+			// RDS stores identifiers in lowercase.
+			return isUnderAppPrefix(name.toLowerCase(), id);
+		default:
+			return isUnderAppPrefix(name, id);
+	}
+}
+
+/**
+ * `scope-outside-app` when the app gives a name-fenced resource (a table, queue,
+ * bucket, function, layer, parameter, log group, RDS cluster or instance, vector
+ * bucket, event rule or bus, or schedule) a literal name outside its prefix. A
+ * reference to one of the app's own resources counts as its own whatever its
+ * name, so the name itself is checked here; the execution policy would refuse
+ * to create it anyway. A name with a reference or pseudo parameter in it, or no
+ * name (CloudFormation generates one from the stack name), isn't judged.
+ */
+export function checkPhysicalName(type: string, props: Record<string, unknown>, id: string, where: string): AppViolation[] {
+	const fenced = PHYSICAL_NAME_OF[type];
+	if (!fenced) return [];
+	const [property, service] = fenced;
+	const value = props[property];
+	if (value === undefined || value === null || value === '') return [];
+	const rendered = renderResource(value);
+	if (rendered.kind !== 'arn' || rendered.arn.includes(TOKEN) || rendered.arn.includes('*')) return [];
+	if (isOwnPhysicalName(service, rendered.arn, id)) return [];
+	return [
+		{
+			rule: 'scope-outside-app',
+			path: where,
+			message:
+				`${where} names its ${type} "${rendered.arn}" (${property}), which isn't under this app's prefix ` +
+				`"${id}-": the platform's execution policy refuses to create it. Name it "${id}-…", or leave the name out.`,
+		},
+	];
+}
+
 /** AWS managed policies too broad for an app role on a shared account. */
 const BROAD_MANAGED_POLICY = /:aws:policy\/(AdministratorAccess|PowerUserAccess|IAMFullAccess|ReadOnlyAccess|[A-Za-z0-9]*FullAccess)$/;
 
