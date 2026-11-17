@@ -318,7 +318,7 @@ flowchart LR
 - `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
 - `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
 
-When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator. That generator accepts only table and column names matching `^[A-Za-z_][A-Za-z0-9_]*$`, stops with an error naming any other, and quotes every name it writes into string literals and property keys.
+When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator. That generator accepts only table and column names that are TypeScript identifiers (`^[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*$`, no Unicode escapes), stops with an error naming any other, and quotes every name it writes into string literals and property keys.
 
 ### Sharing a spec
 

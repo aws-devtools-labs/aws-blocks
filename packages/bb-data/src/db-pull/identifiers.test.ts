@@ -10,14 +10,17 @@ import ts from 'typescript';
 import type { ColumnInfo, TableInfo } from './types.js';
 import {
   IDENTIFIER_PATTERN,
+  RESERVED_TYPE_NAMES,
   assertValidIdentifiers,
+  isIdentifier,
   isPlainIdentifier,
   tsPropertyKey,
   tsStringLiteral,
 } from './identifiers.js';
 import { generateMetaFile, generateMigrationGuide, generateTypesFile, writeTypesAndMeta } from './generate.js';
+import { pascalCase } from './naming.js';
 
-// Names that are not plain identifiers, one per character class the check rejects.
+// Names that are not TypeScript identifiers, one per character class the check rejects.
 const UNSUPPORTED_NAMES: [label: string, name: string][] = [
   ['single quote', "it's"],
   ['double quote', 'say"hi'],
@@ -30,8 +33,18 @@ const UNSUPPORTED_NAMES: [label: string, name: string][] = [
   ['space', 'has space'],
   ['leading digit', '1st'],
   ['hyphen', 'kebab-case'],
-  ['non-ASCII letter', 'café'],
   ['empty', ''],
+];
+
+// Names that are TypeScript identifiers but not plain ASCII ones: accepted, and
+// emitted quoted.
+const NON_PLAIN_IDENTIFIERS: [label: string, name: string][] = [
+  ['non-ASCII lowercase letter', 'café'],
+  ['non-ASCII uppercase letter', 'Café'],
+  ['non-Latin letters', '注文'],
+  ['dollar sign', 'col$1'],
+  ['leading dollar sign', '$total'],
+  ['zero-width non-joiner', 'a\u200Cb'],
 ];
 
 function col(table: string, name: string, pos = 1): ColumnInfo {
@@ -97,21 +110,47 @@ function parseObjectKey(key: string): string {
   return name.text;
 }
 
+describe('isIdentifier', () => {
+  test('accepts plain names, Unicode letters and `$`', () => {
+    for (const name of ['id', 'user_id', '_private', 'CamelCase', 'a1', 'A']) {
+      assert.equal(isIdentifier(name), true, name);
+    }
+    for (const [label, name] of NON_PLAIN_IDENTIFIERS) {
+      assert.equal(isIdentifier(name), true, label);
+    }
+  });
+
+  test('rejects names that are not TypeScript identifiers', () => {
+    for (const [label, name] of UNSUPPORTED_NAMES) {
+      assert.equal(isIdentifier(name), false, label);
+    }
+  });
+
+  test('agrees with the TypeScript scanner', () => {
+    for (const [label, name] of [...NON_PLAIN_IDENTIFIERS, ...UNSUPPORTED_NAMES.filter(([, n]) => n !== '')]) {
+      const scanner = ts.createScanner(ts.ScriptTarget.ES2022, false, ts.LanguageVariant.Standard, name);
+      const isTsIdentifier = scanner.scan() === ts.SyntaxKind.Identifier && scanner.getTokenEnd() === name.length;
+      assert.equal(isIdentifier(name), isTsIdentifier, label);
+    }
+  });
+
+  test('the pattern is the documented one', () => {
+    assert.equal(IDENTIFIER_PATTERN.source, '^[\\p{ID_Start}_$][\\p{ID_Continue}$\\u200C\\u200D]*$');
+    assert.equal(IDENTIFIER_PATTERN.flags, 'u');
+  });
+});
+
 describe('isPlainIdentifier', () => {
-  test('accepts letters, digits and underscores not starting with a digit', () => {
+  test('accepts ASCII letters, digits and underscores not starting with a digit', () => {
     for (const name of ['id', 'user_id', '_private', 'CamelCase', 'a1', 'A']) {
       assert.equal(isPlainIdentifier(name), true, name);
     }
   });
 
-  test('rejects every other name', () => {
-    for (const [label, name] of UNSUPPORTED_NAMES) {
+  test('rejects every other name, including accepted non-ASCII and `$` names', () => {
+    for (const [label, name] of [...UNSUPPORTED_NAMES, ...NON_PLAIN_IDENTIFIERS]) {
       assert.equal(isPlainIdentifier(name), false, label);
     }
-  });
-
-  test('the pattern is the documented one', () => {
-    assert.equal(IDENTIFIER_PATTERN.source, '^[A-Za-z_][A-Za-z0-9_]*$');
   });
 });
 
@@ -121,7 +160,12 @@ describe('tsStringLiteral', () => {
   });
 
   test('round-trips any string through the TypeScript parser', () => {
-    for (const [label, name] of [...UNSUPPORTED_NAMES, ['line separator', 'a\u2028b'], ['tab', 'a\tb']] as const) {
+    for (const [label, name] of [
+      ...UNSUPPORTED_NAMES,
+      ...NON_PLAIN_IDENTIFIERS,
+      ['line separator', 'a\u2028b'],
+      ['tab', 'a\tb'],
+    ] as const) {
       const literal = tsStringLiteral(name);
       assert.equal(parseStringLiteral(literal), name, label);
     }
@@ -136,7 +180,7 @@ describe('tsPropertyKey', () => {
   });
 
   test('quotes other names so they round-trip as one interface property and one object key', () => {
-    for (const [label, name] of UNSUPPORTED_NAMES) {
+    for (const [label, name] of [...UNSUPPORTED_NAMES, ...NON_PLAIN_IDENTIFIERS]) {
       const key = tsPropertyKey(name);
       assert.notEqual(key, name, `${label} is quoted`);
       assert.equal(parseInterfaceKey(key), name, `${label} (interface)`);
@@ -148,6 +192,24 @@ describe('tsPropertyKey', () => {
 describe('assertValidIdentifiers', () => {
   test('accepts plain names', () => {
     assert.doesNotThrow(() => assertValidIdentifiers([table('todos'), table('Mixed_Case')]));
+  });
+
+  for (const [label, name] of NON_PLAIN_IDENTIFIERS) {
+    test(`accepts a table and a column named with ${label}`, () => {
+      const t = table(name, { columns: [col(name, 'id'), col(name, name, 2)] });
+      assert.doesNotThrow(() => assertValidIdentifiers([t]));
+    });
+  }
+
+  test('derives a valid type name from a non-ASCII table name', () => {
+    assert.equal(pascalCase('café'), 'Café');
+    assert.equal(pascalCase('écoles_été'), 'ÉcolesÉté');
+    assert.doesNotThrow(() => assertValidIdentifiers([table('café')]));
+  });
+
+  test('accepts a table named with a reserved word (its type name is capitalized)', () => {
+    assert.equal(pascalCase('class'), 'Class');
+    assert.doesNotThrow(() => assertValidIdentifiers([table('class')]));
   });
 
   for (const [label, name] of UNSUPPORTED_NAMES) {
@@ -203,9 +265,41 @@ describe('assertValidIdentifiers', () => {
   test('rejects a table whose derived type name is not a valid identifier', () => {
     // `_1` matches the pattern, but PascalCase drops the underscore → `1`.
     assert.throws(() => assertValidIdentifiers([table('_1')]), /type name "1"/);
+    // `_\u0301x` is a valid identifier (U+0301 is a combining mark, valid after
+    // the first character), but its type name starts with the combining mark.
+    assert.equal(isIdentifier('_\u0301x'), true);
+    assert.throws(() => assertValidIdentifiers([table('_\u0301x')]), /type name "\u0301x" is not a valid identifier/);
   });
 
-  test('rejects a hand-edited singular that is not a plain identifier', () => {
+  test('the reserved type names cover what the generated files use', () => {
+    for (const name of ['TableMeta', 'Record', 'Uint8Array']) assert.ok(RESERVED_TYPE_NAMES.has(name), name);
+  });
+
+  // Every reserved name a table can derive, with a table name that derives it.
+  const derivableReserved = [...RESERVED_TYPE_NAMES]
+    .filter(name => /^[A-Z]/.test(name))
+    .map(name => [name, name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()] as const);
+
+  test('table_meta and record are among the reserved derived names', () => {
+    const tableNames = derivableReserved.map(([, t]) => t);
+    assert.ok(tableNames.includes('table_meta'));
+    assert.ok(tableNames.includes('record'));
+  });
+
+  for (const [typeName, tableName] of derivableReserved) {
+    test(`rejects table ${tableName}, whose type name ${typeName} clashes with the generated code`, () => {
+      assert.equal(pascalCase(tableName), typeName);
+      assert.throws(
+        () => assertValidIdentifiers([table(tableName)]),
+        (err: Error) =>
+          err.message.includes(`table ${JSON.stringify(tableName)}`) &&
+          err.message.includes(`type name ${JSON.stringify(typeName)} clashes with a name the generated code uses`) &&
+          err.message.includes('Rename the table'),
+      );
+    });
+  }
+
+  test('rejects a hand-edited singular that is not a valid identifier', () => {
     const singulars = new Map([['todos', "to'do"]]);
     assert.throws(() => assertValidIdentifiers([table('todos')], singulars), /singular "to'do"/);
   });
@@ -242,5 +336,104 @@ describe('generators check names before emitting', () => {
     ];
     assert.deepEqual(syntaxErrors(generateTypesFile(tables)), []);
     assert.deepEqual(syntaxErrors(generateMetaFile(tables)), []);
+  });
+});
+
+/**
+ * Type-check generated `database.types.ts` + `database.meta.ts` with the
+ * TypeScript compiler (in-memory files, the real lib files) and return every
+ * diagnostic, formatted.
+ */
+function typeCheck(files: Record<string, string>): string[] {
+  const root = path.resolve('/db-pull-typecheck');
+  const virtual = new Map(Object.entries(files).map(([name, text]) => [path.join(root, name), text]));
+  const options: ts.CompilerOptions = {
+    strict: true,
+    noEmit: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    lib: ['lib.es2022.d.ts'],
+    types: [],
+  };
+  const host = ts.createCompilerHost(options);
+  const { getSourceFile, fileExists, readFile } = host;
+  host.getSourceFile = (fileName, languageVersion, ...rest) => {
+    const text = virtual.get(path.resolve(fileName));
+    return text === undefined
+      ? getSourceFile.call(host, fileName, languageVersion, ...rest)
+      : ts.createSourceFile(fileName, text, languageVersion);
+  };
+  host.fileExists = fileName => virtual.has(path.resolve(fileName)) || fileExists.call(host, fileName);
+  host.readFile = fileName => virtual.get(path.resolve(fileName)) ?? readFile.call(host, fileName);
+  const { directoryExists } = host;
+  host.directoryExists = dir => path.resolve(dir) === root || (directoryExists?.call(host, dir) ?? false);
+  const program = ts.createProgram([...virtual.keys()], options, host);
+  return ts.getPreEmitDiagnostics(program).map(d => ts.formatDiagnostic(d, {
+    getCanonicalFileName: f => f,
+    getCurrentDirectory: () => root,
+    getNewLine: () => '\n',
+  }));
+}
+
+describe('generated types and meta type-check', () => {
+  function typedCol(tableName: string, name: string, dataType: string, pos: number, nullable = false): ColumnInfo {
+    return { ...col(tableName, name, pos), data_type: dataType, is_nullable: nullable ? 'YES' : 'NO' };
+  }
+
+  test('a schema with varied table names, column names and column types has no diagnostics', () => {
+    const tables: TableInfo[] = [
+      table('todos', {
+        columns: [
+          typedCol('todos', 'id', 'uuid', 1),
+          typedCol('todos', 'done', 'boolean', 2),
+          typedCol('todos', 'created_at', 'timestamp with time zone', 3),
+          typedCol('todos', 'payload', 'jsonb', 4, true),
+          typedCol('todos', 'blob', 'bytea', 5, true),
+          typedCol('todos', 'tags', 'ARRAY', 6),
+          typedCol('todos', 'geom', 'geometry', 7, true),
+        ],
+        autoGenerated: ['id', 'created_at'],
+      }),
+      table('enrollments', {
+        columns: [typedCol('enrollments', 'student_id', 'integer', 1), typedCol('enrollments', 'course_id', 'bigint', 2)],
+        primaryKey: ['student_id', 'course_id'],
+      }),
+      table('class', { columns: [typedCol('class', 'id', 'serial', 1), typedCol('class', 'default', 'text', 2)] }),
+      table('café', {
+        columns: [typedCol('café', 'id', 'uuid', 1), typedCol('café', 'prix$', 'numeric', 2), typedCol('café', 'données', 'json', 3)],
+        autoGenerated: ['id'],
+      }),
+      table('注文', { columns: [typedCol('注文', 'id', 'uuid', 1), typedCol('注文', '__proto__', 'text', 2)] }),
+      table('$audit_log', { columns: [typedCol('$audit_log', 'id', 'bigserial', 1), typedCol('$audit_log', 'a\u200Cb', 'text', 2)] }),
+    ];
+    const types = generateTypesFile(tables);
+    const meta = generateMetaFile(tables);
+    assert.deepEqual(typeCheck({ 'database.types.ts': types, 'database.meta.ts': meta }), []);
+
+    // Names round-trip: every interface is declared under its derived name, and
+    // non-ASCII and `$` names keep their exact spelling as keys.
+    const sf = ts.createSourceFile('database.types.ts', types, ts.ScriptTarget.ES2022);
+    const interfaces = sf.statements.filter(ts.isInterfaceDeclaration);
+    assert.deepEqual(interfaces.map(i => i.name.text), ['Todos', 'Enrollments', 'Class', 'Café', '注文', '$auditLog']);
+    const cafe = interfaces[3];
+    const keys = cafe.members.flatMap(m => (m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) ? [m.name.text] : []));
+    assert.deepEqual(keys, ['id', 'prix$', 'données']);
+    assert.match(meta, /"café": \{/);
+    assert.match(meta, /row: Café;/);
+  });
+
+  test('the compiler reports the clashes the reserved type names prevent', () => {
+    // Checks the helper itself: hand-written output using the clashing names
+    // fails to type-check, so a zero-diagnostic result above means something.
+    const recordTypes = 'export interface Record { payload: Record<string, unknown>; [key: string]: unknown; }\n';
+    const recordMeta = "import type { Record } from './database.types.js';\nexport type TableMeta = { record: { row: Record } };\n";
+    const recordErrors = typeCheck({ 'database.types.ts': recordTypes, 'database.meta.ts': recordMeta });
+    assert.ok(recordErrors.some(e => e.includes('TS2315')), recordErrors.join(''));
+
+    const metaTypes = 'export interface TableMeta { [key: string]: unknown; }\n';
+    const metaMeta = "import type { TableMeta } from './database.types.js';\nexport type TableMeta = { table_meta: { row: TableMeta } };\n";
+    const metaErrors = typeCheck({ 'database.types.ts': metaTypes, 'database.meta.ts': metaMeta });
+    assert.ok(metaErrors.some(e => e.includes('TS2440')), metaErrors.join(''));
   });
 });

@@ -32,7 +32,7 @@ import {
 
 export function generateTypesFile(tables: TableInfo[]): string {
   // Catalog names are checked up front; emission below also quotes them, so a
-  // name that is not a plain identifier can never change the generated code.
+  // name that needs quoting can never change the generated code.
   assertValidIdentifiers(tables);
   const interfaces = tables.map(table => {
     const cols = table.columns.map(col => {
