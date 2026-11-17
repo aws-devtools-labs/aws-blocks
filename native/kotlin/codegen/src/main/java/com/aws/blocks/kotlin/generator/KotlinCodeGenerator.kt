@@ -1958,6 +1958,18 @@ class KotlinCodeGenerator(
             }
             val serializer = containerTransferableSerializer(operation.result.type, index, serializerRegistry, opContext)
             funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            // A valid envelope can carry `"result": null`. Decoding it as a non-null type throws
+            // kotlinx's own exception, so say what went wrong in the client's. A nullable type, and
+            // a JsonElement, accept it.
+            if (!returnType.isNullable && returnType != ClassNames.jsonElement) {
+                funBuilder.addStatement(
+                    "if (%N is %T) throw %T(%S)",
+                    names.result,
+                    ClassNames.jsonNull,
+                    ClassNames.transportException,
+                    "Unexpected null result for $dottedMethod",
+                )
+            }
             if (serializer != null) {
                 funBuilder.addStatement("return %L.%M(%L, %N)", json, MemberNames.decode, serializer, names.result)
             } else {
