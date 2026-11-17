@@ -47,9 +47,16 @@ export const PG_PORT = 5432;
 
 export const PG_DEFAULT_DATABASE = 'postgres';
 
-export const DEFAULT_MAX_RETRIES = 3;
+/** `transaction(fn, { retryOnConflict: true })`: how many times the callback is re-run when `maxRetries` is not given. */
+export const DEFAULT_MAX_RETRIES = 8;
 
 export const AUTOCOMMIT_CONFLICT_BACKOFF_MS: readonly number[] = [50, 100, 200];
+
+// The wait before a `transaction()` conflict retry: a random time up to a ceiling that doubles from the base
+// with each retry and stops at the cap. Writers that conflicted together would otherwise re-run together.
+export const TRANSACTION_CONFLICT_BACKOFF_BASE_MS = 50;
+
+export const TRANSACTION_CONFLICT_BACKOFF_CAP_MS = 2000;
 
 /** Local mode: how long a statement waits for the one session while a Kysely transaction holds it. */
 export const SESSION_TRANSACTION_WAIT_MS = 5000;
