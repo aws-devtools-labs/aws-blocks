@@ -19,7 +19,8 @@
  */
 
 import assert from 'node:assert';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -30,13 +31,21 @@ interface TemplatePackage {
 	blocks?: { dev?: { frontend?: boolean } };
 }
 
+/**
+ * A directory without a `package.json` is not a template, so it is skipped
+ * rather than crashing the whole suite at load time.
+ */
+function isFrontendTemplate(dir: string): boolean {
+	const manifest = join(dir, 'package.json');
+	if (!existsSync(manifest)) return false;
+	const pkg: TemplatePackage = JSON.parse(readFileSync(manifest, 'utf8'));
+	return pkg.blocks?.dev !== undefined && pkg.blocks.dev.frontend !== false;
+}
+
 const frontendTemplates = readdirSync(templatesDir, { withFileTypes: true })
 	.filter((entry) => entry.isDirectory())
 	.map((entry) => entry.name)
-	.filter((name) => {
-		const pkg: TemplatePackage = JSON.parse(readFileSync(join(templatesDir, name, 'package.json'), 'utf8'));
-		return pkg.blocks?.dev !== undefined && pkg.blocks.dev.frontend !== false;
-	});
+	.filter((name) => isFrontendTemplate(join(templatesDir, name)));
 
 function assertSvg(path: string): void {
 	assert.ok(existsSync(path), `missing ${path}`);
@@ -51,6 +60,17 @@ describe('template favicons', () => {
 			assert.ok(frontendTemplates.includes(name), `${name} should count as a frontend template`);
 		}
 		assert.ok(!frontendTemplates.includes('backend'), 'backend has no frontend');
+	});
+
+	it('skips a directory without a package.json instead of throwing', () => {
+		const root = mkdtempSync(join(tmpdir(), 'favicon-filter-'));
+		try {
+			const stray = join(root, 'not-a-template');
+			mkdirSync(stray);
+			assert.strictEqual(isFrontendTemplate(stray), false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	for (const name of frontendTemplates) {
