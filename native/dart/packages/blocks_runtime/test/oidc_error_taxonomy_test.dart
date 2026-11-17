@@ -18,6 +18,130 @@ String _stateEnvelope(String csrf) {
   return '$payload.sig';
 }
 
+/// A launcher that answers with a redirect carrying a code and the state it
+/// was sent, as an IdP that signed the user in does.
+class _RedirectLauncher implements BrowserLauncher {
+  _RedirectLauncher(this.redirect);
+
+  final String redirect;
+
+  // `cancel` is optional here, so this fits a launch() with or without it.
+  @override
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
+    final state = authorizeUrl.queryParameters['state']!;
+    return Uri.parse(
+      '$redirect?code=c&state=${Uri.encodeQueryComponent(state)}',
+    );
+  }
+}
+
+/// The authorize-params route's answer for the [request] the client sent.
+http.Response _authorizeParams(http.Request request) {
+  final csrf = (jsonDecode(request.body) as Map)['csrf'] as String;
+  return http.Response(
+    jsonEncode({
+      'authorizeUrl': 'https://idp.example.com/authorize',
+      'clientId': 'cid',
+      'scopes': ['openid'],
+      'kind': 'oidc-builtin',
+      'state': _stateEnvelope(csrf),
+      'nonce': 'n',
+    }),
+    200,
+  );
+}
+
+/// A response whose headers arrive and whose body then fails, as when the
+/// connection drops partway through.
+Future<http.StreamedResponse> _brokenBody(http.BaseRequest request) async =>
+    http.StreamedResponse(
+      Stream<List<int>>.error(
+        http.ClientException('Connection closed while receiving data'),
+      ),
+      200,
+      request: request,
+    );
+
+/// Every OIDC call, run on a client whose route [failing] gets [fail] and
+/// whose other routes answer as a working backend does.
+final Map<String, Future<Object?> Function(OidcClient client)> _calls = {
+  'restore': (c) => c.restore(),
+  'signOut': (c) => c.signOut(),
+  'refresh': (c) => c.refresh(),
+  'exchange': _exchange,
+  'signInDirect (exchange)': (c) => c.signInDirect(
+    'google',
+    launcher: _RedirectLauncher('myapp://auth'),
+    redirectUri: 'myapp://auth',
+  ),
+  'signIn (authorize-params)': (c) => c.signIn(
+    'google',
+    launcher: _RedirectLauncher(_relayTo),
+    relayTo: _relayTo,
+  ),
+  'signIn (exchange)': (c) => c.signIn(
+    'google',
+    launcher: _RedirectLauncher(_relayTo),
+    relayTo: _relayTo,
+  ),
+};
+
+/// The route each of [_calls] fails on.
+const _failingRoute = {
+  'restore': '/auth/session',
+  'signOut': '/auth/signout',
+  'refresh': '/auth/refresh',
+  'exchange': '/auth/exchange',
+  'signInDirect (exchange)': '/auth/exchange',
+  'signIn (authorize-params)': '/auth/authorize-params/google',
+  'signIn (exchange)': '/auth/exchange',
+};
+
+/// A client whose [route] is answered by [fail], and whose authorize-params
+/// route otherwise works.
+Future<OidcClient> _failingOn(
+  String route,
+  Future<http.StreamedResponse> Function(http.BaseRequest) fail,
+) async {
+  final store = InMemoryTokenStore();
+  await store.set('refresh_token', 'rt');
+  return OidcClient(
+    exchangePath: '/auth/exchange',
+    refreshPath: '/auth/refresh',
+    signOutPath: '/auth/signout',
+    sessionPath: '/auth/session',
+    authorizeParamsBasePath: '/auth/authorize-params',
+    callbackPath: '/auth/callback',
+    providers: ['google'],
+    providerConfigs: {
+      'google': ProviderConfig(
+        authorizeUrl: 'https://idp.example.com/authorize',
+        clientId: 'cid',
+        scopes: const ['openid'],
+        kind: 'oidc-builtin',
+      ),
+    },
+    baseUrl: 'http://localhost:3001',
+    tokenStore: store,
+    httpClient: MockClient.streaming((request, body) async {
+      if (request.url.path == route) return fail(request);
+      final bytes = await body.toBytes();
+      final response = _authorizeParams(
+        http.Request(request.method, request.url)..bodyBytes = bytes,
+      );
+      return http.StreamedResponse(
+        Stream.value(response.bodyBytes),
+        response.statusCode,
+        request: request,
+      );
+    }),
+  );
+}
+
 class _ThrowingLauncher implements BrowserLauncher {
   _ThrowingLauncher(this.error);
 
@@ -43,7 +167,14 @@ OidcClient _client(
   authorizeParamsBasePath: '/auth/authorize-params',
   callbackPath: '/auth/callback',
   providers: ['google'],
-  providerConfigs: {},
+  providerConfigs: {
+    'google': ProviderConfig(
+      authorizeUrl: 'https://idp.example.com/authorize',
+      clientId: 'cid',
+      scopes: const ['openid'],
+      kind: 'oidc-builtin',
+    ),
+  },
   baseUrl: 'http://localhost:3001',
   tokenStore: store ?? InMemoryTokenStore(),
   httpClient: MockClient(handler),
@@ -215,23 +346,6 @@ void main() {
       );
     });
 
-    test('an exchange with no response carries a TransportException', () async {
-      final offline = http.ClientException('offline');
-      final client = _client((_) async => throw offline);
-      await expectLater(
-        _exchange(client),
-        throwsA(
-          isA<OidcExchangeException>().having(
-            (e) => e.cause,
-            'cause',
-            isA<TransportException>()
-                .having((e) => e.statusCode, 'statusCode', isNull)
-                .having((e) => e.cause, 'cause', same(offline)),
-          ),
-        ),
-      );
-    });
-
     test('a 200 exchange that is not a JSON object', () async {
       final client = _client((_) async => http.Response('[]', 200));
       await expectLater(
@@ -249,6 +363,44 @@ void main() {
         ),
       );
     });
+  });
+
+  group('every OIDC call reports a failed request as a TransportException', () {
+    for (final MapEntry(key: name, value: call) in _calls.entries) {
+      final route = _failingRoute[name]!;
+
+      test('$name: connection failure', () async {
+        final refused = http.ClientException('Connection refused');
+        final client = await _failingOn(route, (_) async => throw refused);
+        await expectLater(
+          call(client),
+          throwsA(
+            isA<TransportException>()
+                .having((e) => e.statusCode, 'statusCode', isNull)
+                .having((e) => e.message, 'message', 'Connection refused')
+                .having((e) => e.cause, 'cause', same(refused)),
+          ),
+        );
+      });
+
+      test('$name: read failure', () async {
+        final client = await _failingOn(route, _brokenBody);
+        await expectLater(
+          call(client),
+          throwsA(
+            isA<TransportException>()
+                .having((e) => e.statusCode, 'statusCode', isNull)
+                .having((e) => e.cause, 'cause', isA<http.ClientException>()),
+          ),
+        );
+      });
+
+      test('$name: cancellation passes through', () async {
+        final cancelled = OidcCancelledException();
+        final client = await _failingOn(route, (_) async => throw cancelled);
+        await expectLater(call(client), throwsA(same(cancelled)));
+      });
+    }
   });
 
   group('cancellation', () {

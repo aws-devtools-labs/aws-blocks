@@ -29,8 +29,9 @@ class OidcUnknownProviderException extends OidcException {
 /// Token exchange with the backend failed.
 ///
 /// When the backend refused the code, [cause] is the [ApiException] with its
-/// status and error name; when no usable response came back, it is the
-/// [TransportException].
+/// status and error name; when it answered with a body that is not a JSON
+/// object, it is a [TransportException]. An exchange that got no response
+/// throws a [TransportException] itself, as every call does.
 class OidcExchangeException extends OidcException {
   OidcExchangeException(super.message, [super.cause]);
 }

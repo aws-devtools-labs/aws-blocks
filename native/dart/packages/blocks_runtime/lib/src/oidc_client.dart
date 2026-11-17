@@ -284,7 +284,9 @@ class OidcClient implements AuthProvider {
   /// `redirect_uri`; [signIn] is the flow that works with them.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
-  /// [provider], or [providerConfigs] has no entry for it.
+  /// [provider], or [providerConfigs] has no entry for it. The code exchange
+  /// throws as [exchange] does: a [TransportException] when no response
+  /// arrived or it could not be read.
   ///
   /// Signing in with an `Auth` block uses [signIn].
   Future<OidcUser> signInDirect(
@@ -399,7 +401,8 @@ class OidcClient implements AuthProvider {
   /// [provider]. With a [launcher], throws a [StateError] when [relayTo] is
   /// missing; without one, throws a [StateError] on a platform with no
   /// loopback sign-in (mobile or the web). Both are thrown before any request
-  /// is sent.
+  /// is sent. A request to the authorize-params or exchange route that gets
+  /// no response, or one that can't be read, throws a [TransportException].
   Future<OidcUser> signIn(
     String provider, {
     BrowserLauncher? launcher,
@@ -592,9 +595,10 @@ class OidcClient implements AuthProvider {
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], before anything is sent. Throws [OidcExchangeException]
-  /// when the exchange fails: its `cause` is the [ApiException] when the
-  /// backend refused the code, and the [TransportException] when no usable
-  /// response came back.
+  /// when the backend refused the code, with the [ApiException] as its
+  /// `cause`, or answered with a body that is not a JSON object, with a
+  /// [TransportException] as its `cause`. Throws a [TransportException] when
+  /// no response arrived or it could not be read, as every other call does.
   Future<OidcUser> exchange({
     required String code,
     required String verifier,
@@ -609,7 +613,7 @@ class OidcClient implements AuthProvider {
       throw OidcUnknownProviderException(provider);
     }
     final url = Uri.parse('$_authBaseUrl$exchangePath');
-    final (:response, url: responseUrl) = await guardTransport(
+    final (:response, url: responseUrl) = await guardRequest(
       () => postWithResponseUrl(
         _httpClient,
         url,
@@ -629,16 +633,6 @@ class OidcClient implements AuthProvider {
           'tokens': false,
         }),
       ),
-      (e) {
-        final failure = TransportException(
-          transportFailureMessage(e),
-          cause: e,
-        );
-        return OidcExchangeException(
-          'Exchange failed: ${failure.message}',
-          failure,
-        );
-      },
     );
 
     _generation++;

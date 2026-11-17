@@ -57,9 +57,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
     with the status and the server's error name, so
     `isBlocksError(e, 'SignOutIncompleteException')` works; an unreadable 2xx,
     or no response, throws a `TransportException`. `signOut()` still signs
-    out locally first, whatever the outcome. A refused exchange still
-    throws `OidcExchangeException`, now with the `ApiException` or
-    `TransportException` as its `cause`. `OidcCancelledException`, and an
+    out locally first, whatever the outcome. So does every other OIDC call,
+    `signIn`, `signInDirect` and `exchange` included, when no response
+    arrives or it can't be read; they used to throw the HTTP client's own
+    error. A refused exchange still throws `OidcExchangeException`, now with
+    the `ApiException` as its `cause`. `OidcCancelledException`, and an
     `http.RequestAbortedException` from a request the caller aborted, pass
     through unwrapped.
   - Requires `http` 1.5.0 or later, which added `RequestAbortedException`.

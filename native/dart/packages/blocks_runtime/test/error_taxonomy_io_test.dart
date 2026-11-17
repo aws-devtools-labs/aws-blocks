@@ -81,4 +81,36 @@ void main() {
       ]);
     },
   );
+
+  test('an OIDC response cut off mid-body is a TransportException', () async {
+    // Raw sockets: send headers promising a body, then drop the connection.
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    server.listen((socket) async {
+      await socket.first;
+      socket.write(
+        'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+        'content-length: 100\r\n\r\n{"user":',
+      );
+      await socket.flush();
+      socket.destroy();
+    });
+    final client = OidcClient(
+      exchangePath: '/aws-blocks/auth/exchange',
+      refreshPath: '/aws-blocks/auth/refresh',
+      signOutPath: '/aws-blocks/auth/signout',
+      providers: ['google'],
+      providerConfigs: {},
+      baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api',
+      tokenStore: InMemoryTokenStore(),
+    );
+    await expectLater(
+      client.restore(),
+      throwsA(
+        isA<TransportException>()
+            .having((e) => e.statusCode, 'statusCode', isNull)
+            .having((e) => e.cause, 'cause', isA<Exception>()),
+      ),
+    );
+  });
 }
