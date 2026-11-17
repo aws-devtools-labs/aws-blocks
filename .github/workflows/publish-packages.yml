@@ -83,8 +83,8 @@ jobs:
         if: steps.changesets.outputs.pr-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.changesets.outputs.pr-number }}
         run: |
-          PR_NUM="${{ steps.changesets.outputs.pr-number }}"
           CURRENT_BODY=$(gh pr view "$PR_NUM" --json body --jq .body)
           INSTRUCTIONS="## Release Instructions
 

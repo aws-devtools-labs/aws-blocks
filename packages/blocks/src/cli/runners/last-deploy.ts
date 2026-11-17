@@ -7,16 +7,15 @@
  * - Core's deploy loads `.env.production` (and the sandbox `.env.local`) into the
  *   runner's own environment, so only the runner knows the account and
  *   credentials CDK deployed with.
- * - The stack outputs come from the outputs core read when it deployed. A
- *   sandbox and the production deploy of the same app share
- *   `.blocks-sandbox/outputs.json`, and CDK rewrites it with only the stacks of
- *   the command that wrote it, so after the runner exits it can hold the other
- *   stage's stack alone.
+ * - The stack outputs come from the outputs core read when it deployed. Each
+ *   stage writes its own document now, but CDK still rewrites that document with
+ *   only the stacks of the command that wrote it, from a `finally` block, so a
+ *   later deploy of the same stage replaces it and a failed one can blank it.
  *
  * After a successful deploy the runner writes its stage's entry to
  * `.blocks-sandbox/last-deploy.json`; the CLI reads that entry for the
  * `--output json` result, instead of asking AWS with its own, possibly
- * different, environment, or reading `outputs.json` again.
+ * different, environment, or reading that stage's outputs document again.
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';

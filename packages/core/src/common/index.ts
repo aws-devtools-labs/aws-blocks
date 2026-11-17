@@ -8,6 +8,7 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from './lambda-event-handlers.js';
+import { claimScopeFullId, type ScopeFullIdClaims } from './scope-fullid-claims.js';
 
 /** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
 const PG_APPLICATION_NAME_MAX_BYTES = 63;
@@ -94,8 +95,7 @@ export type ScopeParent = Scope | { id: string };
  * Each Building Block has comprehensive docstrings with use-cases, scaling characteristics, performance metrics, and best practices. Import and explore:
  * 
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
- * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Simple key-value storage (DynamoDB)
- * - **`DistributedTable`** from `@aws-blocks/bb-distributed-table` - Type-safe tables with Zod schemas, indexes, and queries (DynamoDB)
+ * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Key-value and document storage, with optional schemas, keys, indexes, and queries (DynamoDB)
  * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
  * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
  * 
@@ -109,34 +109,32 @@ export type ScopeParent = Scope | { id: string };
  * 
  * **For data storage, choose based on your access patterns:**
  * 
- * - **`KVStore`** - Simple key-value lookups (user preferences, feature flags, session data)
- *   - Get/set by key only
- *   - No queries or indexes
- *   - Simplest option
- * 
- * - **`DistributedTable`** - Structured data with queries and indexes
- *   - Query by partition key with optional filtering
- *   - Secondary indexes for alternate access patterns
- *   - Supports filtering, sorting, pagination
- *   - Use Zod schemas for type safety
+ * - **`KVStore`** - One NoSQL block with three forms, chosen by how you read the data
+ *   - No options: a string key and a string value (user preferences, feature flags, session data, caches)
+ *   - `schema` + `indexes`: typed values, still a string key, read by other fields through indexes
+ *   - `schema` + `key`: records that you list or query as a collection (todos, notes, orders)
+ *     - Query by partition key, with a sort field for range reads, ordering, and pagination
+ *     - Secondary indexes for alternate access patterns
+ *   - Use Zod (or any Standard Schema library) for type safety
  *   - **Zero cost to start, highly scalable**
- *   - **Default choice for most application data**
+ *   - **Default choice for most application data** — decide the `key` before you create the store; a store cannot change its key
  * 
  * - **`Database`** - SQL database with full relational features
  *   - Use when you need: complex multi-table JOINs, SQL transactions across tables, foreign key constraints
  *   - Avoid when: DynamoDB limitations are acceptable (no ad-hoc queries, eventual consistency on indexes, 400KB item limit)
  *   - Requires migrations folder with .sql files
  *   - Local dev requires manual schema setup (see Database README)
- *   - Higher baseline cost than DistributedTable
+ *   - Higher baseline cost than KVStore
  * 
- * **Rule of thumb:** Use DistributedTable unless you specifically need SQL JOINs or transactions.
+ * **Rule of thumb:** Use KVStore unless you specifically need SQL JOINs or transactions.
  * 
  * ## Data Modeling
  * 
- * - **For DistributedTable**: Use Zod schemas for runtime validation and type inference. Install: `npm install zod`
+ * - **For KVStore with a `schema`**: Use Zod schemas for runtime validation and type inference. Install: `npm install zod`
  *   - For flexible key-value fields: `z.record(z.string(), z.any())`
+ *   - Example: `export const todos = new KVStore(scope, 'todos', { schema, key: { partitionKey: 'userId', sortKey: 'todoId' } })`
  * - **For Database**: Define TypeScript interfaces and create migrations folder with .sql files
- * - **For KVStore**: Store strings only (serialize objects as JSON)
+ * - **For KVStore with no options**: Store strings only (serialize objects as JSON, or pass a type argument such as `new KVStore<Todo>(scope, 'x')`)
  * 
  * ## Local Development
  * 
@@ -147,7 +145,7 @@ export type ScopeParent = Scope | { id: string };
  * 
  * When deployed (`npm run sandbox` or `npm run deploy`), Blocks provisions real AWS resources:
  * - Lambda functions for your APIs
- * - DynamoDB tables for KVStore and DistributedTable
+ * - DynamoDB tables for KVStore
  * - Aurora Serverless for Database
  * - S3 buckets for file storage
  * - IAM roles and policies
@@ -159,6 +157,9 @@ export type ScopeParent = Scope | { id: string };
  * 
  * - Use one scope per application or major feature boundary
  * - Give scopes descriptive IDs (e.g., 'user-service', 'orders')
+ * - Scope IDs are joined with '-' into each block's `fullId`, which names its resources. Two scope paths that
+ *   join to the same string (`'user-service' > 'sessions'` and `'user' > 'service-sessions'`) share those
+ *   resources: constructing the second logs a warning naming both, and a future release will reject it.
  * - Nest scopes for complex applications using the `parent` option
  * - Always use Building Blocks for storage - never create your own in-memory Maps or custom storage
  */
@@ -186,6 +187,13 @@ const bbRegistry: {
   defaultBlock: { name: string; version: string } | undefined;
 } = { blocks: new Map(), defaultBlock: undefined };
 
+/**
+ * Which scope path claimed each `fullId`, for every scope constructed in this
+ * process. Process-wide, like the SDK identifier registry and the `.bb-data`
+ * directory it protects. See `./scope-fullid-claims.ts`.
+ */
+const fullIdClaims: ScopeFullIdClaims = { owners: new Map(), collided: new Set() };
+
 export class Scope {
   public readonly id: string;
   public readonly parent: ScopeParent;
@@ -199,11 +207,24 @@ export class Scope {
   /** Framework read from the synth sink for the process's telemetry event. */
   private static _framework: string | undefined;
 
+  /**
+   * Logs a warning (`console.warn`) when a different scope path already
+   * resolves to the same `fullId` in this process: ids are joined with `-`, so
+   * `'user-service' > 'sessions'` and `'user' > 'service-sessions'` collide and
+   * would share their resources. A future release will reject this.
+   * Constructing the same path again is accepted.
+   *
+   * @param id - This scope's id, unique among its siblings.
+   * @param options - Parent scope and Building Block metadata.
+   */
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
       id: typeof process !== 'undefined' ? process.env?.BLOCKS_STACK_NAME : undefined
     };
+    // computeScopeFullId, not this.fullId: a subclass getter may read fields it has not set yet.
+    const collision = claimScopeFullId(fullIdClaims, this, computeScopeFullId(this));
+    if (collision) console.warn(`[Blocks] ${collision}`);
 
     if (options?.bbName) {
       this.bbName = options.bbName;

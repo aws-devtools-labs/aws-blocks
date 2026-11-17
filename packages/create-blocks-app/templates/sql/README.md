@@ -24,8 +24,9 @@ The `Database` API and migration model are documented in
 - **`aws-blocks/migrations/`** — the schema as numbered `.sql` files:
   - `001_create_notebooks.sql` — notebooks, unique name per owner
   - `002_create_notes.sql` — notes, foreign key to notebooks with `ON DELETE CASCADE`
-- **Auth** — `AuthBasic` gates every method; callers sign up, then their data is
-  isolated by owner.
+- **Auth** — `Auth` (email + password; Amazon Cognito on AWS) gates every
+  method; callers sign up, confirm their email with a 6-digit code (printed in
+  the `npm run dev` terminal locally), and their data is isolated by owner.
 
 ## The database
 

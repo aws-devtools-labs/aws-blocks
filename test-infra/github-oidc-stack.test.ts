@@ -138,4 +138,33 @@ describe('blocks-github-e2e cleanup grants', () => {
     assert.equal(dynamodb[0].Action, 'dynamodb:DescribeTable');
     assert.equal(dynamodb[0].Resource, `arn:aws:dynamodb:${E2E_REGION}:${ACCOUNT}:table/*-NONE`);
   });
+
+  // scripts/ci/sweep-cognito-pools.mjs lists, describes and deletes orphaned
+  // user pools; without these grants it gets AccessDenied and sweeps nothing.
+  test('grants the Cognito pool sweep exactly the calls it makes', () => {
+    const { template } = synth();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement,
+    );
+    const list = statements.filter((s) => s.Sid === 'CleanupCognitoPoolsList');
+    assert.equal(list.length, 1);
+    assert.equal(list[0].Action, 'cognito-idp:ListUserPools');
+    assert.equal(list[0].Resource, '*');
+    const pools = statements.filter((s) => s.Sid === 'CleanupCognitoPools');
+    assert.equal(pools.length, 1);
+    assert.deepEqual([pools[0].Action].flat().sort(), [
+      'cognito-idp:DeleteUserPool',
+      'cognito-idp:DeleteUserPoolDomain',
+      'cognito-idp:DescribeUserPool',
+    ]);
+    assert.equal(pools[0].Resource, `arn:aws:cognito-idp:${E2E_REGION}:${ACCOUNT}:userpool/*`);
+    // No other statement grants a Cognito call on '*'.
+    const wide = statements.filter(
+      (s) => [s.Resource].flat().includes('*') && [s.Action].flat().some((a: string) => a.startsWith('cognito-idp:')),
+    );
+    assert.deepEqual(
+      wide.map((s) => s.Sid),
+      ['CleanupCognitoPoolsList'],
+    );
+  });
 });

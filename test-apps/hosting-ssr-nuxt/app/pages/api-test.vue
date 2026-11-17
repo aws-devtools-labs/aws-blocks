@@ -261,7 +261,7 @@ const probeCheckAuth = {
 const probeAuthFlow = {
   feature: 'api.authSignUp + authConfirmSignUp + authSignIn',
   description: 'Full auth flow: create disposable account, fetch the verification code, confirm, sign in. Cookie set as a result.',
-  source: 'aws-blocks/index.ts → AuthBasic helpers',
+  source: 'aws-blocks/index.ts → Auth helpers',
   buttons: [
     {
       label: 'Run full auth flow',

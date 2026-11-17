@@ -1,4 +1,4 @@
-import { ApiNamespace, AuthBasic, Dashboard, Logger, Metrics, Scope, Tracer } from '@aws-blocks/blocks';
+import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from '@aws-blocks/blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -27,9 +27,20 @@ new Dashboard(scope, 'dashboard', {
   metrics: { metrics, metricConfigs: [{ name: 'OrdersPlaced' }] },
 });
 
-// AuthBasic: username/password sign-in. `authApi` is the sign-up, sign-in and
-// sign-out API a client calls.
-const auth = new AuthBasic(scope, 'auth');
+// Auth: email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// `authApi` is the sign-up, sign-in and sign-out API a client calls. Sign-up
+// confirms the email address with a 6-digit code; once the caller submits it
+// they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  // Users sign in with their email, matched ignoring case. Both are fixed when
+  // the user pool is created.
+  users: { signInWith: ['email'], caseSensitive: false },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
+});
 
 export const authApi = auth.createApi();
 
@@ -49,7 +60,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       const orderId = crypto.randomUUID();
       const traceId = tracer.getTraceId();
       segment.addAnnotation('item', item);
-      log.info('Order placed', { orderId, item, userId: user.userId });
+      log.info('Order placed', { orderId, item, userSub: user.userSub });
       metrics.emit('OrdersPlaced', 1, { unit: 'Count' });
       return { orderId, traceId };
     });

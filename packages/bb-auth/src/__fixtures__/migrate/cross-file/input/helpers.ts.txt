@@ -1,0 +1,6 @@
+import type { AuthCognito, BlocksContext } from '@aws-blocks/blocks';
+
+export async function profile(a: AuthCognito, context: BlocksContext, holder: { auth: unknown }) {
+	void holder;
+	return a.fetchUserAttributes(context);
+}

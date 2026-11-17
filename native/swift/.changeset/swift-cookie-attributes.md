@@ -17,7 +17,9 @@ sent on that request. When several same-named cookies apply to a request, the on
 responses that arrive together leave the same cookies as if they had arrived in sequence.
 
 Each Keychain item is now keyed by `host|path|name` and holds a JSON record of the cookie and its
-attributes. Items written by earlier versions, keyed by `host|name` and holding the bare value,
-are still read and sent as before (`Path=/`, not `Secure`, no expiry), so a signed-in session
-survives the upgrade; the old item is replaced the next time the server sets that cookie. Items
-written by this version are not readable by earlier versions.
+attributes. Cookies stored by 0.1.x, keyed by `host|name` and holding the bare value, are kept:
+they are read as `Path=/` and `Secure` for the host that set them, the attributes the Auth block
+sets its session cookies with, and are replaced in the current format on the next `Set-Cookie` of
+the same name from that host. A session only used over plain `http` (for example, local
+development) is no longer sent, so those users sign in again. Items written by this version are not
+readable by earlier versions.

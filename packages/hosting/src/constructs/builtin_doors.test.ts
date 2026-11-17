@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Annotations as CdkAnnotations, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -102,7 +102,8 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     frontDoor: HostingConstructProps['frontDoor'],
     extra: Partial<HostingConstructProps> = {},
   ) => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     const hosting = new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
     return { t: Template.fromStack(stack), hosting };
   };
@@ -418,21 +419,137 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.equal(synth(spaManifest(), { kind: 'apiGateway' }).hosting.loadBalancerDnsName, undefined);
     });
 
-    it('a plain-HTTP door with an API warns that sign-in and cookies travel unencrypted', () => {
-      const warn = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
+    /** A custom door that serves the app at a plain-HTTP URL. */
+    const plainHttpCustom = defineFrontDoor({
+      service: 'my-http-proxy',
+      build(_scope, input: DoorInput) {
+        cf.recordWired(input.origins.assets);
+        return { url: 'http://proxy.example.com' };
+      },
+    });
+
+    it('outside a sandbox, a plain-HTTP door with an API fails synth with PlainHttpFrontDoorError, naming the door and the fix', () => {
+      const build = (frontDoor: HostingConstructProps['frontDoor']) => () => {
         const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, backendApi: { url: API_URL } });
+      };
+      assert.throws(build({ kind: 'alb' }), (e: Error & { resolution?: string }) => {
+        assert.equal(e.name, 'PlainHttpFrontDoorError');
+        assert.match(e.message, /The 'alb' front door serves the app over plain HTTP \(no certificate\)/);
+        assert.match(e.message, /session cookies/);
+        assert.match(e.resolution ?? '', /`certificate` and `features\.domain`/);
+        assert.match(e.resolution ?? '', /CloudFront or stacked door/);
+        assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
+        return true;
+      });
+      assert.throws(build({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }), (e: Error & { resolution?: string }) => {
+        assert.equal(e.name, 'PlainHttpFrontDoorError');
+        assert.match(e.message, /The 'custom' front door's URL is `http:\/\/`, so the pages/);
+        assert.doesNotMatch(e.message, /no certificate/);
+        assert.match(e.resolution ?? '', /Serve the custom door over HTTPS \(return an `https:\/\/` url\), or use the CloudFront or stacked door/);
+        assert.doesNotMatch(e.resolution ?? '', /ALB door/);
+        assert.match(e.resolution ?? '', /sandbox deploy \(`sandboxMode` context\) only warns/);
+        return true;
+      });
+      // HTTPS doors, and the ALB door with a certificate, synthesize.
+      const certificate = Certificate.fromCertificateArn(
+        new Stack(new App(), 'CertScope', { env: { account: '111111111111', region: 'us-west-2' } }),
+        'C',
+        'arn:aws:acm:us-west-2:111111111111:certificate/c',
+      );
+      build({ kind: 'alb', certificate, features: { domain: DOMAIN } })();
+      build({ kind: 'apiGateway' })();
+      build(undefined)();
+    });
+
+    it("outside a sandbox, the 'none' door and a plain-HTTP door without an API still synthesize", () => {
+      const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'None', { manifest: spaManifest(), frontDoor: 'none', backendApi: { url: API_URL } });
+      new HostingConstruct(stack, 'Alb', { manifest: spaManifest(), frontDoor: { kind: 'alb' } });
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')).length, 1, "'none' warns");
+    });
+
+    it('a plain-HTTP door with an API warns in a sandbox that sign-in and cookies travel unencrypted', () => {
+      const warn = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
+        const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
         new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, ...extra });
         return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
       };
       const alb = warn({ kind: 'alb' }, { backendApi: { url: API_URL } });
       assert.equal(alb.length, 1);
-      assert.match(JSON.stringify(alb[0].entry.data), /AuthCognito and AuthOIDC keep it/);
+      assert.match(JSON.stringify(alb[0].entry.data), /`Auth` drops `Secure` from its session cookie/);
+      assert.match(JSON.stringify(alb[0].entry.data), /allowed in a sandbox only; a production deploy fails synth/);
+      assert.equal(warn({ kind: 'custom', door: plainHttpCustom, wiringCheck: false }, { backendApi: { url: API_URL } }).length, 1, 'custom');
       assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
+    });
+
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes a plain-HTTP door with an API, with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (frontDoor: HostingConstructProps['frontDoor'], acknowledge = false) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, backendApi: { url: API_URL } });
+        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning(ID);
+        return {
+          allowed: Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')),
+          sandboxOnly: Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')),
+        };
+      };
+      for (const door of [
+        { kind: 'alb', allowPlainHttp: true },
+        { kind: 'custom', door: plainHttpCustom, wiringCheck: false, allowPlainHttp: true },
+      ] as const) {
+        const { allowed, sandboxOnly } = synthProd(door);
+        assert.equal(allowed.length, 1, door.kind);
+        assert.equal(sandboxOnly.length, 0, `${door.kind}: not the sandbox warning`);
+        const text = JSON.stringify(allowed[0].entry.data);
+        assert.match(text, new RegExp(`The '${door.kind}' front door`));
+        assert.match(text, /`allowPlainHttp: true`/);
+        assert.match(text, /sign-in, session cookies and every RPC/);
+        assert.match(text, /session cookie without `Secure`/);
+        assert.match(text, /trusted network/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
+        assert.equal(synthProd(door, true).allowed.length, 0, `${door.kind}: acknowledged on the stack`);
+      }
+      // `allowPlainHttp: false` keeps the refusal.
+      assert.throws(() => synthProd({ kind: 'alb', allowPlainHttp: false }), (e: Error) => e.name === 'PlainHttpFrontDoorError');
+      // A non-boolean fails synth rather than silently opting in or out.
+      assert.throws(
+        // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+        () => synthProd({ kind: 'alb', allowPlainHttp: 'yes' }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
+      );
+    });
+
+    it('in a sandbox, `allowPlainHttp: true` changes nothing: the sandbox warning, not the production one', () => {
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: { kind: 'alb', allowPlainHttp: true }, backendApi: { url: API_URL } });
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')).length, 1);
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')).length, 0);
+    });
+
+    it("the 'none' door warns that the site is served without TLS, with or without an API, and names how to acknowledge it", () => {
+      const warn = (extra: Partial<HostingConstructProps> = {}, acknowledge = false) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: 'none', ...extra });
+        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      };
       // The S3 website's URL is a token at synth; its handle says it is plain HTTP.
-      const none = warn('none', { backendApi: { url: API_URL } });
-      assert.equal(none.length, 1);
-      assert.match(JSON.stringify(none[0].entry.data), /an S3 website has no TLS/);
+      // The same text with and without an API: 'none' serves no same-origin API.
+      for (const extra of [{}, { backendApi: { url: API_URL } }]) {
+        const found = warn(extra);
+        assert.equal(found.length, 1, JSON.stringify(extra));
+        const text = JSON.stringify(found[0].entry.data);
+        assert.match(text, /The 'none' front door serves the app from the public S3 website endpoint over plain HTTP \(an S3 website has no TLS\)/);
+        assert.match(text, /the HTML and scripts can be read or altered in transit/);
+        assert.match(text, /Use the CloudFront door for HTTPS/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpFrontDoor'\)/);
+        assert.doesNotMatch(text, /same-origin API|drops `Secure`/, "'none' has no same-origin API, so no cookie clause");
+        assert.equal((text.match(/no TLS|no certificate/g) ?? []).length, 1, 'says there is no TLS once');
+        // The remedy the message names clears it.
+        assert.equal(warn(extra, true).length, 0, 'acknowledged on the stack');
+      }
     });
 
     it('the ALB door with a custom domain: the URL, the trusted origin and the CORS origin are the domain', () => {

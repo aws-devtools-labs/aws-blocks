@@ -23,6 +23,7 @@ import {
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 const isWindows = process.platform === 'win32';
 // The end-to-end signal tests below deliver a *process-group* signal
@@ -104,6 +105,15 @@ describe('decideSignalResponse — a converging deploy is not abandoned by one s
     assert.strictEqual(action, 'abort');
     assert.match(message, /Interrupted/);
   });
+
+  it('names a destroy as a destroy, with the same policy', () => {
+    const first = decideSignalResponse('SIGTERM', null, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(first.action, 'defer');
+    assert.match(first.message, /Ignoring SIGTERM: the destroy is still running.*the stack deletion continues server-side/);
+    const second = decideSignalResponse('SIGTERM', SIGNAL_COALESCE_MS + 1, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(second.action, 'abort');
+    assert.match(second.message, /Received SIGTERM while destroying\. .*applying the stack deletion/);
+  });
 });
 
 // ── line assembly ───────────────────────────────────────────────────────────
@@ -153,7 +163,7 @@ describe('formatElapsed', () => {
 // keeps them line-oriented when there is no TTY. Dropping either flag restores
 // the 0-byte stdout, so the argv is pinned here.
 describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
-  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: OUTPUTS_FILE.production });
 
   it('sends CDK logs to stdout instead of stderr', () => {
     assert.ok(args.includes('--ci'), `expected --ci in: ${args.join(' ')}`);
@@ -180,7 +190,7 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
     assert.strictEqual(args[args.indexOf('--require-approval') + 1], 'never');
-    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.json');
+    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.production.json');
     assert.strictEqual(args[args.indexOf('--context') + 1], 'projectRoot=/app');
   });
 });

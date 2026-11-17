@@ -189,7 +189,7 @@ describe('Dashboard synth ids', () => {
 // roles and any other stack or helper stack's roles included) must carry the
 // configured boundary and be listed in the synth-time IAM report.
 //
-// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-container-compute and bb-cron-job
+// Keep in sync: the same helper is copied in the bb-auth (`boundary.cdk.test.ts`), bb-compute, bb-container-compute and bb-cron-job
 // cdk test files, and mirrors core's `assertEveryRoleBounded` in
 // `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
 // belongs in all of them.

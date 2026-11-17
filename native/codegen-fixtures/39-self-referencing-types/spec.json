@@ -1,0 +1,65 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.getTree",
+      "params": [
+        { "name": "root", "required": true, "schema": { "$ref": "#/components/schemas/TreeNode" } }
+      ],
+      "result": { "name": "GetTreeResult", "schema": { "$ref": "#/components/schemas/TreeNode" } }
+    },
+    {
+      "name": "api.getThread",
+      "params": [],
+      "result": { "name": "GetThreadResult", "schema": { "$ref": "#/components/schemas/Comment" } }
+    },
+    {
+      "name": "api.getCategory",
+      "params": [],
+      "result": {
+        "name": "GetCategoryResult",
+        "schema": { "oneOf": [{ "$ref": "#/components/schemas/Category" }, { "type": "null" }] }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "TreeNode": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string" },
+          "children": { "type": "array", "items": { "$ref": "#/components/schemas/TreeNode" } },
+          "byName": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/TreeNode" } }
+        },
+        "required": ["label", "children"]
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "replies": {
+            "oneOf": [{ "type": "array", "items": { "$ref": "#/components/schemas/Comment" } }, { "type": "null" }]
+          }
+        },
+        "required": ["text", "replies"]
+      },
+      "Category": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "products": { "type": "array", "items": { "$ref": "#/components/schemas/Product" } }
+        },
+        "required": ["name", "products"]
+      },
+      "Product": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string" },
+          "categories": { "type": "array", "items": { "$ref": "#/components/schemas/Category" } }
+        },
+        "required": ["sku", "categories"]
+      }
+    }
+  }
+}

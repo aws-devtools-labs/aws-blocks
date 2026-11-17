@@ -2,7 +2,7 @@
 
 Standard Building Blocks for common AWS services in the AWS Blocks.
 
-> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) and [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md), which are the authoritative reference for the shipped blocks.
+> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md), [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) and [`packages/bb-auth/README.md`](../bb-auth/README.md), which are the authoritative reference for the shipped blocks. The `Auth` section below matches the shipped API.
 
 ## Overview
 
@@ -10,39 +10,32 @@ Standard Building Blocks for common AWS services in the AWS Blocks.
 
 ## Available Building Blocks
 
-### AuthBasic
-Username/password authentication with code-based verification.
+### Auth
+One authentication block for email + password, social sign-in, generic OIDC and SAML. This section describes the shipped API; see [`packages/bb-auth/README.md`](../bb-auth/README.md) (including *Which option and why*) for the full reference.
 
 ```typescript
-import { AuthBasic } from '@aws-blocks/blocks';
+import { AppSetting, Auth } from '@aws-blocks/blocks';
 
-const auth = new AuthBasic(scope, 'auth', {
-  codeDelivery: async (username, code) => { /* send code via email */ },
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+
+// Email + password is on by default (sign-up confirms the email with a code);
+// every other sign-in method is a `providers` entry tagged with its `type`.
+const auth = new Auth(scope, 'auth', {
+  providers: { google: { type: 'google', clientId: 'your-google-client-id', clientSecret: googleSecret } }, // via Cognito
 });
-```
+export const authApi = auth.createApi();
 
-### AuthOIDC
-OIDC/OAuth 2.0 sign-in gate — Google, GitHub, Okta, or any OIDC provider. Sessions outlive the IdP's ID token with transparent background refresh.
-
-```typescript
-import { AuthOIDC, google } from '@aws-blocks/blocks';
-
-const auth = new AuthOIDC(scope, 'auth', {
-  providers: [google({ clientId: '...', clientSecret: '...' })],
-  onSignIn: async (user) => { /* persist profile */ },
+// An IdP your backend verifies itself (no Cognito user pool) is a second block,
+// with its own sign-in routes (`auth` already mounts the default ones):
+const sso = new Auth(scope, 'sso', {
+  store: 'builtin',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
+  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 });
+export const ssoApi = sso.createApi();
 
+// Inside a request handler:
 const user = await auth.requireAuth(ctx);
-```
-
-### AuthCognito
-Cognito User Pool integration with sign-up, MFA, groups, and custom attributes.
-
-```typescript
-import { AuthCognito } from '@aws-blocks/blocks';
-
-const users = new AuthCognito(scope, 'users');
-export const auth = users.buildAPI();
 ```
 
 ### Storage (FileBucket)
@@ -56,32 +49,31 @@ await files.write('key', content);
 const data = await files.read('key');
 ```
 
-### DistributedTable
-DynamoDB-like key-value storage with local SQLite mocking.
-
-```typescript
-import { DistributedTable } from '@aws-blocks/blocks';
-
-const table = new DistributedTable('app', 'data', {
-  partitionKey: 'userId',
-  sortKey: 'timestamp'
-});
-```
-
 ### KVStore
-Simple key-value storage for user-scoped data.
+Key-value and document storage backed by DynamoDB. With no options it is a string-keyed store; with a `schema` and a `key` it holds records that you list or query.
 
 ```typescript
 import { KVStore } from '@aws-blocks/blocks';
+import { z } from 'zod';
 
 const store = new KVStore(scope, 'settings');
+
+const events = new KVStore(scope, 'events', {
+  schema: z.object({ userId: z.string(), timestamp: z.number(), kind: z.string() }),
+  key: { partitionKey: 'userId', sortKey: 'timestamp' },
+});
 
 // Data methods run at request time, inside a handler — not at CDK synth time.
 await store.put(`user:${userId}:theme`, 'dark');
 const theme = await store.get(`user:${userId}:theme`);
+
+await events.put({ userId, timestamp: Date.now() }, { kind: 'sign-in' });
+for await (const { key, value } of events.query({ where: { userId: { equals: userId } }, order: 'desc', limit: 10 })) {
+  console.log(key.timestamp, value.kind);
+}
 ```
 
-See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, TTL, and conditional writes.
+See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, keys, indexes, TTL, and conditional writes.
 
 ### SQLTable
 Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.

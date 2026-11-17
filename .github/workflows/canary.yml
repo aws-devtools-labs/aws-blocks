@@ -1,8 +1,9 @@
 name: Canary
 
 # Scaffolds a fresh app from a locally-published @aws-blocks registry.
-# Tests the full packaging + scaffold + build + e2e path using published
-# artifacts (not workspace links).
+# Tests the full packaging + scaffold + build + e2e + cdk synth path using
+# published artifacts (not workspace links). No AWS credentials are configured,
+# so the synth step also proves each template synthesizes without an account.
 # Not a PR gate. Runs on a daily schedule against the default branch, and on
 # PRs that touch the canary itself or a template's package.json / tests.
 
@@ -124,4 +125,7 @@ jobs:
       - name: Run canary
         env:
           BLOCKS_REGISTRY_URL: http://localhost:4873/registry/
-        run: npm run canary -- --template ${{ matrix.template }}
+          # The template name comes from a directory name in the checked-out
+          # tree, so it reaches the shell as data, not as script text.
+          TEMPLATE: ${{ matrix.template }}
+        run: npm run canary -- --template "$TEMPLATE"

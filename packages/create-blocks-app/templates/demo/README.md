@@ -1,9 +1,9 @@
 # Blocks Demo App
 
 A fuller example app on AWS Blocks. It wires together several Building Blocks in
-one place so you can see how they fit: `AuthBasic` for sign-in, a `KVStore` for
-loose key/value data, and a `DistributedTable` for a sortable, per-user
-todo list. Vite + vanilla DOM frontend, no framework.
+one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
+loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
+sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
 
@@ -29,7 +29,9 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## What's Included
 
-- **AuthBasic** — sign up / sign in / sign out with JWT sessions.
+- **Auth** — email + password sign-up / sign-in / sign-out with server-side
+  sessions (Amazon Cognito on AWS). Sign-up confirms the email address with a
+  6-digit code; locally the code is printed in the `npm run dev` terminal.
 - **KVStore** — a `getValue` / `setValue` pair gated by `requireAuth`, with
   keys namespaced per user.
 - **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
@@ -40,7 +42,15 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
-- **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
+  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  Its placeholder works locally (the mock sends nothing), but replace it with a
+  verified SES identity before deploying to production: the placeholder is on the
+  reserved `.invalid` domain, which SES can never verify, so every send from it
+  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  until you do.
+- **KVStore with a `schema` and a `key`** — per-user todos, stored as records
+  you list or query as a collection (a store fixes its key when you create
+  it); `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
 - **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both

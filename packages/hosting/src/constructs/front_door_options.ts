@@ -31,7 +31,7 @@
  * | `monitoring` | ✓ | ✓ (`enabled` only) | – | ✓ |
  * | `skewProtection` | ✓ | – | – | ✓ |
  * | `geoRestriction` | ✓ | – | – | ✓ |
- * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
+ * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheGuardIgnoredCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
  *
  * The stacked door (`@aws-blocks/core` `Hosting` only) scopes its settings
  * per layer: {@link StackedDoorFeatures}. `'none'` takes no settings.
@@ -200,6 +200,16 @@ export type CloudFrontDoorFeatures<TDomain = HostingDomainConfig> = {
   ssrDefaultTtl?: Duration;
   /** Cookie names in the SSR cache key (at most 10; 2 are reserved for Next.js preview mode). */
   cacheKeyCookies?: string[];
+  /**
+   * Cookie names that never affect the rendered output (e.g. `_ga`, `_gid`,
+   * `_fbp`, a consent cookie). The SSR cache guard treats a request carrying
+   * them like one without them, as it does the `__dpl` build pin, so a
+   * shared-cacheable SSR response stays edge-cacheable for those visitors.
+   * They are not in the cache key. A listed name must never change what the
+   * server renders: a response that depends on it would be cached once and
+   * served to every visitor. A name may not also be in `cacheKeyCookies`.
+   */
+  cacheGuardIgnoredCookies?: string[];
   /** Header names in the SSR cache key (e.g. `'authorization'`; not `'accept-encoding'`). */
   cacheKeyHeaders?: string[];
   /** Bring-your-own response headers policy (shared across stacks to save the account quota). */
@@ -344,8 +354,35 @@ export type AlbDoorOptions<TDomain = HostingDomainConfig> = {
    * It must cover `features.domain`, which is required with it: a certificate
    * can't cover the ALB's own `*.elb.amazonaws.com` name, so the app is
    * reached at the custom domain.
+   *
+   * Without it the ALB serves plain HTTP :80. With an API, that is
+   * sandbox-only: a production deploy fails synth (`PlainHttpFrontDoorError`),
+   * and a sandbox deploy (`sandboxMode` context) warns
+   * (`@aws-blocks/hosting:PlainHttpFrontDoor`), unless {@link AlbDoorOptions.allowPlainHttp}.
    */
   certificate?: ICertificate;
+  /**
+   * Serve a production deploy over plain HTTP :80 with an API: the explicit
+   * opt-out of `PlainHttpFrontDoorError`, for an ALB without a `certificate`.
+   *
+   * Dangerous: sign-in, session cookies and every RPC travel in cleartext
+   * between the browser and the ALB, and `Auth` issues its session cookie
+   * without `Secure` (this flag is what lets it, outside a sandbox: without it
+   * sign-in is refused with `InsecureTransportException`). Anyone who can read
+   * or alter traffic on that path can take over a session.
+   *
+   * Legitimate only when the network path is trusted: an `internal` ALB reached
+   * only inside a private network, or TLS ended upstream (a corporate proxy or
+   * another load balancer in front of this one). Use it in production only then.
+   *
+   * Outside a sandbox, synth warns
+   * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * A sandbox deploy is unchanged (it always only warns). Has no effect with a
+   * `certificate` (the ALB serves HTTPS).
+   * @default false
+   */
+  allowPlainHttp?: boolean;
   /** The settings the app asks the ALB door for. */
   features?: AlbDoorFeatures<TDomain>;
 };
@@ -417,6 +454,28 @@ export type CustomDoorOptions<TDomain = HostingDomainConfig> = {
    * @default true
    */
   wiringCheck?: boolean;
+  /**
+   * Serve a production deploy at the plain-HTTP (`http://`) `url` the door
+   * returns, with an API: the explicit opt-out of `PlainHttpFrontDoorError`.
+   *
+   * Dangerous: sign-in, session cookies and every RPC travel in cleartext
+   * between the browser and the door, and `Auth` issues its session cookie
+   * without `Secure` (this flag is what lets it, outside a sandbox: without it
+   * sign-in is refused with `InsecureTransportException`). Anyone who can read
+   * or alter traffic on that path can take over a session.
+   *
+   * Legitimate only when the network path is trusted: a door reached only
+   * inside a private network, or TLS ended upstream (a corporate proxy or
+   * another load balancer in front of the door). Use it in production only then.
+   *
+   * Outside a sandbox, synth warns
+   * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * A sandbox deploy is unchanged (it always only warns). Has no effect when
+   * the door returns an `https://` url.
+   * @default false
+   */
+  allowPlainHttp?: boolean;
   /** The settings the door receives as `input.features` (see {@link CustomDoorFeatures}). */
   features?: CustomDoorFeatures<TDomain>;
 };
@@ -435,6 +494,11 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    * cross-origin), image optimization or TLS; an app with a server fails synth
    * (use `'cloudfront'` or `{ kind: 'alb' }`). `s3-website` is the internal
    * mechanism, not a front door. It takes no settings.
+   *
+   * Because the site is served without TLS, `'none'` always warns at synth
+   * (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
+   * If that is intended, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`.
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>
@@ -472,6 +536,7 @@ export const FRONT_DOOR_SETTINGS = {
     'geoRestriction',
     'ssrDefaultTtl',
     'cacheKeyCookies',
+    'cacheGuardIgnoredCookies',
     'cacheKeyHeaders',
     'responseHeadersPolicy',
     'quotas',
@@ -521,9 +586,9 @@ export type ResolveFrontDoorOptions = {
 const DOOR_OPTION_KEYS: Readonly<Record<FrontDoorKind | 'stackedRouter', readonly string[]>> = {
   cloudfront: [],
   none: [],
-  alb: ['vpc', 'internal', 'certificate'],
+  alb: ['vpc', 'internal', 'certificate', 'allowPlainHttp'],
   apiGateway: ['api', 'certificate'],
-  custom: ['door', 'wiringCheck'],
+  custom: ['door', 'wiringCheck', 'allowPlainHttp'],
   stackedRouter: ['vpc', 'internal', 'certificate'],
 };
 
@@ -624,6 +689,12 @@ const validateDoorOptions = (frontDoor: object, kind: FrontDoorKind, label: stri
   }
   if (door.wiringCheck !== undefined && typeof door.wiringCheck !== 'boolean') {
     throw invalidOption(`\`frontDoor.wiringCheck\` must be true or false (got ${JSON.stringify(door.wiringCheck)}).`, 'Pass a boolean.');
+  }
+  if (door.allowPlainHttp !== undefined && typeof door.allowPlainHttp !== 'boolean') {
+    throw invalidOption(
+      `\`frontDoor.allowPlainHttp\` must be true or false (got ${JSON.stringify(door.allowPlainHttp)}).`,
+      'Pass a boolean.',
+    );
   }
   if (door.api !== undefined && door.api !== 'http' && door.api !== 'rest') {
     throw invalidOption(

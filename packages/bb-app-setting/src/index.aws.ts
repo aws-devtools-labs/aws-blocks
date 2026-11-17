@@ -13,6 +13,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
+import { assertValueWithinSizeLimit } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -50,7 +51,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  * `Secret`, the recommended home for credentials.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes and queries, use `KVStore` or `DistributedTable`.
+ * writes and queries, use `KVStore`.
  *
  * **Best practices:**
  * - One AppSetting per logical configuration value
@@ -170,6 +171,9 @@ export class AppSetting<T = string> extends Scope {
 		await validateSchema(this.schema, value);
 
 		const serialized = JSON.stringify(value);
+		// Same check, at the same point, as the mock (see validation.ts): an
+		// oversized value fails with ValidationFailed before reaching SSM.
+		assertValueWithinSizeLimit(serialized, this.isSecret);
 
 		await this.client.send(new PutParameterCommand({
 			Name: getSdkIdentifiers(this).parameterName,

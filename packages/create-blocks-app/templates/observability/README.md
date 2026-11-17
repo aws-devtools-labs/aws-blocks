@@ -4,8 +4,9 @@ Backend-only AWS Blocks app showing the observability Building Blocks on one
 API call. `api.placeOrder(item)` writes a structured log line (**Logger**),
 emits an `OrdersPlaced` metric (**Metrics**) and runs inside a `placeOrder`
 trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
-`placeOrder` is gated by **AuthBasic** (`auth.requireAuth(context)`), so it
-needs a signed-in user. No frontend included.
+`placeOrder` is gated by **Auth** (`auth.requireAuth(context)`), so it
+needs a signed-in user. Sign-up confirms the email with a 6-digit code, which
+`npm run dev` prints in its terminal locally. No frontend included.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template observability`
 
@@ -79,14 +80,21 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 
 ```bash
 # The dev server's RPC endpoint is JSON-RPC 2.0 at POST /aws-blocks/api:
-# placeOrder needs a signed-in user: sign up first and keep the session cookie in a jar
-# (outside the project, so the session token is never committed).
-curl -c /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+# placeOrder needs a signed-in user: sign up, confirm the code `npm run dev` prints
+# ([auth] signUp code for me@example.com: 123456), then sign in. Keep the session cookie
+# in a jar outside the project, so the session token is never committed.
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"signUp","username":"me@example.com","password":"TestPass123!"}],"id":1}'
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"confirmSignUp","username":"me@example.com","code":"123456"}],"id":2}'
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"autoSignIn","username":"me@example.com"}],"id":3}'
 curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":2}'
+  -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":4}'
 # method = "<namespace>.<methodName>" (namespace = the exported variable name in aws-blocks/index.ts: `export const api = …` → api); params = positional array.
 # Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```

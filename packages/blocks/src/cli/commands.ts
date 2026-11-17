@@ -33,6 +33,7 @@ import {
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
+import { loadDevPidfile } from './core-load.js';
 import {
 	BLOCKS_COMMAND,
 	blocksCommand,
@@ -57,6 +58,7 @@ import {
 	DEV_OPTIONS_ENV,
 	DEV_STATE,
 	DEV_UNDER_WATCH_ENV,
+	devCrashCode,
 	type RunnerLaunch,
 	type RunnerName,
 	resolveTsxCli,
@@ -65,6 +67,7 @@ import {
 	runnerPath,
 	shellQuote,
 	TSX_IMPORT_ENV,
+	tsxTsconfigEnv,
 } from './runners/launch.js';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -93,18 +96,27 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	failureFile?: string;
 }
 
+/** What the dev server runner recorded in `failureFile` (see {@link ChildRun.failureFile}); `undefined` before any runner started. */
+function readDevState(failureFile: string): string | undefined {
+	try {
+		const state = readFileSync(failureFile, 'utf-8');
+		return state.trim() === '' ? undefined : state;
+	} catch {
+		return undefined; // No runner started.
+	}
+}
+
 /**
  * The exit code of `cdk-blocks dev`, from what its runner recorded in `failureFile`
  * (see {@link ChildRun.failureFile}); `undefined` to map `result` as for any child.
  */
 function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): number | undefined {
-	let state: string | undefined;
-	try {
-		state = readFileSync(failureFile, 'utf-8');
-	} catch {
-		// No runner started.
+	const state = readDevState(failureFile);
+	// A dev server that crashed after it started: `dev` restarts it, unless the CLI was stopped meanwhile.
+	if (devCrashCode(state) !== undefined) {
+		if (result.interrupted) return undefined;
+		return result.stopped ? ExitCode.Ok : ExitCode.Failure;
 	}
-	if (state?.trim() === '') state = undefined;
 	// The runner printed the reason and its hint; printing it again would only repeat it.
 	if (state !== undefined && state !== DEV_STATE.running && state !== DEV_STATE.stopped) return ExitCode.Failure;
 	if (result.interrupted) return undefined;
@@ -184,6 +196,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		const code = devExitCode(run, run.failureFile, result);
 		if (code !== undefined) return code;
 	}
+
 	// A child that is not long-running and exited 0 finished its work before the
 	// Ctrl-C reached it (`cdk-blocks db migrate` applied every migration): report that.
 	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
@@ -260,7 +273,8 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
 /**
  * Run a lifecycle runner with the app's `tsx`, from the project root (see
  * {@link runnerArgs}). The runner's client generation (core's deploy and
- * sandbox) loads the same `tsx`.
+ * sandbox) loads the same `tsx`, and both compile the backend with
+ * `aws-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = run.cwd ?? ctx.requireRoot();
@@ -274,7 +288,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 			args: [...options, ...(run.args ?? []), ...telemetryArgs(ctx)],
 		}),
 		cwd: root,
-		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
+		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...tsxTsconfigEnv(root, ctx.env), ...run.env },
 		where: run.where,
 		tool: run.tool,
 		longRunning: run.longRunning,
@@ -389,8 +403,9 @@ export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'accoun
 /**
  * Print the result of the deploy of `stage` that just ran, as JSON, from the
  * entry its runner recorded in `.blocks-sandbox/last-deploy.json`:
- * - the stack outputs core read when it deployed, not `.blocks-sandbox/outputs.json`
- *   again, which a concurrent deploy of the other stage rewrites with only its own stack;
+ * - the stack outputs core read when it deployed, not that stage's outputs document
+ *   again, which a later deploy of the same stage rewrites with only its own stacks
+ *   and a failed one can blank;
  * - not `.blocks-sandbox/config.json`, which a dev server or sandbox rewrites with its own (local) URL;
  * - the account and Region the runner deployed with: it loaded the stage env
  *   files, so its credentials can differ from this process's. Never queries AWS.
@@ -430,21 +445,152 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		);
 	}
 	const { source: _source, ...devConfig } = config;
-	// The dev server records a fatal startup failure here (see ChildRun.failureFile).
-	const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
-	const failureFile = join(failureDir, 'failure');
-	try {
-		return await runRunner(ctx, {
-			runner: 'dev-server',
-			operation: 'cdk-blocks dev',
-			watch: true,
-			env: { ...devServerEnv(ctx.env, { backendPath, ...devConfig }), [DEV_FAILURE_FILE_ENV]: failureFile },
-			longRunning: true,
-			failureFile,
+	const port = config.port ?? 3000;
+	const { claimDevSession, DEV_SESSION_ENV } = await loadDevPidfile();
+	// Claim the session before anything starts, so that a `dev stop` from now on finds it: until the dev
+	// server has loaded and taken the record over, the stop SIGTERMs this process, which stops what it started.
+	// A listener keeps that SIGTERM from ending the CLI before it spawns `tsx watch`; from then on the spawn's
+	// own listener stops the child. Nothing in between awaits, so the signal is handled once both are in place.
+	const keepAlive = (): void => {};
+	process.on('SIGTERM', keepAlive);
+	let session = claimDevSession(root, port);
+	if (!session.acquired) {
+		process.off('SIGTERM', keepAlive);
+		// One dev server per app, whatever its port: stop the one that runs, on its port.
+		const running = session.port;
+		const stop = running === 3000 ? blocksCommand('dev', 'stop') : blocksCommand('dev', 'stop', '--port', String(running));
+		throw new CliError(`${session.reason}. Not starting a second one.`, {
+			where: [`project: ${root}`],
+			hint: stop,
 		});
-	} finally {
-		rmSync(failureDir, { recursive: true, force: true });
 	}
+	let release: (() => void) | undefined = session.release;
+	try {
+		// The dev server records a fatal startup failure here (see ChildRun.failureFile).
+		const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
+		try {
+			return await superviseDevServer(join(failureDir, 'failure'));
+		} finally {
+			rmSync(failureDir, { recursive: true, force: true });
+		}
+	} finally {
+		process.off('SIGTERM', keepAlive);
+		release?.();
+	}
+
+	/**
+	 * Run the dev server under `tsx watch` until it is stopped, and start it again, after a
+	 * backoff, when it crashes after it started (see {@link decideDevRestart}).
+	 */
+	async function superviseDevServer(failureFile: string): Promise<number> {
+		let restarts: number[] = [];
+		for (;;) {
+			// A record that the last session left (a crash) must not be read as this session's: a runner
+			// that exits before it records anything (tsx's preflight, a failing import) would look like a
+			// new crash, and a restarted runner would not see its start as a first start (runners/fail.ts).
+			rmSync(failureFile, { force: true });
+			const code = await runRunner(ctx, {
+				runner: 'dev-server',
+				operation: 'cdk-blocks dev',
+				watch: true,
+				env: {
+					...devServerEnv(ctx.env, { backendPath, ...devConfig }),
+					[DEV_FAILURE_FILE_ENV]: failureFile,
+					[DEV_SESSION_ENV]: String(process.pid),
+				},
+				longRunning: true,
+				failureFile,
+			});
+			const crash = code === ExitCode.Failure ? devCrashCode(readDevState(failureFile)) : undefined;
+			if (crash === undefined) return code;
+			const decision = decideDevRestart(restarts, Date.now());
+			restarts = decision.recent;
+			const { maxRestarts, windowMs } = DEV_RESTART_POLICY;
+			if (!decision.restart) {
+				throw new CliError(
+					`cdk-blocks dev ended: its dev server crashed ${maxRestarts + 1} times within ${windowMs / 1000} s, so it was not restarted again. ` +
+						`Fix the error in its output above, then run ${blocksCommand('dev')} again.`,
+					{ where: [`project: ${root}`], runner: true },
+				);
+			}
+			ctx.out.error(
+				`\n⚠️  The dev server crashed (exit code ${crash}); restarting it in ${decision.delayMs} ms ` +
+					`(restart ${decision.recent.length} of ${maxRestarts} within ${windowMs / 1000} s).\n`,
+			);
+			// The crashed dev server removed its record: claim the session again, so that a `dev stop`
+			// from now on finds this CLI, which stops what it started, as it does during the first start.
+			release?.();
+			release = undefined;
+			session = claimDevSession(root, port);
+			if (!session.acquired) {
+				throw new CliError(`${session.reason}, so the crashed dev server was not restarted.`, {
+					where: [`project: ${root}`],
+				});
+			}
+			release = session.release;
+			const signal = await waitUnlessStopped(decision.delayMs);
+			if (signal === 'SIGINT') {
+				ctx.out.progress('cdk-blocks dev interrupted.');
+				return ExitCode.Interrupted;
+			}
+			if (signal !== undefined) return ExitCode.Ok;
+		}
+	}
+}
+
+/** How `cdk-blocks dev` restarts a dev server that crashed after it started (see {@link decideDevRestart}). */
+export interface DevRestartPolicy {
+	/** Restarts allowed within `windowMs`; the next crash ends `cdk-blocks dev`. */
+	maxRestarts: number;
+	/** The sliding window (ms) over which restarts are counted. */
+	windowMs: number;
+	/** The first backoff (ms); it doubles for each restart already in the window. */
+	backoffMs: number;
+	/** The longest backoff (ms). */
+	maxBackoffMs: number;
+}
+
+/** The default: 5 restarts within 60 s, after a backoff of 500 ms that doubles up to 5 s. */
+export const DEV_RESTART_POLICY: DevRestartPolicy = {
+	maxRestarts: 5,
+	windowMs: 60_000,
+	backoffMs: 500,
+	maxBackoffMs: 5_000,
+};
+
+/**
+ * Decide whether to restart a dev server that crashed at `now`, given the times of
+ * the restarts so far. Only restarts within the window count, so a backend that
+ * crashes once in a while is always restarted, and one that crashes again at once
+ * after every restart stops after `maxRestarts`, instead of looping. `recent` is
+ * the restarts to pass to the next decision, this one included when it restarts.
+ */
+export function decideDevRestart(
+	restarts: readonly number[],
+	now: number,
+	policy: DevRestartPolicy = DEV_RESTART_POLICY,
+): { restart: boolean; delayMs: number; recent: number[] } {
+	const recent = restarts.filter((t) => now - t < policy.windowMs);
+	if (recent.length >= policy.maxRestarts) return { restart: false, delayMs: 0, recent };
+	const delayMs = Math.min(policy.backoffMs * 2 ** recent.length, policy.maxBackoffMs);
+	return { restart: true, delayMs, recent: [...recent, now] };
+}
+
+/**
+ * Wait `ms`, unless a SIGINT, SIGTERM or SIGHUP arrives first (a Ctrl-C, `cdk-blocks dev stop`,
+ * a closed terminal): resolves that signal, or `undefined` when the wait ran out.
+ */
+function waitUnlessStopped(ms: number): Promise<NodeJS.Signals | undefined> {
+	const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+	return new Promise((resolvePromise) => {
+		const done = (signal?: NodeJS.Signals): void => {
+			clearTimeout(timer);
+			for (const s of signals) process.off(s, done);
+			resolvePromise(signal);
+		};
+		const timer = setTimeout(() => done(), ms);
+		for (const s of signals) process.on(s, done);
+	});
 }
 
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {
@@ -485,23 +631,24 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	}
 	const results = [];
 	for (const port of ports) results.push(await core.stopDevServer(port));
+	// A port still bound after the stop is a problem, not an outcome: it goes to stderr, as in core's runStopCli.
+	const warnings = results.filter((r) => core.isStopWarning(r));
+	for (const r of warnings) ctx.out.error(`${core.stopMessage(r)}\n`);
+	const outcomes = results.filter((r) => !core.isStopWarning(r));
 	const text =
-		results.length > 0
-			? results.map((r) => core.stopMessage(r)).join('\n')
-			: 'No dev server was recorded for this app.';
-	ctx.out.result(
-		{
-			stopped: results.map(({ port, stopped, alreadyStopped, portFree, via }) => ({
-				port,
-				stopped,
-				alreadyStopped,
-				portFree,
-				via,
-			})),
-		},
-		text,
-	);
-	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
+		results.length > 0 ? outcomes.map((r) => core.stopMessage(r)).join('\n') : 'No dev server was recorded for this app.';
+	const value = {
+		stopped: results.map(({ port, stopped, alreadyStopped, portFree, via, holders }) => ({
+			port,
+			stopped,
+			alreadyStopped,
+			portFree,
+			via,
+			holders,
+		})),
+	};
+	if (ctx.out.format === 'json' || text !== '') ctx.out.result(value, text);
+	return warnings.length > 0 ? ExitCode.Failure : ExitCode.Ok;
 }
 
 /** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
@@ -601,11 +748,25 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 }
 
 /**
+ * Each stage's CDK outputs document, by basename, mirroring core's `OUTPUTS_FILE`.
+ *
+ * Spelled here rather than imported: core is resolved lazily and version-checked
+ * (`core-load.ts`), so a static value import would bypass that guard and fail
+ * with Node's raw error on a skewed install. A test pins these against core.
+ */
+const OUTPUTS_BASENAME: Readonly<Record<DeployStage, string>> = {
+	sandbox: 'outputs.json',
+	production: 'outputs.production.json',
+};
+
+/**
  * Remove what this machine recorded about the deleted stack of `stage`, so that
- * `sandbox console`, `--output json` and the frontend no longer point at it: its
- * entry in `last-deploy.json`, its stack in `outputs.json`, and `config.json`
- * when a deploy of that stage wrote it. The other stage's records stay, and so
- * does the sandbox id: the next deploy reuses it.
+ * `sandbox console`, `--output json` and tests that target that stage no longer
+ * point at it: its entry in `last-deploy.json`, its stack in that stage's outputs
+ * document (and in the pre-split `outputs.json` for production), its
+ * `config.<stage>.json` (see core's `deployedConfigFile`), and a `config.json`
+ * that an older deploy of that stage wrote. The other stage's records stay, and
+ * so does the sandbox id: the next deploy reuses it.
  */
 function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
 	forgetLastDeploy(root, stage);
@@ -621,23 +782,36 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 			? Object.fromEntries(Object.entries(value))
 			: undefined;
 	};
-	const outputs = readJson('outputs.json');
-	if (outputs && Object.hasOwn(outputs, stack)) {
+	// A production destroy scrubs the sandbox document too: an app that deployed
+	// production before the per-stage split recorded its stack there, and nothing
+	// rewrites that file until the next sandbox deploy. Stack names carry the
+	// stage, so this can never drop a sandbox entry.
+	const documents = [OUTPUTS_BASENAME[stage]];
+	if (stage === 'production') documents.push(OUTPUTS_BASENAME.sandbox);
+	for (const name of documents) {
+		const outputs = readJson(name);
+		if (!outputs || !Object.hasOwn(outputs, stack)) continue;
 		delete outputs[stack];
-		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
-		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
+		if (Object.keys(outputs).length === 0) rmSync(join(dir, name));
+		else writeFileSync(join(dir, name), `${JSON.stringify(outputs, null, 2)}\n`);
 	}
+	// The name as a literal, not core's `deployedConfigFile`: this CLI may run against an
+	// app whose installed core predates that export, and the file name is fixed.
+	rmSync(join(dir, `config.${stage}.json`), { force: true });
+	// Core 0.8.0 and earlier: a deploy wrote its URL to the dev server's config.json.
 	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 
 /**
  * Open the console for this machine's sandbox stack, never another stack in
- * `.blocks-sandbox/outputs.json`, which a production deploy rewrites with its
- * own stack alone. The Region is the one the sandbox was deployed to, when
- * `last-deploy.json` recorded it; otherwise the sandbox's configured Region.
- * When neither record names the stack (a sandbox that the old npm-script
- * wrappers deployed, then a production deploy), CloudFormation is asked: only a
- * stack that does not exist is refused.
+ * `.blocks-sandbox/outputs.json`. A production deploy no longer rewrites that
+ * file, since each stage now writes its own document, but one written before
+ * that split still holds production's stack alone, so the stack is derived here
+ * and the document is only ever corroboration. The Region is the one the sandbox
+ * was deployed to, when `last-deploy.json` recorded it; otherwise the sandbox's
+ * configured Region. When neither record names the stack (a sandbox that the old
+ * npm-script wrappers deployed, then a production deploy), CloudFormation is
+ * asked: only a stack that does not exist is refused.
  */
 export async function sandboxConsole(ctx: Context): Promise<number> {
 	const root = ctx.enterRoot();
@@ -651,7 +825,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	const last = readLastDeploy(root, 'sandbox');
 	let outputs: unknown;
 	try {
-		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
+		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', OUTPUTS_BASENAME.sandbox), 'utf-8'));
 	} catch {
 		// No outputs: only last-deploy.json can show that the sandbox was deployed.
 	}
@@ -951,6 +1125,8 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
 		cwd: root,
+		// The worker imports the backend through tsx, so it needs the backend's jsx and paths too.
+		env: tsxTsconfigEnv(root, ctx.env),
 	});
 }
 

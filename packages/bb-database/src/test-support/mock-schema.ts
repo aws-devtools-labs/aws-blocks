@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
-import { DsqlRulesEngine } from '../dialect/rules-engine.js';
+import { RulesEngine } from '../dialect/rules-engine.js';
 import { internalAccess } from '../runtime/internal.js';
 
 /**
@@ -12,7 +12,7 @@ import { internalAccess } from '../runtime/internal.js';
  */
 export async function resetMockSchema(db: object, schema: string = DEFAULT_SCHEMA): Promise<void> {
 	const engine = await internalAccess(db, 'resetMockSchema').engine();
-	assert.ok(engine instanceof DsqlRulesEngine, 'a local Database runs on the DsqlRulesEngine');
+	assert.ok(engine instanceof RulesEngine, 'a local Database runs on the RulesEngine');
 	await engine.withDdl(async () => {
 		await engine.execute(`DROP SCHEMA ${quoteIdent(schema)} CASCADE`);
 		await engine.execute(`CREATE SCHEMA ${quoteIdent(schema)}`);

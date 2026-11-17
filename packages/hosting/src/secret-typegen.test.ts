@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
 	DEFAULT_TYPEGEN_MODULES,
@@ -151,6 +152,68 @@ void describe('scanValueKeys()', () => {
 		const scan = await scanValueKeys({ cwd });
 		assert.deepEqual(scan.secretKeys, []);
 		assert.deepEqual(scan.configKeys, []);
+	});
+
+	void it('infers schema types with the tsconfig that compiles each file, strict by default', async () => {
+		// A solution-style root (create-vite, the Vite templates) has no compilerOptions of its own.
+		// Read as the app's options, it turned strictNullChecks off and .nullable() lost its null.
+		const schemas = `
+import { z } from 'zod';
+export const limits = config('LIMITS', { schema: z.object({ max: z.number().nullable(), label: z.string().optional() }) });
+export const tags = config('TAGS', { schema: z.array(z.string().nullable()) });
+export const keys = secret('KEYS', { schema: z.record(z.string(), z.string().optional()) });
+`;
+		const strictProject = { strict: true, module: 'ES2022', moduleResolution: 'bundler', skipLibCheck: true };
+		const cwd = await fixture({
+			'tsconfig.json': JSON.stringify({
+				files: [],
+				references: [{ path: './tsconfig.app.json' }, { path: './aws-blocks' }],
+			}),
+			'tsconfig.app.json': JSON.stringify({
+				compilerOptions: { ...strictProject, noEmit: true },
+				include: ['src/**/*'],
+				references: [{ path: './aws-blocks' }],
+			}),
+			'aws-blocks/tsconfig.json': JSON.stringify({
+				compilerOptions: {
+					...strictProject,
+					composite: true,
+					emitDeclarationOnly: true,
+					outDir: '../node_modules/.tmp/aws-blocks',
+					rootDir: '..',
+				},
+				include: ['**/*'],
+			}),
+			'aws-blocks/index.ts': `import { config, secret } from '@aws-blocks/blocks';${schemas}`,
+			'src/app.ts': `import { config } from '@aws-blocks/hosting';
+import { z } from 'zod';
+export const banner = config('BANNER', { schema: z.object({ text: z.string().nullable() }) });
+`,
+		});
+		const zod = dirname(createRequire(import.meta.url).resolve('zod/package.json'));
+		const { mkdir } = await import('node:fs/promises');
+		await mkdir(join(cwd, 'node_modules'));
+		await symlink(zod, join(cwd, 'node_modules', 'zod'), 'junction');
+		const expected = {
+			config: {
+				BANNER: '{ text: string | null; }',
+				LIMITS: '{ max: number | null; label?: string | undefined; }',
+				TAGS: '(string | null)[]',
+			},
+			secret: { KEYS: '{ [x: string]: string | undefined; }' },
+		};
+		assert.deepStrictEqual((await scanValueKeys({ cwd })).valueTypes, expected);
+		// With no tsconfig at all, the defaults are strict too.
+		const bare = await fixture({
+			'aws-blocks/index.ts': `import { config, secret } from '@aws-blocks/blocks';${schemas}`,
+		});
+		await mkdir(join(bare, 'node_modules'));
+		await symlink(zod, join(bare, 'node_modules', 'zod'), 'junction');
+		const { BANNER: _banner, ...backendConfig } = expected.config;
+		assert.deepStrictEqual((await scanValueKeys({ cwd: bare })).valueTypes, {
+			config: backendConfig,
+			secret: expected.secret,
+		});
 	});
 
 	void it('does not descend into node_modules / dist / .blocks', async () => {

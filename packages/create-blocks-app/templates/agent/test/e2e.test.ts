@@ -9,8 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -24,37 +24,35 @@ let authApi: typeof AuthApiType;
 
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
+// a deploy, which records its URL in .blocks-sandbox/config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // The canned-provider assertions below only hold in the local mock runtime; a
 // deployed sandbox runs a real Bedrock model whose text is non-deterministic.
 // So no test drives a deployed turn: the deployed path relies on `model.deployed`
 // in aws-blocks/index.ts naming a valid model. The readiness config.json
-// carries which runtime we hit.
+// carries which runtime we hit; against TEST_URL, the canned tests skip.
 let isLocalMock = false;
 
 // A new user each run: the local auth store persists, so a fixed username
 // would already exist when you rerun `npm run test:e2e` against the same server.
 const creds = { username: `agent-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 
-test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
-    server = spawn('npm', ['run', 'dev:server'], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWin,
-      shell: isWin,
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-    server.unref();
-    await setTimeout(2000);
-  }
+// Sign up the way the sign-in UI does: sign-up confirms the email with a code,
+// then signs the user in. Locally no email is sent: getLastAuthCode reads the
+// code the local auth block issued.
+async function signUpAndSignIn() {
+  await authApi.setAuthState({ action: 'signUp', ...creds });
+  await authApi.setAuthState({ action: 'confirmSignUp', username: creds.username, code: await getLastAuthCode(creds.username) });
+  return await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
+}
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the Blocks server to be ready without depending on the sample API,
+// and record which runtime it reports.
+async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
       const response = await fetch(readinessUrl);
@@ -66,9 +64,35 @@ test.before(async () => {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
+test.before(async () => {
+  if (!testUrl && !await isServerRunning(serverPort)) {
+    server = spawn('npm', ['run', 'dev:server'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWin,
+      shell: isWin,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    server.unref();
+  }
+
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  const mod = await import('aws-blocks');
+  api = mod.api;
+  authApi = mod.authApi;
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -82,7 +106,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -103,7 +127,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace the sample methods with your own.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -125,7 +149,7 @@ test('Agent - a chat turn returns the model text', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  const signedUp = await signUpAndSignIn();
   assert.strictEqual(signedUp.state, 'signedIn');
 
   const { text } = await api.chat('hello there');
@@ -140,9 +164,8 @@ test('Agent - a tool-calling turn runs the tool handler', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  await authApi.setAuthState({ action: 'signIn', ...creds }).catch(async () => {
-    await authApi.setAuthState({ action: 'signUp', ...creds });
-  });
+  const signedIn = await authApi.setAuthState({ action: 'signIn', ...creds });
+  if (signedIn.state !== 'signedIn') await signUpAndSignIn();
 
   // Mentioning the tool's name (its camelCase words "save"/"note") makes the
   // canned provider emit a toolUse for `saveNote`; Strands runs the handler,

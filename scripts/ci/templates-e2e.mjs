@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killTree, runBool, startRegistry, isWin } from './_proc.mjs';
+import { checkDevLifecycle } from './windows-dev-lifecycle.mjs';
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..', '..');
 const REGISTRY_PORT = 4873;
@@ -98,6 +99,41 @@ function discoverTemplates() {
 	return names.sort();
 }
 
+/**
+ * `process.env` without npm's lowercase `npm_config_*` variables. `npm run
+ * test:templates` exports npm's own resolved configuration that way
+ * (`npm_config_userconfig=~/.npmrc`, `npm_config_cache`, …). Child npm processes
+ * read them, and `npm_config_userconfig` overrides `NPM_CONFIG_USERCONFIG`, so a
+ * registry in the caller's ~/.npmrc would serve the scaffolded apps' @aws-blocks
+ * packages instead of the local registry. Dropping them makes `npm run
+ * test:templates` behave exactly like `node scripts/ci/templates-e2e.mjs` (what CI
+ * runs). Uppercase `NPM_CONFIG_*` variables a caller sets on purpose are kept.
+ */
+function callerEnvWithoutNpmConfig() {
+	return Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('npm_config_')));
+}
+
+/**
+ * True when the install in `dir` took `@aws-blocks/<name>` from the local
+ * registry, so a registry leaking in from the caller's npm config fails loudly
+ * instead of testing published packages.
+ */
+function assertLocalRegistry(dir, name) {
+	let resolved = '';
+	try {
+		const lock = JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf-8'));
+		resolved = lock.packages?.[`node_modules/@aws-blocks/${name}`]?.resolved ?? '';
+	} catch {
+		/* no lockfile: reported below */
+	}
+	if (!resolved.startsWith(REGISTRY_URL)) {
+		console.error(`  FAIL: @aws-blocks/${name} in ${dir} was not installed from the local registry (resolved: ${resolved || '<none>'})`);
+		return false;
+	}
+	console.log(`  ✓ @aws-blocks/${name} installed from the local registry`);
+	return true;
+}
+
 async function main() {
 	// ── Step 1: publish to the local registry (unless reusing dist-registry) ──
 	if (skipPublish && existsSync(join(ROOT, 'dist-registry'))) {
@@ -124,7 +160,7 @@ async function main() {
 	const userNpmrc = join(work, '.npmrc');
 	writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY_URL}\n`);
 	const env = {
-		...process.env,
+		...callerEnvWithoutNpmConfig(),
 		NPM_CONFIG_USERCONFIG: userNpmrc,
 		npm_config_cache: join(work, '.npm-cache'),
 		// This harness scaffolds and exercises every template; its CLI runs are
@@ -137,6 +173,9 @@ async function main() {
 	console.log('\n=== Step 3: Install create-blocks-app from registry ===');
 	if (!run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env })) {
 		throw new Error('installing @aws-blocks/create-blocks-app from the local registry failed');
+	}
+	if (!assertLocalRegistry(work, 'create-blocks-app')) {
+		throw new Error('@aws-blocks/create-blocks-app was not installed from the local registry');
 	}
 	const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
 
@@ -165,6 +204,11 @@ async function main() {
 			continue;
 		}
 
+		if (!assertLocalRegistry(app, 'blocks')) {
+			failed.push(template);
+			continue;
+		}
+
 		console.log('\n--- Running e2e tests ---');
 		if (!run('npm', ['run', 'test:e2e'], inApp)) {
 			console.error(`  FAIL: e2e tests failed for template ${template}`);
@@ -185,6 +229,17 @@ async function main() {
 			console.error(`  FAIL: vendorized source not found for template ${template}`);
 			failed.push(template);
 			continue;
+		}
+		// Windows only: the user's `cdk-blocks dev` → edit → `dev stop` session, which `test:e2e`'s
+		// `taskkill /T` teardown does not exercise (see windows-dev-lifecycle.mjs).
+		if (isWin && template === 'default') {
+			try {
+				await checkDevLifecycle(app, env, work);
+			} catch (error) {
+				console.error(`  FAIL: ${error?.message ?? error}`);
+				failed.push(`${template} (dev lifecycle)`);
+				continue;
+			}
 		}
 		console.log(`  ✓ Template ${template} passed all checks`);
 	}

@@ -47,7 +47,8 @@
     "@aws-blocks/bb-logger": "^0.3.0",
     "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-bedrock-agent": "^3.1156.0",
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.1156.0"
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1156.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

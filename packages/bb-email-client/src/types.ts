@@ -15,14 +15,38 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
  * @param configurationSet - Optional SES configuration set name for tracking.
  */
 export interface EmailOptions {
-	/** The verified sender email address. */
+	/**
+	 * The verified sender email address.
+	 *
+	 * Must be on a domain SES can verify. An address on a reserved domain
+	 * (`example.com`, `example.net`, `example.org` and their subdomains, or under
+	 * `.test`, `.example`, `.invalid` or `.localhost`) can never be verified, so
+	 * synth adds the warning `@aws-blocks/bb-email-client:UnverifiableSender`.
+	 */
 	fromAddress: string;
-	/** Optional reply-to address(es). */
+	/**
+	 * Optional reply-to address(es).
+	 *
+	 * An address on a reserved domain adds the synth warning
+	 * `@aws-blocks/bb-email-client:UndeliverableReplyTo`.
+	 */
 	replyTo?: string[];
 	/** Optional SES configuration set name for tracking/events. */
 	configurationSet?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+	/**
+	 * Maximum number of messages one `sendBatch()` call accepts. A larger batch is
+	 * rejected as a whole with `EmailErrors.InvalidInput` before any message is sent.
+	 * Must be a positive integer. Defaults to 100.
+	 *
+	 * The cap bounds how many SES sends a single call can trigger, which limits the
+	 * damage if `sendBatch()` is reachable by an untrusted caller. Raise it only for
+	 * trusted server-side jobs that need larger batches.
+	 *
+	 * @defaultValue 100
+	 */
+	maxBatchSize?: number;
 }
 
 /**

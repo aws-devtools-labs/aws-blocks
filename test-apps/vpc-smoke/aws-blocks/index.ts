@@ -9,12 +9,11 @@
 
 import { ApiNamespace, Scope } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Realtime } from '@aws-blocks/bb-realtime';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Database, sql } from '@aws-blocks/bb-data';
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
@@ -27,7 +26,7 @@ const scope = new Scope('vpc-smoke');
 
 const kv = new KVStore(scope, 'cache');
 
-const table = new DistributedTable(scope, 'items', {
+const table = new KVStore(scope, 'items', {
   schema: z.object({
     pk: z.string(),
     sk: z.string(),
@@ -55,10 +54,13 @@ const rt = new Realtime(scope, 'events', {
   },
 });
 
-const auth = new AuthCognito(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
-const db = new Database(scope, 'db');
+// `secretRotation: true` because this app runs on the sandbox preset, which
+// leaves rotation off: the lane exists to prove the rotation Lambda reaches the
+// shared VPC's Secrets Manager endpoint, which needs rotation actually on.
+const db = new Database(scope, 'db', { secretRotation: true });
 
 const logger = new Logger(scope, 'log', { level: 'info' });
 const metrics = new Metrics(scope, 'metrics', { namespace: 'vpc-smoke' });
@@ -75,10 +77,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async tablePutQuery(pk: string, sk: string, data: string) {
-    await table.put({ pk, sk, data });
+    await table.put({ pk, sk }, { data });
     const items: Array<{ pk: string; sk: string; data: string }> = [];
-    for await (const item of table.query({ where: { pk: { equals: pk } } })) {
-      items.push(item);
+    for await (const { value } of table.query({ where: { pk: { equals: pk } } })) {
+      items.push(value);
     }
     await table.delete({ pk, sk });
     return items;

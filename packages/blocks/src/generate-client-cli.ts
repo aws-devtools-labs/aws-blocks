@@ -32,7 +32,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const [foundationArg, outputArg] = process.argv.slice(2);
@@ -81,9 +81,23 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
 	nodeArgs.push('--import', loader);
 }
 
+/**
+ * The worker's environment. `tsx` compiles a file with the options of the
+ * `tsconfig.json` in the working directory, and a root that only lists project
+ * references (the Vite templates) lists no file, so the backend would load without
+ * its `jsx` or `paths`. Point `tsx` at the `tsconfig.json` next to the backend entry
+ * (`aws-blocks/tsconfig.json`) when there is one, unless `TSX_TSCONFIG_PATH` is set.
+ */
+function workerEnv(): NodeJS.ProcessEnv {
+	if (process.env.TSX_TSCONFIG_PATH) return process.env;
+	const backendTsconfig = resolve(dirname(foundationPath), 'tsconfig.json');
+	return existsSync(backendTsconfig) ? { ...process.env, TSX_TSCONFIG_PATH: backendTsconfig } : process.env;
+}
+
 const worker = spawn(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {
 	stdio: 'inherit',
 	cwd: process.cwd(),
+	env: workerEnv(),
 });
 
 // A signal sent to this process alone (`kill <pid>`, a supervisor, the `cdk-blocks` CLI

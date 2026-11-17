@@ -3,7 +3,7 @@
 Design document for the Agent Building Block. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-agent`
-**Type:** Composite (uses DistributedTable, Realtime, FileBucket internally) + an AgentCore Runtime
+**Type:** Composite (uses KVStore, Realtime, FileBucket internally) + an AgentCore Runtime
 **AWS Services:** Bedrock AgentCore Runtime, Bedrock, DynamoDB, S3, API Gateway (WebSocket)
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)
 
@@ -16,7 +16,7 @@ managed) — not the shared Blocks request handler — and streams chunks to the
 | Internal BB / resource | Purpose | Created when |
 |-------------|---------|-------------|
 | **FileBucket** | Session persistence (Strands SessionManager) | Always |
-| **DistributedTable** | Frontend message history | `inferenceOnly: false` |
+| **KVStore** | Frontend message history | `inferenceOnly: false` |
 | **Realtime** | Streaming chunks to caller | Always |
 | **AgentCore Runtime** | Hosts the streaming loop (co-bundled backend + `serve()`) | Always (AWS) |
 
@@ -27,7 +27,7 @@ stream()/resume() → InvokeAgentRuntime (returns immediately)
      async task and returns an ack immediately
                 ↓
          runAgent() → Strands agent loop → publishes chunks to Realtime (as the shared execution role)
-                                         → persists messages to DistributedTable
+                                         → persists messages to KVStore
                                          → SessionManager saves state to FileBucket
 ```
 
@@ -86,13 +86,15 @@ The conversation record in the `convos` table is keyed by `{ userId, conversatio
 
 **The caller's identity travels in an options object** (`getConversation(id, { userId, limit? })`, `getPendingInterrupts(conversationId, { userId })`, `getChannel(channelId, { userId })`), as `stream()`/`resume()` already take it, so later fields stay additive. No backward-compatible form exists: the pre-ownership calls carry no `userId`, so keeping them callable would either keep returning another user's data or silently change what they return. With persistence enabled, anything that is not an object with a non-empty string `userId` throws `InvalidUsage` instead.
 
-**The ownership read is strongly consistent** (`DistributedTable.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
+**The ownership read is strongly consistent** (`KVStore.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
 
-**Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, { userId })`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, and the runtime computes the same key. `inferenceOnly` agents keep no owner and publish on the bare `channelId`, as before.
+**Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, { userId })`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, and the runtime computes the same key. `inferenceOnly` agents keep no owner record; with `sessionScope: 'user'` (the default, below) they use the same scoped key, and only with `sessionScope: 'shared'` do they publish on the bare `channelId`. Every chunks handle the agent hands out (`getChannel()`, `stream()`'s `channel`) is minted with Realtime's `scope: 'exact'`, so its token authorizes that one channel and none of the `/`-separated sub-channels under it: a `channelId` of `c/x` belongs to a different turn (and, with `'shared'`, possibly a different caller) than `c`.
 
 **A turn without a conversation never runs in a conversation's session.** On AWS the `InvokeAgentRuntime` `runtimeSessionId` is derived from the `conversationId` for a conversation (the id itself, or its hash when shorter than 33 characters, so its turns and resumes reuse one warm microVM), and a turn without one, which has no state to keep, gets a fresh `turn-<uuid>` session (`runtimeSessionIdFor` in `agent.aws.ts`). The AgentCore entry (`handleInvocation` in `agentcore-invocation.ts`) takes `conversationId` from the request only, never from the session id. Before, the session id was the bare `channelId` and the entry fell back to it as the `conversationId`, so `stream({ channelId: <someone's conversation id> })` without a `conversationId` skipped the ownership check and ran inside that conversation's session on AWS (the mock never persisted such a turn).
 
-**`inferenceOnly` agents have no owner.** A `conversationId` passed to one is a shared session key with no ownership check, as before; the README says so.
+**`inferenceOnly` agents have no owner record.** There is nothing to check a `conversationId` against, so by default (`sessionScope: 'user'`) the owner goes into the session key instead (below). `sessionScope: 'shared'` is an explicit opt-out: a `conversationId` is then a shared session key with no ownership check, safe only when callers can't choose it (or the `channelId`); the README says so. `resume()` throws `InvalidUsage` in that mode before anything else runs: the session has no owner, so any caller who knows the id could approve, or `trust`, its pending tool calls. The constructor refuses the mode up front (`InvalidModelConfig`) when a tool sets `needsApproval` or `interrupt`, since those prompts could never be answered; a handler that calls `interrupt()` itself can't be detected there, so the `resume()` refusal stays.
+
+**`sessionScope: 'user'` (the default) keys an `inferenceOnly` session by its owner.** There is no conversation record to check ownership against, so the owner goes into the key instead: the Strands session id is `u-` + the SHA-256 hex of `JSON.stringify([userId, conversationId])` (`sessionIdFor` in `agent.ts`). A caller who passes another user's `conversationId` selects a different, empty session. The hash keeps the key a fixed-length, path-safe S3 prefix whatever the ids contain, and the JSON array keeps `('a:b', 'c')` and `('a', 'b:c')` apart. Realtime channels take the same `u/<userId>/<channelId>` form as with persistence, and on AWS the AgentCore `runtimeSessionId` is derived from the scoped key, so two users on one `conversationId` don't share a runtime session either. `stream()`/`resume()`/`getChannel()` require a `userId` (the `'anonymous'` default would put every caller in one scope), and so does `invokeTurn` on the runtime: the AgentCore entry passes a missing `userId` through, and the turn is refused and logged rather than run as `'anonymous'`. A missing `userId` throws `InvalidUsage` with a message that names the `'shared'` opt-out, since that is what an existing `inferenceOnly` agent hits first after upgrading. Switching scopes changes which stored session an existing `conversationId` resolves to, so sessions stored under the other key are not resumed.
 
 ## Session Persistence
 
@@ -101,6 +103,13 @@ Two storage backends, same FileBucket BB:
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
 **Missing-snapshot parity (D-002/D-008).** A genuinely missing first-turn snapshot already comes back as `NoSuchKey`/`NoSuchBucket` → `null` (and a missing manifest as an empty one) from `S3Storage` itself, which Strands' `SessionManager` treats as "start fresh" — the same contract the local `FileBucketSnapshotStorage` honours (it returns `null` when `bucket.get` is falsy). So the deployed read paths are delegated to `S3Storage` **unchanged**: no wrapper is needed to start a true first turn fresh. A read that fails for any **other** reason — `AccessDenied`, a 5xx, a corrupt object — means the snapshot may exist and simply was not read, so it **rethrows and surfaces**. It must NOT degrade to a fresh start: `SessionManager` overwrites `snapshot_latest.json` after a fresh start, so swallowing a transient fault on turn N would silently overwrite an established conversation's saved history with a blank one (a local Strands reproduction confirmed a single 503 on turn N erased turns 1..N-1). A read fault cannot be distinguished from a genuine first turn, which is exactly why it must not be treated as one. The diagnostic value is kept where it belongs: a rethrown restore error propagates into `runAgent`'s catch, which logs the deepest cause's `name`, `httpStatusCode` and `requestId` (flattened out of the non-enumerable `.cause` by `errorCauseShape`) at **`error`** level — above the deployed agent's default `error` log level, so the concrete production error shape is captured for the first time, without the data-loss fallback. See the `createDeployedSnapshotStorage` JSDoc in `src/agent.aws.ts`, the `errorCauseShape` guard, and the rethrow regression tests plus the parity tripwire (`SessionManager does not read the manifest on a fresh-session restore`) in `index.test.ts`.
+
+## Untrusted tool output
+
+`ToolDefinition.untrustedOutput` wraps a tool's result in `<untrusted-data id="<nonce>" source="<tool>">…</untrusted-data id="<nonce>">` (see `src/untrusted.ts`). The nonce is random per Strands agent instance, and the system prompt names it and tells the model the block is data.
+
+- **Both paths are wrapped.** Strands turns a thrown tool error into an error tool result whose text is `Error: <message>`, which reaches the model like a result does. So the tool callback catches the handler's error and rethrows a new `Error` whose message is the wrapped text (the original stays on a non-enumerable `cause`, and its shape — name plus any AWS status and request id, never the message, which can echo untrusted content — is logged at `warn` via `errorCauseShape`). Strands' `InterruptError` is rethrown untouched, because an `interrupt()` call is control flow, not a failure.
+- **Detect on the normalized form, rewrite only on a hit.** The nonce and delimiter-shaped text are looked for in an NFKC-normalized copy (fullwidth and other compatibility forms fold to ASCII) stripped of invisible characters: zero-width spaces and joiners, the combining grapheme joiner, the word joiner and invisible operators, the BOM, the soft hyphen, bidirectional controls (including U+061C), Mongolian free variation selectors, Hangul fillers, variation selectors (U+FE00–U+FE0F, U+E0100–U+E01EF), and the Unicode tag block (U+E0000–U+E007F). `untrusted` and `data` joined by whitespace, any dash or a connector are all neutralized to `untrusted_data`. Without this, `＜/ｕｎｔｒｕｓｔｅｄ-data id="…"＞` or `untrusted​-data` slip past an exact match while a model still reads them as the closing tag. Only a string with a hit is replaced by its normalized, neutralized form, so that string can change (`x²` → `x2`, ZWNJ dropped from Persian, emoji ZWJ sequences split). Every other string reaches the model unchanged, apart from tag characters, which are always removed because some models read them as hidden ASCII. A structured result is sanitized string by string (keys and values) before `JSON.stringify`: normalizing the serialized text instead would fold a fullwidth `＂`/`＼` (which `JSON.stringify` doesn't escape) into a raw `"`/`\` and break the JSON. A last nonce/delimiter pass on the serialized text catches anything formed across tokens; it adds no `"` or `\`, so the JSON stays valid. None of this touches trusted tool results.
 
 ## Runaway-protection caps
 
@@ -112,11 +121,13 @@ Two storage backends, same FileBucket BB:
 
 A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strands reports the cancellation as the call's result), so the `tool-call` row already written to the message table keeps its `tool-result` partner — no dangling `tool_use` is left for the next turn to replay. `runAgent` additionally writes an `assistant` row carrying the stop reason in `metadata.error`, so a reloaded conversation explains why it ended.
 
+**Cancelled tool calls publish no tool chunks.** Strands runs every `BeforeToolCallEvent` hook before it yields the event to the `stream()` loop (`_streamCore` awaits `_invokeCallbacks(event)` and only then yields it), so by the time `runAgent` sees the event, `event.cancel` holds the decision of the HITL hook (the user denied the approval) and of the tool cap. A cancelled call never runs, so `runAgent` publishes no `tool-call` chunk for it, and remembers its `toolUseId` to skip the `tool-result` chunk for the cancellation result that Strands emits next. A call that pauses for approval isn't yielded at all on the paused segment: the HITL hook's `interrupt()` throws, and Strands throws that back into the loop instead of yielding the event. It is yielded once, when the turn resumes with the answer, so an approved call publishes exactly one `tool-call` and one `tool-result`. The message table is unchanged: a cancelled call still writes its paired `tool-call`/`tool-result` rows, and the `tool-result` row records the denial for audit.
+
 ## Infrastructure (CDK)
 
 The CDK class provisions:
 - **FileBucket:** `${id}-sn` — session snapshot storage
-- **DistributedTable:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
+- **KVStore:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
 - **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
   harness. It runs **as the shared Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
@@ -142,7 +153,7 @@ handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered 
 every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
 from the shared execution role.
 
-> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`.
+> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`. The two `KVStore` children also take their options from one place in both layers: `conversationsTableOptions` and `messagesTableOptions` in `schemas.ts`.
 
 ## Model Providers
 
@@ -195,6 +206,18 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
   `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A turn that failed during the gap** is recovered from the row the backend saves for it: an
+  assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
+  turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)
+  stopped it. The client adopts any partial text under the same `extendsStream` guard, then ends the
+  turn through `failTurn()`, the same path a live `error` chunk takes: `loading` clears, the failsafe
+  is disarmed, and `onError` fires once with the recorded message (typed by `errorName`, e.g.
+  `AgentErrors.ModelUnavailable`, as for a live chunk), instead of waiting out the failsafe below.
+  The backend writes a turn's user row inside the turn, after `stream()` returns, so the read can miss
+  it and end at the previous turn's last row. Rows carry no turn id, so when the previous turn may have
+  failed (it failed, its send failed, the failsafe ended it, or a loaded conversation ends in an error
+  row) an error row is not trusted: the client waits for the terminal chunk or the failsafe, as for a
+  turn still running.
 - **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect

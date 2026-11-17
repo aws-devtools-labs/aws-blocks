@@ -22,7 +22,9 @@
  *
  * The router admits only this edge: it hands over (in its `originHandle`) the
  * origin-verify header every request must carry, which the edge sets as the
- * origin's custom headers, and — for an internal ALB — the balancer itself,
+ * origin's custom headers (never over a plain-HTTP hop to an internet-facing
+ * router outside a sandbox: that fails synth, see `assertSecretHopEncrypted`),
+ * and — for an internal ALB — the balancer itself,
  * which the edge reaches through a CloudFront VPC origin and admits into the
  * balancer's security group (the VPC origin's `CloudFront-VPCOrigins-Service-SG`,
  * looked up after the distribution, since CloudFormation doesn't return it).
@@ -51,6 +53,8 @@
 import { Annotations, Duration } from 'aws-cdk-lib';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
+import { HostingError } from '../hosting_error.js';
+import { isSandboxDeploy, PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID } from './deploy_stage.js';
 import {
   AllowedMethods,
   type BehaviorOptions,
@@ -71,7 +75,7 @@ import type { IApplicationLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalanc
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import { ASSET_BEHAVIOR_OPTIONS, assetsS3Origin, cf, inlineFunction, trimSlashes } from './cf_helpers.js';
-import { customErrorResponses } from './error_responses.js';
+import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
 import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { proxyRulesJs } from './proxy_rules.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
@@ -84,6 +88,15 @@ export type CloudFrontEdgeDoorInput = DoorInput & {
   contentSecurityPolicy?: string;
   /** BYO CLOUDFRONT-scoped web ACL ARN for the edge. */
   webAclArn?: string;
+  /**
+   * The stacked door's `allowPlainHttp`: outside a sandbox, send the router's
+   * required headers (its origin-verify secret) over a plain-HTTP hop to an
+   * internet-facing router instead of failing synth
+   * (`OriginSecretOverPlainHttpError`), with the
+   * `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning. Only for a
+   * trusted network path. @default false
+   */
+  allowPlainHttp?: boolean;
 };
 
 /** The edge's result: the {@link FrontDoorResult} plus the distribution it built. */
@@ -98,23 +111,86 @@ export type CloudFrontEdgeDoorResult = FrontDoorResult & {
   staticFunction?: CloudFrontFunction;
 };
 
+/**
+ * Require an HTTPS hop, or a CloudFront VPC origin (an internal router, on the
+ * AWS network), before attaching the router's required headers (its
+ * origin-verify secret) to the edge → router origin.
+ *
+ * A production deploy fails synth, so the secret is never sent. A sandbox
+ * deploy (`sandboxMode` context) synthesizes with a warning
+ * (`@aws-blocks/hosting:OriginSecretOverPlainHttp`): it is disposable, and the
+ * router rejects every request without the header, so dropping it would
+ * leave the sandbox unreachable.
+ *
+ * With the stacked door's `allowPlainHttp: true`, a production deploy sends
+ * the headers anyway and warns
+ * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledgeable): the
+ * explicit opt-out for a trusted network path between the edge and the router.
+ *
+ * @throws HostingError('OriginSecretOverPlainHttpError') for that hop outside a sandbox, without `allowPlainHttp`.
+ */
+const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['originHandle'], allowPlainHttp: boolean): void => {
+  if (handle.protocol === 'https' || handle.privateLoadBalancer) return;
+  const headers = Object.keys(handle.customHeaders ?? {}).join(', ');
+  const message =
+    `The stacked door's CloudFront edge would send the router's required headers (${headers}) over plain HTTP ` +
+    "to the internet-facing router's public addresses, unencrypted.";
+  const resolution =
+    'Give the router a `certificate` and `features.router.domain` so the edge → router hop is HTTPS :443, or set ' +
+    '`internal: true` so the edge reaches the router through a CloudFront VPC origin on the AWS network.';
+  const sandbox = isSandboxDeploy(scope);
+  if (!sandbox && allowPlainHttp) {
+    Annotations.of(scope).addWarningV2(
+      PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID,
+      `${message} \`allowPlainHttp: true\` lets this production deploy send them anyway: the origin secret crosses the ` +
+        'edge → router hop in cleartext, so anyone who reads it on that path can reach the router directly, past the edge ' +
+        "(and its web ACL), and the requests on that hop (sign-in, cookies, every RPC) can be read or altered. Keep it only " +
+        'when that path is trusted. ' +
+        `${resolution} If the plain-HTTP hop is intended, acknowledge it with ` +
+        `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID}')\`.`,
+    );
+    return;
+  }
+  if (!sandbox) {
+    throw new HostingError('OriginSecretOverPlainHttpError', {
+      message: `${message} A production deploy refuses to send it.`,
+      resolution:
+        `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns. Only if the path between the edge and ` +
+        'the router is trusted, set `allowPlainHttp: true` on the stacked door to send it anyway.',
+    });
+  }
+  Annotations.of(scope).addWarningV2(
+    '@aws-blocks/hosting:OriginSecretOverPlainHttp',
+    `${message} This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
+  );
+};
+
 /** The built-in CloudFront edge of the stacked door. */
 export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, CloudFrontEdgeDoorResult>({
   service: 'cloudfront-edge',
 
-  /** @throws Error when there is no `upstream` door to front. */
+  /**
+   * @throws Error when there is no `upstream` door to front.
+   * @throws HostingError('OriginSecretOverPlainHttpError') when the router requires headers (its origin-verify
+   *   secret) over a plain-HTTP hop to an internet-facing router, outside a sandbox deploy (unless
+   *   `allowPlainHttp: true`, which warns instead).
+   */
   build(scope, input) {
     const router = input.upstream;
     if (!router) {
       throw new Error('cloudfront-edge door: the stacked edge needs the router door it fronts as `upstream`.');
     }
     const handle = router.originHandle;
-    // The headers the router requires on every request (its origin-verify secret).
-    const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     // The edge → router hop uses the router listener's protocol and port: HTTP
     // :80, or HTTPS :443 when the router has a certificate. (For HTTPS, the
     // certificate must cover the name CloudFront connects to.)
     const https = handle.protocol === 'https';
+    // The headers the router requires on every request (its origin-verify
+    // secret). Over plain HTTP to an internet-facing router they would cross
+    // the internet in cleartext, so that hop fails synth (see
+    // `assertSecretHopEncrypted`). A router that requires none has nothing to protect.
+    if (Object.keys(handle.customHeaders ?? {}).length > 0) assertSecretHopEncrypted(scope, handle, input.allowPlainHttp === true);
+    const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     const protocolPolicy = https ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY;
     const routerPort = https ? 443 : 80;
     const origin = handle.privateLoadBalancer
@@ -128,10 +204,13 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
           protocolPolicy,
           customHeaders,
         });
+    // Server routes: the origin's TTLs, clamped to a day (as the SSR cache
+    // policy behind the CloudFront door), so a long origin `s-maxage` on a
+    // rendered page can't pin it at the edge for longer.
     const cachePolicy = new CachePolicy(scope, 'CfAlbCache', {
       defaultTtl: Duration.seconds(0),
       minTtl: Duration.seconds(0),
-      maxTtl: Duration.days(365),
+      maxTtl: Duration.days(1),
       cookieBehavior: CacheCookieBehavior.all(),
       headerBehavior: CacheHeaderBehavior.none(),
       queryStringBehavior: CacheQueryStringBehavior.all(),
@@ -227,11 +306,13 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
 
     // The app's error pages, as on the CloudFront door: every 404 / 500 from
     // any origin answers with the page (served from S3).
-    const errorResponses = customErrorResponses(app.errorPages, {
+    const pageResponses = customErrorResponses(app.errorPages, {
       pathPrefix: buildPrefix(input),
       hasCompute: Boolean(origins.server),
       pageKeys: true,
     });
+    // A server's 5xx is never cached (as on the CloudFront door).
+    const errorResponses = origins.server ? withServerErrorsNotCached(pageResponses) : pageResponses;
 
     const additionalBehaviors: Record<string, BehaviorOptions> = {};
     for (const [pattern, target] of plan.behaviors) additionalBehaviors[pattern] = behaviorFor(target);

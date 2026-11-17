@@ -101,6 +101,34 @@ describe('generateClientCode — middleware collection', () => {
 			'a real (non-marker) export still becomes a namespace',
 		);
 	});
+
+	it('skips server-only functions, however they were copied out (auth.admin methods)', async () => {
+		// The fixture registers its "admin" methods through the dispatcher's own
+		// markServerOnlyFunction, imported by file URL so it needs no package resolution
+		// from the temp dir. It mirrors what bb-auth does for `auth.admin`.
+		const rpcDispatch = pathToFileURL(join(import.meta.dirname, '..', 'rpc-dispatch.js')).href;
+		const backendPath = join(tmpDir, 'backend.mjs');
+		writeFileSync(
+			backendPath,
+			`
+				import { markServerOnlyFunction } from '${rpcDispatch}';
+				const admin = { async deleteUser() {}, async addUserToGroup() {} };
+				for (const fn of Object.values(admin)) markServerOnlyFunction(fn);
+				const auth = { admin };
+				export const { deleteUser } = auth.admin;
+				export const remove = auth.admin.deleteUser;
+				export function realApi() {}
+			`,
+		);
+
+		const code = await generateClientCode(backendPath);
+		assert.ok(!code.includes("'deleteUser'"), 'a destructured admin method must not get a client proxy');
+		assert.ok(!code.includes("'remove'"), 'a renamed admin method must not get a client proxy');
+		assert.ok(
+			code.includes("export const realApi = __BLOCKS_ApiNamespaceClient__('realApi')"),
+			'an ordinary exported function still gets a client proxy',
+		);
+	});
 });
 
 describe('generateClientCode — generateClient options', () => {

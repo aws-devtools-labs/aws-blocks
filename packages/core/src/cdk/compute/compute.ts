@@ -7,6 +7,7 @@ import type * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { ComputeType } from '../../common/compute-capabilities.js';
 import type { ScopeOptions } from '../../common/index.js';
+import { markBlocksOwned } from '../blocks-roles.js';
 import { Scope } from '../index.js';
 import { registerCompute } from './compute-registry.js';
 
@@ -141,6 +142,9 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
+		// A compute is AWS Blocks' own: its roles (function and task roles) are
+		// framework roles for the service-principal trust check.
+		markBlocksOwned(this);
 		// Self-register on the owning stack so finalize steps (config, tracing,
 		// dashboards) can enumerate every compute without a separate discovery
 		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated —

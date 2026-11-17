@@ -37,7 +37,7 @@ The emitter uses three tiers, in order of precision:
 
 1. **Zod schemas** — if a method calls `.parse()` on an exported Zod schema, the emitter extracts full JSON Schema with constraints (`format: uuid`, `maxLength`, `minLength`, etc.)
 2. **TypeScript types** — if no Zod schema is found, the emitter uses the TypeScript type checker to extract types from method signatures and inferred return values
-3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates `Any` in native clients
+3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates an untyped JSON value in native clients (`JsonElement` in Kotlin, `JSONValue` in Swift, `dynamic` in Dart)
 
 Most methods get good types from tier 2 automatically. Tier 1 is for when you need precision beyond what TypeScript can express.
 
@@ -211,6 +211,32 @@ export const authApi = auth.createApi();
 
 If the helper returns `any` or an unresolvable generic, the methods will emit as `unknown`. In that case, wrap them in an explicit `ApiNamespace`.
 
+### Narrowed for TypeScript, wide for native: `@blocksCodegenDefaultTypeArgs` (experimental, for Building Block authors)
+
+> **Experimental and internal.** A JSDoc tag for Building Block authors, like `@blocksSkipCodegen`; app code does not need it. Its name and behaviour may change.
+
+A Building Block may narrow a type per instance for TypeScript callers, by its options, while native clients should see one shape. `Auth` does: `createApi()`'s `setAuthState` accepts only the actions a block's options allow, and `signIn` returns only the steps they can produce. If the spec followed the narrowed types, two differently configured blocks would generate different native types (and, in Dart, colliding class names).
+
+`@blocksCodegenDefaultTypeArgs` on an exported generic type alias or interface whose type parameters all have defaults makes the spec describe every instantiation of it at its default type arguments: `SignInNextStep<{ mfa: 'off' }>` is described as `SignInNextStep`, every step. It applies wherever the type appears: a namespace's own type (`AuthStateApi<I, U>`, so `setAuthState` takes the full `AuthActionInput`), a parameter, a result, or nested inside one. The TypeScript types are unaffected, so the server must enforce the narrowing at runtime.
+
+```ts
+/** … @blocksCodegenDefaultTypeArgs */
+export type SignInNextStep<O extends AuthOptions = AuthOptions> = Extract<AnySignInNextStep, { name: SignInStepNameOf<O> }>;
+```
+
+A misplaced tag fails spec generation with an error naming the type: on a type that is not exported at the top level of its file, that has no type parameters, or that has one without a default.
+
+### One component per type name
+
+A named object type (an interface or type alias) becomes one entry in `components.schemas`, and every use with the same schema refers to it. When uses of one name differ, the first (the one the name has always gone to) keeps it, and each other use is described where it appears; native generators name those by method and field (Dart `ApiListKeysOptions`, Swift and Kotlin `Api.ListKeys.Options`). That happens for:
+
+- instantiations of one generic type that come out different, such as the `AuthenticatedUser` of two differently configured `Auth` blocks;
+- two different declarations with the same name, such as two Building Blocks' `ScanOptions`. The generator also prints a warning naming both declarations: rename one type, or share one declaration, to keep a single native type.
+
+A recursive type (`interface Comment { replies: Comment[] }`) is described four levels deep, a mutually recursive pair (`A` holding `B` holding `A`) five, and a generic that holds a new instantiation of itself nine; the next level is an object with any fields (native clients decode it as a map), with a warning naming the field.
+
+Unnamed types nest at most six levels below the nearest named type. Past that, an unnamed object is an object with any fields and an array of unnamed objects or arrays an array of any values, with a warning naming the field; strings, numbers, booleans, named types and arrays of them keep their types. To describe a deep shape in full, declare one of its enclosing object types as an interface.
+
 ### Returning Building Block handles (Realtime, FileBucket)
 
 Some BBs return live handles instead of plain data — `RealtimeChannel`, `FileDownloadHandle`, `FileUploadHandle`. These implement `toJSON()` returning a `{ __blocks: '<tag>' }` descriptor. The spec emitter detects the marker and lowers it onto the result schema as `x-blocks-transferable`, plus `x-blocks-type-args` for any generic arguments. Native codegen reads those fields and emits the matching SDK type (`RealtimeChannel<Cursor>` instead of a raw struct).
@@ -300,13 +326,22 @@ This produces:
 ### Spread/rest params
 
 ```ts
-// ⚠️ Rest params emit a single "args" param with unknown type
+// ✅ A rest param typed as a tuple is one param per element: `item`, then optional `options`
 async tablePut(...args: Parameters<typeof table.put>) {
   await table.put(...args);
 }
+
+// ⚠️ A rest param typed as a plain array stays one array param, with a warning
+async tag(name: string, ...labels: string[]) { ... }
 ```
 
-The spec emitter sees one param named `args`. Prefer explicit params.
+The server calls a method with its params spread, so a rest param typed as a tuple (`...args: [id: string, count?: number]`, or `Parameters<typeof f>`) is described as one positional param per element. Each is named by its tuple label (`f`'s parameter names), otherwise `arg0`, `arg1`, and so on, and is optional where the element is. A rest element inside the tuple (`[level: string, ...string[]]`) can't be described: the params stop before it, with a warning.
+
+A rest param typed as a plain array (`...labels: string[]`) is described as one array param, and spec generation warns: a native client sends the labels as one nested array, so the method receives that array as its only `labels` argument. Declare it as an array param (`labels: string[]`) instead.
+
+### Tuples
+
+A tuple (`[number, string]`) is described with `prefixItems`, `minItems` and `maxItems`, and is a JSON array on the wire. Swift and Kotlin generate a type with properties `item0`, `item1`, and so on. Dart generates a record (`(num, String)`), and a one-element tuple (`[number]`) as a `List`. An optional element (`[string, number?]`) is nullable, and is `null` when the array leaves it out.
 
 ### `as any` type casts
 
@@ -399,7 +434,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `AnyProvider` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `AnyProvider` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | none: formerly `bb-auth-oidc`, which `Auth` replaced; `Auth` returns no `oidc/client`, and the tag stays built in |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -420,7 +455,7 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 
 Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. The emitter writes the field when a method's return type spells out the arguments, on a namespace the entry file exports directly (`export const api = new ApiNamespace(...)`). It's omitted for non-generic transferables (`file-bucket/download`, `file-bucket/upload`), for a `RealtimeChannel` whose message type isn't written in the return type, and for every method of a namespace built elsewhere, such as a block's `createApi()` or a factory function.
 
-The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. `AuthOIDC.createApi()` types `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
+The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. The removed `AuthOIDC.createApi()` typed `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
 
 ```json
 {

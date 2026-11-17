@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { isBlocksError } from '@aws-blocks/blocks/client';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -12,15 +14,38 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 let hello: typeof helloType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// Locally no email is sent: `getLastAuthCode(name)` reads the verification code
+// the local auth block just issued for `name` (it finds the block's .bb-data/
+// files itself). On AWS, Cognito emails it instead.
+
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -29,32 +54,30 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
-  hello = mod.hello;
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
 
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 60; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
+  hello = app.hello;
 });
 
 // The installed cookie jar carries the session cookie across calls, so after
-// this resolves every API call runs as the new user.
-const signUp = async (username: string) => {
-  const result = await authApi.setAuthState({ action: 'signUp', username, password: 'Password1!' });
-  assert.strictEqual(result.state, 'signedIn', `signUp: ${result.error ?? ''}`);
+// this resolves every API call runs as the new user. This pool signs in with an
+// email, so `name` becomes an address (`:` and other punctuation turn into `-`);
+// sign-up confirms the emailed code, then signs the user in (see `signUpAs`).
+const emailOf = (name: string) => `${name.replace(/[^A-Za-z0-9-]/g, '-')}@example.com`;
+const signUp = async (name: string) => {
+  await signUpAs(emailOf(name), 'Password1!');
 };
 const uniqueSuffix = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -69,7 +92,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -90,7 +113,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet`/`setValue`/`getValue` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -160,6 +183,73 @@ test('Cookie - a hostile value round-trips without adding attributes', async () 
   assert.strictEqual(await api.getCookie(), value);
   await api.deleteCookie();
   assert.strictEqual(await api.getCookie(), null);
+});
+
+// Sign-up confirms the email address with a code, then signs the user in
+// (the <Authenticator> does the same steps in the browser).
+test('auth: sign up with the emailed code, then call a protected method', async () => {
+  const username = `demo-${Date.now().toString(36)}@example.com`;
+  const password = 'TestPass123!';
+
+  await assert.rejects(
+    () => api.listTodos(),
+    (err: unknown) => isBlocksError(err, 'NotAuthenticatedException'),
+    'todo methods require a signed-in user',
+  );
+
+  const signUp = await authApi.setAuthState({ action: 'signUp', username, password });
+  assert.strictEqual(signUp.state, 'confirmingSignUp');
+  await authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  const state = await authApi.setAuthState({ action: 'autoSignIn', username });
+  assert.strictEqual(state.state, 'signedIn');
+
+  const todo = await api.createTodo('Try AWS Blocks', 1);
+  assert.ok(todo.userSub, "the todo is keyed on the owner's userSub");
+  await api.deleteTodo(todo.todoId);
+});
+
+/**
+ * Sign out whoever is signed in, then sign up `username` and sign them in.
+ * `user` defaults to this file's clients (the cookie jar `installCookieJar`
+ * installs); pass `createTestClient(app)` for another user with a session of
+ * their own, signed in at the same time.
+ */
+async function signUpAs(username: string, password: string, user = { authApi }) {
+  await user.authApi.setAuthState({ action: 'signOut' });
+  await user.authApi.setAuthState({ action: 'signUp', username, password });
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  const state = await user.authApi.setAuthState({ action: 'autoSignIn', username });
+  assert.strictEqual(state.state, 'signedIn');
+}
+
+// Todos are private: each method reads and writes only the caller's own.
+test('todos: another user can neither see nor change them', async () => {
+  const password = 'TestPass123!';
+  // Alice and Bob signed in at once, each with a cookie jar of their own.
+  const alice = createTestClient(app);
+  const bob = createTestClient(app);
+  await signUpAs(`demo-a-${Date.now().toString(36)}@example.com`, password, alice);
+  await signUpAs(`demo-b-${Date.now().toString(36)}@example.com`, password, bob);
+  const mine = await alice.api.createTodo('Private to alice', 1);
+
+  const bobsTodo = await bob.api.createTodo('Bob', 2);
+  for (const sortBy of [undefined, 'priority', 'title', 'createdAt'] as const) {
+    const theirs = await bob.api.listTodos(sortBy);
+    assert.ok(!theirs.some((t) => t.todoId === mine.todoId), `listTodos(${sortBy ?? ''}) leaked alice's todo`);
+  }
+  await assert.rejects(() => bob.api.updateTodo(mine.todoId, { title: 'not yours' }), /not found/i);
+  await bob.api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
+
+  // Extra properties reach the server untouched, so updateTodo must not copy
+  // key fields from `updates` onto the stored todo.
+  const withKeyFields = { title: 'still bob', userSub: mine.userSub, todoId: mine.todoId };
+  await bob.api.updateTodo(bobsTodo.todoId, withKeyFields);
+  const bobs = await bob.api.listTodos();
+  assert.deepStrictEqual(bobs.map((t) => [t.todoId, t.title]), [[bobsTodo.todoId, 'still bob']]);
+
+  const after = await alice.api.listTodos();
+  assert.deepStrictEqual(after.map((t) => [t.todoId, t.title]), [[mine.todoId, 'Private to alice']]);
+  await alice.api.deleteTodo(mine.todoId);
 });
 
 // ─── FileBucket ─────────────────────────────────────────────────────────────
@@ -257,21 +347,45 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 });
 
 // ─── EmailClient ────────────────────────────────────────────────────────────
-// Transactional email (no SES in local dev). This is a send-succeeds smoke
-// check: it asserts send() resolves with a message id. It does not assert the
-// mock recorded the mail — EmailClient's public API is send/sendBatch only (no
-// read-back method, matching the AWS runtime), so asserting capture would mean
-// reaching into mock-internal storage and breaking mock/AWS parity.
-test('EmailClient - send returns a message id', async () => {
+// Transactional email (no SES in local dev). EmailClient's public API is
+// send/sendBatch only (no read-back method, matching the AWS runtime), so the
+// mail is checked through the local outbox the mock documents for inspection:
+// `.bb-data/{fullId}/emails.json`, where fullId is `<scope id>-<block id>`.
+const outboxPath = join('.bb-data', 'my-app-mailer', 'emails.json');
+
+test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
   await signUp(`email-${uniqueSuffix()}`);
-  const { messageId } = await api.sendWelcome('user@example.com');
+  // A unique recipient picks out this run's mail in an outbox that persists across runs.
+  const to = `welcome-${uniqueSuffix()}@example.com`;
+  const { messageId } = await api.sendWelcome(to);
   assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
+
+  const outbox: { to: string | string[]; from: string; subject: string; body: string; messageId: string }[] =
+    JSON.parse(readFileSync(outboxPath, 'utf-8'));
+  const sent = outbox.find((mail) => mail.messageId === messageId);
+  assert.ok(sent, `expected ${messageId} in ${outboxPath}`);
+  assert.deepStrictEqual(sent.to, to);
+  assert.strictEqual(sent.from, 'noreply@replace-with-your-verified-domain.invalid');
+  assert.strictEqual(sent.subject, 'Welcome');
+  assert.strictEqual(sent.body, 'Thanks for trying the demo app.');
+});
+
+// The mock runs the same address checks as the deployed client, so a bad
+// address fails here exactly as it would against SES.
+test('EmailClient - an invalid recipient is rejected by name', async () => {
+  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  await signUp(`email-bad-${uniqueSuffix()}`);
+  await assert.rejects(
+    api.sendWelcome('not-an-email-address'),
+    // EmailErrors.InvalidInput (the error constants are server-side exports).
+    (e: unknown) => isBlocksError(e, 'InvalidInputException'),
+  );
 });
 
 // ─── DistributedDatabase (SQL) ───────────────────────────────────────────
 // A money transfer runs both UPDATEs inside one transaction: the balances move
 // together or not at all. We assert the post-transfer balances AND that the
-// total is conserved — the atomic-multi-row-write capability DistributedTable
+// total is conserved — the atomic-multi-row-write capability KVStore
 // cannot express. Runs on the PGlite mock locally (no AWS). OCC-conflict retry
 // (SerializationFailureException / retryOnConflict) is covered by the
 // bb-distributed-data unit suite; forcing a real 40001 race here would be
@@ -363,27 +477,27 @@ test("DistributedDatabase - a user cannot read, debit or credit another user's a
   await api.transfer('savings', 'checking', 5);
   assert.strictEqual((await api.balanceOf('checking')).balance, 5, "the caller's own account is credited");
 
-  const signIn = await authApi.setAuthState({ action: 'signIn', username: owner, password: 'Password1!' });
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: emailOf(owner), password: 'Password1!' });
   assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
   assert.strictEqual((await api.balanceOf('checking')).balance, 0, "the owner's checking was not credited");
   assert.strictEqual((await api.balanceOf('savings')).balance, 100, "the owner's savings did not move");
   await authApi.setAuthState({ action: 'signOut' });
 });
 
-// Todos are keyed by the owner's username. `updates` is typed, but RPC arguments
+// Todos are keyed by the owner's userSub. `updates` is typed, but RPC arguments
 // aren't checked at runtime, so a caller can send fields the type doesn't allow.
-test("DistributedTable - an update cannot move a todo into another user's list", async () => {
+test("KVStore - an update cannot move a todo into another user's list", async () => {
   const suffix = uniqueSuffix();
   const victim = `todo-victim-${suffix}`;
   await signUp(victim);
   await signUp(`todo-attacker-${suffix}`);
 
   const todo = await api.createTodo('mine');
-  const forged: Parameters<typeof api.updateTodo>[1] = Object.assign({ title: 'planted' }, { userId: victim });
+  const forged: Parameters<typeof api.updateTodo>[1] = Object.assign({ title: 'planted' }, { userSub: victim });
   await api.updateTodo(todo.todoId, forged);
   assert.deepStrictEqual((await api.listTodos()).map((t) => t.title), ['planted'], 'the update applies to the caller');
 
-  const signIn = await authApi.setAuthState({ action: 'signIn', username: victim, password: 'Password1!' });
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: emailOf(victim), password: 'Password1!' });
   assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
   assert.deepStrictEqual(await api.listTodos(), [], "nothing was written into the other user's list");
   await authApi.setAuthState({ action: 'signOut' });

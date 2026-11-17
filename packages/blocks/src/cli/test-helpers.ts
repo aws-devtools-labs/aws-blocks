@@ -35,6 +35,8 @@ export interface FakeOptions {
 	 * has recorded a clean stop (`DEV_STATE.stopped`) in its failure file beforehand.
 	 */
 	onSpawn?: (spec: SpawnSpec) => Partial<ChildResult> | undefined;
+	/** Called for each child before anything runs it, so before the clean stop above is recorded. */
+	beforeSpawn?: (spec: SpawnSpec) => void;
 	core?: Partial<CoreScripts>;
 }
 
@@ -82,6 +84,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		},
 		spawn: async (spec) => {
 			run.spawned.push(spec);
+			options.beforeSpawn?.(spec);
 			const failureFile = spec.env[DEV_FAILURE_FILE_ENV];
 			if (failureFile) writeFileSync(failureFile, DEV_STATE.stopped);
 			return { code: 0, signal: null, interrupted: false, ...options.onSpawn?.(spec) };

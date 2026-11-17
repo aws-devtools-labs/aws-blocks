@@ -1,0 +1,230 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The user-attribute write rules that need **no pool schema**, shared by the
+ * local engine (through `mock-attribute-schema.ts`) and the Cognito engine
+ * (`native-cognito.ts`, `native-cognito-admin.ts`,
+ * `native-cognito-challenges.ts`), so both runtimes reject the same writes
+ * with the same canonical error.
+ *
+ * Why the Cognito engine checks these itself: an untyped client (JSON-RPC, a
+ * native app) can send any JSON as a value, and the AWS JS SDK validates
+ * nothing. It serializes a number, boolean, object or array `Value` as-is and
+ * drops a `null` one, so Cognito's JSON protocol answers with
+ * `SerializationException`, which is outside the `AuthErrors` vocabulary, and
+ * the client would see a 500 `InternalErrorException` where the local engine
+ * answers 400 `InvalidParameterException`. Checking before the SDK call gives
+ * the canonical answer on both runtimes, and no call is made.
+ *
+ * Rules (sources as in `mock-attribute-schema.ts`):
+ *
+ * - **Non-string value** → `InvalidParameterException`.
+ * - **Value over 2,048 characters** → `InvalidParameterException`
+ *   (`AttributeType.Value`: "Maximum length of 2048").
+ * - **Not in the app client's write attributes** (`signUp`, `update`) →
+ *   `NotAuthorizedException`: `email_verified` / `phone_number_verified`, and
+ *   a declared custom attribute marked `userWritable: false`. The CDK layer
+ *   sets the client's `WriteAttributes` to everything else
+ *   (`endUserWriteAttributes` in `cdk/mappers.ts`); checking here too covers
+ *   an external pool and the local engine. `AdminCreateUser` and
+ *   `AdminUpdateUserAttributes` are IAM-authorized and may write them.
+ * - **`sub`** → `InvalidParameterException`: Cognito-assigned and immutable,
+ *   so no call writes it.
+ *
+ * The schema-dependent rules — an unknown name, an undeclared `custom:`
+ * attribute, an immutable custom attribute after creation — are left to the
+ * caller: the local engine knows the schema it provisions
+ * (`MockAttributeSchema`), and on AWS Cognito knows the deployed one and
+ * answers `InvalidParameterException`, which reaches the client as is.
+ *
+ * **Precedence**. When one write breaks several rules, both
+ * engines answer with the same error because they apply the rules in the same
+ * order, each over the **whole write** before the next:
+ *
+ * 1. every value is a string (`InvalidParameterException`);
+ * 2. every value is within 2,048 characters (`InvalidParameterException`);
+ * 3. the app client may write every name: no verified flag and no
+ *    `userWritable: false` attribute on `signUp` / `update`
+ *    (`NotAuthorizedException`);
+ * 4. the pool schema: `sub` here, then the caller's schema rules (unknown
+ *    name, undeclared `custom:`, immutable after creation), all
+ *    `InvalidParameterException`.
+ *
+ * Cognito documents no order, so this one follows how its JSON API processes
+ * a request: a wrong-typed member fails deserialization before anything
+ * reads it, a model length constraint is checked next, and authorization
+ * comes before the work it authorizes. It is also the only order in which
+ * the AWS engine's answer never depends on the schema, which it cannot see
+ * (an external pool's least of all): the schema rules all give the same
+ * error, and come last. Before the shared precedence order, each attribute was checked in turn, so a
+ * write naming an undeclared `custom:` attribute before `email_verified` was
+ * 400 locally and 401 on AWS. Before any attribute rule, `signUp` checks that
+ * the pool allows self-service sign-up at all ({@link signUpNotPermitted}).
+ *
+ * Pure: imports only `../errors.js` (and a type), so it is safe in the AWS import graph.
+ *
+ * @internal
+ */
+
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { AuthErrors } from '../errors.js';
+import type { UserAttribute } from '../types.js';
+
+/**
+ * Which call writes the attributes:
+ *
+ * - `signUp` — `SignUp`: a new user, through the app client.
+ * - `adminCreateUser` — `AdminCreateUser`: a new user, IAM-authorized.
+ * - `update` — `UpdateUserAttributes`, or a challenge answer's
+ *   `userAttributes`: an existing user, through the app client.
+ * - `adminUpdate` — `AdminUpdateUserAttributes`: an existing user,
+ *   IAM-authorized.
+ *
+ * @internal
+ */
+export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update' | 'adminUpdate';
+
+/** Whether `write` is IAM-authorized (the admin API), so the app client's write attributes do not apply. */
+export function isAdminWrite(write: AttributeWrite): boolean {
+	return write === 'adminCreateUser' || write === 'adminUpdate';
+}
+
+/**
+ * In the schema, but outside an app client's default write permissions.
+ *
+ * @internal
+ */
+export const VERIFIED_FLAGS: ReadonlySet<string> = new Set(['email_verified', 'phone_number_verified']);
+
+/**
+ * The stored names (`custom:<name>`) of the declared attributes marked
+ * `userWritable: false`: left out of the app client's write attributes, so
+ * only the admin API may write them.
+ *
+ * @internal
+ */
+export function adminOnlyAttributes(attributes: readonly UserAttribute[] | undefined): ReadonlySet<string> {
+	return new Set((attributes ?? []).filter((a) => a.userWritable === false).map((a) => `custom:${a.name}`));
+}
+
+/** The admin-only attribute each refusal of rule 3 was for (see {@link withAdminOnlyRefusalLog}). */
+const ADMIN_ONLY_REFUSALS = new WeakMap<Error, string>();
+
+/**
+ * Run `check` (an end-user write check that calls {@link checkAttributeValues})
+ * and log a refusal of a `userWritable: false` attribute before rethrowing it.
+ * Such an attribute is one the app authorizes on, so an end-user write of it
+ * is worth a server-side line. The log names the attribute, never the value.
+ *
+ * @internal
+ */
+export function withAdminOnlyRefusalLog<T>(log: Pick<ChildLogger, 'warn'>, check: () => T): T {
+	try {
+		return check();
+	} catch (e) {
+		const attribute = e instanceof Error ? ADMIN_ONLY_REFUSALS.get(e) : undefined;
+		if (attribute !== undefined)
+			log.warn('[bb-auth] refused end-user write to admin-only attribute', { attribute });
+		throw e;
+	}
+}
+
+/** `AttributeType.Value`: "Maximum length of 2048". */
+const MAX_VALUE_LENGTH = 2048;
+
+/** A Cognito-shaped service error (`name` = the exception name), for `AuthBase` to map. */
+function rejection(name: string, message: string): Error {
+	const e = new Error(message);
+	e.name = name;
+	return e;
+}
+
+/**
+ * Cognito's answer to `SignUp` on a pool that allows no self-service sign-up
+ * (`AllowAdminCreateUserOnly`, which the CDK layer sets for
+ * `emailPassword: { selfSignUp: false }`; see `selfSignUpEnabled` in
+ * `cdk/contract.ts`). The operation itself is refused, so both engines
+ * throw this before any attribute rule: "If you do not enable
+ * self-registration, new users must be created by administrative API
+ * actions" (developer guide, "Creating user accounts as administrator").
+ *
+ * @internal
+ */
+export function signUpNotPermitted(): Error {
+	return rejection(AuthErrors.NotAuthorized, 'SignUp is not permitted for this user pool');
+}
+
+/**
+ * Cognito's answer to writing an immutable attribute (`sub`, or a
+ * `mutable: false` custom attribute after creation).
+ *
+ * @internal
+ */
+export function immutableAttributeError(name: string): Error {
+	return rejection(
+		AuthErrors.InvalidParameter,
+		`Invalid user attributes: user.${name}: Attribute cannot be updated. (changing an immutable attribute)`,
+	);
+}
+
+/**
+ * Throw the error Cognito answers `write` with when the write breaks a
+ * schema-independent rule; return normally otherwise. `attributes` is the
+ * caller's input as received (an untyped client can send any JSON); an
+ * `undefined` value is skipped: it is absent on the wire.
+ *
+ * The rules apply in the module's precedence order, each over every
+ * attribute before the next: a non-string value anywhere wins over a
+ * value over 2,048 characters, which wins over a verified flag or an
+ * `adminOnly` attribute through the app client (`signUp`, `update`;
+ * `adminCreateUser` may write them), which wins over `sub`. `adminOnly` holds
+ * stored names ({@link adminOnlyAttributes}); `AuthBase` has already prefixed
+ * a declared attribute written by its bare name. Within one rule, the first attribute in input order is
+ * reported. The Cognito engine calls this before it sends the write: a
+ * rejected write sends nothing. The local engine calls it first too, then
+ * applies its schema rules (`MockAttributeSchema`).
+ *
+ * @internal
+ */
+export function checkAttributeValues(
+	attributes: Readonly<Record<string, unknown>>,
+	write: AttributeWrite,
+	adminOnly: ReadonlySet<string>,
+): void {
+	const values: [name: string, value: string][] = [];
+	// 1. The wire shape: every value a string.
+	for (const [name, value] of Object.entries(attributes)) {
+		if (value === undefined) continue;
+		if (typeof value !== 'string') {
+			throw rejection(
+				AuthErrors.InvalidParameter,
+				`Attributes did not conform to the schema: ${name}: the value must be a string`,
+			);
+		}
+		values.push([name, value]);
+	}
+	// 2. `AttributeType.Value`'s length constraint.
+	for (const [name, value] of values) {
+		if (value.length > MAX_VALUE_LENGTH) {
+			throw rejection(
+				AuthErrors.InvalidParameter,
+				`Attributes did not conform to the schema: ${name}: String must be no longer than ${MAX_VALUE_LENGTH} characters`,
+			);
+		}
+	}
+	// 3. The app client's write permissions (the admin API is IAM-authorized).
+	if (!isAdminWrite(write)) {
+		for (const [name] of values) {
+			if (VERIFIED_FLAGS.has(name) || adminOnly.has(name)) {
+				const e = rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+				if (adminOnly.has(name)) ADMIN_ONLY_REFUSALS.set(e, name);
+				throw e;
+			}
+		}
+	}
+	// 4. The schema rule that needs no schema: `sub` is Cognito-assigned.
+	for (const [name] of values) {
+		if (name === 'sub') throw immutableAttributeError(name);
+	}
+}

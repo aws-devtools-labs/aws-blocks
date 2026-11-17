@@ -1,0 +1,17 @@
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const stage = process.env.STAGE ?? 'dev';
+const authId = 'auth';
+
+// A variable id.
+export const a = new AuthCognito(scope, authId, { selfSignUp: true });
+// A template-literal id.
+export const b = new AuthCognito(scope, `auth-${stage}`, { sessionTtlSeconds: 3600 });
+// A computed id.
+export const c = new AuthCognito(scope, ['auth', stage].join('-'), { groups: ['ops'] });
+// An id that mentions the old class name: left alone on purpose.
+export const d = new AuthCognito(scope, AuthCognito.name.toLowerCase(), { crossDomain: true });
+// A string-literal id whose text looks like an old error name.
+export const e = new AuthCognito(scope, 'SessionExpiredException');

@@ -8,6 +8,8 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import { FRAMEWORK_KEY_VALUE, isFrameworkKeyOptions } from './framework-key-options.js';
+import { secretArnConfigKey } from './internal-shared.js';
 import type { ExternalSecretRef, SecretOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -19,6 +21,18 @@ export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion
 // a typed `get`/`put`, so these can only alias it.
 export type WritableSecret<_T = string> = Secret;
 export type SecretConstructor = typeof Secret;
+
+/**
+ * Symbol-keyed flag on a stack-managed `Secret` (absent on one wrapping
+ * `Secret.fromExisting()`): `true` when the secret is created with a value
+ * (`generate: true`), `false` when it starts empty. Read at synth by blocks
+ * that consume the value during the same deploy (`Auth`'s identity-provider
+ * registration), so they can warn before a deploy that would fail. A
+ * `Symbol.for` key, so a reader needs no dependency on this package.
+ *
+ * @internal
+ */
+const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
 
 /**
  * CDK construct for a single application secret backed by AWS Secrets Manager.
@@ -52,7 +66,16 @@ export class Secret extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: SecretOptions<unknown>) {
-		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] } });
+		super(id, {
+			parent: scope,
+			bbName: BB_NAME,
+			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] },
+		});
+
+		// Framework key mode is set only by `frameworkKey()` in `./internal`,
+		// through a module-private Symbol a customer options object cannot carry
+		// (see `framework-key-options.ts`). Public defaults are unaffected.
+		const frameworkKeyMode = isFrameworkKeyOptions(options);
 
 		if (options?.secret) {
 			// `fromExisting`: bind to the pre-existing secret by ARN; do not
@@ -71,9 +94,12 @@ export class Secret extends BuildingBlockScope {
 			const l2 = new secretsmanager.Secret(this, 'secret', {
 				// Use the caller's explicit, well-known name when provided (so a
 				// team/CI pipeline can target it with `aws secretsmanager …`); else
-				// derive a unique name from the scope tree.
-				secretName: (options?.name ?? this.fullId).substring(0, 255),
+				// derive a unique name from the scope tree. The framework key
+				// helper leaves the name unset instead, so CloudFormation generates
+				// a unique one and a recreate never collides with a retained name.
+				secretName: frameworkKeyMode ? undefined : (options?.name ?? this.fullId).substring(0, 255),
 				removalPolicy,
+				generateSecretString: frameworkKeyMode ? { ...FRAMEWORK_KEY_VALUE } : undefined,
 			});
 
 			// Default: an EMPTY secret, so an unset secret reads back as `null`
@@ -84,10 +110,11 @@ export class Secret extends BuildingBlockScope {
 			// that generator only when `generate: true` (signing/HMAC keys that just
 			// need to exist). CloudFormation treats a secret with neither
 			// `GenerateSecretString` nor `SecretString` as empty.
-			if (options?.generate !== true) {
+			if (options?.generate !== true && !frameworkKeyMode) {
 				const cfn = l2.node.defaultChild as secretsmanager.CfnSecret;
 				cfn.addPropertyDeletionOverride('GenerateSecretString');
 			}
+			Reflect.set(this, SECRET_HAS_INITIAL_VALUE, options?.generate === true);
 			this.secret = l2;
 
 			// Tag the BB-created secret so it joins the stack's `-settings` resource
@@ -103,13 +130,24 @@ export class Secret extends BuildingBlockScope {
 		// Grant the shared execution role read on this specific secret (not a
 		// wildcard): secretsmanager:GetSecretValue + ListSecretVersionIds (the
 		// latter for listVersions(), which grantRead does NOT include).
-		this.secret.grantRead(this.executionRole);
-		this.executionRole.addToPrincipalPolicy(
-			new iam.PolicyStatement({
-				actions: ['secretsmanager:ListSecretVersionIds'],
-				resources: [this.secret.secretArn],
-			}),
-		);
+		// A framework key is only ever read with `get()`, so it gets
+		// GetSecretValue alone (no DescribeSecret, no ListSecretVersionIds).
+		if (frameworkKeyMode) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['secretsmanager:GetSecretValue'],
+					resources: [this.secret.secretArn],
+				}),
+			);
+		} else {
+			this.secret.grantRead(this.executionRole);
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['secretsmanager:ListSecretVersionIds'],
+					resources: [this.secret.secretArn],
+				}),
+			);
+		}
 		// Writes are opt-in and least-privilege: grant PutSecretValue (plus the KMS
 		// grants Secrets Manager attaches) ONLY when the app will write at runtime.
 		// By default the role has read-only access, matching the runtime object,
@@ -128,7 +166,7 @@ export class Secret extends BuildingBlockScope {
 		// so both instances would read/write a single secret. `fullId` is unique
 		// within the stack, and the runtime derives the identical key from its own
 		// `fullId`.
-		registerConfig(this, configKey(this.fullId), this.secret.secretArn);
+		registerConfig(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
@@ -145,15 +183,4 @@ export class Secret extends BuildingBlockScope {
 	listVersions(..._args: unknown[]): never {
 		return synthGuard('Secret', 'listVersions');
 	}
-}
-
-/**
- * The config key used to pass a Secret's ARN to the runtime. Derived from the
- * scoped `fullId` (same derivation as the runtime layer, so the two agree
- * without handing a value between them) — unique within the stack, so same-`id`
- * secrets in different scopes get distinct keys. The `BLOCKS_` prefix is
- * framework-reserved.
- */
-function configKey(fullId: string): string {
-	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }

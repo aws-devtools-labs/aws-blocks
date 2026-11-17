@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { ApiNamespace } from './api.js';
 import { ApiError } from './errors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
@@ -28,6 +29,17 @@ const backend = {
 			throw new Error('database is down');
 		},
 	}),
+	// `httpErrorStatus`: a 4xx ApiError is answered with its HTTP status.
+	strict: new ApiNamespace(
+		{ id: 'app' },
+		'strict',
+		() => ({
+			async forbidden() {
+				throw new ApiError('nope', 403, { name: 'Forbidden' });
+			},
+		}),
+		{ httpErrorStatus: true },
+	),
 	// A method that honours the request's abort signal, and outlives a short deadline.
 	slow: (context: { request: { signal?: AbortSignal } }) => ({
 		async wait() {
@@ -126,6 +138,15 @@ describe('RpcErrors metric (Lambda)', () => {
 		const [line] = emfLines();
 		assert.strictEqual(line.StatusClass, '4xx');
 		assert.strictEqual(line.Status, 403);
+	});
+
+	it('an httpErrorStatus namespace answering HTTP 403 still writes exactly one 4xx line', async () => {
+		const res = await call('strict.forbidden');
+		assert.strictEqual(res.statusCode, 403);
+		const emf = emfLines();
+		assert.strictEqual(emf.length, 1);
+		assert.strictEqual(emf[0].StatusClass, '4xx');
+		assert.strictEqual(emf[0].Status, 403);
 	});
 
 	it('an unknown method counts as a 404', async () => {

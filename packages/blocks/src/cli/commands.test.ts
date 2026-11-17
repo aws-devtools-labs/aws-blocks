@@ -3,24 +3,30 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
-import { redactArgs } from './commands.js';
+import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
+import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
+import { DEV_RESTART_POLICY, decideDevRestart, redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
+import { blocksCommand } from './errors.js';
 import type { LastDeploy } from './runners/last-deploy.js';
 import {
 	DEV_OPTIONS_ENV,
 	DEV_STATE,
 	DEV_UNDER_WATCH_ENV,
+	devCrashCode,
+	devCrashState,
 	type RunnerName,
 	runnerPath,
 	TSX_IMPORT_ENV,
+	TSX_TSCONFIG_ENV,
 } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -640,8 +646,12 @@ describe('lifecycle commands', () => {
 		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
 		const seed = (config: unknown) => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
+			// Both stacks in one document is the pre-split shape, which an app that
+			// upgrades still has on disk: a sandbox destroy must take only its own.
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		// A failed destroy forgets nothing.
@@ -653,6 +663,8 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['production']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.ok(!existsSync(join(dir, 'config.sandbox.json')), 'the sandbox deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
 		// No record names the deleted sandbox any more, and CloudFormation no longer has it.
 		const console = await runCli(['sandbox', 'console'], {
@@ -669,16 +681,23 @@ describe('lifecycle commands', () => {
 		assert.ok(!existsSync(join(dir, 'outputs.json')));
 	});
 
-	it('forgets the deleted production stack in last-deploy.json, outputs.json and config.json, and keeps the sandbox', async () => {
+	it("forgets the deleted production stack in its own outputs document and in a pre-split one, and leaves the sandbox's entry alone", async () => {
 		const root = withSandboxId(fixtureApp());
 		const dir = join(root, '.blocks-sandbox');
+		// Named from core's own map, so renaming the document there without
+		// updating the CLI fails here instead of silently leaving a dead stack
+		// recorded for anything that reads it.
+		const prodOutputs = basename(CORE_OUTPUTS_FILE.production);
 		const write = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
 		const read = (name: string) => JSON.parse(readFileSync(join(dir, name), 'utf-8')) as unknown;
 		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
 		const seed = (config: unknown) => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
-			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
+			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+			write(prodOutputs, { 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://p', environment: 'production' });
 		// A failed or declined destroy forgets nothing.
@@ -687,19 +706,38 @@ describe('lifecycle commands', () => {
 		const declined = await runCli(['destroy'], { cwd: root, env: AWS_ENV, stdinIsTTY: true, answer: 'n' });
 		assert.strictEqual(declined.code, 1);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
-		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
+		assert.deepStrictEqual(Object.keys(read(prodOutputs) as object), ['demo-prod']);
 		assert.ok(existsSync(join(dir, 'config.json')));
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
+		// Its own document held only that stack, so it goes; the sandbox's is untouched.
+		assert.ok(!existsSync(join(dir, prodOutputs)));
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
-		// A sandbox config.json stays; an outputs.json with only the production stack goes.
+		assert.ok(!existsSync(join(dir, 'config.production.json')), 'the production deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.sandbox.json')));
+		// A sandbox config.json stays. A production document naming a second stack
+		// keeps that entry rather than being removed wholesale.
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
-		write('outputs.json', { 'demo-prod': { ApiUrl: 'https://p' } });
+		write(prodOutputs, { 'demo-prod': { ApiUrl: 'https://p' }, 'edge-lambda-stack-x': { Fn: 'arn' } });
 		assert.strictEqual((await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV })).code, 0);
 		assert.deepStrictEqual(read('config.json'), { apiUrl: 'https://s', environment: 'sandbox' });
-		assert.ok(!existsSync(join(dir, 'outputs.json')));
+		assert.deepStrictEqual(read(prodOutputs), { 'edge-lambda-stack-x': { Fn: 'arn' } });
+		// An app that deployed production BEFORE the split has its production stack
+		// in the pre-split document and no production one at all. The destroy takes
+		// it from there, and takes only it.
+		seed({ apiUrl: 'https://p', environment: 'production' });
+		rmSync(join(dir, prodOutputs));
+		write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
+		assert.strictEqual((await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV })).code, 0);
+		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+		// Upgraded on both counts: the old outputs.json and the old config.json both
+		// named production, and the per-stage deploy record goes with them.
+		assert.ok(!existsSync(join(dir, 'config.production.json')));
+		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.deepStrictEqual(read('config.sandbox.json'), { apiUrl: 'https://s', environment: 'sandbox' });
 	});
 
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
@@ -810,6 +848,25 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(deployOptions.preview, false);
 	});
 
+	it("points the runners' tsx at aws-blocks/tsconfig.json when the backend has one", async () => {
+		// A Vite template's root tsconfig.json only lists project references, so tsx would
+		// compile backend files with no options (no jsx, no paths) without this.
+		const root = fixtureApp();
+		const backend = join(root, 'aws-blocks', 'tsconfig.json');
+		const without = await runCli(['dev'], { cwd: root });
+		assert.strictEqual(without.code, 0, without.stderr);
+		assert.strictEqual(without.spawned[0].env[TSX_TSCONFIG_ENV], undefined);
+		writeFileSync(backend, '{}\n');
+		for (const argv of [['dev'], ['deploy'], ['sandbox'], ['generate', 'spec'], ['generate', 'client']]) {
+			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
+			assert.ok(run.spawned.length > 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.strictEqual(run.spawned[0].env[TSX_TSCONFIG_ENV], backend, argv.join(' '));
+		}
+		// One the user set wins.
+		const own = await runCli(['dev'], { cwd: root, env: { [TSX_TSCONFIG_ENV]: 'tsconfig.dev.json' } });
+		assert.strictEqual(own.spawned[0].env[TSX_TSCONFIG_ENV], 'tsconfig.dev.json');
+	});
+
 	it('exports a configured dev host as BLOCKS_DEV_HOST, which opts /realtime into it', async () => {
 		const root = fixtureApp({ blocks: { dev: { host: 'mybox.example.com' } } });
 		const run = await runCli(['dev', '--no-frontend'], { cwd: root });
@@ -917,6 +974,165 @@ describe('lifecycle commands', () => {
 		const sigkill = await dev(DEV_STATE.running, { code: null, signal: 'SIGKILL' });
 		assert.strictEqual(sigkill.code, 1);
 		assert.match(sigkill.stderr, /^Error: cdk-blocks dev failed \(signal SIGKILL\)\./);
+	});
+
+	it('restarts the dev server of cdk-blocks dev when it crashed after it started, and stops after the restart budget', {
+		timeout: 60_000,
+	}, async () => {
+		const cwd = fixtureApp();
+		const crashThen = (results: (Partial<ChildResult> | 'crash')[]) => {
+			let spawns = 0;
+			return runCli(['dev'], {
+				cwd,
+				onSpawn: (spec) => {
+					const result = results[Math.min(spawns++, results.length - 1)];
+					if (result !== 'crash') return result;
+					// The runner recorded the crash and SIGTERMed tsx watch, which exits 143.
+					writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+					return { code: 143 };
+				},
+			});
+		};
+		// One crash, then `cdk-blocks dev stop` ends the restarted session cleanly.
+		const restarted = await crashThen(['crash', { code: 0 }]);
+		assert.strictEqual(restarted.code, 0, restarted.stderr);
+		assert.strictEqual(restarted.spawned.length, 2);
+		assert.match(
+			restarted.stderr,
+			/⚠️ {2}The dev server crashed \(exit code 1\); restarting it in 500 ms \(restart 1 of 5 within 60 s\)\./,
+		);
+		// The restart runs the same tsx watch command with the same failure file.
+		assert.deepStrictEqual(restarted.spawned[1]?.args, restarted.spawned[0]?.args);
+		assert.strictEqual(
+			restarted.spawned[1]?.env.BLOCKS_DEV_FAILURE_FILE,
+			restarted.spawned[0]?.env.BLOCKS_DEV_FAILURE_FILE,
+		);
+		// A crash with a stop that the CLI made, or a Ctrl-C, at the same time: no restart.
+		const stoppedCrash = await runCli(['dev'], {
+			cwd,
+			onSpawn: (spec) => {
+				writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+				return { code: 143, stopped: true };
+			},
+		});
+		assert.deepStrictEqual([stoppedCrash.code, stoppedCrash.spawned.length], [0, 1], stoppedCrash.stderr);
+		const interruptedCrash = await runCli(['dev'], {
+			cwd,
+			onSpawn: (spec) => {
+				writeFileSync(String(spec.env.BLOCKS_DEV_FAILURE_FILE), devCrashState(1));
+				return { code: 130, interrupted: true };
+			},
+		});
+		assert.deepStrictEqual(
+			[interruptedCrash.code, interruptedCrash.spawned.length],
+			[130, 1],
+			interruptedCrash.stderr,
+		);
+		// A backend that crashes again after every restart: 5 restarts, then the 6th crash ends cdk-blocks dev.
+		const looping = await crashThen(['crash']);
+		assert.strictEqual(looping.code, 1);
+		assert.strictEqual(looping.spawned.length, DEV_RESTART_POLICY.maxRestarts + 1);
+		assert.deepStrictEqual(
+			[...looping.stderr.matchAll(/restarting it in (\d+) ms/g)].map((m) => Number(m[1])),
+			[500, 1000, 2000, 4000, 5000],
+		);
+		const again = blocksCommand('dev').replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+		assert.match(
+			looping.stderr,
+			new RegExp(
+				`Error: cdk-blocks dev ended: its dev server crashed 6 times within 60 s, so it was not restarted again\\. Fix the error in its output above, then run ${again} again\\.`,
+			),
+		);
+		// A restarted runner that exits before it records anything (tsx's preflight, a failing import): the
+		// last session's crash record is gone, so this is a failed start, not a new crash to restart.
+		const before: (string | undefined)[] = [];
+		const failedRestart = await runCli(['dev'], {
+			cwd,
+			beforeSpawn: (spec) => {
+				const file = String(spec.env.BLOCKS_DEV_FAILURE_FILE);
+				before.push(existsSync(file) ? readFileSync(file, 'utf-8') : undefined);
+			},
+			onSpawn: (spec) => {
+				const file = String(spec.env.BLOCKS_DEV_FAILURE_FILE);
+				if (before.length === 1) {
+					writeFileSync(file, devCrashState(1));
+					return { code: 143 };
+				}
+				// This runner wrote nothing: the file holds what it held before it ran.
+				const previous = before.at(-1);
+				if (previous === undefined) rmSync(file, { force: true });
+				else writeFileSync(file, previous);
+				return { code: 1 };
+			},
+		});
+		assert.strictEqual(failedRestart.code, 1, failedRestart.stderr);
+		assert.deepStrictEqual(before, [undefined, undefined]);
+		assert.strictEqual(failedRestart.spawned.length, 2);
+		assert.strictEqual([...failedRestart.stderr.matchAll(/restarting it in/g)].length, 1, failedRestart.stderr);
+	});
+
+	it('records a crash of a started dev server runner and SIGTERMs its tsx watch parent', () => {
+		const fail = pathToFileURL(fileURLToPath(new URL('./runners/fail.js', import.meta.url))).href;
+		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-crash-')), 'failure');
+		// The runner: it starts, then crashes outside any request.
+		const runner = [
+			`const { trackDevSession } = await import(${JSON.stringify(fail)});`,
+			'trackDevSession().started();',
+			"setTimeout(() => { throw new Error('the backend crashed'); }, 10);",
+		].join('\n');
+		// Its parent, in the place of tsx watch: it reports the SIGTERM that it gets and the runner's exit code.
+		const watcher = [
+			"const { spawn } = await import('node:child_process');",
+			"let signalled = false;",
+			"process.on('SIGTERM', () => { signalled = true; });",
+			`const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(runner)}], { stdio: 'ignore' });`,
+			"child.on('exit', (code) => { console.log(JSON.stringify({ signalled, code })); process.exit(0); });",
+		].join('\n');
+		const run = spawnSync(process.execPath, ['--input-type=module', '-e', watcher], {
+			env: { ...process.env, BLOCKS_DEV_FAILURE_FILE: file },
+			encoding: 'utf-8',
+			timeout: 20_000,
+		});
+		assert.strictEqual(run.status, 0, run.stderr);
+		assert.deepStrictEqual(JSON.parse(run.stdout), { signalled: true, code: 1 });
+		assert.strictEqual(readFileSync(file, 'utf-8'), devCrashState(1));
+	});
+
+	it('decides a dev server restart from the restarts within the window, with a doubling, capped backoff', () => {
+		const policy = { maxRestarts: 3, windowMs: 10_000, backoffMs: 100, maxBackoffMs: 250 };
+		assert.deepStrictEqual(decideDevRestart([], 1000, policy), { restart: true, delayMs: 100, recent: [1000] });
+		assert.deepStrictEqual(decideDevRestart([1000], 2000, policy), {
+			restart: true,
+			delayMs: 200,
+			recent: [1000, 2000],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000], 3000, policy), {
+			restart: true,
+			delayMs: 250,
+			recent: [1000, 2000, 3000],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 4000, policy), {
+			restart: false,
+			delayMs: 0,
+			recent: [1000, 2000, 3000],
+		});
+		// Restarts older than the window no longer count: a backend that crashes once in a while always restarts.
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 12_500, policy), {
+			restart: true,
+			delayMs: 200,
+			recent: [3000, 12_500],
+		});
+		assert.deepStrictEqual(decideDevRestart([1000, 2000, 3000], 60_000, policy), {
+			restart: true,
+			delayMs: 100,
+			recent: [60_000],
+		});
+		assert.strictEqual(devCrashCode(devCrashState(7)), 7);
+		// A record without its code (a torn write) is a crash with exit code 1, not 0.
+		assert.strictEqual(devCrashCode(DEV_STATE.crashed), 1);
+		assert.strictEqual(devCrashCode(`${DEV_STATE.crashed}  `), 1);
+		assert.strictEqual(devCrashCode(DEV_STATE.running), undefined);
+		assert.strictEqual(devCrashCode(undefined), undefined);
 	});
 
 	it('exits 143 when a forwarded SIGTERM ends a deploy or a destroy, and 130 on an abort by SIGINT', async () => {
@@ -1875,6 +2091,7 @@ describe('JSON output', () => {
 					record: null,
 					pids: [],
 					via: 'watcher' as const,
+					holders: [],
 				};
 			},
 		};
@@ -1883,7 +2100,7 @@ describe('JSON output', () => {
 			[['deploy', '--query', 'apiUrl.x'], 'apiUrl is a value, with no fields.'],
 			[
 				['dev', 'stop', '--query', 'stopped.0.nope'],
-				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via.',
+				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via, holders.',
 			],
 			[
 				['dev', 'stop', '--query', 'stopped.length'],
@@ -2066,6 +2283,7 @@ describe('cdk-blocks dev stop', () => {
 						record: null,
 						pids: [],
 						via: 'none' as const,
+						holders: [],
 					};
 				},
 			},
@@ -2170,6 +2388,65 @@ describe('cdk-blocks dev stop', () => {
 			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with npx --no -- cdk-blocks dev stop --port <port>, or all of them with npx --no -- cdk-blocks dev stop --all\./,
 		);
 	});
+
+	it('cdk-blocks dev claims the session before it starts anything, and releases it after', async () => {
+		const cwd = fixtureApp({ blocks: { dev: { port: 41966 } } });
+		const pidfile = join(cwd, '.blocks-sandbox', 'dev-server.41966.pid');
+		let during: DevServerPidRecord | null = null;
+		const run = await runCli(['dev'], {
+			cwd,
+			onSpawn: () => {
+				during = parsePidRecord(readFileSync(pidfile, 'utf-8'));
+				return { code: 143 };
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		// `dev stop` during startup finds this record, and SIGTERMs this process; the dev server takes it over.
+		const { token, ...record } = during ?? { token: undefined };
+		assert.match(token ?? '', /^[0-9a-f-]{36}$/, 'a token names the record for the reap protocol');
+		assert.deepStrictEqual(record, {
+			pid: process.pid,
+			ppid: process.ppid,
+			port: 41966,
+			command: pidCommand(process.pid),
+			parentCommand: pidCommand(process.ppid),
+			starting: true,
+		});
+		assert.strictEqual(run.spawned[0]?.env.BLOCKS_DEV_SESSION, String(process.pid));
+		assert.strictEqual(existsSync(pidfile), false);
+
+		// While another CLI's session is starting, a second cdk-blocks dev is refused before it starts anything.
+		const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+		try {
+			const pid = other.pid ?? 0;
+			await once(other, 'spawn');
+			const record = { pid, ppid: process.pid, port: 41966, command: pidCommand(pid), parentCommand: '', starting: true };
+			writeFileSync(pidfile, JSON.stringify(record));
+			const second = await runCli(['dev'], { cwd });
+			assert.strictEqual(second.code, 1, second.stderr);
+			assert.strictEqual(second.spawned.length, 0);
+			assert.match(
+				second.stderr,
+				new RegExp(
+					`^Error: a dev server is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- cdk-blocks dev stop --port 41966\\n`,
+				),
+			);
+			assert.deepStrictEqual(JSON.parse(readFileSync(pidfile, 'utf-8')), record, 'the first session keeps its record');
+			// One dev server per app: a cdk-blocks dev on another port is refused too, and told the running port.
+			const elsewhere = await runCli(['dev', '--port', '41967'], { cwd });
+			assert.strictEqual(elsewhere.code, 1, elsewhere.stderr);
+			assert.strictEqual(elsewhere.spawned.length, 0);
+			assert.match(
+				elsewhere.stderr,
+				new RegExp(
+					`^Error: a dev server of this app is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- cdk-blocks dev stop --port 41966\\n`,
+				),
+			);
+			assert.ok(!existsSync(join(cwd, '.blocks-sandbox', 'dev-server.41967.pid')), 'the refused start leaves no record');
+		} finally {
+			other.kill('SIGKILL');
+		}
+	});
 });
 
 describe('cdk-blocks secret and config', () => {
@@ -2218,5 +2495,46 @@ describe('cdk-blocks secret and config', () => {
 		assert.strictEqual(bad.code, 2, bad.stderr);
 		assert.match(bad.stderr, /^Error: Invalid key "bad-key"\./);
 		assert.doesNotMatch(bad.stderr, /--verbose/);
+	});
+});
+
+describe('dev stop output', () => {
+	const stopResult = (overrides: Partial<StopResult>): StopResult => ({
+		port: 3000,
+		stopped: false,
+		alreadyStopped: true,
+		record: null,
+		via: 'none',
+		pids: [],
+		portFree: true,
+		holders: [],
+		...overrides,
+	});
+
+	it('prints a port still bound after the stop on stderr, not stdout, and exits 1', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dev', 'stop'], {
+			cwd: root,
+			core: {
+				stopDevServer: async () =>
+					stopResult({ stopped: true, alreadyStopped: false, via: 'watcher', pids: [4242], portFree: false }),
+			},
+		});
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(run.stdout, '');
+		assert.match(run.stderr, /Signalled the dev server on :3000 \(pid 4242\), but the port is still bound/);
+	});
+
+	it('names the process holding the port, and reports it in JSON', async () => {
+		const root = fixtureApp();
+		const holders = [{ pid: 777, command: 'python3 -m http.server 3000' }];
+		const core = { stopDevServer: async () => stopResult({ portFree: false, holders }) };
+		const text = await runCli(['dev', 'stop'], { cwd: root, core });
+		assert.strictEqual(text.code, 0, text.stderr);
+		assert.match(text.stdout, /held by another process, which was not stopped: pid 777 \(python3 -m http\.server 3000\)/);
+		const json = await runCli(['--output', 'json', 'dev', 'stop'], { cwd: root, core });
+		assert.deepStrictEqual(JSON.parse(json.stdout).stopped[0].holders, holders);
+		const pid = await runCli(['dev', 'stop', '--query', 'stopped.0.holders.0.pid'], { cwd: root, core });
+		assert.strictEqual(pid.stdout, '777\n', pid.stderr);
 	});
 });

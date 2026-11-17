@@ -14,6 +14,8 @@ import type { EmailMessage } from './types.js';
 export const MAX_RECIPIENTS_PER_MESSAGE = 50;
 /** SES limit on the total message size. */
 export const MAX_MESSAGE_BYTES = 40 * 1024 * 1024; // 40 MB
+/** Default for `EmailOptions.maxBatchSize`: the most messages one `sendBatch()` call accepts. */
+export const DEFAULT_MAX_BATCH_SIZE = 100;
 
 // Basic RFC 5322 addr-spec
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -99,4 +101,60 @@ export function validateMessage(message: EmailMessage, fromAddress: string, repl
 	if (messageSize > MAX_MESSAGE_BYTES) {
 		throw blocksError(EmailErrors.SendFailed, `Message size ${messageSize} bytes exceeds the 40 MB limit`);
 	}
+}
+
+/**
+ * Resolve `EmailOptions.maxBatchSize`: the default when unset, otherwise the
+ * given value, which must be a positive integer. Run in every layer's
+ * constructor, so a bad value fails at synth and at startup, not on first send.
+ *
+ * @throws {EmailErrors.InvalidInput} If the value is not a positive integer.
+ */
+export function resolveMaxBatchSize(maxBatchSize: number | undefined): number {
+	if (maxBatchSize === undefined) return DEFAULT_MAX_BATCH_SIZE;
+	if (!Number.isSafeInteger(maxBatchSize) || maxBatchSize < 1) {
+		throw blocksError(EmailErrors.InvalidInput, `maxBatchSize must be a positive integer (got ${String(maxBatchSize)}).`);
+	}
+	return maxBatchSize;
+}
+
+/**
+ * Reject a `sendBatch()` call with more messages than the cap, before any
+ * message is validated or sent. Both the mock and AWS run this first.
+ *
+ * @throws {EmailErrors.InvalidInput} If `count` exceeds `maxBatchSize`.
+ */
+export function validateBatchSize(count: number, maxBatchSize: number): void {
+	if (count > maxBatchSize) {
+		throw blocksError(EmailErrors.InvalidInput, `Batch size ${count} exceeds the maximum of ${maxBatchSize} messages.`);
+	}
+}
+
+/** Second-level domains reserved for documentation (RFC 2606 section 3). */
+const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+/** Top-level domains reserved by RFC 2606 section 2 and RFC 6761 section 6. */
+const RESERVED_TLDS = ['test', 'example', 'invalid', 'localhost'];
+
+/**
+ * The reserved domain an address is on, or `undefined` when it is on a normal
+ * domain. Reserved names (`example.com`, `example.net`, `example.org` and their
+ * subdomains, and anything under `.test`, `.example`, `.invalid` or
+ * `.localhost`) are never delegated, so they can't be verified as an SES
+ * identity and mail to them can't be delivered. Accepts a bare addr-spec or a
+ * name-addr; matching ignores case and a trailing dot.
+ *
+ * Synth-time only: the CDK entry uses it to raise a warning. It is not part of
+ * the caller-input validation shared by the mock and AWS entries, so a reserved
+ * address still passes `send()` validation and local dev keeps working.
+ */
+export function reservedDomainOf(address: string): string | undefined {
+	const addrSpec = NAME_ADDR_REGEX.exec(address)?.[1] ?? address;
+	const at = addrSpec.lastIndexOf('@');
+	if (at < 0) return undefined;
+	const domain = addrSpec.slice(at + 1).trim().toLowerCase().replace(/\.$/, '');
+	if (!domain) return undefined;
+	const tld = domain.slice(domain.lastIndexOf('.') + 1);
+	const reserved =
+		RESERVED_TLDS.includes(tld) || RESERVED_DOMAINS.some((name) => domain === name || domain.endsWith(`.${name}`));
+	return reserved ? domain : undefined;
 }

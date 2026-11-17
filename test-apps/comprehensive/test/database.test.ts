@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, describe } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert';
 import { isBlocksError, ApiError } from '@aws-blocks/core';
 import { DatabaseErrors } from '@aws-blocks/bb-data';
@@ -20,6 +21,15 @@ type KyselyRow = Awaited<ReturnType<typeof apiType.dbKyselySelect>>[number];
 type _AssertKyselyRowType = Expect<Equal<KyselyRow, { id: string; name: string; value: number }>>;
 
 export function databaseTests(getApi: () => typeof apiType) {
+  const DEPLOYED =
+    process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOCKS_TEST_ENV === 'production';
+  // Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+  // production run must not read the sandbox's.
+  const outputsFile =
+    process.env.BLOCKS_TEST_ENV === 'production'
+      ? '.blocks-sandbox/outputs.production.json'
+      : '.blocks-sandbox/outputs.json';
+
   describe('Database BB', () => {
     test('Database - setup table', async () => {
       const api = getApi();
@@ -212,6 +222,28 @@ export function databaseTests(getApi: () => typeof apiType) {
       assert.strictEqual(ours?.value, 123);
 
       await api.dbDelete(id);
+    });
+
+    // Deployed environments only: there is no stack locally. Same gate as the
+    // other deploy-only suites in this app.
+    test('Database - the rotation this deploy started finished', { skip: DEPLOYED ? false : 'deployed only' }, () => {
+      // Read from the stack's own outputs rather than Secrets Manager: a schedule
+      // existing proves nothing, but the CI role that can describe a stack cannot
+      // describe a secret. bb-data outputs what its deploy-time wait observed.
+      const outputs = JSON.parse(readFileSync(outputsFile, 'utf-8')) as Record<
+        string,
+        Record<string, string>
+      >;
+      const stack = Object.keys(outputs)[0];
+      const waited = Object.entries(outputs[stack]).filter(([key]) =>
+        /RotationWaited([0-9A-F]{8})?$/.test(key),
+      );
+      assert.strictEqual(
+        waited.length,
+        1,
+        `one RotationWaited output in ${stack}, got: ${waited.map(([key]) => key).join(', ')}`,
+      );
+      assert.strictEqual(waited[0][1], 'true', `the deploy's wait saw the rotation finish: ${waited[0][1]}`);
     });
   });
 }

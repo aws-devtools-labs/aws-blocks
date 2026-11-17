@@ -28,6 +28,7 @@ import {
   writeTypesAndMeta,
 } from './generate.js';
 import type { IneligibleReason } from './generate.js';
+import { assertValidIdentifiers } from './identifiers.js';
 import { generateBaseline } from '../migrations/baseline.js';
 import { prepareEnvFileUpsert, upsertEnvFile } from './env-file.js';
 import { SUPABASE, SUPABASE_AUTH, SUPABASE_CONN_GUIDANCE, SUPABASE_MESSAGING, detectSupabase, extractProjectRef } from './supabase.js';
@@ -186,6 +187,16 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     process.exit(1);
   }
 
+  // On re-pull, preserve hand-edited singular values from existing database.meta.ts.
+  // Read before the consent prompt so the singulars are checked along with the
+  // catalog names below.
+  const outputDir = opts.outputDir;
+  const existingSingulars = readExistingSingulars(outputDir);
+
+  // Check table/column names (and the singulars) before asking for consent, so an
+  // unsupported name stops the pull before any file is written. The generators check again.
+  assertValidIdentifiers(tables, existingSingulars);
+
   const answer = await prompt('  Continue? (y/N) ');
   if (answer.toLowerCase() !== 'y') {
     console.log('  Aborted.');
@@ -202,11 +213,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   const connString = opts.connectionString;
 
   // Generate files
-  const outputDir = opts.outputDir;
   fs.mkdirSync(outputDir, { recursive: true });
-
-  // On re-pull, preserve hand-edited singular values from existing database.meta.ts.
-  const existingSingulars = readExistingSingulars(outputDir);
 
   // database.types.ts + database.meta.ts via the shared writer (same path the
   // dev-loop type refresh uses, so the two stay consistent).
@@ -369,7 +376,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
         const insertPos = apiMatch.index + apiMatch[0].length;
         const authBlock = [
           `  // TODO: add auth — see MIGRATION_GUIDE.md#auth`,
-          `  // const auth = new AuthOIDC(scope, 'auth', { providers: [...] });`,
+          `  // const auth = new Auth(scope, 'auth', { ... });  // import { Auth } from '@aws-blocks/bb-auth'`,
           `  ...supabaseCrud(context),  // pass auth as 2nd arg once configured: supabaseCrud(context, auth)`,
         ].join('\n') + '\n';
         indexFileContent = indexFileContent.slice(0, insertPos) + authBlock + indexFileContent.slice(insertPos);

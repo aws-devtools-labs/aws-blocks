@@ -24,7 +24,7 @@ import {
   sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
-import { isDispatchableExport, resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import { isDispatchableExport, resolveApiMethod, resolveApiNamespace, rpcErrorHttpStatus } from './rpc-dispatch.js';
 import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
@@ -115,6 +115,12 @@ export interface DispatcherOptions {
    */
   listApisWhenNotFound?: boolean;
   /**
+   * Runs each RPC method call and RawRoute handler, labelled `namespace.method`
+   * or `METHOD /path`. The local dev server uses it to trace an unhandled
+   * rejection back to its request. Default: calls `fn` directly.
+   */
+  runHandler?: <T>(label: string, fn: () => T | Promise<T>) => Promise<T>;
+  /**
    * Which API namespaces (by export name) this compute serves. A call to any
    * other namespace gets the same "not found" error as an unknown one, whichever
    * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
@@ -131,10 +137,14 @@ export interface DispatcherOptions {
  * @internal
  */
 export interface DispatchCorsPolicy {
-  /** Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin. */
-  rejects(origin: string): boolean;
-  /** The CORS headers for a response to a request from `origin` (`''` when absent). */
-  headers(origin: string): Record<string, string>;
+  /**
+   * Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin.
+   * `request` is the request itself, for a policy that also depends on its method or `Host` (the local
+   * dev server refuses only state-changing requests from a foreign origin).
+   */
+  rejects(origin: string, request: DispatchRequest): boolean;
+  /** The CORS headers for a response to `request`, from `origin` (`''` when absent). */
+  headers(origin: string, request: DispatchRequest): Record<string, string>;
 }
 
 /**
@@ -164,7 +174,7 @@ export interface DispatchRpcTrace {
 /** The deployed CORS policy: the configured allowlist, when there is one. */
 const ALLOWLIST_CORS_POLICY: DispatchCorsPolicy = {
   rejects: (origin) => getCorsPatterns() !== null && !isOriginAllowed(origin),
-  headers: buildCorsHeaders,
+  headers: (origin) => buildCorsHeaders(origin),
 };
 
 /**
@@ -235,6 +245,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
   const trace = options.rpcTrace;
+  const runHandler = options.runHandler ?? (async <T>(_label: string, fn: () => T | Promise<T>): Promise<T> => fn());
   const servesNamespace = options.servesNamespace;
   const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
     if (options.logHandlerError) options.logHandlerError(failure);
@@ -242,10 +253,10 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   return async (request) => {
     const { origin, method: httpMethod } = request;
-    const corsHeaders = cors.headers(origin);
+    const corsHeaders = cors.headers(origin, request);
 
     // Reject cross-origin requests from disallowed origins
-    if (origin && cors.rejects(origin)) {
+    if (origin && cors.rejects(origin, request)) {
       const rejection = corsRejection();
       return { kind: 'cors-rejected', status: rejection.statusCode, headers: rejection.headers, cookies: [], body: rejection.body };
     }
@@ -279,7 +290,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
         if (matched) {
-          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError);
+          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError, runHandler);
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
@@ -323,6 +334,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       // Declared outside the try so the error path can still deliver cookies the
       // method set before throwing (e.g. clearing a dead session on a 401).
       let responseHeaders: Headers | undefined;
+      // Also outside the try: an `httpErrorStatus` namespace answers a 4xx error
+      // with that HTTP status (see rpcErrorHttpStatus).
+      let apiHandler: unknown;
 
       try {
         const headers = request.headers();
@@ -352,7 +366,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Get the API by export name. resolveApiNamespace refuses exported Building
         // Block instances and `_`-private exports, so only an API surface is callable.
         // A namespace placed on another compute is refused exactly like an unknown one.
-        const apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
+        apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
           const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
@@ -371,7 +385,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
           return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
         }
 
-        const result = await apiMethod(...args);
+        const result = await runHandler(`${apiNamespace}.${method}`, () => apiMethod(...args));
         const value = responseBody ?? result;
         trace?.result?.(apiNamespace, method, value);
 
@@ -396,7 +410,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // never hand out a live session. The method's other headers are dropped,
         // as before, so the JSON-RPC error envelope keeps its standard headers.
         // The body is unchanged (message/name only — never SDK metadata).
-        return { ...rpcEnvelope(errorResponseFromCatch(error, rpcId)), cookies: errorResponseSetCookies(responseHeaders) };
+        return {
+          ...rpcEnvelope(errorResponseFromCatch(error, rpcId)),
+          status: rpcErrorHttpStatus(apiHandler, error),
+          cookies: errorResponseSetCookies(responseHeaders),
+        };
       }
     };
 
@@ -424,6 +442,7 @@ async function dispatchRawRoute(
   params: Record<string, string>,
   corsHeaders: Record<string, string>,
   logHandlerError: (failure: DispatchHandlerFailure, request: DispatchRequest, label: string) => void,
+  runHandler: <T>(label: string, fn: () => T | Promise<T>) => Promise<T>,
 ): Promise<DispatchResponse> {
   const headers = request.headers();
   const { text: bodyText, stream: bodyStream } = request.body();
@@ -455,7 +474,7 @@ async function dispatchRawRoute(
   };
 
   try {
-    await route.handler(context);
+    await runHandler(`${request.method} ${request.path}`, () => route.handler(context));
 
     return {
       kind: 'raw-route',

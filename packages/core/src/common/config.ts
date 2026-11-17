@@ -18,6 +18,24 @@
 let configCache: Record<string, string> | null = null;
 let configLoadPromise: Promise<Record<string, string>> | null = null;
 
+/**
+ * Keys {@link loadConfigToProcessEnv} or {@link refreshConfig} put into
+ * `process.env` from the config file. A refresh may update these; any other
+ * `process.env` key is a real environment variable and is never overwritten.
+ */
+const configInjectedKeys = new Set<string>();
+
+/** The in-flight {@link refreshConfig}, shared by every caller in this process. */
+let refreshPromise: Promise<boolean> | null = null;
+/** When the last {@link refreshConfig} reload started (epoch ms); 0 = never. */
+let lastRefreshStartedAt = 0;
+
+/**
+ * Minimum time between two config reloads in one process (one Lambda
+ * container). See {@link refreshConfig}.
+ */
+export const CONFIG_REFRESH_MIN_INTERVAL_MS = 5_000;
+
 type S3Fetcher = (bucket: string, key: string) => Promise<string>;
 let s3FetcherOverride: S3Fetcher | null = null;
 
@@ -177,6 +195,7 @@ export async function loadConfigToProcessEnv(): Promise<void> {
 		const existing = process.env[key];
 		if (existing === undefined) {
 			process.env[key] = value;
+			configInjectedKeys.add(key);
 		} else if (existing !== String(value)) {
 			shadowed.push(key);
 		}
@@ -186,6 +205,79 @@ export async function loadConfigToProcessEnv(): Promise<void> {
 			`[Blocks config] Ignored ${shadowed.length} config entr${shadowed.length === 1 ? 'y' : 'ies'} because an environment variable of the same name is already set (environment variables take precedence over registerConfig): ${shadowed.join(', ')}`,
 		);
 	}
+}
+
+/**
+ * Re-read the config file from S3, bypassing the per-container cache, and
+ * merge it into `process.env`. **Internal**: for Building Blocks that detect,
+ * at request time, that the config they started with may be stale. Exported
+ * from `@aws-blocks/core/internal`, not from the public entry points.
+ *
+ * Why it exists: the config file is uploaded by a deployment that is not
+ * ordered before the compute update, and its object key does not change. During
+ * a deploy, new code can cold-start while S3 still serves the previous
+ * deploy's config; the normal loader then caches that for the container's life.
+ *
+ * Merge rules:
+ * - a key that is not in `process.env` yet is set (so keys new in this deploy
+ *   reach the runtime);
+ * - a key that an earlier config load set is updated to the new value;
+ * - any other `process.env` key is a real environment variable and is left
+ *   alone, exactly as {@link loadConfigToProcessEnv} leaves it.
+ *
+ * Limits, so a failing caller cannot hammer S3:
+ * - one reload in flight per process: concurrent callers share it;
+ * - at most one reload per {@link CONFIG_REFRESH_MIN_INTERVAL_MS} per process.
+ *   A call inside the interval does not reload and resolves `false`.
+ *
+ * A 404 (the file is not readable yet) or a failed fetch keeps the current
+ * config. A 404 resolves `false`; a failed fetch rejects.
+ *
+ * @returns `true` when a fresh config was loaded and merged, `false` when no
+ *   reload ran (inside the interval, no config location, or a 404).
+ * @internal
+ */
+export function refreshConfig(): Promise<boolean> {
+	if (refreshPromise) return refreshPromise;
+	if (!process.env.BLOCKS_CONFIG_BUCKET || !process.env.BLOCKS_CONFIG_KEY) return Promise.resolve(false);
+	const now = Date.now();
+	if (lastRefreshStartedAt !== 0 && now - lastRefreshStartedAt < CONFIG_REFRESH_MIN_INTERVAL_MS) {
+		return Promise.resolve(false);
+	}
+	lastRefreshStartedAt = now;
+	refreshPromise = reloadAndMerge().finally(() => {
+		refreshPromise = null;
+	});
+	return refreshPromise;
+}
+
+async function reloadAndMerge(): Promise<boolean> {
+	// Let a first load that is still in flight finish, so the two never race on
+	// the cache.
+	if (configLoadPromise) await configLoadPromise.catch(() => {});
+	const previous = configCache;
+	configCache = null;
+	let fresh: Record<string, string>;
+	try {
+		await loadConfigFromS3();
+		if (configCache === null) {
+			// The 404 path: nothing new to merge. Keep what the container had.
+			configCache = previous;
+			return false;
+		}
+		fresh = configCache;
+	} catch (error) {
+		configCache = previous;
+		throw error;
+	}
+	for (const [key, value] of Object.entries(fresh)) {
+		const existing = process.env[key];
+		if (existing === undefined || configInjectedKeys.has(key)) {
+			process.env[key] = value;
+			configInjectedKeys.add(key);
+		}
+	}
+	return true;
 }
 
 /**
@@ -235,6 +327,9 @@ export function _resetConfigCache(): void {
 	configCache = null;
 	configLoadPromise = null;
 	s3FetcherOverride = null;
+	configInjectedKeys.clear();
+	refreshPromise = null;
+	lastRefreshStartedAt = 0;
 }
 
 /**

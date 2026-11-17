@@ -139,8 +139,8 @@ public final class BlocksClient: Sendable {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        // Encode request body
-        urlRequest.httpBody = try JSONEncoder().encode(request)
+        // Encode request body (dates as ISO 8601 strings, see `makeEncoder()`)
+        urlRequest.httpBody = try makeEncoder().encode(request)
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
@@ -152,20 +152,36 @@ public final class BlocksClient: Sendable {
         }
 
         // Parse response to check for errors (minimal parsing)
-        guard let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw RPCError(message: "Invalid JSON response")
-        }
+        let responseJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-        // Check for JSON-RPC "error" field
-        if let errorObj = responseJson["error"] as? [String: Any] {
+        // Decode a JSON-RPC `error` body first, then check the HTTP status, and only then reject a
+        // body that is not a JSON object, so a non-2xx with such a body is reported by its status.
+        if let errorObj = responseJson?["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            throw RPCError(message: "Error occured with code: \(code) message: \(message)")
+            var errorData: [String: JSONValue]?
+            if let rawData = errorObj["data"] as? [String: Any],
+               case .dictionary(let entries)? = JSONValue(serialized: rawData) {
+                errorData = entries
+            }
+            var name: String?
+            if case .string(let value)? = errorData?["name"] { name = value }
+            throw RPCError(
+                message: "Error occured with code: \(code) message: \(message)",
+                code: code,
+                name: name,
+                retriable: errorData?["retriable"] == .bool(true),
+                data: errorData
+            )
         }
 
-        // Check HTTP status
+        // Check HTTP status: a non-2xx with no JSON-RPC error reports its status as `code`
         if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
-            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)")
+            throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)", code: httpResponse.statusCode)
+        }
+
+        guard let responseJson else {
+            throw RPCError(message: "Invalid JSON response")
         }
 
         // Check for null result
@@ -242,7 +258,8 @@ public final class BlocksClient: Sendable {
         urlRequest.httpMethod = "POST"
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         // Attach stored cookies
         if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
@@ -254,6 +271,31 @@ public final class BlocksClient: Sendable {
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
             processCookies(from: httpResponse, requestURL: requestURL)
+            // An error response is the server refusing the request, not a malformed success:
+            // surface its status and error name instead of handing the error body to the caller.
+            if !(200 ..< 300).contains(httpResponse.statusCode) {
+                // Blocks routes answer `{ error: <message>, name }`; a plain OAuth body is
+                // `{ error: <code>, error_description }`.
+                // A Blocks body without a `name` (`{ error: 'Missing required fields' }`) holds a
+                // message, so `error` is a name only beside `error_description` or when it reads
+                // like a code (no spaces). Known approximation: a nameless one-word message
+                // (`{ error: 'Unauthorized' }`) reads as a code and becomes the error name.
+                let errorBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let blocksName = errorBody?["name"] as? String
+                let error = errorBody?["error"] as? String
+                let description = errorBody?["error_description"] as? String
+                let errorIsCode = blocksName == nil
+                    && error.map { description != nil || !$0.contains(" ") } == true
+                let name = blocksName ?? (errorIsCode ? error : nil)
+                // A body with only `error_description` keeps it as the detail.
+                let detail = errorIsCode ? description : (error ?? description)
+                let reason = [name, detail].compactMap { $0 }.joined(separator: ": ")
+                throw RawRouteError(
+                    message: "\(path) answered HTTP \(httpResponse.statusCode)" + (reason.isEmpty ? "" : " (\(reason))"),
+                    statusCode: httpResponse.statusCode,
+                    errorName: name
+                )
+            }
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -312,9 +354,49 @@ public struct RPCError: BlocksError {
     public let message: String
     public let underlyingError: Error?
 
-    public init(message: String, underlyingError: Error? = nil) {
+    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its HTTP
+    /// status (e.g. `401`); `-1` when `code` is absent or not readable as an `Int`. For a non-2xx
+    /// response with no JSON-RPC error (a gateway or route error), the HTTP status (`name` and `data`
+    /// are `nil`, `retriable` is `false`). `nil` for other transport and decoding failures.
+    public let code: Int?
+
+    /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
+    /// Errors cross the wire by name, so match on this rather than on `message`.
+    /// `nil` when the server sent none or sent a non-string, and for transport and decoding failures.
+    public let name: String?
+
+    /// Whether the caller can retry the same action without restarting the broader flow
+    /// (`error.data.retriable`, e.g. a wrong MFA code). `true` only for the JSON boolean `true`;
+    /// it marks the kind of failure as retriable, not that a given retry will succeed.
+    public let retriable: Bool
+
+    /// The server's `error.data` object, as `[String: JSONValue]`. `nil` when the server sent none
+    /// or sent `error.data` that is not a JSON object, and for transport and decoding failures.
+    public let data: [String: JSONValue]?
+
+    public init(
+        message: String,
+        code: Int? = nil,
+        name: String? = nil,
+        retriable: Bool = false,
+        data: [String: JSONValue]? = nil,
+        underlyingError: Error? = nil
+    ) {
         self.message = message
+        self.code = code
+        self.name = name
+        self.retriable = retriable
+        self.data = data
         self.underlyingError = underlyingError
+    }
+}
+
+public extension Error {
+    /// Whether this carries the server error name `name` (e.g. `"NotAuthenticatedException"`):
+    /// an `RPCError` (`error.data.name`) or a `RawRouteError` (its `errorName`). As with Kotlin's
+    /// `Throwable.isBlocksError`, it is offered on any `Error`.
+    func isBlocksError(name: String) -> Bool {
+        (self as? RPCError)?.name == name || (self as? RawRouteError)?.errorName == name
     }
 }
 
@@ -328,8 +410,17 @@ public struct ClientClosedError: BlocksError {
 /// Error thrown by raw route (non-RPC) requests.
 public struct RawRouteError: BlocksError {
     public let message: String
+    /// The HTTP status of a response outside 2xx; `nil` when no such response was received.
+    public let statusCode: Int?
+    /// The error name from the response body (`name`, else `error`), when the body is JSON and has one.
+    /// `error` counts as a name only beside `error_description` (an OAuth body) or when it has no
+    /// spaces; a nameless Blocks body's `error` is a message and goes into `message` instead. A
+    /// nameless one-word message (`{ "error": "Unauthorized" }`) has no spaces, so it is taken as the name.
+    public let errorName: String?
 
-    public init(message: String) {
+    public init(message: String, statusCode: Int? = nil, errorName: String? = nil) {
         self.message = message
+        self.statusCode = statusCode
+        self.errorName = errorName
     }
 }

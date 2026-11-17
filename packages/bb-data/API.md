@@ -46,6 +46,7 @@ export type CrudMethods<M extends Record<string, TableTypeMeta>, Tables extends 
 export interface CrudOptions<M extends Record<string, TableTypeMeta>> {
     // (undocumented)
     auth: () => Promise<CrudAuthResult>;
+    dangerouslyAllowWithoutRowLevelSecurity?: (keyof M & string)[];
     // (undocumented)
     exclude?: string[];
     // (undocumented)
@@ -88,6 +89,7 @@ export const DatabaseErrors: {
     readonly CheckViolation: "CheckViolationException";
     readonly NotNullViolation: "NotNullViolationException";
     readonly ForeignKeyViolation: "ForeignKeyViolationException";
+    readonly RowLevelSecurityRequired: "RowLevelSecurityRequiredException";
 };
 
 // @public (undocumented)
@@ -106,6 +108,9 @@ export interface DatabaseOptions {
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
+    secretRotation?: boolean | {
+        intervalDays: number;
+    };
     storageEncryptionKeyArn?: string;
     subnets?: SubnetSelection;
 }
@@ -229,6 +234,7 @@ export interface TableMetaEntry {
     plural: string;
     // (undocumented)
     primaryKey: string | string[];
+    rowLevelSecurity?: boolean;
     // (undocumented)
     singular: string;
 }

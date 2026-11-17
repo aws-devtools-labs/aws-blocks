@@ -1,0 +1,9 @@
+export async function loadCognito() {
+	// TODO(aws-blocks-auth-migrate): dynamic import of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.
+	return import('@aws-blocks/bb-auth-cognito');
+}
+
+export function loadBasic() {
+	// TODO(aws-blocks-auth-migrate): require() of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.
+	return require('@aws-blocks/bb-auth-basic');
+}

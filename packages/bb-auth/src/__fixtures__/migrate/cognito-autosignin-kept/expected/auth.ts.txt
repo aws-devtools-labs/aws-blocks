@@ -1,0 +1,8 @@
+import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+
+// The Authenticator UI (createApi()) auto-signed users in after confirmSignUp,
+// so Auth's default (emailPassword.autoSignIn: true) is kept.
+export const scope = new Scope('app');
+export const auth = new Auth(scope, 'auth', { emailPassword: { selfSignUp: true } });
+export const authApi = auth.createApi();

@@ -87,9 +87,17 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 type Tier = 'cloudfront' | 'apigateway';
 
-/** Synthesize a stack + Hosting behind `frontDoor`; return what the browser and the runtime get. */
-const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
-	const app = new cdk.App();
+/**
+ * Synthesize a stack + Hosting behind `frontDoor`; return what the browser and the runtime get.
+ * `sandbox` synthesizes a sandbox deploy (`sandboxMode` context): a plain-HTTP ALB door with an API
+ * fails synth in production (`PlainHttpFrontDoorError`).
+ */
+const synth = async (
+	tier: Tier,
+	frontDoor: HostingProps['frontDoor'] | ((stack: cdk.Stack) => HostingProps['frontDoor']),
+	sandbox = false,
+) => {
+	const app = new cdk.App(sandbox ? { context: { sandboxMode: 'true' } } : undefined);
 	const stack = await BlocksStack.create(app, `Origin${tier}`, {
 		backendHandlerPath: join(fixtures, 'handler.js'),
 		backendCDKPath: join(fixtures, 'side-effect-backend.js'),
@@ -98,7 +106,13 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
 		apiFrontDoor: tier,
 		env: { account: '111111111111', region: 'us-west-2' },
 	});
-	const hostingProps: HostingProps = { root, buildOutputDir: 'dist', framework: 'spa', api: stack, frontDoor };
+	const hostingProps: HostingProps = {
+		root,
+		buildOutputDir: 'dist',
+		framework: 'spa',
+		api: stack,
+		frontDoor: typeof frontDoor === 'function' ? frontDoor(stack) : frontDoor,
+	};
 	new Hosting(stack, 'Hosting', hostingProps);
 	const template = Template.fromStack(stack);
 	const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
@@ -111,6 +125,7 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
 	return {
 		apiFrontDoorBuilt: apiDistributions.length === 1,
 		publicOrigin: entries?.has('BLOCKS_PUBLIC_ORIGIN') ? resolve(entries.get('BLOCKS_PUBLIC_ORIGIN')) : undefined,
+		allowPlainHttp: entries?.get('BLOCKS_ALLOW_PLAIN_HTTP'),
 		apiUrlOutput: resolve(template.findOutputs('ApiUrl').ApiUrl?.Value),
 		browserApiUrl: resolve(buildConfigJson(hostingProps, 'b1').apiUrl),
 	};
@@ -118,14 +133,69 @@ const synth = async (tier: Tier, frontDoor: HostingProps['frontDoor']) => {
 
 describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browsers', () => {
 	test("ALB without a certificate under 'cloudfront': the ALB stays the public origin (the API distribution doesn't overwrite it)", async () => {
-		const r = await synth('cloudfront', { kind: 'alb' });
+		const r = await synth('cloudfront', { kind: 'alb' }, true);
 		assert.ok(r.apiFrontDoorBuilt, 'an http:// door does not claim, so native clients keep an HTTPS ApiUrl');
 		assert.match(r.publicOrigin ?? '', /"http:\/\/",\{"Fn::GetAtt":\["HostingAlb[0-9A-F]+","DNSName"\]\}/);
 		assert.match(r.apiUrlOutput, /ApiFrontDoor/);
 	});
 
+	test('`allowPlainHttp: true` on a plain-HTTP door registers BLOCKS_ALLOW_PLAIN_HTTP, so `Auth` issues its cookie without `Secure`', async () => {
+		const r = await synth('apigateway', { kind: 'alb', allowPlainHttp: true });
+		assert.match(r.publicOrigin ?? '', /"http:\/\/"/);
+		assert.strictEqual(r.allowPlainHttp, 'true');
+		// Without the opt-out (a sandbox deploy), or over HTTPS, nothing is registered: `Auth` fails closed.
+		assert.strictEqual((await synth('apigateway', { kind: 'alb' }, true)).allowPlainHttp, undefined);
+		assert.strictEqual((await synth('apigateway', { kind: 'alb', allowPlainHttp: true }, true)).allowPlainHttp, undefined);
+		assert.strictEqual((await synth('apigateway', { kind: 'apiGateway' })).allowPlainHttp, undefined);
+	});
+
+	// The registration rule needs both the opt-out AND a door that serves plain HTTP: an opted-out door
+	// whose public origin is HTTPS registers nothing, so `Auth` keeps `Secure`.
+	describe('`allowPlainHttp: true` registers BLOCKS_ALLOW_PLAIN_HTTP only where the public origin is plain HTTP', () => {
+		const domain = { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' };
+		test('an ALB with a `certificate` and `features.domain` serves HTTPS: nothing is registered', async () => {
+			const r = await synth('apigateway', (stack) => ({
+				kind: 'alb',
+				allowPlainHttp: true,
+				certificate: cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+					stack,
+					'Cert',
+					'arn:aws:acm:us-west-2:111111111111:certificate/c',
+				),
+				features: { domain },
+			}));
+			assert.match(r.publicOrigin ?? '', /https:\/\/app\.example\.com/);
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
+
+		test('the stacked door: its public origin is the HTTPS edge, so nothing is registered', async () => {
+			const r = await synth('apigateway', { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true });
+			assert.doesNotMatch(r.publicOrigin ?? '', /"http:\/\/"/);
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
+
+		// A literal url: the scheme of a token url (`Fn.join`) is not readable at synth.
+		const customDoor = (scheme: 'http' | 'https') =>
+			defineFrontDoor({
+				service: `custom-${scheme}`,
+				build(scope, { origins }) {
+					new Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
+					for (const api of origins.api ? [origins.api] : []) cf.recordWired(api, api.paths);
+					return { url: `${scheme}://proxy.example.com` };
+				},
+			});
+		test('a custom door returning an `http://` url: registered', async () => {
+			const r = await synth('apigateway', { kind: 'custom', door: customDoor('http'), allowPlainHttp: true });
+			assert.strictEqual(r.allowPlainHttp, 'true');
+		});
+		test('a custom door returning an `https://` url: nothing is registered', async () => {
+			const r = await synth('apigateway', { kind: 'custom', door: customDoor('https'), allowPlainHttp: true });
+			assert.strictEqual(r.allowPlainHttp, undefined);
+		});
+	});
+
 	test("ALB without a certificate under 'apigateway': the ALB is the public origin", async () => {
-		const r = await synth('apigateway', { kind: 'alb' });
+		const r = await synth('apigateway', { kind: 'alb' }, true);
 		assert.ok(!r.apiFrontDoorBuilt);
 		assert.match(r.publicOrigin ?? '', /HostingAlb[0-9A-F]+","DNSName"/);
 	});
@@ -172,7 +242,7 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		const domain = { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' };
 		for (const [label, frontDoor, claims] of [
 			['CloudFront default', undefined, true],
-			['stacked edge', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, true],
+			['stacked edge', { kind: 'stacked', edge: 'cloudfront', router: 'alb', internal: true }, true],
 			['API Gateway (HTTP)', { kind: 'apiGateway' }, false],
 			['API Gateway (REST, domain)', { kind: 'apiGateway', api: 'rest', features: { domain } }, false],
 		] as const) {

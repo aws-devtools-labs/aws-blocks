@@ -1,0 +1,4 @@
+// The app's own barrel: the rest of the backend imports auth from here.
+export { Auth as AuthBasic } from '@aws-blocks/bb-auth';
+// TODO(aws-blocks-auth-migrate): AuthenticatedUser has no createdAt. Read the creation date with auth.admin.getUser() if you need it.
+export type { AuthenticatedUser as AuthBasicUser } from '@aws-blocks/bb-auth';

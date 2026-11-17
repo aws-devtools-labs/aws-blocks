@@ -57,7 +57,8 @@ import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
-import { customErrorResponses } from './error_responses.js';
+import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
+import { assertCacheGuardIgnoredCookies } from './ssr_cache_guard.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
@@ -210,11 +211,37 @@ export type CdnConstructProps = {
   /**
    * Default TTL for SSR/compute cache behaviors when the origin doesn't
    * set Cache-Control. Enables CDN caching of dynamic responses.
+   *
+   * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
+   * `Cache-Control` header shared at the CloudFront edge. Because the SSR
+   * cache key does NOT include Authorization or session cookies by default,
+   * one cached response would answer requests regardless of their
+   * credentials. CloudFront ignores `Vary`. Before enabling, set
+   * {@link cacheKeyCookies} and/or {@link cacheKeyHeaders} to include
+   * credentials in the cache key, or ensure personalized routes emit
+   * `Cache-Control: private`. Synth fails closed if this resolves to > 0 and
+   * neither is set.
+   *
+   * At runtime, the SSR server's responses pass through the SSR cache guard:
+   * a response that sets cookies (`Set-Cookie`), and a shared-cacheable
+   * response (`s-maxage`, `public`, `max-age` without `private`, or no
+   * `Cache-Control` while this TTL is positive) to a request carrying
+   * `Authorization` or a cookie that is not in the cache key, are sent with
+   * `Cache-Control: private, no-store`. Listing the credential in
+   * {@link cacheKeyCookies}/{@link cacheKeyHeaders} keeps those responses
+   * cacheable, keyed per credential. Edge TTLs are clamped to at most 1 day.
+   * See HostingProps.cdn.ssrDefaultTtl.
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: Duration;
   /** Cookie names to add to the SSR cache key. See HostingProps.cdn.cacheKeyCookies. */
   cacheKeyCookies?: string[];
+  /**
+   * Cookie names that never affect the rendered output; never in the SSR
+   * cache key (a name may not also be in {@link cacheKeyCookies}). See
+   * HostingProps.cdn.cacheGuardIgnoredCookies.
+   */
+  cacheGuardIgnoredCookies?: string[];
   /** Header names to add to the SSR cache key. See HostingProps.cdn.cacheKeyHeaders. */
   cacheKeyHeaders?: string[];
   /**
@@ -358,6 +385,8 @@ export class CdnConstruct extends Construct {
           'on a static-only deploy (no compute origin); the options are ignored.',
       );
     }
+
+    assertCacheGuardIgnoredCookies(props.cacheKeyCookies, props.cacheGuardIgnoredCookies);
 
     // ---- Lambda@Edge function-count validation ----
     // The KVS single-behavior model removed the per-route cache-behavior and
@@ -888,8 +917,12 @@ export class CdnConstruct extends Construct {
     //   (preserves the safe default; SSR routes that forget to set
     //   Cache-Control still don't accidentally cache personalized
     //   responses)
-    // - maxTtl: 1 year — clamps any wild origin values (e.g. corrupted
-    //   Cache-Control: s-max-age=999999999) to at most a year.
+    // - maxTtl: 1 day — clamps any wild origin values (e.g. corrupted
+    //   Cache-Control: s-max-age=999999999, or a framework's 1-year
+    //   `s-maxage` on prerendered HTML) to at most a day, which bounds how
+    //   long any one edge entry can be served. Frameworks revalidate in the
+    //   background (stale-while-revalidate), so a shorter clamp costs an
+    //   origin request per object per day at most.
     //
     // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
     // flags — CloudFront normalizes the Accept-Encoding header into
@@ -910,7 +943,7 @@ export class CdnConstruct extends Construct {
             'SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers',
           minTtl: Duration.seconds(0),
           defaultTtl: props.ssrDefaultTtl ?? Duration.seconds(0),
-          maxTtl: Duration.days(365),
+          maxTtl: Duration.days(1),
           headerBehavior: CacheHeaderBehavior.allowList(
             'rsc',
             'next-router-prefetch',
@@ -1395,6 +1428,7 @@ export class CdnConstruct extends Construct {
             // 500: Don't cache Lambda 500s — they're likely transient.
             // Image-opt Lambda returns 500 for missing images; caching
             // that error would serve stale errors to all users.
+            // 502/503/504: not cached either (see withServerErrorsNotCached).
             {
               httpStatus: 500,
               responseHttpStatus: 500,
@@ -1405,19 +1439,19 @@ export class CdnConstruct extends Construct {
               httpStatus: 502,
               responseHttpStatus: 502,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 503,
               responseHttpStatus: 503,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 504,
               responseHttpStatus: 504,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
           ]
         : []),
@@ -1428,6 +1462,9 @@ export class CdnConstruct extends Construct {
     // For compute (SSR) stacks, the default 502/503/504 error pages are
     // already wired above; only 500 gets the custom page.
     errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
+    // A server's 5xx is never cached: the error caching minimum TTL is 0 for
+    // 500-504, keeping each response's page (see withServerErrorsNotCached).
+    const distributionErrorResponses = hasCompute ? withServerErrorsNotCached(errorResponses) : errorResponses;
 
 
     // ---- Distribution ----
@@ -1467,7 +1504,7 @@ export class CdnConstruct extends Construct {
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }
         : {}),
-      errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
+      errorResponses: distributionErrorResponses.length > 0 ? distributionErrorResponses : undefined,
     });
 
     // ---- Standard logging v2 (opt-in) ----

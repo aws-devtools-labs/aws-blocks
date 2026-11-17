@@ -22,6 +22,7 @@ import {
   makeInvalidationProbe,
   type InvalidationStatusClient,
 } from './deploy.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 describe('formatDeploySignal — the machine-readable deploy completion line', () => {
   it('is re-exported by deploy.ts (the public surface external callers import)', () => {
@@ -223,16 +224,18 @@ describe('makeInvalidationProbe — maps the SDK result to a pure outcome', () =
 
 describe('deploy — onDeployed', () => {
   // deploy() itself, in a fresh process. Only the steps that reach AWS or spawn
-  // CDK are replaced; the fake CDK writes outputs.json, as `cdk deploy` does.
+  // CDK are replaced; the fake CDK writes the production outputs document, as
+  // `cdk deploy --outputs-file` does.
   const scripts = new URL('./', import.meta.url).href;
   const fixture = `
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { mock } from 'node:test';
 
 const scripts = ${JSON.stringify(scripts)};
 const moduleUrl = (name) => new URL(name + '.js', scripts).href;
-const outputsFile = '.blocks-sandbox/outputs.json';
+const outputsFile = ${JSON.stringify(OUTPUTS_FILE.production)};
 const prod = {
   ApiUrl: 'https://prod.execute-api.us-east-1.amazonaws.com/',
   HostingHostingUrl1A2B3C4D: 'https://d111.cloudfront.net',
@@ -253,20 +256,30 @@ await replace(moduleUrl('external-migrations-step'), { applyExternalMigrations: 
 await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });
 await replace(new URL('../telemetry/trackCommand.js', scripts).href, { trackCommand: async (_name, fn) => fn() });
 await replace(moduleUrl('deploy-stream'), {
-  runStreaming: async () => {
-    mkdirSync('.blocks-sandbox', { recursive: true });
-    writeFileSync(outputsFile, JSON.stringify({ 'demo-prod-monitoring': { AlarmTopic: 'arn:topic' }, 'demo-prod': prod }));
+  // Writes where deploy() told the CDK CLI to write, not to a path of its own,
+  // so this fixture fails if production stops naming its own document.
+  runStreaming: async (_cmd, args) => {
+    const file = args[args.indexOf('--outputs-file') + 1];
+    assert.equal(file, outputsFile);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ 'demo-prod-monitoring': { AlarmTopic: 'arn:topic' }, 'demo-prod': prod }));
   },
 });
 await replace(moduleUrl('wait-live'), {
   waitForLiveBuild: async () => {
     events.push('wait');
-    // A sandbox deploy of the same app rewrites the file with only its own stack.
+    // A second production deploy rewrites the file with only its own stack.
     writeFileSync(outputsFile, JSON.stringify({ 'demo-jdoe': { ApiUrl: 'https://sandbox.example/' } }));
     return { live: true, attempts: 1, elapsedMs: 0, reason: 'live' };
   },
 });
 const { deploy } = await import(moduleUrl('deploy'));
+// The running dev server's config, which the Node client and the e2e tests read.
+const local = { apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' };
+// LEGACY: the config.json a sandbox deploy from core 0.8.0 or earlier wrote, with the sandbox's AWS URL.
+const legacy = { apiUrl: 'https://stub.example/prod/aws-blocks/api', environment: 'sandbox' };
+mkdirSync('.blocks-sandbox', { recursive: true });
+writeFileSync('.blocks-sandbox/config.json', JSON.stringify(process.env.LEGACY ? legacy : local));
 await deploy({
   cdkAppPath: 'unused',
   projectRoot: process.cwd(),
@@ -278,14 +291,28 @@ assert.deepEqual(events, [
   { stack: 'demo-prod', apiUrl: prod.ApiUrl, hostingUrl: prod.HostingHostingUrl1A2B3C4D },
   'wait',
 ]);
+if (process.env.LEGACY) {
+  assert.ok(!existsSync('.blocks-sandbox/config.json'), 'the legacy config.json is gone');
+  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.sandbox.json', 'utf-8')), legacy);
+} else {
+  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8')), local);
+}
+assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.production.json', 'utf-8')), {
+  apiUrl: prod.ApiUrl,
+  environment: 'production',
+});
 `;
 
-  it('reports the stack outputs it read before the liveness wait, which a sandbox deploy can overwrite', () => {
+  for (const legacy of [false, true]) {
+  it(legacy
+    ? 'moves a config.json an older sandbox deploy wrote into config.sandbox.json, and removes it'
+    : 'reports the stack outputs it read before the liveness wait, which a second production deploy can overwrite', () => {
+    // It also records its API URL in config.production.json, and leaves the dev server's config.json alone.
     const dir = mkdtempSync(join(tmpdir(), 'blocks-on-deployed-'));
     try {
       execFileSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture], {
         cwd: dir,
-        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...(legacy ? { LEGACY: '1' } : {}) },
         encoding: 'utf8',
         stdio: 'pipe',
         timeout: 15_000,
@@ -294,4 +321,5 @@ assert.deepEqual(events, [
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  }
 });

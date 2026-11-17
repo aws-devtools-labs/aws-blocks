@@ -1,14 +1,12 @@
 name: Actions Pinned
+# No path filter: this job is meant to be a required status check on `main`, and a
+# required check that a path filter skips stays pending and blocks the PR. It takes
+# seconds. Keep the job name below stable; branch protection matches on it.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '.github/**'
-      - 'scripts/check-actions-pinned*'
   push:
     branches: [main]
-    paths:
-      - '.github/**'
 
 concurrency:
   group: actions-pinned-${{ github.event.pull_request.number || github.ref }}

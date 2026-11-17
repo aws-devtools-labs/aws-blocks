@@ -7,7 +7,7 @@ AWS Blocks is a backend framework built from **Building Blocks**: self-contained
 This package (`@aws-blocks/blocks`) re-exports every Building Block and the core primitives, so you import everything from one place:
 
 ```typescript
-import { Scope, ApiNamespace, KVStore, AuthBasic } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, KVStore, Auth } from '@aws-blocks/blocks';
 ```
 
 - **Type-safe, end to end** — your frontend calls backend methods directly; types flow through automatically.
@@ -64,14 +64,14 @@ Blocks compose. Here's the same API gated behind authentication and backed by a 
 
 ```typescript
 // aws-blocks/index.ts
-import { Scope, ApiNamespace, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, Auth, KVStore } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
-const auth = new AuthBasic(scope, 'auth', { passwordPolicy: { minLength: 8 } });
+const auth = new Auth(scope, 'auth', { emailPassword: { passwordPolicy: { minLength: 8 } } });
 
-const notes = new DistributedTable(scope, 'notes', {
+const notes = new KVStore(scope, 'notes', {
   schema: z.object({ userId: z.string(), noteId: z.string(), text: z.string() }),
   key: { partitionKey: 'userId', sortKey: 'noteId' },
 });
@@ -83,12 +83,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async addNote(text: string) {
     const user = await auth.requireAuth(context);          // 401s if not signed in
     const noteId = crypto.randomUUID();
-    await notes.put({ userId: user.username, noteId, text });
+    await notes.put({ userId: user.userSub, noteId }, { text });
     return { noteId };
   },
   async listNotes() {
     const user = await auth.requireAuth(context);
-    return await Array.fromAsync(notes.query({ where: { userId: { equals: user.username } } }));
+    const entries = await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
+    return entries.map((entry) => entry.value);
   },
 }));
 ```
@@ -107,21 +108,24 @@ onAuthChange(authApi, (user) => {
 });
 ```
 
+A frontend served from another origin than the API signs in with a federated provider through `createAuthClient()` from the same entry: see `@aws-blocks/bb-auth`'s README, *Frontend on a different origin*.
+
 ## Building Blocks
 
 Start from what you need:
 
 - **Store data**
-  - Simple key → value (caches, flags, user prefs) → `KVStore` (bb-kv-store)
-  - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
+  - Values that you read by one key (caches, flags, user preferences) → `KVStore` (bb-kv-store) with no options
+  - Records that you list or query, with indexes → `KVStore` (bb-kv-store) with a `schema` and a `key` — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
   - A single config value → `AppSetting` (bb-app-setting)
   - A high-value credential (API key, OAuth secret, connection string) → `Secret` (bb-secret), backed by AWS Secrets Manager
-- **Authenticate users**
-  - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
-  - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
-  - External identity provider (OIDC) → `AuthOIDC` (bb-auth-oidc)
+- **Authenticate users** → `Auth` (bb-auth) — one block; `store` picks where users live, and every sign-in provider is a `providers` entry with a `type` (see [Choosing a sign-in method](#choosing-a-sign-in-method) below)
+  - Your own users with email + password (the default) → `new Auth(scope, 'auth')`
+  - Google, Apple, Facebook or Amazon sign-in → `providers: { google: { type: 'google', … } }`
+  - Okta, Entra ID, Auth0, GitHub or any OIDC provider, verified by your backend → `store: 'builtin'` with `type: 'oidc'` entries (or `github()`)
+  - An identity provider that only speaks SAML → `type: 'saml'`
 - **Run work outside the request/response**
   - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
   - Scheduled / recurring tasks → `CronJob` (bb-cron-job)
@@ -139,11 +143,27 @@ Start from what you need:
 
 ### Choosing a data block
 
-Default to `DistributedTable` for your data models unless your domain specifically requires SQL engine capabilities.
+Default to `KVStore` for your data models unless your domain specifically requires SQL engine capabilities. Give a store a `schema` and a `key` for records that you list or query as a collection; use it with no options for values that you read by one key. Decide before you create the store: a store cannot change its key.
 
 Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
 If you need SQL, prefer `DistributedDatabase` for Aurora DSQL, which is PostgreSQL wire-protocol compatible; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for supported SQL features. Use `Database` specifically when you need a full (more expensive) Postgres implementation with row level security, triggers, procedures, or PL/pgSQL functions; large transactions (more than 3,000 rows); or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
+
+### Choosing a sign-in method
+
+First pick where the users live: in a Cognito user pool (the default store), or at their identity provider with `store: 'builtin'` (no user pool). One block holds one kind of user, so password users and backend-verified OIDC users need two `Auth` blocks. The methods differ in cost and in where they run:
+
+| Method | Configure with | Cognito free tier | Works offline in `npm run dev` | User-pool user (Cognito groups, `auth.admin`) |
+|---|---|---|---|---|
+| Email + password | `emailPassword` (on by default; default store) | 10,000 MAUs (none on the Plus plan) | Yes | Yes |
+| Social | `providers` entry, `type: 'google'` / `'apple'` / `'facebook'` / `'amazon'` (default store) | 10,000 MAUs, shared with email + password (none on Plus) | No — deploy a sandbox to test | Yes |
+| OIDC, verified by your backend | `store: 'builtin'`, `type: 'oidc'` entry | No Cognito charge | Yes, with `stubIdp()` | No — groups come from the IdP's token |
+| OIDC through Cognito | `type: 'oidc'` entry on the default store | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
+| SAML | `type: 'saml'` entry (default store) | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
+
+Free tiers and rates are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026.
+
+MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only `store: 'builtin'` supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`docs/bb-auth/README.md`).
 
 ## Building Block documentation
 
@@ -158,23 +178,20 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
 |-------|--------------|----------|
-| auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
+| auth-common | Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
 | bb-async-job | Background job processing backed by SQS, run on Lambda or a container. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
-| bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
-| bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
-| bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-auth | `Auth` is the single authentication Building Block for AWS Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
 | bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
 | bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
-| bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
 | bb-email-client | Transactional email sending via Amazon SES. | — |
 | bb-file-bucket | File storage backed by Amazon S3. | — |
 | bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
-| bb-kv-store | Simple key-value storage backed by DynamoDB. | — |
+| bb-kv-store | Key-value and document storage backed by DynamoDB, with optional secondary indexes. | — |
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
@@ -248,7 +265,7 @@ npx --no -- cdk-blocks --version
 
 The npm-script spellings also work as hidden aliases: `dev:stop`, `sandbox:deploy`, `sandbox:preview`, `sandbox:destroy`, `sandbox:console`, `console`, `typegen`, `generate-client`, `spec`, `cleanup` (`dev stop --all`), `sandbox --deploy-only` (`sandbox deploy`), and `sandbox --preview` (`sandbox preview`). Global options can go before the command, between its words (`cdk-blocks generate --debug client`) or after it. `db`, `secret`, `config` and `vendorize` forward the tokens after their name to their tool unchanged, except the global options before a `--`, which apply to the run: `cdk-blocks secret list --profile prod` lists the secrets of that profile's account, and `cdk-blocks config list --output json` exits 2 because `config` has no JSON output. After `--`, every token is the tool's: `cdk-blocks config set GREETING -- -hello-`. A relative path given to `db` or `generate client|spec|types` (including `--out` and `--include`) is resolved from the directory you run the command in, as it was with the tools themselves. The exception is `-h`/`--help`: anywhere after one of these commands it shows help and never runs the tool with your arguments. For a verb of the tool (`cdk-blocks db pull ./out --help`, `cdk-blocks help secret remove KEY`), only `<verb> --help` reaches the tool, which prints that verb's usage.
 
-The CLI collects usage data to improve AWS Blocks and prints a notice the first time it does. An event can include random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. To opt out everywhere, set `AWS_BLOCKS_DISABLE_TELEMETRY` to `1`, `true` or `yes`, or run `npx --no -- cdk-blocks telemetry disable --global` or `npx --no -- blocks-telemetry --disable --global` inside an AWS Blocks app. Without `--global`, these commands opt out the current app only. Pass `--telemetry-file <path>` to see the exact events a run sends.
+The CLI collects usage data to improve AWS Blocks and prints a notice the first time it does. An event can include random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years. To opt out everywhere, set `AWS_BLOCKS_DISABLE_TELEMETRY` to `1`, `true` or `yes`, or run `npx --no -- cdk-blocks telemetry disable --global` or `npx --no -- blocks-telemetry --disable --global` inside an AWS Blocks app. Without `--global`, these commands opt out the current app only. Pass `--telemetry-file <path>` to see the exact events a run sends.
 
 Run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`; until then the check exits 1.
 
@@ -258,7 +275,7 @@ Global options: `-h`/`--help`, `--version`, `-q`/`--quiet`, `-v`/`--verbose`, `-
 
 ### Output and exit codes
 
-Results go to stdout; progress, warnings and errors go to stderr. In text mode the CLI runs core with `BLOCKS_LOG_STREAM=stderr`: core's progress lines, the CDK milestones, raw CDK output (`--verbose`/`--debug`) and the streamed CloudFormation events go to stderr, while the result lines — `🎯 Deployment target: …`, `BLOCKS_DEPLOYED …` and the final URLs — stay on stdout. Without `BLOCKS_LOG_STREAM` (core's scripts called directly) the streams are as before. With `--output json`, stdout carries exactly one JSON document and all output of CDK and other child tools moves to stderr; after a failed or interrupted deploy no result is printed. `cdk-blocks deploy` and `cdk-blocks sandbox deploy` print `{apiUrl, url, stack, account, region}`, where the account and Region are the ones the deploy itself used (it loads `.env.production` or `.env.local`); `cdk-blocks deploy` adds `live`: `true` when `--wait-live` confirmed the new build, `false` when its wait failed (the deploy succeeded, the result is printed, and the command exits 1), `null` otherwise; `cdk-blocks whoami` prints `{account, arn, credentials, region, projectRoot, stacks: {sandbox, production}}`; `cdk-blocks dev stop` prints `{stopped: [{port, stopped, alreadyStopped, portFree, via}, …]}`. Arguments after `--` are an error (exit 2) except for `db`, `secret`, `config` and `vendorize`, which forward them.
+Results go to stdout; progress, warnings and errors go to stderr. In text mode the CLI runs core with `BLOCKS_LOG_STREAM=stderr`: core's progress lines, the CDK milestones, raw CDK output (`--verbose`/`--debug`) and the streamed CloudFormation events go to stderr, while the result lines — `🎯 Deployment target: …`, `BLOCKS_DEPLOYED …` and the final URLs — stay on stdout. Without `BLOCKS_LOG_STREAM` (core's scripts called directly) the streams are as before. With `--output json`, stdout carries exactly one JSON document and all output of CDK and other child tools moves to stderr; after a failed or interrupted deploy no result is printed. `cdk-blocks deploy` and `cdk-blocks sandbox deploy` print `{apiUrl, url, stack, account, region}`, where the account and Region are the ones the deploy itself used (it loads `.env.production` or `.env.local`); `cdk-blocks deploy` adds `live`: `true` when `--wait-live` confirmed the new build, `false` when its wait failed (the deploy succeeded, the result is printed, and the command exits 1), `null` otherwise; `cdk-blocks whoami` prints `{account, arn, credentials, region, projectRoot, stacks: {sandbox, production}}`; `cdk-blocks dev stop` prints `{stopped: [{port, stopped, alreadyStopped, portFree, via, holders}, …]}`, where `holders` lists the `{pid, command}` of each process still holding a port that was not stopped. Arguments after `--` are an error (exit 2) except for `db`, `secret`, `config` and `vendorize`, which forward them.
 
 `--query <path>` prints one field of that result, raw: a string without quotes, `null` as an empty line, and an object as JSON. A list element is named by its index (`stopped.0.port`). A path the result cannot have (an unknown field at any level, a field of a plain value, a list element named by anything but its index) exits 2 before the command runs; an element past the end of a list prints an empty line.
 
@@ -293,7 +310,7 @@ Errors print as `Error: <what failed>`, then where it failed and a `Try:` line w
 
 `port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort` (default `3100`). `host` sets the interface to bind (default `127.0.0.1`); a `host` you set (or `--host`) is also exported to the dev server as `BLOCKS_DEV_HOST` (unless `BLOCKS_DEV_HOST` is already set, which then wins), which opts the local realtime WebSocket (`/realtime`) into that host's origins. Without `frontendCommand`, the frontend is detected from the app's dependencies and started on `frontendPort`: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>`, `vite` runs `npx vite --port <frontendPort> --strictPort`, and neither runs the backend only. `"frontend": false` runs the backend only even when `next` or `vite` is installed, as `--no-frontend` does; it cannot be combined with `frontendCommand` or `frontendPort`. Set `frontendCommand` only for a frontend that detection does not know. It must listen on `frontendPort` itself, so `--frontend-port` does not move it: `cdk-blocks dev` warns when the command does not contain the frontend port. Flags override both: `npm run dev -- --port 4000` serves the app on http://localhost:4000.
 
-The lifecycle commands run the app's TypeScript with `tsx`. The CLI runs its runners and client generation (`cdk-blocks generate client`, and the client step of `cdk-blocks deploy` and `cdk-blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `cdk-blocks dev` runs under `tsx watch`, which restarts it on a change; the other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `cdk-blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `cdk-blocks deploy` and `cdk-blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
+The lifecycle commands run the app's TypeScript with `tsx`. The CLI runs its runners and client generation (`cdk-blocks generate client`, and the client step of `cdk-blocks deploy` and `cdk-blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `cdk-blocks dev` runs under `tsx watch`, which restarts it on a change. When the dev server crashes after it started (an uncaught exception outside any request, a `process.exit(1)` in the backend), `cdk-blocks dev` prints its exit code and starts it again after a backoff of 500 ms that doubles up to 5 s; after 5 restarts within 60 s, the next crash ends `cdk-blocks dev` with exit code 1. A failed start is not restarted: a failed first start, or a failed start of a restarted dev server, ends `cdk-blocks dev`, and a failed reload waits for the next change as before. A dev server that a signal killed (`kill -9`, out of memory) is not restarted either. The other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `cdk-blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `cdk-blocks deploy` and `cdk-blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
 
 ### Migrating an app from `aws-blocks/scripts`
 
@@ -308,10 +325,11 @@ npx --no -- cdk-blocks migrate             # rewrite the scripts and delete the 
 - A script is rewritten only when its value is exactly the generated command and the wrapper it runs is generated: `tsx watch aws-blocks/scripts/server.ts` becomes `cdk-blocks dev`, `tsx aws-blocks/scripts/sandbox.ts --deploy-only` becomes `cdk-blocks sandbox deploy`, `tsx aws-blocks/scripts/sandbox.ts --preview` becomes `cdk-blocks sandbox preview`, `tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts` becomes `cdk-blocks sandbox destroy`, and so on. Every other script is left alone. Some generated scripts are kept and reported too:
   - When `server.ts` is customized, the `sandbox`, `sandbox:deploy` and `sandbox:preview` scripts are kept, because a generated `sandbox.ts` starts `server.ts` as the sandbox's dev server and `cdk-blocks sandbox` would bypass the custom server. In the Amplify overlay, `blocks:stop` and `stop.ts` are kept as well: the overlay's `stop.ts` stops the port of its `server.ts`, but `cdk-blocks dev stop` stops the `blocks.dev` port, which migrate takes only from a generated `server.ts`.
   - When `.blocks/config.json` is missing or has no `stackId`, as in apps scaffolded before create-blocks-app wrote that file, the `deploy` and `destroy` scripts and their wrappers are kept. `cdk-blocks deploy` and `cdk-blocks destroy` name the production stack `<stackId>-prod` and stop without it. To finish, create `.blocks/config.json` with `{"stackId": "<id>"}`, where `<id>-prod` must equal the name of the production stack that your `aws-blocks/index.cdk.ts` defines (an app whose `index.cdk.ts` hard-codes `'my-blocks-stack-prod'` uses `{"stackId": "my-blocks-stack"}`), commit it, and run `cdk-blocks migrate` again. A `.blocks/config.json` that is not valid JSON keeps them too, and the report quotes the parse error so you can fix the file.
-- The `port`, `frontendCommand`, `frontendPort` and `frontend` (`false` for a backend-only `server.ts`) of a generated `server.ts` move to `package.json#blocks.dev`, unless `blocks.dev` already exists. `frontendCommand` is written only when it differs from the command `cdk-blocks dev` detects from the app's `vite` or `next` dependency on that `frontendPort`, so a migrated default app gets `{"frontendPort": 3100}`, as new apps do, and `--frontend-port` keeps working.
+- The `port`, `frontendCommand`, `frontendPort` and `frontend` (`false` for a backend-only `server.ts`) of a generated `server.ts` move to `package.json#blocks.dev`, unless `blocks.dev` already exists. `frontendCommand` is written only when it differs from the command `cdk-blocks dev` detects from the app's `vite` or `next` dependency on that `frontendPort`, so a migrated default app gets `{"frontendPort": 3100}`, as new apps do, and `--frontend-port` keeps working. For the Amplify overlay's `server.ts`, migrate also sets `"generateClient": false`, so the dev server keeps the overlay's own `aws-blocks/client.js`. An overlay from before it shipped a `server.ts` (0.1.0 to 0.1.15), which migrate tells by its generated `aws-blocks/scripts/generate-client.ts`, gets the same `{"port": 3001, "frontend": false, "generateClient": false}` as new overlays.
 - A generated wrapper is deleted once no script and no file in the app directory other than a Markdown doc uses it, by its project path (`aws-blocks/scripts/deploy.ts`) or by a relative path such as `import '../server.js'`. In a git repository, migrate reads the files that git lists for the app directory: tracked files and untracked files that are not gitignored, in any directory, so gitignored build output (`build-temp`, `dist`) and logs do not count, and a tracked `tools/build/release.sh` does. It also reads the files of a submodule or of an untracked git repository inside the app. Outside git, or when git does not list the app's `package.json` (a parent repository ignores the app's directory), it reads the files under the app directory, dot directories such as `.github` and `.vscode` included, and skips `node_modules`, `.git`, build output and tool caches (`dist`, `build`, `build-temp`, `cdk.out`, `.blocks-sandbox`, `.next` and the like). Either way shell scripts, Dockerfiles and CI workflows count, and Markdown docs and editor rules (`*.md`, `*.mdx`, `*.mdc`), binary files, files over 1 MiB and symbolic links do not. The fields of the app's `package.json` other than `scripts` count as well, such as a `lint-staged`, `simple-git-hooks` or `nodemonConfig` block that runs a wrapper; the wrapper is kept and reported as used by `package.json#<field>`. Shell scripts, Dockerfiles, CI files and `package.json` scripts and fields can run from another working directory (`working-directory: aws-blocks`, `cd aws-blocks/scripts && npx tsx typegen.ts`), so in them a bare `scripts/deploy.ts` or `deploy.ts` counts too. When the app is a subdirectory of its git repository (a monorepo), migrate also reads every `package.json` and every CI, shell, Make and Docker file that git tracks in the repository outside the app (`.github/workflows/*`, `scripts/deploy-web.sh`, `ci/Makefile`, a sibling workspace's `package.json`; not under `node_modules`, and not files over 1 MiB). When the app is in a git submodule, it reads those files of the superproject too. In those files a path counts only when it names this app: `apps/web/aws-blocks/scripts/deploy.ts`, a path relative to the file, or a bare `aws-blocks/scripts/deploy.ts` or `deploy.ts` in a file that changes into the app (`working-directory: apps/web`, `cd apps/web`, `cd "$(git rev-parse --show-toplevel)/apps/web"`, or `cd "$(dirname "$0")/../apps/web"` from the script's own directory), so another app's workflow does not keep this app's wrappers. It reads nothing else outside the app directory. A wrapper that a kept wrapper starts is kept too: a `sandbox.ts` that stays keeps its `server.ts`. A customized wrapper is never deleted; it is reported with its script, which keeps running it. The Amplify overlay's `generate-client.ts` and files migrate does not know are left alone.
 - In a git repository it refuses a working tree with uncommitted changes (exit 1, with a `Try:` hint), so you can review the result with `git diff` and undo it. It also refuses an app that git does not track, such as one in a directory that a parent repository ignores, because git could not undo the changes, and a repository that git fails to read (for example "detected dubious ownership" in a checkout another user owns), quoting git's error. For the same reason it refuses an app outside git, or where git is not installed. `--force` skips these checks; outside git, or where git does not track the app or fails to read it, migrate then reads the files under the app directory. `--dry-run` writes nothing and skips the checks, so run it first to see the plan. If `package.json` changes while migrate scans the app, it stops with "package.json changed while cdk-blocks migrate ran; nothing was written", even with `--force`.
-- `--output json` prints `{changed, removed, kept: [{file, reason}], scriptsRewritten: {name: {from, to}}, devConfig}`. `devConfig` is the `blocks.dev` config (`{port?, frontendCommand?, frontendPort?, frontend?: false}`) that migrate added to `package.json`, or with `--dry-run` would add, and `null` when it adds none. When migrate refuses (an app outside git, an uncommitted change, an app git does not track, a git failure, a `package.json` that changed during the run), it writes nothing and prints `{"error": {"message", "hint"}}` instead, as well as the error on stderr. With `--query`, a refusal prints only the error, on stderr, and nothing on stdout.
+- `--output json` prints `{changed, removed, kept: [{file, reason}], scriptsRewritten: {name: {from, to}}, devConfig}`. `devConfig` is the `blocks.dev` config (`{port?, frontendCommand?, frontendPort?, frontend?: false, generateClient?: false}`) that migrate added to `package.json`, or with `--dry-run` would add, and `null` when it adds none. When migrate refuses (an app outside git, an uncommitted change, an app git does not track, a git failure, a `package.json` that changed during the run), it writes nothing and prints `{"error": {"message", "hint"}}` instead, as well as the error on stderr. With `--query`, a refusal prints only the error, on stderr, and nothing on stdout.
+- Migrate rewrites `package.json` before it deletes the wrappers, so a wrapper that cannot be deleted (for example `EACCES` in a read-only directory) is left behind unused instead of a script running a deleted file. It still deletes the others, then exits 1 with `package.json was rewritten, but <n> wrappers could not be deleted.`, each one with its error code on stderr, and the same `{"error"}` document under `--output json`. Fix the permissions and run `cdk-blocks migrate --force` to delete them (`--force` because the tree now holds the first run's changes).
 - Exit codes: 0 when the app is fully migrated or there is nothing to do; 1 when kept items remain for you to finish by hand, or when migrate refused and wrote nothing (with `--output json`, the `error` document tells the two apart); 2 for a usage error. Kept items are a report, not a crash: everything else was migrated, and running it again is safe.
 
 Two commands behave differently after the migration: `npm run destroy` asks for confirmation (`npm run destroy -- --yes` in CI), and `npm run cleanup` stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
@@ -348,7 +366,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
-- **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
+- **`Database` when `KVStore` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations
@@ -358,9 +376,9 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
-- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards. List plain origins such as `'https://app.example.com'` (matched exactly); in a regex entry, escape every dot (`'https://app\\.example\\.com'`) — invalid regex entries fail `cdk synth`
 - `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
-- For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
+- For cross-domain deployments, pass `session: { crossDomain: true }` to `Auth` (enables `SameSite=None; Secure; Partitioned`)
 - Enable `frontDoor: { features: { monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] } } }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only; the top-level `monitoring` prop is its deprecated alias)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
@@ -392,7 +410,7 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 
 ## Reference
 
-- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
-- **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
+- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) and `docs/<block>/PRODUCTION.md` (production settings, scaling & cost) where present — e.g. `docs/bb-kv-store/README.md`. The catalog + decision tree live in `docs/README.md`.
+- **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

@@ -97,31 +97,43 @@ interface VpcRequirements {
    *  validated at synth against the runtime's resolved placement, fails the
    *  build on a mismatch. */
   requiresEgress?: boolean;
+  /** Security groups of compute the BB provisions itself that must reach the
+   *  Blocks-managed interface endpoints; the framework admits each on the
+   *  endpoint security group (443). Registered after the BB builds them. */
+  endpointClientSecurityGroups?: ec2.ISecurityGroup[];
+  /** Constructs that must not be created before those security groups can reach
+   *  the endpoints; `finalizeVpc` orders each after the endpoints and the rule. */
+  endpointClientDependents?: IConstruct[];
 }
 ```
+
+The last two fields name resources the BB builds itself, so they usually cannot
+go in the `BuildingBlockScope` constructor call: that registration runs before
+the BB has built anything. The BB declares them in a second call once they
+exist, with `registerVpcRequirements` from `@aws-blocks/core/cdk/internal`,
+which carries no backward-compatibility guarantee unlike the `VpcRequirements`
+type itself. Registrations accumulate, so the second call adds to the first.
 
 ### Per-BB Declarations
 
 | Building Block | VPC requirements |
 |----------------|--------------------------------|
 | bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
-| bb-distributed-table | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-file-bucket | `{ gatewayEndpoints: [S3] }` |
-| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }` |
+| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }`, plus the client fields for rotation |
 | bb-async-job | `{ interfaceEndpoints: [SQS] }` |
 | bb-agent | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
 | bb-knowledge-base | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
 | bb-email-client | `{ interfaceEndpoints: [SES] }` |
 | bb-app-setting | `{ interfaceEndpoints: [SSM] }` |
 | bb-realtime | `{ interfaceEndpoints: [APIGATEWAY] }` |
-| bb-auth-cognito | `{ interfaceEndpoints: [SSM] }` |
-| bb-auth-oidc | `{ interfaceEndpoints: [SSM] }` |
+| bb-auth | `{ interfaceEndpoints: [SSM] }` |
 | bb-distributed-data | `{ requiresEgress: true }` (DSQL over public HTTPS needs Lambda egress) |
 
 > CloudWatch Logs is always provisioned by `finalizeVpc` regardless of BB
 > declarations (Lambda needs it for log delivery from within a VPC). The SSM
 > interface endpoint is no longer always-on — it flows from BB requirements
-> (AppSetting and the auth BBs), so an app that uses neither gets no SSM
+> (AppSetting and `Auth`), so an app that uses neither gets no SSM
 > endpoint.
 
 ### Always-Added Endpoints
@@ -182,7 +194,7 @@ This avoids:
 ```
 test-apps/vpc-smoke/
 ├── aws-blocks/
-│   ├── index.ts          # Instantiates KVStore, DistributedTable, FileBucket, AsyncJob, AppSetting, Realtime, AuthCognito, Database, Logger, Metrics, Tracer
+│   ├── index.ts          # Instantiates KVStore, FileBucket, AsyncJob, AppSetting, Realtime, Auth, Database, Logger, Metrics, Tracer
 │   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances
 └── package.json

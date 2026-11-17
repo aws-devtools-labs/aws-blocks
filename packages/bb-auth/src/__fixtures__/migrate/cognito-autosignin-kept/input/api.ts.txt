@@ -1,0 +1,13 @@
+import type { BlocksContext } from '@aws-blocks/core';
+import { auth } from './auth.js';
+
+// A direct signUp() that relied on AuthCognito's default (false) now signs the
+// user in: the codemod marks it.
+export async function register(username: string, password: string, context: BlocksContext) {
+	return auth.signUp(username, password, { attributes: { email: username } }, context);
+}
+
+// No context: auto sign-in never applied, before or after.
+export async function invite(username: string, password: string) {
+	return auth.signUp(username, password);
+}

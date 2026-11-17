@@ -19,8 +19,15 @@
  * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
  * The runners pass the same `tsx` loader to core's client-generation worker
  * through `BLOCKS_TSX_IMPORT`, so an app without its own `tsx` works there too.
+ *
+ * `tsx` compiles a file with the options of the `tsconfig.json` in the working
+ * directory, and only when that config lists the file. A root that only lists
+ * project references (the Vite templates, create-vite apps) lists none, so when
+ * the backend is a project of its own (`aws-blocks/tsconfig.json`), the runners
+ * point `tsx` at it through `TSX_TSCONFIG_PATH` (see {@link tsxTsconfigEnv}).
  */
 
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,15 +41,38 @@ export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
  * The dev server runner writes {@link DEV_STATE}`.running` when it starts and
  * {@link DEV_STATE}`.stopped` when it exits after a start or a reload; a fatal startup
  * failure writes its reason instead (the runner's `exitWithError`, core's dev server).
- * Absent until the first runner starts.
+ * A dev server that started and then exits with a failing code (an uncaught exception
+ * outside any request) writes {@link DEV_STATE}`.crashed` and its exit code, and
+ * `cdk-blocks dev` restarts it (see {@link devCrashState}).
+ * Absent until the first runner starts: `cdk-blocks dev` removes it before each `tsx watch`
+ * session it starts, so the first start of a restarted session is a first start too.
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
 
 /**
  * The states in {@link DEV_FAILURE_FILE_ENV}'s file that are not a failure reason. `running`
  * left behind means that the runner died without running any code: a signal, or out of memory.
+ * `crashed` starts the state of a dev server that crashed after it started; its exit code follows.
  */
-export const DEV_STATE = { running: '[blocks dev: running]', stopped: '[blocks dev: stopped]' } as const;
+export const DEV_STATE = {
+	running: '[blocks dev: running]',
+	stopped: '[blocks dev: stopped]',
+	crashed: '[blocks dev: crashed]',
+} as const;
+
+/** The state that records a crash of a started dev server with exit code `code`. */
+export function devCrashState(code: number): string {
+	return `${DEV_STATE.crashed} ${code}`;
+}
+
+/** The exit code of a crash that `state` records (see {@link devCrashState}); `undefined` for any other state. */
+export function devCrashCode(state: string | undefined): number | undefined {
+	if (!state?.startsWith(DEV_STATE.crashed)) return undefined;
+	// A record without a code (a torn write) is still a crash, with exit code 1.
+	const tail = state.slice(DEV_STATE.crashed.length).trim();
+	const code = tail === '' ? Number.NaN : Number(tail);
+	return Number.isInteger(code) ? code : 1;
+}
 
 /**
  * The environment variable, `1`, that tells the dev server it runs under `tsx watch`
@@ -54,6 +84,23 @@ export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
 
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
+
+/** The environment variable that names the `tsconfig.json` that `tsx` compiles the app's files with. */
+export const TSX_TSCONFIG_ENV = 'TSX_TSCONFIG_PATH';
+
+/**
+ * The environment that points the runners' `tsx` at the backend's own TypeScript
+ * project, `aws-blocks/tsconfig.json`, when the app has one: otherwise `tsx`
+ * reads the root `tsconfig.json`, which in a Vite template only lists project
+ * references, so a backend file would run without its `jsx` or `paths`. The
+ * deploy bundling (esbuild) uses the nearest `tsconfig.json`, the same file.
+ * A `TSX_TSCONFIG_PATH` already set in `env` is left as it is.
+ */
+export function tsxTsconfigEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	if (env[TSX_TSCONFIG_ENV]) return {};
+	const backend = join(root, 'aws-blocks', 'tsconfig.json');
+	return existsSync(backend) ? { [TSX_TSCONFIG_ENV]: backend } : {};
+}
 
 export type RunnerName = 'dev-server' | 'sandbox' | 'sandbox-destroy' | 'deploy' | 'destroy' | 'generate-spec';
 

@@ -396,7 +396,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// CloudFront forwards with `ALL_VIEWER_EXCEPT_HOST_HEADER`, so the gateway gets
 		// the execute-api host; handlers get the public host from the stamp above.
 		// Publish the public origin the same way `Hosting` does too, so absolute URLs
-		// the runtime builds without a request (e.g. AuthOIDC's callback
+		// the runtime builds without a request (e.g. Auth's federated callback
 		// `redirect_uri`) point at this distribution and its cookies. Registered at
 		// synth, before the config JSON (a Lazy) resolves.
 		// A `Hosting` door that serves `/aws-blocks/*` to browsers owns the origin

@@ -1,0 +1,6 @@
+import { Auth } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+export const users = new Auth(scope, 'users', {});
+export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });

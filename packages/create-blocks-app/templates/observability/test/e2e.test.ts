@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -20,6 +20,10 @@ let authApi: typeof authApiType;
 const creds = { username: `orders-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
+// a deploy, which records its URL in .blocks-sandbox/config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // Every line the dev server writes, when this file started it. Logger and
@@ -37,8 +41,22 @@ function collectLines(stream: NodeJS.ReadableStream | null) {
   });
 }
 
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -49,24 +67,20 @@ test.before(async () => {
     collectLines(server.stdout);
     collectLines(server.stderr);
     server.unref();
-    await setTimeout(2000);
   }
 
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
   const mod = await import('aws-blocks');
   api = mod.api;
   authApi = mod.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -80,7 +94,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -123,7 +137,7 @@ async function waitForRecord(predicate: (record: Record<string, unknown>) => boo
   for (let i = 0; i < 25; i++) {
     const [record] = jsonRecords(predicate);
     if (record) return record;
-    await setTimeout(200);
+    await sleep(200);
   }
   return undefined;
 }
@@ -150,7 +164,7 @@ function savedTraces() {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `placeOrder` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -166,14 +180,18 @@ test('placeOrder rejects a signed-out caller', async () => {
 });
 
 test('placeOrder returns an order id and the trace id', async () => {
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  // Sign-up confirms the email with a code, as the sign-in UI does. Locally no
+  // email is sent: getLastAuthCode reads the code the local auth block issued.
+  await authApi.setAuthState({ action: 'signUp', ...creds });
+  await authApi.setAuthState({ action: 'confirmSignUp', username: creds.username, code: await getLastAuthCode(creds.username) });
+  const signedUp = await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
   assert.strictEqual(signedUp.state, 'signedIn');
   order = await api.placeOrder('coffee');
   assert.ok(order.orderId, 'orderId should be set');
   assert.ok(order.traceId, 'traceId should be set: the Tracer samples every request by default');
 });
 
-test('Tracer: the placeOrder segment is saved with its annotation', async () => {
+test('Tracer: the placeOrder segment is saved with its annotation', { skip: testUrl && 'reads the local Tracer mock, so it needs a dev server' }, async () => {
   const trace = savedTraces().find((t) => t.traceId === order.traceId);
   assert.ok(trace, `no saved trace with traceId ${order.traceId}`);
   assert.strictEqual(trace.segment, 'placeOrder');

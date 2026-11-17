@@ -7,7 +7,7 @@
  * Both dispatchers resolve `backend[apiNamespace][method]` from the request. Without
  * these guards that lookup reaches anything on the backend module:
  *
- * - an exported **Building Block instance** (`export const todos = new DistributedTable(...)`)
+ * - an exported **Building Block instance** (`export const todos = new KVStore(...)`)
  *   — its whole data plane (`put`/`delete`/`query`) becomes an unauthenticated RPC
  *   surface that bypasses every `requireAuth` in the `ApiNamespace` layer;
  * - a member **inherited from `Object.prototype`** (`toString`, `constructor`,
@@ -25,7 +25,8 @@
  * @internal
  */
 
-import { API_NAMESPACE_MARKER } from './api.js';
+import { API_NAMESPACE_HTTP_ERROR_STATUS, API_NAMESPACE_MARKER } from './api.js';
+import { sanitizeCaughtError } from './rpc.js';
 
 /** Whether `value` was produced by `new ApiNamespace(...)`. */
 export function isApiNamespace(value: unknown): boolean {
@@ -58,16 +59,55 @@ function isManagedValue(value: unknown): boolean {
 }
 
 /**
+ * Functions that are server-side APIs, never RPC methods (each `auth.admin`
+ * method is added). Membership is by function identity, so a copy of the method
+ * made by spread, `Object.assign` or destructuring is the same function and is
+ * refused too, however it reaches the module's exports. Held on a global-registry
+ * key so duplicate `@aws-blocks/core` copies in one bundle share one set. Meant
+ * for long-lived, bounded method identities (one admin surface per block), not
+ * per-request closures.
+ *
+ * shortcut: a new function that wraps or `bind`s an admin method is not in the
+ * set; that is an application method and needs its own caller check.
+ */
+const SERVER_ONLY_FUNCTIONS = Symbol.for('@aws-blocks/core.ServerOnlyFunctions');
+
+function serverOnlyFunctions(): WeakSet<object> {
+  const registry = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
+  registry[SERVER_ONLY_FUNCTIONS] ??= new WeakSet();
+  return registry[SERVER_ONLY_FUNCTIONS];
+}
+
+/**
+ * Mark `fn` as a server-side API: the RPC dispatcher never serves it, as an
+ * export or as a method, wherever it is copied. Calling it from server code is
+ * unaffected. Exported through `@aws-blocks/core/internal`.
+ *
+ * @internal
+ */
+export function markServerOnlyFunction(fn: (...args: never[]) => unknown): void {
+  serverOnlyFunctions().add(fn);
+}
+
+/** True for a function marked with {@link markServerOnlyFunction}. */
+function isServerOnly(value: unknown): boolean {
+  return typeof value === 'function' && serverOnlyFunctions().has(value);
+}
+
+/**
  * Whether a backend-module export may be dispatched to as an API namespace.
  *
- * Rejects `_`-private exports, non-function/non-object values, Building Block
- * (`Scope`) instances, and `secret()`/`config()` managed values. `ApiNamespace`
- * values — and, for backward compatibility, plain exported functions/objects that
- * `generate-client` also proxies — are allowed. An `ApiNamespace` is allowed even if
- * it happens to look like a `Scope`, the same order `generate-client` checks in.
+ * Rejects `_`-private exports, server-only functions (see
+ * {@link markServerOnlyFunction}, e.g. an `auth.admin` method exported on its own),
+ * non-function/non-object values, Building Block (`Scope`) instances, and
+ * `secret()`/`config()` managed values. `ApiNamespace` values — and, for backward
+ * compatibility, plain exported functions/objects — are allowed. An `ApiNamespace`
+ * is allowed even if it happens to look like a `Scope`. `generate-client` uses this
+ * same predicate to decide which exports get a client proxy.
  */
 export function isDispatchableExport(name: string, value: unknown): boolean {
   if (name.startsWith('_')) return false;
+  if (isServerOnly(value)) return false;
   if (isApiNamespace(value)) return true;
   if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return false;
   return !isScopeLike(value) && !isManagedValue(value);
@@ -106,6 +146,42 @@ export function resolveApiMethod(
   const own = Object.getOwnPropertyDescriptor(apiMethods, method);
   if (own && !own.enumerable) return undefined;
   const fn = (apiMethods as Record<string, unknown>)[method];
-  if (typeof fn !== 'function') return undefined;
+  // A server-only function (each `auth.admin` method) is refused wherever it was copied to.
+  if (typeof fn !== 'function' || isServerOnly(fn)) return undefined;
   return fn.bind(apiMethods) as (...args: unknown[]) => unknown;
+}
+
+/**
+ * The HTTP status to answer a failed call on `apiHandler` with.
+ *
+ * `200` — the JSON-RPC default, the error travelling in the body — unless the
+ * namespace was created with `httpErrorStatus: true` and the error is wire-safe
+ * with a `4xx` status (an `ApiError` such as `requireAuth()`'s `401`), in which
+ * case that status. Reads the status the same way the response body does
+ * ({@link sanitizeCaughtError}), so the HTTP status and the body's `error.code`
+ * always agree. Shared by the Lambda handler and the local dev server.
+ */
+export function rpcErrorHttpStatus(apiHandler: unknown, error: unknown): number {
+  if ((typeof apiHandler !== 'object' || apiHandler === null) && typeof apiHandler !== 'function') return 200;
+  if (Reflect.get(apiHandler, API_NAMESPACE_HTTP_ERROR_STATUS) !== true) return 200;
+  const { status } = sanitizeCaughtError(error);
+  return Number.isInteger(status) && status >= 400 && status <= 499 ? status : 200;
+}
+
+/**
+ * Symbol under which a backend owner (`BlocksStack` / `BlocksBackend`) records
+ * the export names of its `httpErrorStatus` namespaces, at synth, once the
+ * backend module is imported. `Hosting` reads it off the backend it fronts
+ * (`props.api`) to warn when its CloudFront error pages would replace those
+ * namespaces' 4xx responses.
+ *
+ * @internal
+ */
+export const HTTP_ERROR_STATUS_EXPORTS = Symbol.for('blocks:httpErrorStatusExports');
+
+/** The dispatchable exports of `backendModule` created with `httpErrorStatus: true`. @internal */
+export function httpErrorStatusExports(backendModule: object): string[] {
+  return Object.entries(backendModule)
+    .filter(([name, value]) => isDispatchableExport(name, value) && Reflect.get(value as object, API_NAMESPACE_HTTP_ERROR_STATUS) === true)
+    .map(([name]) => name);
 }

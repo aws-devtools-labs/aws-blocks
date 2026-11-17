@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -127,6 +127,24 @@ describe('classifyModelAccessError', () => {
 		assert.strictEqual(classifyModelAccessError(otherStatus), undefined);
 	});
 
+	test('classifies the use-case refusal Bedrock reports as ResourceNotFoundException (HTTP 404)', () => {
+		// The shape Bedrock returns from ConverseStream on a new account, wrapped the way Strands wraps it.
+		const notFound = Object.assign(named('ResourceNotFoundException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 404 } });
+		assert.match(classifyModelAccessError(new Error('Model stream failed', { cause: notFound }), 'global.anthropic.claude-sonnet-4-6') ?? '', /first-time-use form/);
+		// Either signal is enough on its own.
+		assert.match(classifyModelAccessError(named('ResourceNotFoundException', FIRST_TIME_USE)) ?? '', /first-time-use form/);
+		const status404 = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 404 } });
+		assert.match(classifyModelAccessError(status404) ?? '', /first-time-use form/);
+	});
+
+	test('leaves a not-found error unclassified unless it carries the use-case wording', () => {
+		const genericNotFound = Object.assign(named('ResourceNotFoundException', 'Model not found'), { $metadata: { httpStatusCode: 404 } });
+		assert.strictEqual(classifyModelAccessError(new Error('Model stream failed', { cause: genericNotFound })), undefined);
+		// A 404 does not admit the other refusals: their wording is only trusted on an access refusal.
+		assert.strictEqual(classifyModelAccessError(named('ResourceNotFoundException', MARKETPLACE_NOT_SUBSCRIBED)), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ResourceNotFoundException', NOT_ENTITLED)), undefined);
+	});
+
 	test('names only the resource part of an ARN model id, not the account id', () => {
 		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz');
 		assert.ok(message, 'should classify');
@@ -170,6 +188,31 @@ describe('agentErrorFromChunk', () => {
 	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
+	});
+});
+
+describe('persistedTurnError', () => {
+	test('reads the error row a failed turn persists', () => {
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'denied', errorName: AgentErrors.ModelUnavailable } }),
+			{ error: 'denied', errorName: AgentErrors.ModelUnavailable },
+		);
+		assert.deepStrictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'boom' } }), { error: 'boom' });
+		// A turn stopped by a runaway cap keeps its partial text alongside metadata.error.
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: 'partial', metadata: { error: 'Agent stopped: cap.' } }),
+			{ error: 'Agent stopped: cap.' },
+		);
+	});
+
+	test('ignores rows that are not a failed turn', () => {
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: 'done', metadata: { latencyMs: 12 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'user', content: '', metadata: { error: 'x' } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: {} }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 42 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
+		assert.strictEqual(persistedTurnError(undefined), undefined);
 	});
 });
 
@@ -393,24 +436,44 @@ describe('inferenceOnly error handling', () => {
 		assert.ok(result.channelId);
 	});
 
-	// inferenceOnly agents keep no conversation records, so the ownership check must
-	// not apply to them: a conversationId is passed through, not rejected.
+	// inferenceOnly agents keep no conversation records, so there is no record to check: a
+	// conversationId is passed through, not rejected. (The default sessionScope: 'user' keys
+	// the session by the userId instead; see the sessionScope tests below.)
 	test('stream() with a conversationId is not ownership-checked', async () => {
 		const result = await agent.stream('hello', { conversationId: crypto.randomUUID(), userId: 'u' });
 		const done = await result.complete();
 		assert.strictEqual(done.type, 'done');
 	});
 
-	// The per-user channel scoping only applies with persistence: an inferenceOnly
-	// agent has no owner to scope by, so its channel is the bare channelId.
-	test("the channel is not user-scoped (getChannel's userId is not used)", async () => {
+	// The default sessionScope ('user') scopes an inferenceOnly agent's channel to the caller,
+	// as with persistence: someone else who passes the same channelId gets a different channel.
+	test("the channel is user-scoped by default (another userId doesn't receive the turn)", async () => {
 		const channelId = crypto.randomUUID();
-		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
-		const received: unknown[] = [];
-		const sub = channel.subscribe((chunk) => { received.push(chunk); });
-		await (await agent.stream('hello', { channelId })).complete();
-		sub.unsubscribe();
-		assert.ok(received.some((c: any) => c.type === 'done'));
+		const own = await agent.getChannel(channelId, { userId: 'test-user' });
+		const other = await agent.getChannel(channelId, { userId: 'someone-else' });
+		const ownReceived: unknown[] = [];
+		const otherReceived: unknown[] = [];
+		const ownSub = own.subscribe((chunk) => { ownReceived.push(chunk); });
+		const otherSub = other.subscribe((chunk) => { otherReceived.push(chunk); });
+		await (await agent.stream('hello', { channelId, userId: 'test-user' })).complete();
+		ownSub.unsubscribe();
+		otherSub.unsubscribe();
+		assert.ok(ownReceived.some((c: any) => c.type === 'done'), "the caller's own channel carries the turn");
+		assert.strictEqual(otherReceived.length, 0, "another user's channel must not carry the turn");
+	});
+
+	// An agent written before 'user' became the default calls stream() without a userId. That
+	// must fail loudly, with an error that says what to pass and names the 'shared' opt-out.
+	test('stream() without a userId throws InvalidUsage that names the fix', async () => {
+		await assert.rejects(
+			() => agent.stream('hello'),
+			(err: any) => {
+				assert.ok(isBlocksError(err, AgentErrors.InvalidUsage));
+				assert.match(err.message, /options\.userId/);
+				assert.match(err.message, /sessionScope: 'shared'/);
+				return true;
+			},
+		);
 	});
 
 	// Regression: resuming an interrupted agent needs a conversationId to restore
@@ -424,12 +487,350 @@ describe('inferenceOnly error handling', () => {
 			(err: any) => {
 				assert.strictEqual(err.name, AgentErrors.InterruptRequired);
 				assert.match(err.message, /conversationId/);
-				// For an inferenceOnly agent the message must explain it's a
-				// fundamental limitation (no persistent session), not a missing param.
+				// For an inferenceOnly agent the message must say how to resume (pass the
+				// same conversationId), not that such agents can't be resumed: they can.
 				assert.match(err.message, /inferenceOnly/);
+				assert.doesNotMatch(err.message, /cannot be resumed/);
 				return true;
 			},
 		);
+	});
+});
+
+// ── inferenceOnly sessionScope: 'user' ──────────────────────────────────────
+
+describe("inferenceOnly sessionScope: 'user'", () => {
+	/** Snapshot storage that records every snapshot a turn loads, by sessionId. */
+	class RecordingSnapshotStorage extends FileBucketSnapshotStorage {
+		loads: Array<{ sessionId: string; snapshot: unknown }> = [];
+		override async loadSnapshot(params: Parameters<FileBucketSnapshotStorage['loadSnapshot']>[0]) {
+			const snapshot = await super.loadSnapshot(params);
+			this.loads.push({ sessionId: params.location.sessionId, snapshot });
+			return snapshot;
+		}
+	}
+
+	function makeAgent(id: string, sessionScope?: 'shared' | 'user') {
+		let storage: RecordingSnapshotStorage | undefined;
+		const agent = new AgentBase(new Scope(`test-io-scope-${id}`), id, { systemPrompt: 'test', inferenceOnly: true, ...(sessionScope && { sessionScope }) }, [{ provider: 'canned' }], (bucket) => {
+			storage = new RecordingSnapshotStorage(bucket);
+			return storage;
+		});
+		if (!storage) throw new Error('snapshot storage was not created');
+		return { agent, storage };
+	}
+
+	const secret = 'alice-private-note-7f3a';
+
+	test("user B who passes user A's conversationId does not load A's session state", async () => {
+		const { agent, storage } = makeAgent('iosu1', 'user');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+
+		storage.loads = [];
+		await (await agent.stream('what did I tell you?', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.length > 0, "bob's turn should load (or try to load) a session");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+
+		// Alice still resumes her own session.
+		storage.loads = [];
+		await (await agent.stream('and again?', { conversationId, userId: 'alice' })).complete();
+		assert.ok(storage.loads.some(({ snapshot }) => JSON.stringify(snapshot ?? null).includes(secret)), "alice's turn should restore her session");
+	});
+
+	test("user B can't receive user A's chunks on the shared conversationId channel", async () => {
+		const { agent } = makeAgent('iosu2', 'user');
+		const conversationId = crypto.randomUUID();
+		const aliceChannel = await agent.getChannel(conversationId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(conversationId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const bobReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSub = bobChannel.subscribe((chunk) => { bobReceived.push(chunk); });
+		await (await agent.stream('hello', { conversationId, userId: 'alice' })).complete();
+		aliceSub.unsubscribe();
+		bobSub.unsubscribe();
+		// Alice's subscription proves the turn was delivered, so bob's empty list means "not his".
+		assert.ok(aliceReceived.length > 0, "alice's channel should carry her own chunks");
+		assert.strictEqual(bobReceived.length, 0, "bob's channel must not carry alice's chunks");
+	});
+
+	test("user B with user A's channelId (distinct from the conversationId) gets neither her chunks nor her session", async () => {
+		const { agent, storage } = makeAgent('iosu5', 'user');
+		const conversationId = crypto.randomUUID();
+		const channelId = `chan-${crypto.randomUUID()}`;
+		const aliceChannel = await agent.getChannel(channelId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(channelId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const bobReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSub = bobChannel.subscribe((chunk) => { bobReceived.push(chunk); });
+		await (await agent.stream(`remember ${secret}`, { conversationId, channelId, userId: 'alice' })).complete();
+		storage.loads = [];
+		const bobTurn = await agent.stream('what did I tell you?', { conversationId, channelId, userId: 'bob' });
+		assert.strictEqual(bobTurn.channelId, channelId, 'the caller still sees the plain channelId');
+		await bobTurn.complete();
+		aliceSub.unsubscribe();
+		bobSub.unsubscribe();
+		assert.ok(aliceReceived.length > 0, "alice's channel should carry her own chunks");
+		assert.ok(bobReceived.length > 0, "bob's channel should carry his own chunks");
+		assert.ok(!JSON.stringify(bobReceived).includes(secret), "bob's chunks must not carry alice's session state");
+		const aliceDone = aliceReceived.filter((c) => (c as { type?: string }).type === 'done').length;
+		assert.strictEqual(aliceDone, 1, "bob's turn must not publish onto alice's channel");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+	});
+
+	test("user B can't resume user A's interrupted turn or publish onto her channel", async () => {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope('test-io-scope-iosu6'), 'iosu6', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			sessionScope: 'user',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		const conversationId = crypto.randomUUID();
+		const aliceTurn = await agent.stream('what is the weather?', { conversationId, userId: 'alice' });
+		const err = await aliceTurn.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, "sanity: alice's turn should pause for approval");
+		const responses = err.interrupts.map((i) => ({ interruptId: i.id, approved: true }));
+
+		// Bob resumes with alice's conversationId, channelId and interrupt ids.
+		const aliceChannel = await agent.getChannel(aliceTurn.channelId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(aliceTurn.channelId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSettled = new Promise<void>((resolve) => {
+			const sub = bobChannel.subscribe((chunk) => {
+				const type = (chunk as { type?: string }).type;
+				if (type === 'done' || type === 'error' || type === 'interrupt') { sub.unsubscribe(); resolve(); }
+			});
+		});
+		await agent.resume(aliceTurn.channelId, responses, { conversationId, userId: 'bob' });
+		await bobSettled;
+		aliceSub.unsubscribe();
+		assert.strictEqual(handlerCalls, 0, "bob's resume must not run alice's pending tool call");
+		assert.strictEqual(aliceReceived.length, 0, "bob's resume must not publish onto alice's channel");
+
+		// Alice can still resume her own turn.
+		const aliceDone = new Promise<{ type?: string }>((resolve) => {
+			const sub = aliceChannel.subscribe((chunk) => {
+				const c = chunk as { type?: string };
+				if (c.type === 'done' || c.type === 'error') { sub.unsubscribe(); resolve(c); }
+			});
+		});
+		await agent.resume(aliceTurn.channelId, responses, { conversationId, userId: 'alice' });
+		assert.strictEqual((await aliceDone).type, 'done');
+		assert.strictEqual(handlerCalls, 1);
+	});
+
+	test('stream(), resume() and getChannel() require a userId', async () => {
+		const { agent } = makeAgent('iosu3', 'user');
+		const isInvalidUsage = (err: any) => err.name === AgentErrors.InvalidUsage && /userId/.test(err.message);
+		await assert.rejects(() => agent.stream('hello', { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		await assert.rejects(() => agent.resume('chan', [{ interruptId: 'i-1', approved: true }], { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for a caller on an older signature
+		await assert.rejects(() => agent.getChannel('chan'), isInvalidUsage);
+	});
+
+	test('stream() and resume() reject a non-string userId, as getChannel() does', async () => {
+		const { agent } = makeAgent('iosu7', 'user');
+		const isInvalidUsage = (err: any) => err.name === AgentErrors.InvalidUsage && /userId/.test(err.message);
+		// An untyped RPC caller: `123` would get the channel of '123' but a different session hash.
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.stream('hello', { conversationId: crypto.randomUUID(), userId: 123 }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.resume('chan', [{ interruptId: 'i-1', approved: true }], { conversationId: crypto.randomUUID(), userId: 123 }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.getChannel('chan', { userId: 123 }), isInvalidUsage);
+	});
+
+	test('a runtime invocation without a userId is refused, not run as anonymous', async () => {
+		const { agent, storage } = makeAgent('iosu8', 'user');
+		const conversationId = crypto.randomUUID();
+		const anonymousChannel = await agent.getChannel(conversationId, { userId: 'anonymous' });
+		const received: unknown[] = [];
+		const sub = anonymousChannel.subscribe((chunk) => { received.push(chunk); });
+		const turns: Array<Promise<void>> = [];
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		const recording = { invokeTurn: (payload: Parameters<typeof agent.invokeTurn>[0]) => { const t = agent.invokeTurn(payload); turns.push(t); return t; } };
+		handleInvocation(recording, tasks, { prompt: 'hello', channelId: conversationId, conversationId }, {});
+		await Promise.all(turns);
+		sub.unsubscribe();
+		assert.strictEqual(storage.loads.length, 0, 'the refused turn must not load any session');
+		assert.strictEqual(received.length, 0, "the refused turn must not run in the shared 'anonymous' scope");
+	});
+
+	test('the constructor rejects an unknown sessionScope', () => {
+		assert.throws(
+			// @ts-expect-error -- exercising the runtime guard for an untyped config
+			() => makeAgent('iosu9', 'owner'),
+			(err: any) => err.name === AgentErrors.InvalidModelConfig && /sessionScope/.test(err.message),
+		);
+	});
+
+	// 'shared' is an explicit opt-in that keeps the conversationId-only key.
+	test("'shared' keys the session by the conversationId alone", async () => {
+		const { agent, storage } = makeAgent('iosu4', 'shared');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		storage.loads = [];
+		await (await agent.stream('again', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.some(({ sessionId }) => sessionId === conversationId));
+	});
+
+	test("'shared' still streams without a userId, on the bare channelId", async () => {
+		const { agent } = makeAgent('iosu10', 'shared');
+		const channelId = crypto.randomUUID();
+		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
+		const received: unknown[] = [];
+		const sub = channel.subscribe((chunk) => { received.push(chunk); });
+		const turn = await agent.stream('hello', { channelId });
+		assert.strictEqual((await turn.complete()).type, 'done');
+		sub.unsubscribe();
+		assert.ok(received.some((c: any) => c.type === 'done'), "'shared' channels are not user-scoped");
+	});
+
+	test("the default is 'user': alice and bob on one conversationId get different sessions", async () => {
+		const { agent, storage } = makeAgent('iosu11');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		const aliceSessions = new Set(storage.loads.map(({ sessionId }) => sessionId));
+		storage.loads = [];
+		await (await agent.stream('what did I tell you?', { conversationId, userId: 'bob' })).complete();
+		const bobSessions = new Set(storage.loads.map(({ sessionId }) => sessionId));
+		assert.ok(aliceSessions.size > 0 && bobSessions.size > 0, 'both turns should load (or try to load) a session');
+		for (const id of bobSessions) {
+			assert.ok(!aliceSessions.has(id), "bob's turn must not select alice's session");
+			assert.notStrictEqual(id, conversationId, 'the session must not be keyed by the bare conversationId');
+			assert.match(id, /^u-[0-9a-f]{64}$/);
+		}
+	});
+
+	test("by default, a foreign conversationId can't reach another user's session state or chunks", async () => {
+		const { agent, storage } = makeAgent('iosu12');
+		const conversationId = crypto.randomUUID();
+		const aliceChannel = await agent.getChannel(conversationId, { userId: 'alice' });
+		const aliceReceived: AgentStreamChunk[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		const aliceDoneBefore = aliceReceived.filter((c) => c.type === 'done').length;
+
+		storage.loads = [];
+		const bobTurn = await agent.stream('what did I tell you?', { conversationId, userId: 'bob' });
+		const bobDone = await bobTurn.complete();
+		aliceSub.unsubscribe();
+		assert.ok(!JSON.stringify(bobDone).includes(secret), "bob's turn must not see alice's session state");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+		assert.strictEqual(aliceReceived.filter((c) => c.type === 'done').length, aliceDoneBefore, "bob's turn must not publish onto alice's channel");
+	});
+
+	test("'shared' refuses resume() before approving anything", async () => {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope('test-io-scope-iosu13'), 'iosu13', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			sessionScope: 'shared',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				// A handler that calls interrupt() itself can't be detected at construction (unlike
+				// needsApproval/interrupt, refused below), so resume() still has to refuse the turn.
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), handler: async ({ interrupt }) => { interrupt({ name: 'confirm-weather' }); handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		const conversationId = crypto.randomUUID();
+		const turn = await agent.stream('what is the weather?', { conversationId, userId: 'alice' });
+		const err = await turn.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, 'sanity: the turn should pause for approval');
+		const responses = err.interrupts.map((i) => ({ interruptId: i.id, approved: true }));
+		for (const userId of ['alice', 'bob', undefined]) {
+			await assert.rejects(
+				() => agent.resume(turn.channelId, responses, { conversationId, userId }),
+				(e: any) => {
+					assert.ok(isBlocksError(e, AgentErrors.InvalidUsage), `resume as ${userId}`);
+					assert.match(e.message, /sessionScope: 'shared'/);
+					return true;
+				},
+			);
+		}
+		await new Promise((r) => setTimeout(r, 50));
+		assert.strictEqual(handlerCalls, 0, 'a refused resume must not run the pending tool call');
+	});
+
+	for (const [label, def] of [
+		['needsApproval', { needsApproval: true }],
+		['interrupt', { interrupt: ({ interrupt }: { interrupt: (p: { name: string }) => unknown }) => { interrupt({ name: 'confirm' }); } }],
+	] as const) {
+		test(`'shared' refuses a tool with ${label} at construction`, () => {
+			assert.throws(
+				() => new Agent(new Scope(`test-io-scope-hitl-${label}`), `ioh${label.length}`, {
+					systemPrompt: 'test',
+					inferenceOnly: true,
+					sessionScope: 'shared',
+					model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+					tools: (tool) => ({
+						getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), ...def, handler: async () => ({ temp: 22 }) }),
+					}),
+				}),
+				(e: any) => {
+					assert.ok(isBlocksError(e, AgentErrors.InvalidModelConfig), String(e));
+					assert.match(e.message, /'getWeather'/);
+					assert.match(e.message, /sessionScope: 'shared'/);
+					return true;
+				},
+			);
+		});
+	}
+
+	test("'user' (the default) accepts a tool with needsApproval on an inferenceOnly agent", () => {
+		new Agent(new Scope('test-io-scope-hitl-user'), 'iohu', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }),
+			}),
+		});
+	});
+});
+
+// ── Agent chunks channel handles: exact token scope ─────────────────────────
+
+describe('agent chunks channel handles authorize the exact channel only', () => {
+	/** The channel path a handle's token authorizes, and how: `exact` or `channel` (subtree). */
+	function tokenScope(handle: { toJSON(): unknown }): { exact?: string; channel?: string } {
+		const descriptor = handle.toJSON();
+		const token = typeof descriptor === 'object' && descriptor !== null ? Reflect.get(descriptor, 'token') : undefined;
+		assert.ok(typeof token === 'string', 'the handle carries a channel token');
+		return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
+	}
+
+	const configs: Array<[string, { inferenceOnly?: boolean; sessionScope?: 'shared' | 'user' }]> = [
+		['persistence', {}],
+		["inferenceOnly, sessionScope: 'user' (default)", { inferenceOnly: true }],
+		["inferenceOnly, sessionScope: 'shared'", { inferenceOnly: true, sessionScope: 'shared' }],
+	];
+	configs.forEach(([label, extra], i) => {
+		test(`${label}: getChannel() and stream().channel`, async () => {
+			const agent = new Agent(new Scope(`test-exact-scope-${i}`), `ex${i}`, { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } }, ...extra });
+			const viaGetChannel = tokenScope(await agent.getChannel('chan-1', { userId: 'alice' }));
+			assert.ok(viaGetChannel.exact?.endsWith('/chan-1'), `getChannel() token should be exact, got ${JSON.stringify(viaGetChannel)}`);
+			assert.strictEqual(viaGetChannel.channel, undefined);
+			const conversationId = extra.inferenceOnly ? undefined : await agent.createConversationId('alice');
+			const turn = await agent.stream('hello', { channelId: 'chan-2', userId: 'alice', conversationId });
+			const viaStream = tokenScope(await turn.channel);
+			await turn.complete();
+			assert.ok(viaStream.exact?.endsWith('/chan-2'), `stream().channel token should be exact, got ${JSON.stringify(viaStream)}`);
+			assert.strictEqual(viaStream.channel, undefined);
+		});
 	});
 });
 
@@ -1207,21 +1608,21 @@ describe('CannedProvider', () => {
 
 		try {
 			writeFileSync(filePath, JSON.stringify({ release: 'initial response' }));
-			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'initial response');
+			assert.strictEqual((await (await agent.stream('release', { userId: 'test-user' })).complete()).text, 'initial response');
 
 			writeFileSync(replacementPath, JSON.stringify({ release: 'atomically replaced response' }));
 			renameSync(replacementPath, filePath);
-			assert.strictEqual((await (await agent.stream('release')).complete()).text, 'atomically replaced response');
+			assert.strictEqual((await (await agent.stream('release', { userId: 'test-user' })).complete()).text, 'atomically replaced response');
 
 			writeFileSync(filePath, '{ malformed');
-			const malformed = await agent.stream('release');
+			const malformed = await agent.stream('release', { userId: 'test-user' });
 			await assert.rejects(
 				() => malformed.complete(),
 				error => error instanceof Error && error.name === AgentErrors.StreamFailed && /Malformed canned responses JSON/.test(error.message),
 			);
 
 			writeFileSync(filePath, JSON.stringify({ recovered: 'healthy again' }));
-			assert.strictEqual((await (await agent.stream('recovered')).complete()).text, 'healthy again');
+			assert.strictEqual((await (await agent.stream('recovered', { userId: 'test-user' })).complete()).text, 'healthy again');
 		} finally {
 			rmSync(filePath, { force: true });
 			rmSync(replacementPath, { force: true });
@@ -1690,6 +2091,138 @@ describe('runaway protection caps', () => {
 	});
 });
 
+// ── tool-call chunks for approval-gated tools ────────────────────────────────
+
+/**
+ * Run one turn, answering every interrupt with `approved`, and collect the chunks of the
+ * whole turn (the paused segment plus the resumed one) from a single subscription.
+ */
+async function runAnsweringInterrupts(agent: any, message: string, conversationId: string, userId: string, approved: boolean) {
+	const chunks: any[] = [];
+	const result = await agent.stream(message, { conversationId, userId });
+	const channel = await result.channel;
+	const sub = channel.subscribe((chunk: any) => { chunks.push(chunk); });
+	const isTerminal = (c: any) => c.type === 'done' || c.type === 'error' || c.type === 'interrupt';
+	const waitFor = async (from: number) => {
+		for (let i = 0; i < 200; i++) {
+			const hit = chunks.slice(from).find(isTerminal);
+			if (hit) return hit;
+			await new Promise(r => setTimeout(r, 25));
+		}
+		return undefined;
+	};
+	let resumes = 0;
+	let terminal = await waitFor(0);
+	while (terminal?.type === 'interrupt' && resumes < 5) {
+		resumes++;
+		const seen = chunks.length;
+		await agent.resume(result.channelId, terminal.interrupts.map((i: any) => ({ interruptId: i.id, approved })), { conversationId, userId });
+		terminal = await waitFor(seen);
+	}
+	sub.unsubscribe();
+	return { chunks, terminal, resumes };
+}
+
+describe('tool-call chunks for approval-gated tools', () => {
+	const model = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+
+	test('a tool the user denies publishes no tool-call or tool-result chunk', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-deny-chunks');
+		const agent = new Agent(scope, 'denychunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the denied turn should still finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 0, 'a denied tool must not run');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-call'), [], 'a denied tool must not publish a tool-call chunk');
+		assert.deepStrictEqual(chunks.filter(c => c.type === 'tool-result'), [], 'a denied tool must not publish a tool-result chunk');
+	});
+
+	test('a denied tool still keeps its paired tool-call/tool-result rows in history', async () => {
+		// The README documents that a denial is kept in history for audit: the tool-result row
+		// records the denial. Only the live chunks change.
+		const scope = new Scope('test-deny-history');
+		const agent = new Agent(scope, 'denyhist', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', false);
+
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
+		const toolCalls = history.filter(m => m.role === 'tool-call');
+		const toolResults = history.filter(m => m.role === 'tool-result');
+		assert.strictEqual(toolCalls.length, 1, 'the denied call keeps its tool-call row');
+		assert.strictEqual(toolResults.length, 1, 'the denied call keeps its tool-result row');
+		assert.match(JSON.stringify(toolResults[0].metadata), /User denied permission to run getWeather/);
+	});
+
+	test('a tool the user approves publishes exactly one tool-call then one tool-result', async () => {
+		let handlerCalls = 0;
+		const scope = new Scope('test-approve-chunks');
+		const agent = new Agent(scope, 'approvechunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'What is the weather in Paris?', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 1, 'the tool should have paused once for approval');
+		assert.strictEqual(terminal?.type, 'done', `the approved turn should finish, got ${terminal?.type}`);
+		assert.strictEqual(handlerCalls, 1, 'an approved tool runs once');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getWeather', 'tool-result:getWeather']);
+		const interruptAt = chunks.findIndex(c => c.type === 'interrupt');
+		const callAt = chunks.findIndex(c => c.type === 'tool-call');
+		assert.ok(interruptAt < callAt, 'the tool-call chunk comes after the approval, not before the interrupt');
+	});
+
+	test('a tool without approval still publishes one tool-call then one tool-result', async () => {
+		const scope = new Scope('test-noapproval-chunks');
+		const agent = new Agent(scope, 'noapprovalchunks', {
+			systemPrompt: 'test',
+			model,
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal, resumes } = await runAnsweringInterrupts(agent, 'run getStatus', convId, 'test-user', true);
+
+		assert.strictEqual(resumes, 0, 'no approval is needed');
+		assert.strictEqual(terminal?.type, 'done');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:getStatus', 'tool-result:getStatus']);
+		assert.deepStrictEqual(toolChunks[0].input, {});
+	});
+
+	test('a tool call stopped by maxToolIterations publishes no tool chunks', async () => {
+		// The cap cancels the second call through the same `event.cancel` as a denial.
+		const scope = new Scope('test-cap-chunks');
+		const agent = new Agent(scope, 'capchunks', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model,
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { chunks, terminal } = await runAnsweringInterrupts(agent, 'run alpha and bravo', convId, 'test-user', true);
+
+		assert.strictEqual(terminal?.type, 'error');
+		const toolChunks = chunks.filter(c => c.type === 'tool-call' || c.type === 'tool-result');
+		assert.deepStrictEqual(toolChunks.map(c => `${c.type}:${c.toolName}`), ['tool-call:alpha', 'tool-result:alpha']);
+	});
+});
+
 // ── tool context ─────────────────────────────────────────────────────────────
 
 describe('untrustedOutput', () => {
@@ -1711,6 +2244,63 @@ describe('untrustedOutput', () => {
 		assert.match(done.text ?? '', /<untrusted-data id="[0-9a-f]{18}" source="searchDocs">/);
 		assert.match(done.text ?? '', /<\/untrusted-data id="[0-9a-f]{18}">/);
 		assert.ok((done.text ?? '').includes(injected), 'content is preserved inside the block');
+	});
+
+	test('wraps the error text of a throwing untrusted tool in an untrusted-data block', async () => {
+		const scope = new Scope('test-untrusted-throw');
+		const agent = new Agent(scope, 'ut', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ fetchPage: tool({ description: 'fetches a page',
+				parameters: z.object({}),
+				untrustedOutput: true,
+				handler: async () => { throw new Error(`upstream said: ${injected}`); }, }) }),
+		});
+		const result = await agent.stream('use fetchPage', { userId: 'u-1' });
+		const done = await result.complete();
+		// The canned model echoes the error result it was given, so this is what the model saw.
+		const seen = done.text ?? '';
+		assert.ok(seen.includes(injected), `error text should still reach the model: ${seen}`);
+		assert.match(seen, /<untrusted-data id="[0-9a-f]{18}" source="fetchPage">\n[\s\S]*IGNORE PREVIOUS INSTRUCTIONS[\s\S]*\n<\/untrusted-data id="[0-9a-f]{18}">/);
+	});
+
+	test('logs the shape of a throwing untrusted tool\'s original error server-side, without its message', async () => {
+		const warnings: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+		const logger = { info() {}, error() {}, debug() {}, warn: (msg: string, meta?: Record<string, unknown>) => { warnings.push({ msg, meta }); } } as never;
+		const scope = new Scope('test-untrusted-throw-log');
+		const agent = new Agent(scope, 'utl', {
+			systemPrompt: 'test',
+			logger,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ fetchPage: tool({ description: 'fetches a page',
+				parameters: z.object({}),
+				untrustedOutput: true,
+				handler: async () => {
+					const err = new Error(`upstream said: ${injected}`);
+					err.name = 'UpstreamError';
+					throw err;
+				}, }) }),
+		});
+		const result = await agent.stream('use fetchPage', { userId: 'u-1' });
+		await result.complete();
+		const logged = warnings.find((w) => w.meta?.tool === 'fetchPage');
+		assert.ok(logged, `expected a warning for the failed tool, got ${JSON.stringify(warnings)}`);
+		assert.strictEqual(logged.meta?.name, 'UpstreamError');
+		assert.ok(!JSON.stringify(logged).includes(injected), 'the untrusted message is not logged');
+	});
+
+	test('still pauses for approval when an untrusted tool calls interrupt()', async () => {
+		const scope = new Scope('test-untrusted-interrupt');
+		const agent = new Agent(scope, 'ui', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ fetchPage: tool({ description: 'fetches a page',
+				parameters: z.object({}),
+				untrustedOutput: true,
+				handler: async ({ interrupt }) => { interrupt({ name: 'confirm-fetch' }); return 'never'; }, }) }),
+		});
+		const result = await agent.stream('use fetchPage', { userId: 'u-1' });
+		await assert.rejects(result.complete(), (err: unknown) => err instanceof InterruptError);
 	});
 
 	test('leaves results of tools without the flag unchanged', async () => {
@@ -2510,6 +3100,197 @@ describe('useChat', () => {
 		// The terminal chunk finally arrives on the resubscribed channel.
 		cap.handler!({ type: 'done', text: 'done at last' });
 		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+	});
+
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async () => {
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+				] }),
+			},
+			subscribe,
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		// The socket drops (arming the failsafe), then comes back.
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		chat.destroy();
+	});
+
+	test('reconnect keeps the text streamed before a turn threw while disconnected', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A turn that throws saves an empty-content error row even after text streamed.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Stream failed' } },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'text-delta', text: 'Partial' });
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the failed turn clears loading');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial', 'the streamed text is kept');
+		assert.deepStrictEqual(errors, ['Stream failed'], 'the recorded error is reported once');
+		chat.destroy();
+	});
+
+	test('a live error chunk after reconnect already failed the turn changes nothing more', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'boom' } },
+				] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+		cap.handler!({ type: 'error', error: 'boom' });
+
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.deepStrictEqual(errors, ['boom'], 'the error is reported once');
+		chat.destroy();
+	});
+
+	test("reconnect does not end a turn on a previous turn's error row", async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The retry's user row is written inside the turn, after sendMessage returns, so
+				// this read still ends at the failed first turn's error row.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'first turn failed' } },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'error', error: 'first turn failed' });
+		await chat.sendMessage('hello'); // the retry
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the retry is still running');
+		assert.deepStrictEqual(errors, ['first turn failed'], "the first turn's error is not reported again");
+		cap.handler!({ type: 'text-delta', text: 'Retry answer' });
+		cap.handler!({ type: 'done' });
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+	});
+
+	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+		const history = { messages: [
+			{ role: 'user', content: 'hello' },
+			{ role: 'assistant', content: '', metadata: { error: 'earlier failure' } },
+		] };
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.loadConversation('conv-1');
+		await chat.sendMessage('hello');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the error row may be the loaded turn, so the new turn keeps running');
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+				] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'text-delta', text: 'Partial' });
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
 		chat.destroy();
 	});
 
@@ -4033,6 +4814,221 @@ describe('createChat', () => {
 		await flush();
 	});
 
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async () => {
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+					],
+				}),
+			},
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// The socket drops (arming the failsafe), then comes back.
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect keeps the text streamed before a turn threw while disconnected', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A turn that throws saves an empty-content error row even after text streamed.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Stream failed' } },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Partial' });
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the failed turn clears loading');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial', 'the streamed text is kept');
+		assert.deepStrictEqual(errors, ['Stream failed'], 'the recorded error is reported once');
+		chat.destroy();
+		await flush();
+	});
+
+	test('a live error chunk after reconnect already failed the turn changes nothing more', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'boom' } },
+					],
+				}),
+			},
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+		cap.chunk({ type: 'error', error: 'boom' });
+		await flush();
+
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.deepStrictEqual(errors, ['boom'], 'the error is reported once');
+		chat.destroy();
+		await flush();
+	});
+
+	test("reconnect does not end a turn on a previous turn's error row", async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The retry's user row is written inside the turn, after sendMessage returns, so
+				// this read still ends at the failed first turn's error row.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'first turn failed' } },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'error', error: 'first turn failed' });
+		await flush();
+		await chat.sendMessage('hello'); // the retry
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the retry is still running');
+		assert.deepStrictEqual(errors, ['first turn failed'], "the first turn's error is not reported again");
+		cap.chunk({ type: 'text-delta', text: 'Retry answer' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+		const history = {
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: '', metadata: { error: 'earlier failure' } },
+			],
+		};
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.loadConversation('conv-1');
+		await chat.sendMessage('hello');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the error row may be the loaded turn, so the new turn keeps running');
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+					],
+				}),
+			},
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Partial' });
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
+		chat.destroy();
+		await flush();
+	});
+
 	test('reconnect re-checks pending interrupts (recovered interrupt pauses the turn)', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let interruptsReceived: Array<{ interruptId: string; name: string; reason?: unknown }> | undefined;
@@ -4848,6 +5844,26 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		}
 		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^turn-[0-9a-f-]{36}$/);
 		assert.strictEqual(new Set(sent.map(s => s.runtimeSessionId)).size, 3, 'no two conversation-less turns share a session');
+	});
+
+	test("with sessionScope: 'user', two users on one conversationId route to different runtime sessions", async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session-user'), 'acsu', { systemPrompt: 'test', inferenceOnly: true, sessionScope: 'user' });
+		const sent: Array<{ runtimeSessionId?: string; payload?: Uint8Array }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		const conv = crypto.randomUUID();
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'bob' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		assert.match(sent[0].runtimeSessionId ?? '', /^u-[0-9a-f]{64}$/);
+		assert.notStrictEqual(sent[0].runtimeSessionId, sent[1].runtimeSessionId, 'different users must not share a runtime session');
+		assert.strictEqual(sent[0].runtimeSessionId, sent[2].runtimeSessionId, "a user's turns keep routing to one session");
+		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[1].payload)).conversationId, conv, 'the payload still carries the plain conversationId');
 	});
 
 	test('the AgentCore entry does not turn the session id into a conversationId', async () => {

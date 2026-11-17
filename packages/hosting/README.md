@@ -552,8 +552,9 @@ the CloudFront origins update in the same deploy. Expect the same short window
 of 403s while the distribution propagates; rotate in a quiet window.
 
 The stacked door's CloudFront edge sends its own origin-verify header to the
-ALB router; without a router certificate it travels over plain HTTP, which core
-warns about at synth (`@aws-blocks/hosting:StackedRouterPlainHttp`).
+ALB router. It never sends it over plain HTTP to an internet-facing router in
+a production deploy, unless the door sets `allowPlainHttp: true`: see
+[the edge → router hop](#the-stacked-door).
 
 ## Front doors
 
@@ -570,6 +571,92 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
 | `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see below). |
+
+**Where TLS ends on each door.** The viewer hop is the browser → the door; the
+origin hop is the door → what serves the request. The secret header is what a
+locked origin requires on every request, so it only answers its own door.
+
+| Door | Viewer TLS | Origin-hop TLS | Secret header |
+|---|---|---|---|
+| CloudFront (default) | HTTPS (HTTP redirects to HTTPS; TLS 1.2+ with a custom `domain`) | HTTPS: S3 through origin access control, Lambda function URLs through origin access control, and the API Gateway REST APIs in front of the server and the image optimizer | `Referer` carrying a Secrets Manager secret, which each server-origin REST API's resource policy requires (plus the `x-blocks-front-door` marker); over HTTPS only |
+| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox unless `allowPlainHttp: true` | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`), unless the door sets `allowPlainHttp: true` |
+| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80, which with an API is sandbox-only (`PlainHttpFrontDoorError` outside a sandbox) unless `allowPlainHttp: true` | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
+| `apiGateway`, `api: 'http'` | HTTPS only (the `execute-api` endpoint, or a custom `domain`) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
+| `apiGateway`, `api: 'rest'` | HTTPS only, at the required custom `domain` (TLS 1.2) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
+| `'none'` | None: S3 website endpoints are HTTP only | None: the website bucket serves the files itself | None: the bucket is public read |
+
+A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself
+(an `http://` URL with an API is sandbox-only unless `allowPlainHttp: true`).
+
+**Sandbox-only options.** Some plain-HTTP shapes synthesize only in a sandbox
+deploy (the `sandboxMode` context the sandbox scripts pass); a production
+deploy fails synth, and a sandbox deploy warns:
+
+| Shape | Production synth | Production synth with `allowPlainHttp: true` | Sandbox synth |
+|---|---|---|---|
+| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction` (the origin secret crosses the edge → router hop in cleartext) | Warns: `@aws-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-blocks/hosting:StackedRouterPlainHttp` |
+
+> [!WARNING]
+> `allowPlainHttp: true` turns off a production safeguard. Sign-in, session
+> cookies and every RPC (and, on the stacked door, the router's origin secret)
+> travel in cleartext, and `Auth`'s session cookie has no `Secure`: anyone who
+> can read or alter traffic on that path can steal a session. Use it in
+> production only when the whole network path is trusted. It changes nothing
+> in a sandbox deploy, which already only warns. See
+> [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production).
+
+`'none'` is not sandbox-only: it serves static sites with no same-origin API,
+and warns in every stage (`@aws-blocks/hosting:PlainHttpFrontDoor`, see
+[the `'none'` door](#the-none-door)). An ALB door without a certificate and
+without an API synthesizes in every stage.
+
+### Running a plain-HTTP door in production
+
+Some deploys legitimately serve plain HTTP in production: an `internal` ALB
+reached only inside a trusted private network, or a door whose TLS is ended
+upstream by a corporate proxy or another load balancer. For those, set
+`allowPlainHttp: true` on the door (default `false`):
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+// An internal ALB reached only inside your network (`vpc`: your ec2.IVpc with private subnets).
+new Hosting(stack, 'Hosting', {
+  root: '.',
+  api: stack,
+  frontDoor: { kind: 'alb', internal: true, vpc, allowPlainHttp: true },
+});
+// Or: { kind: 'custom', door, allowPlainHttp: true }
+// Or: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true }
+
+// After reviewing the warning, acknowledge it:
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction');
+```
+
+What it exposes:
+
+- **`alb` and `custom` doors:** the browser reaches the door over plain HTTP, so
+  the pages, sign-in, session cookies and every RPC can be read or altered on
+  the network path. `Hosting` registers `BLOCKS_ALLOW_PLAIN_HTTP` in the
+  backend's config, so `Auth` issues its same-origin session cookie without
+  `Secure` (a browser drops a `Secure` cookie set over HTTP) instead of refusing
+  sign-in with `InsecureTransportException`.
+- **`stacked` door:** the browser still reaches the CloudFront edge over HTTPS,
+  so the session cookie keeps `Secure`. The edge → router hop is plain HTTP to
+  the router's public addresses: the `x-blocks-origin-verify` origin secret
+  crosses it in cleartext, so anyone who reads it there can reach the router
+  directly, past the edge and its web ACL. Prefer `internal: true` (a VPC
+  origin, on the AWS network) or a router `certificate`.
+
+A production synth with the option emits one warning,
+`@aws-blocks/hosting:PlainHttpAllowedInProduction`, that names what is exposed;
+acknowledge it with
+`Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`.
+A sandbox deploy behaves as without the option. A value other than `true` or
+`false` fails synth with `InvalidFrontDoorOptionError`. The option has no
+effect on a door that serves HTTPS, or on `'none'`, which takes no options.
 
 `frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
 `{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
@@ -601,6 +688,22 @@ Some apps need the CloudFront door:
   fails the same way only when the app forces a streaming build (a Nitro
   `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
   `open-next.config.ts` with a streaming wrapper).
+
+**CloudFront error pages and the API.** A CloudFront distribution's custom
+error responses apply to every path it serves, the proxied API (`/aws-blocks/*`)
+included. The CloudFront door maps 403 / 404 to a page when the app has one —
+`errorPages.notFound`, a static build's own `404.html` — and, for a static
+multi-page site with no server, no SPA fallback and no 404 page of its own, to
+the built-in not-found page. The Blocks API normally answers every call with
+HTTP 200, so this never touches it; but an `ApiNamespace` created with
+`httpErrorStatus: true` (`@aws-blocks/core`) answers a 4xx `ApiError` with that
+status, and its 403 / 404 then reach the browser as that HTML page instead of
+the JSON-RPC error, which the typed client cannot read. CloudFront cannot
+scope error responses away from `/aws-blocks/*`, so `Hosting` from
+`@aws-blocks/core` fails synth when it sees both, with a `HostingError` named
+`HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
+Remove the 4xx error pages, or leave `httpErrorStatus` off for those
+namespaces.
 
 ### Settings per door kind
 
@@ -657,16 +760,28 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 (RPC and sign-in) and each of the backend's raw routes registered before
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
-certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted.
+certificate) would send sign-in, cookies and every RPC unencrypted, so a
+production deploy fails synth (`PlainHttpFrontDoorError`), and a sandbox deploy
+warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only for a trusted network
+path, `allowPlainHttp: true` opts a production deploy out (see
+[Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). `'none'` warns with the same id
+whether or not the app has an API: the S3 website can't serve over TLS, so the
+pages and scripts themselves can be read or altered in transit (see
+[the `'none'` door](#the-none-door)).
 
 The session cookie can't be `Secure` behind such a door either: a browser
-discards a `Secure` cookie set by a plain-HTTP origin. `AuthBasic` therefore
-omits `Secure` from its same-origin session cookie behind a standalone
-`{ kind: 'alb' }` door with no certificate, so the cookie and the session it
-carries cross the network in clear text. `AuthCognito` and `AuthOIDC` keep
-`Secure`, so the browser drops their session cookie and sign-in doesn't persist.
-Use a plain-HTTP door for testing only: for anything else, give the ALB door a
+discards a `Secure` cookie set by a plain-HTTP origin. In a sandbox deploy
+`Auth` therefore omits `Secure` from its same-origin session cookie behind a
+standalone `{ kind: 'alb' }` door with no certificate, so the cookie and the
+session it carries cross the network in clear text. Outside a sandbox `Auth`
+refuses to issue the session instead: sign-in fails with
+`InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500) before
+any session is stored, and no `Set-Cookie` line is written. Sign-out and account
+deletion still clear the cookie (a `Max-Age=0` cookie carries no value). With
+the door's `allowPlainHttp: true`, `Auth` issues the cookie without `Secure` in
+production too, as in a sandbox.
+Use a plain-HTTP door in a sandbox only, unless the network path is trusted
+and the door opts out: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
 `Secure`. Its edge → router hop is plain HTTP unless the router has a
@@ -820,6 +935,20 @@ its chunks gets a 404 (the website's error document) and needs a reload. The pag
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
 
+The website endpoint takes no certificate, so `'none'` always warns at synth
+(`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
+HTML and scripts travel unencrypted and can be altered in transit, and a
+tampered script sees everything the user enters, even when the API it calls is
+HTTPS. Use `'none'` for testing or public, non-interactive content; use the
+CloudFront door for HTTPS. If you chose `'none'` deliberately, acknowledge the
+warning on the stack:
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+```
+
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
 payload format 2.0 event and can't stream, so the server is built for it: the
 Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
@@ -901,8 +1030,18 @@ else is a 404. The proxy never fetches a remote URL.
   port 443. A domain with a hosted zone and no certificate gets a DNS-validated
   one. Without either, the hop is plain HTTP on port 80 and unencrypted:
   through a VPC origin (`internal: true`) it stays on the AWS network; to an
-  internet-facing ALB it reaches the ALB's public addresses, and synth warns
-  (`@aws-blocks/hosting:StackedRouterPlainHttp`). The router's `x-forwarded-proto`
+  internet-facing ALB it reaches the ALB's public addresses. That last hop
+  would carry the origin-verify secret in cleartext, so a production deploy
+  fails synth (`OriginSecretOverPlainHttpError`) and the secret is never sent;
+  give the router a `certificate` and `features.router.domain`, or set
+  `internal: true`. A sandbox deploy (the `sandboxMode` context the sandbox
+  scripts pass) still synthesizes, and warns
+  (`@aws-blocks/hosting:StackedRouterPlainHttp` and
+  `@aws-blocks/hosting:OriginSecretOverPlainHttp`). Only when the path between
+  CloudFront and the router is trusted, `allowPlainHttp: true` on the stacked
+  door lets a production deploy send the secret over that hop, with the
+  `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning (see
+  [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). The router's `x-forwarded-proto`
   is `http` on a plain-HTTP hop. A certificate without a router domain fails
   synth (`StackedRouterCertificateNeedsDomainError`).
 - There is no custom domain or skew protection on the edge yet.
@@ -1272,11 +1411,70 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-The guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
+The synth guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
 emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
-Astro SSR) are not seen by synth, so those routes must set the cache-key options
-themselves or emit `Cache-Control: private`. Any route that sets cookies or
-otherwise varies per user should emit `Cache-Control: private`.
+Astro SSR) are not seen by synth; for those, the SSR server's responses pass
+through a runtime cache guard that the construct installs in front of the SSR
+server, and in front of every other regional compute a route targets (such as a
+Next.js split function built regional): Lambda handlers, and Node.js servers on
+the Lambda Web Adapter or a Web Function, for every framework. Where the guard cannot be installed (for example
+a Lambda Web Adapter server that is not Node.js, or a handler module missing from
+the bundle), synth emits a `@aws-blocks/hosting:SsrCacheGuardNotInstalled`
+warning and that server's responses are cached as its `Cache-Control` says. The
+guard sends `Cache-Control: private, no-store` instead of the origin's value
+when:
+
+- the response sets cookies (`Set-Cookie`) and is not already `private` or
+  `no-store` — CloudFront stores `Set-Cookie` with a cached object and replays
+  it on every hit; or
+- the request carries `Authorization` (unless `'authorization'` is in
+  `cacheKeyHeaders`) or a cookie whose name is not in the cache key (the Next.js
+  preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`),
+  and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without
+  `private`, a future `Expires`, no caching headers while `ssrDefaultTtl > 0`,
+  or an error status CloudFront caches without caching headers (404, 414 and
+  500 to 504).
+
+Responses that are already `private`/`no-store`, or `no-cache` without
+`s-maxage`, are left as they are. To keep a credentialed route cacheable, list
+its credential in `cacheKeyCookies`/`cacheKeyHeaders` so the cache is keyed per
+credential. Any route that otherwise varies per user should still emit
+`Cache-Control: private`.
+
+Client-side analytics and consent cookies (`_ga`, `_gid`, `_fbp`, a consent
+manager's cookie) are not in the cache key, so by default a visitor carrying one
+gets ISR/SSR pages as `private, no-store` and they are not edge-cached for that
+visitor. List such cookies in `cacheGuardIgnoredCookies`
+(`frontDoor.features.cacheGuardIgnoredCookies`) to have the guard ignore them.
+They stay out of the cache key, so a listed cookie must never change what the
+server renders. A name may not be in both `cacheKeyCookies` and
+`cacheGuardIgnoredCookies`.
+
+```ts
+frontDoor: { features: { cacheKeyCookies: ['session'], cacheGuardIgnoredCookies: ['_ga', '_gid', '_fbp'] } }
+```
+
+Behind the CloudFront-over-ALB door the server-route cache key holds every
+cookie, so cookies never lead to a rewrite there; `Authorization` and
+`Set-Cookie` still do.
+
+CloudFront caches the 500, 501, 502, 503 and 504 responses of an origin for the
+error caching minimum TTL and, except for 501, does so whatever their
+`Cache-Control` says. A distribution with a server (the CloudFront door and the
+CloudFront-over-ALB door) therefore sets that TTL to 0 for those statuses,
+keeping any error page configured for them.
+
+The guard models CloudFront's own caching inputs only: `CDN-Cache-Control` and
+`Surrogate-Control` are not CloudFront TTL inputs, and CloudFront ignores `Vary`
+for the cache key, so the guard does not read them.
+
+CloudFront uses `max-age` as its edge TTL when `s-maxage` is absent, so a bare
+`max-age` is cached at the edge and counts as shared-cacheable. A credentialed
+route that should still be cached by the browser should send
+`Cache-Control: private, max-age=…`, which the guard leaves unchanged.
+
+The SSR cache policy clamps edge TTLs to at most **1 day**, whatever
+`s-maxage` the origin sends.
 
 CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
 **8 cookies** and **5 headers** for callers. `accept-encoding` is handled

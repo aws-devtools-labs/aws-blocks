@@ -32,13 +32,16 @@ import {
 } from './cdk/api-front-door.js';
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, coverHosting, forEachBlocksKmsKey, forEachBlocksRole, snapshotForHosting } from './cdk/blocks-roles.js';
+import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
 import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 
 // ================================================================
 // Hosting construct tests
@@ -1430,7 +1433,7 @@ describe('Hosting', () => {
   // ── Issue #728: SSR cache policy honors origin Cache-Control ──
 
   describe('SSR cache policy (issue #728)', () => {
-    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=31536000 for compute behaviors', () => {
+    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=86400 for compute behaviors', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1445,13 +1448,13 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // The L3 construct should create an SsrCachePolicy with these values.
-      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
-      // values to at most a year.
+      // maxTtl is 1 day (86400s): it clamps origin Cache-Control values
+      // (e.g. `s-maxage=31536000`) to at most a day at the edge.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 31536000,
+          MaxTTL: 86400,
         }),
       });
     });
@@ -2041,6 +2044,34 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
 
+    it('fails synth when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+      createSpaBuildOutput(tmpDir);
+      const notFoundPath = path.join(tmpDir, '404.html');
+      fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
+      const synth = (exports: string[] | undefined, errorPages: boolean) => () => {
+        const app = new App();
+        const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
+        // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
+        const api: BlocksStackApi = { ...MOCK_API };
+        if (exports) Reflect.set(api, HTTP_ERROR_STATUS_EXPORTS, exports);
+        new Hosting(stack, 'Hosting', { root: tmpDir, api, ...(errorPages ? { errorPages: { notFound: notFoundPath } } : {}) });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
+      };
+
+      assert.throws(synth(['api'], true), (err: Error) => {
+        assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
+        assert.match(err.message, /'api'/);
+        assert.match(err.message, /404/);
+        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
+        return true;
+      });
+
+      assert.deepStrictEqual(synth([], true)(), [], 'no httpErrorStatus namespace: synths, no warning');
+      assert.deepStrictEqual(synth(undefined, true)(), [], 'a plain { apiUrl } backend: synths, no warning');
+      assert.deepStrictEqual(synth(['api'], false)(), [], 'no 4xx error page: synths, no warning');
+    });
+
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {
       createSpaBuildOutput(tmpDir);
 
@@ -2628,6 +2659,58 @@ describe('Hosting', () => {
       );
     });
 
+    it('defaults.appIdentity: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
+      const app = new App();
+      const stack = new Stack(app, 'appa', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+      (backend as unknown as { defaults: Record<string, unknown> }).defaults.appIdentity = { id: 'appa' };
+      applyAppIdentity(backend as unknown as Construct);
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');
+      assert.ok(edgeStack, `edge stack not named appa-edge: ${stacks.map((s) => s.node.id)}`);
+      assert.ok(!stacks.some((c) => c.node.id.startsWith('edge-lambda-stack')), 'no CDK-named edge stack');
+      // Role coverage finds the edge stack through EdgeFunction's private `_edgeFunction`: pin it.
+      // EdgeFunctions (bundlers may suffix the class name, e.g. `EdgeFunction2`).
+      const edgeFns = app.node.findAll().filter((n) => n.constructor.name.startsWith('EdgeFunction'));
+      assert.ok(edgeFns.length > 0, 'an EdgeFunction');
+      for (const fn of edgeFns) {
+        const real = (fn as unknown as { _edgeFunction?: Construct })._edgeFunction;
+        assert.ok(real, 'aws-cdk-lib no longer keeps the cross-region function in EdgeFunction._edgeFunction');
+        assert.strictEqual(Stack.of(real).node.id, 'appa-edge');
+      }
+      const roles = Object.values(Template.fromStack(edgeStack).findResources('AWS::IAM::Role'));
+      assert.ok(roles.length > 0, 'the edge stack should hold the Lambda@Edge role');
+      for (const r of roles) {
+        assert.strictEqual(r.Properties?.PermissionsBoundary, BOUNDARY_ARN);
+        assert.ok(
+          (r.Properties?.Tags as { Key: string; Value: string }[] | undefined)?.some((t) => t.Key === 'app' && t.Value === 'appa'),
+          'edge role tagged app=appa',
+        );
+      }
+    });
+
+    it('without EdgeFunction._edgeFunction, only a CDK- or app-named dependency stack is the edge stack (no appIdentity)', () => {
+      for (const edgeId of ['edge-lambda-stack-c8abc123', 'appa-edge']) {
+        const app = new App();
+        const env = { account: '123456789012' };
+        const stack = new Stack(app, 'appa', { env: { ...env, region: 'eu-west-1' } });
+        const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+        // A real edge stack, and an unrelated dependency that happens to hold a child with the same id.
+        const edge = new Stack(app, edgeId, { env: { ...env, region: 'us-east-1' } });
+        const decoy = new Stack(app, 'unrelated', { env: { ...env, region: 'us-east-1' } });
+        new Construct(edge, 'EdgeFn');
+        new Construct(decoy, 'EdgeFn');
+        stack.addDependency(edge);
+        stack.addDependency(decoy);
+        const hosting = new Construct(stack, 'Hosting');
+        const before = snapshotForHosting(hosting);
+        // Stands in for an EdgeFunction from a CDK version without the private `_edgeFunction`.
+        const fn = new Construct(hosting, 'EdgeFn');
+        const covered = coverHosting(hosting, backend as unknown as Construct, before, [fn]);
+        assert.deepStrictEqual(covered.map((s) => s.node.id), [edgeId], edgeId);
+      }
+    });
+
     it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {
       const app = new App();
       const stack = new Stack(app, 'EdgeVisitorStack', { env: { account: '123456789012', region: 'eu-west-1' } });
@@ -2655,6 +2738,26 @@ describe('Hosting', () => {
       assert.ok(
         [...visited].some((r) => r.includes('CustomCrossRegionExportWriter')),
         'the prepare-time cross-region provider role was visited',
+      );
+    });
+
+    it('checks the key policies of both alarm topic keys (regional and us-east-1) and synthesizes', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeKeyPolicyStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      addServicePrincipalTrustCheck(backend as unknown as Construct);
+      const visited: string[] = [];
+      forEachBlocksKmsKey(backend as unknown as Construct, (key) => visited.push(key.node.path));
+      buildOffRegionEdgeHosting(app, stack, backend);
+      // Synth fails if either key's cloudwatch.amazonaws.com statement lacks a source condition.
+      assert.doesNotThrow(() => app.synth());
+      assert.ok(
+        visited.some((p) => p.startsWith('EdgeKeyPolicyStack/Hosting/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the regional alarm topic key is checked (visited: ${visited.join(', ')})`,
+      );
+      assert.ok(
+        visited.some((p) => !p.startsWith('EdgeKeyPolicyStack/') && p.endsWith('/AlarmTopicKey/Resource')),
+        `the us-east-1 monitoring stack's alarm topic key is checked (visited: ${visited.join(', ')})`,
       );
     });
 
@@ -2890,7 +2993,7 @@ describe('Hosting', () => {
       ['apiGateway', { kind: 'apiGateway' }, false, { scheme: '', type: 'AWS::ApiGatewayV2::Api', attr: 'ApiEndpoint' }],
       [
         'stacked',
-        { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+        { kind: 'stacked', edge: 'cloudfront', router: 'alb', internal: true },
         true,
         { scheme: 'https://', type: 'AWS::CloudFront::Distribution', attr: 'DomainName', id: /CfOverAlb/ },
       ],
@@ -2899,7 +3002,9 @@ describe('Hosting', () => {
     for (const [label, frontDoor, claims, origin] of doors) {
       it(`${label}: registers the door url and ${claims ? 'claims' : 'does not claim'} the API front-door role`, () => {
         createSpaBuildOutput(tmpDir);
-        const stack = new Stack(new App(), `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+        const app = label === 'alb' ? new App({ context: { sandboxMode: 'true' } }) : new App();
+        const stack = new Stack(app, `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
         const claimed: string[] = [];
         const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claimed.push(url) };
         const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor });
@@ -3078,9 +3183,43 @@ describe('Hosting', () => {
   });
 
   describe("frontDoor: { kind: 'alb' } (regional ALB — no CloudFront)", () => {
+    it('outside a sandbox, the ALB door without a certificate fails synth (PlainHttpFrontDoorError); a sandbox deploy warns', () => {
+      createSpaBuildOutput(tmpDir);
+      const prod = new Stack(new App(), 'AlbPlainHttpProd', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () => new Hosting(prod, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } }),
+        (e: Error & { resolution?: string }) =>
+          e.name === 'PlainHttpFrontDoorError' &&
+          /The 'alb' front door serves the app over plain HTTP/.test(e.message) &&
+          /`certificate` and `features\.domain`/.test(e.resolution ?? ''),
+      );
+      const sandbox = new Stack(new App({ context: { sandboxMode: 'true' } }), 'AlbPlainHttpSandbox', {
+        env: { account: '111111111111', region: 'us-east-1' },
+      });
+      new Hosting(sandbox, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
+      const warnings = Annotations.fromStack(sandbox).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      assert.strictEqual(warnings.length, 1);
+    });
+
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes the plain-HTTP ALB door with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `AlbAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb', allowPlainHttp: true } });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction'));
+      };
+      const found = synthProd(false);
+      assert.strictEqual(found.length, 1);
+      assert.match(JSON.stringify(found[0].entry.data), /session cookie without `Secure`/);
+      assert.strictEqual(synthProd(true).length, 0, 'acknowledged on the stack');
+    });
+
     it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
       createSpaBuildOutput(tmpDir);
-      const app = new App();
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const app = new App({ context: { sandboxMode: 'true' } });
       const stack = new Stack(app, 'AlbStaticStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
@@ -3108,7 +3247,7 @@ describe('Hosting', () => {
       );
     const cases: Array<[string, HostingProps['frontDoor'], (t: Template) => string[]]> = [
       ['alb', { kind: 'alb' }, albPaths],
-      ['stacked', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, albPaths],
+      ['stacked', { kind: 'stacked', edge: 'cloudfront', router: 'alb', internal: true }, albPaths],
       [
         'apiGateway (http)',
         { kind: 'apiGateway' },
@@ -3120,7 +3259,9 @@ describe('Hosting', () => {
         createSpaBuildOutput(tmpDir);
         registerRoute({ method: 'GET', path: '/hooks/door-probe', handler: async () => {} });
         registerRoute({ method: 'GET', path: '/users/{id}', handler: async () => {} });
-        const stack = new Stack(new App(), `RawRoutes-${label.replace(/\W/g, '')}`, {
+        // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+        const app = label === 'alb' ? new App({ context: { sandboxMode: 'true' } }) : new App();
+        const stack = new Stack(app, `RawRoutes-${label.replace(/\W/g, '')}`, {
           env: { account: '111111111111', region: 'us-east-1' },
         });
         new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor });
@@ -3149,11 +3290,15 @@ describe('Hosting', () => {
   });
 
   describe('composed CF → ALB front door', () => {
+    // Most of these stacked doors have a public router over plain HTTP, a
+    // sandbox-only setup: outside a sandbox the edge refuses to send the
+    // origin-verify secret over that hop (see the 'without a certificate' tests).
+    const sandboxApp = () => new App({ context: { sandboxMode: 'true' } });
     // The router is an ALB, which invokes the server without streaming.
     const BUFFERED = { streaming: false };
     it('stacks a CloudFront edge OVER a FULL ALB router (both exist), not one instead of the other', () => {
       createSpaBuildOutput(tmpDir);
-      const app = new App();
+      const app = sandboxApp();
       const stack = new Stack(app, 'CfOverAlbStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
       new Hosting(stack, 'Hosting', {
@@ -3267,7 +3412,7 @@ describe('Hosting', () => {
 
     it("the static function rewrites to this deploy's own build prefix, and strips the basePath first", () => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbBuildId', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbBuildId', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3298,7 +3443,7 @@ describe('Hosting', () => {
 
     it('router behaviors: the viewer host as x-forwarded-host; the API uncached; the SSR default keys cookies', () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbRouterBehaviors', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbRouterBehaviors', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3331,7 +3476,7 @@ describe('Hosting', () => {
 
     it('SSR: the edge is invalidated after the uploads, the resolved config, the cutover and the new server', () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbInvalidate', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbInvalidate', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3371,21 +3516,21 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
       fs.writeFileSync(path.join(tmpDir, 'dist', 'big.js'), crypto.randomBytes(1_200_000));
       for (let i = 0; i < 30; i++) registerRoute({ method: 'POST', path: `/hook${i}`, handler: async () => {} });
-      const stack = new Stack(new App(), 'CfOverAlbBig', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbBig', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('AssetExceedsProxyLimit'));
       assert.strictEqual(warnings.length, 1);
       assert.match(String(warnings[0]?.entry.data), /big\.js/);
       // With the API within the budget, the SPA is served from S3: no warning.
       clearRouteRegistry();
-      const small = new Stack(new App(), 'CfOverAlbSmall', { env: { account: '111111111111', region: 'us-east-1' } });
+      const small = new Stack(sandboxApp(), 'CfOverAlbSmall', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(small, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
       assert.strictEqual(Annotations.fromStack(small).findWarning('*', Match.stringLikeRegexp('AssetExceedsProxyLimit')).length, 0);
     });
 
     it('SSR: a static route is an S3 behavior; the server catch-all and the API stay on the ALB', () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbS3Ssr', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbS3Ssr', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3402,7 +3547,7 @@ describe('Hosting', () => {
 
     it("keeps the router's precedence: a dynamic route listed before an overlapping static one shadows it at the edge", () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbS3Order', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbS3Order', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3421,7 +3566,7 @@ describe('Hosting', () => {
 
     it('the static function resolves the directory index and answers redirects the S3 behaviors would otherwise swallow', () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbS3Fn', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbS3Fn', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3445,7 +3590,7 @@ describe('Hosting', () => {
 
     it("more routes than CloudFront's 25 behaviors: the edge keeps a correct prefix and warns; the rest go through the ALB", () => {
       createNextjsBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'CfOverAlbS3Cap', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbS3Cap', { env: { account: '111111111111', region: 'us-east-1' } });
       const routes: RouteBehavior[] = [
         ...Array.from({ length: 40 }, (_, i) => ({ pattern: `/static${i}/*`, target: 'static' as const })),
         { pattern: '/*', target: 'default' },
@@ -3471,7 +3616,7 @@ describe('Hosting', () => {
     it('the edge stamps the same security headers on the API, auth and raw-route behaviors as on the static site', () => {
       createSpaBuildOutput(tmpDir);
       registerRoute({ method: 'GET', path: '/health', handler: async () => {} });
-      const stack = new Stack(new App(), 'CfOverAlbApiHeaders', { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), 'CfOverAlbApiHeaders', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
       const edge = edgeOf(Template.fromStack(stack));
       const policy = (b: { ResponseHeadersPolicyId?: unknown }) => JSON.stringify(b.ResponseHeadersPolicyId);
@@ -3488,7 +3633,7 @@ describe('Hosting', () => {
 
     it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
       createSpaBuildOutput(tmpDir);
-      const app = new App();
+      const app = sandboxApp();
       const stack = new Stack(app, 'CfOverAlbSecHeadersStack', { env: { account: '111111111111', region: 'us-east-1' } });
 
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
@@ -3509,7 +3654,7 @@ describe('Hosting', () => {
     const ORIGIN_VERIFY = 'x-blocks-origin-verify';
     const stackedSynth = (name: string, internal?: boolean) => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
+      const stack = new Stack(sandboxApp(), name, { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3675,10 +3820,59 @@ describe('Hosting', () => {
       assert.doesNotMatch(JSON.stringify(hostingUrl), /router\.example\.com/);
     });
 
-    it('without a certificate the hop is HTTP :80; an internet-facing router warns, an internal one does not', () => {
+    it('without a certificate an internet-facing router fails synth outside a sandbox (no origin-verify secret over plain HTTP)', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'StackedHttpProd', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+          }),
+        (e: Error) => e.name === 'OriginSecretOverPlainHttpError',
+      );
+    });
+
+    it('`allowPlainHttp: true` lets an internet-facing router without a certificate synthesize outside a sandbox, with one acknowledgeable warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `StackedAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true },
+        });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        const count = (code: string) => Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(code));
+        return { allowed: count('PlainHttpAllowedInProduction'), sandboxOnly: [...count('StackedRouterPlainHttp'), ...count('OriginSecretOverPlainHttp')] };
+      };
+      const { allowed, sandboxOnly } = synthProd(false);
+      assert.strictEqual(allowed.length, 1);
+      assert.match(JSON.stringify(allowed[0].entry.data), /origin secret crosses the edge → router hop in cleartext/);
+      assert.strictEqual(sandboxOnly.length, 0, 'one warning id to acknowledge, not the sandbox ones');
+      assert.strictEqual(synthProd(true).allowed.length, 0, 'acknowledged on the stack');
+      // A non-boolean fails synth.
+      createSpaBuildOutput(tmpDir);
+      const bad = new Stack(new App(), 'StackedAllowPlainHttpBad', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(bad, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: 'true' },
+          }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
+      );
+    });
+
+    it('without a certificate the hop is HTTP :80; an internet-facing sandbox router warns, an internal one does not', () => {
       const warns = (internal: boolean) => {
         createSpaBuildOutput(tmpDir);
-        const stack = new Stack(new App(), `StackedHttp${internal}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        const app = new App({ context: { sandboxMode: 'true' } });
+        const stack = new Stack(app, `StackedHttp${internal}`, { env: { account: '111111111111', region: 'us-east-1' } });
         new Hosting(stack, 'Hosting', {
           root: tmpDir,
           api: MOCK_API,
@@ -3686,10 +3880,11 @@ describe('Hosting', () => {
         });
         const listener = Object.values(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::Listener'))[0];
         assert.strictEqual(listener?.Properties.Port, 80);
-        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedRouterPlainHttp')).length;
+        const count = (code: string) => Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(code)).length;
+        return [count('StackedRouterPlainHttp'), count('OriginSecretOverPlainHttp')];
       };
-      assert.strictEqual(warns(false), 1);
-      assert.strictEqual(warns(true), 0);
+      assert.deepStrictEqual(warns(false), [1, 1]);
+      assert.deepStrictEqual(warns(true), [0, 0]);
     });
 
     it('a router certificate without a router domain fails synth', () => {
@@ -3709,7 +3904,8 @@ describe('Hosting', () => {
 
     it('the standalone ALB door stays public by design (open listener, plain forward)', () => {
       createSpaBuildOutput(tmpDir);
-      const stack = new Stack(new App(), 'AlbStaysPublic', { env: { account: '111111111111', region: 'us-east-1' } });
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'AlbStaysPublic', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
       const t = Template.fromStack(stack);
       assert.ok(albIngress(t).some((r) => r.CidrIp === '0.0.0.0/0'));
@@ -3875,7 +4071,8 @@ describe('Hosting — frontDoor.features', () => {
   });
 
   it('ALB: features (and a supported alias) reach the router', () => {
-    const stack = newStack('FeatAlb');
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'FeatAlb', { env: { account: '111111111111', region: 'us-east-1' } });
     new Hosting(stack, 'Hosting', {
       root: tmpDir,
       api: MOCK_API,
@@ -3898,6 +4095,7 @@ describe('Hosting — frontDoor.features', () => {
         kind: 'stacked',
         edge: 'cloudfront',
         router: 'alb',
+        internal: true,
         features: {
           edge: { waf: { webAclArn: EDGE_ACL }, contentSecurityPolicy: "default-src 'self'" },
           router: { waf: { enabled: true, webAclArn: REGIONAL_ACL }, monitoring: { enabled: true } },

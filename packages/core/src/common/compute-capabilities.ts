@@ -175,7 +175,10 @@ export interface ContainerComputeOptions {
 	 * @default `public.ecr.aws/docker/library/node:24-slim` — a stock, public,
 	 * AWS-hosted Node 24 image. Must be arm64-compatible (Blocks runs Fargate on
 	 * Graviton); multi-arch images resolve automatically. The default is pinned
-	 * by digest, so it doesn't change between deploys.
+	 * by digest, so it doesn't change between deploys. The default image runs
+	 * as its unprivileged `node` user (uid/gid 1000), not root; a custom image
+	 * runs as its own default user, so set `image` explicitly (for example to
+	 * the same Node image) if your handlers need root.
 	 */
 	image?: string;
 }

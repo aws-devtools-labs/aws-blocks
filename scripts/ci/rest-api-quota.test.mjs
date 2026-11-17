@@ -35,7 +35,7 @@ const PERCENT = '\nAn error occurred (LimitExceededException) when calling the G
 //   get-rest-apis.err present   -> its text on stderr, exit 254 (both forms);
 //                                  get-rest-apis-query.err / -json.err fail one form
 //   list-stacks.err present     -> the same for list-stacks
-//   describe-stack-resources    -> resources-<stack>.txt
+//   list-stack-resources        -> resources-<stack>.txt
 //   delete-rest-api             -> appends the id to deleted.txt
 const STUB = `#!/usr/bin/env bash
 d=$STUB_DIR
@@ -50,7 +50,7 @@ case "$1 $2" in
 'cloudformation list-stacks')
 	if [ -f "$d/list-stacks.err" ]; then cat "$d/list-stacks.err" >&2; exit 254; fi
 	cat "$d/stacks.txt" 2>/dev/null || true ;;
-'cloudformation describe-stack-resources')
+'cloudformation list-stack-resources')
 	cat "$d/resources-$4.txt" 2>/dev/null || true ;;
 'apigateway delete-rest-api')
 	echo "$4" >> "$d/deleted.txt" ;;

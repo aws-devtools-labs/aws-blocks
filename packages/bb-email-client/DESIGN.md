@@ -14,9 +14,10 @@ Email sending for transactional emails — welcome emails, password resets, orde
 
 Creates no SES resources. The CDK layer only:
 
-- **IAM Permissions:** grants `ses:SendEmail` and `ses:SendBulkEmail` to the parent scope's handler automatically, on this account's SES identities and configuration sets
+- **IAM Permissions:** grants `ses:SendEmail` and `ses:SendBulkEmail` to the parent scope's handler automatically, on this account's SES identities and configuration sets in the stack's own region and partition
 - **VPC endpoint requirement:** declares the SES interface endpoint, which the shared VPC layer provisions when the app's compute runs in a VPC
-- **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). Nothing is checked at synth or deploy time.
+- **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). A sender on a reserved domain gets the reserved-domain warning below instead, which links the same guide. SES itself is not queried at synth or deploy time.
+- **Reserved-domain check:** at synth, a `fromAddress` on a reserved domain (`example.com`/`.net`/`.org` and subdomains; the `.test`, `.example`, `.invalid` and `.localhost` TLDs, per RFC 2606 and RFC 6761) adds the acknowledgeable CDK warning `@aws-blocks/bb-email-client:UnverifiableSender`, because such a domain can never be verified and every send would fail. A reserved `replyTo` address adds `@aws-blocks/bb-email-client:UndeliverableReplyTo`. Both are warnings on every stage (sandbox and production); the check is purely on the address string.
 
 **Prerequisites (out of band):**
 
@@ -49,13 +50,36 @@ The mock and the AWS entry point run the same checks from `src/validation.ts` be
 
 `send()` throws; within `sendBatch()` an invalid message is marked `failed` in the per-entry results and not sent.
 
+## Batch Size Cap (mock and AWS)
+
+`sendBatch()` takes at most `maxBatchSize` messages per call (an `EmailOptions` field, default 100). Both layers check the count first, before any per-message validation, and throw `InvalidInputException` for a larger batch; nothing is sent (AWS) or recorded (mock). Without a cap, one request to an exposed method could fan out into an unbounded number of SES sends.
+
+`maxBatchSize` must be a positive integer. The mock, AWS and CDK constructors all check it, so a bad value fails at synth and at startup, not on the first `sendBatch()`.
+
+The cap counts messages, not recipients: each message can still have up to 50 recipients. It bounds a single call, not a caller (see [Rate Limiting Is the Application's Job](#rate-limiting-is-the-applications-job) below).
+
+## Rate Limiting Is the Application's Job
+
+The block doesn't limit how often a caller can send. That is a deliberate design decision:
+
+- **The block can't see the caller.** `send()` and `sendBatch()` take a message, not a request context. Who the caller is (a signed-in user, an API key, an IP address, an internal job) is known only to the app method that calls the block, so only the app can choose what a limit is keyed on.
+- **A limit needs shared state and a policy.** A per-caller ceiling has to count across every compute and every request, which means a store, a window and a default that suits every app. The app already has those choices to make for its own methods, and a limit inside the block would duplicate them or disagree with them.
+- **The build can't detect an exposed send.** Any `ApiNamespace` method can call any block, so synth can't tell which methods reach `send()` or whether they are gated. A synth-time refusal would either miss real open relays or reject safe apps.
+
+What the block does instead:
+
+- It bounds one call: `sendBatch()` takes at most `maxBatchSize` messages (default 100), and each message at most 50 recipients.
+- The README's security section shows the open-relay anti-pattern and the fix: gate the method with `auth.requireAuth(context)`, build the message on the server, and add a per-user limit if a gated method still sends on the caller's behalf. It sketches one such limit: a per-user, per-window counter in a `KVStore`, updated with a conditional `put`.
+
+**The consequence of getting it wrong falls on the app's AWS account.** Mail goes out under the app's own verified SES identity. Abuse shows up as bounces and complaints against that identity, which damages the domain's sending reputation, and SES can put the account under review, pause its sending, or suspend it. SES's own limits are no substitute: the sending quota (messages per rolling 24 hours) and the maximum send rate (messages per second) apply to the whole AWS account in a Region, shared by every caller and every app there. One caller can use up the quota or hold the account at its send rate, and the app's legitimate mail (password resets, notifications) then fails until capacity frees up. Every app that sends on a caller's behalf needs its own limit for that reason.
+
 ## HTML Part
 
 A message gets an HTML part only when `html` is set, for both `send()` and `sendBatch()`. `sendBatch()` uses `SendBulkEmail`, where one inline template is shared by every entry of a call, so it sends messages with `html` and messages without it in separate calls: the text-only call's template has no HTML part. The calls with an HTML part go first, so send order differs from input order, while `results` stays in input order. A plain-text `body` is never placed in an HTML part, where a mail client would render any markup in it.
 
 ## IAM
 
-The shared execution role gets `ses:SendEmail` (for `send()`) and `ses:SendBulkEmail` (for `sendBatch()`), scoped to this account's identities and configuration sets. No raw-MIME or stored-template sends are made, so `ses:SendRawEmail`, `ses:SendTemplatedEmail` and `ses:SendBulkTemplatedEmail` are not granted.
+The shared execution role gets `ses:SendEmail` (for `send()`) and `ses:SendBulkEmail` (for `sendBatch()`), scoped to this account's identities and configuration sets in the stack's region and partition (`Stack.formatArn`). The runtime SES client uses the Lambda's own region, so no other region is needed. The identity part stays `identity/*`: SES authorizes a send against the sending identity, which can be the address, its domain or a parent domain, and in the SES sandbox also against each recipient identity, so a narrower resource derived from `fromAddress` could deny sends that work today. No raw-MIME or stored-template sends are made, so `ses:SendRawEmail`, `ses:SendTemplatedEmail` and `ses:SendBulkTemplatedEmail` are not granted.
 
 ### Mock vs AWS Behavior Differences
 

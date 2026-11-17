@@ -670,3 +670,27 @@ test('CDK: fromExisting without encryption / objectLock emits no ignored-options
   const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ignored for a bucket wrapped'));
   assert.strictEqual(warnings.length, 0);
 });
+
+test('CDK: malformed allowedContentTypes / maxUploadBytes throw at synth, also for a wrapped bucket', () => {
+  for (const options of [
+    { allowedContentTypes: [] },
+    { allowedContentTypes: ['image'] },
+    { maxUploadBytes: 0 },
+    { maxUploadBytes: 1.5 },
+  ]) {
+    const { parent } = setup();
+    assert.throws(() => new FileBucket(parent, 'uploads', options), /allowedContentTypes|maxUploadBytes/, JSON.stringify(options));
+    const wrapped = setup();
+    assert.throws(
+      () => new FileBucket(wrapped.parent, 'uploads', { ...options, bucket: FileBucket.fromExisting('existing') }),
+      /allowedContentTypes|maxUploadBytes/,
+      `wrapped: ${JSON.stringify(options)}`,
+    );
+  }
+});
+
+test('CDK: valid upload constraints synth', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { allowedContentTypes: ['image/*', 'application/pdf'], maxUploadBytes: 1024 });
+  Template.fromStack(stack).resourceCountIs('AWS::S3::Bucket', 1);
+});

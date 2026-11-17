@@ -1,5 +1,5 @@
 ---
-'@aws-blocks/bb-auth-oidc': patch
+'@aws-blocks/bb-auth': patch
 '@aws-blocks/bb-compute': patch
 '@aws-blocks/bb-container-compute': patch
 '@aws-blocks/bb-cron-job': patch
@@ -7,7 +7,7 @@
 '@aws-blocks/blocks': patch
 ---
 
-test: check `defaults.permissionsBoundary` coverage for AuthOIDC, Compute, ContainerCompute, CronJob and Dashboard
+test: check `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob and Dashboard
 
 Each of these blocks now has a synth test that sets `defaults.permissionsBoundary`
 and fails if any IAM role in any synthesized template, including custom-resource

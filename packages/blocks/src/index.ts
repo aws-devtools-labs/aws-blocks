@@ -35,7 +35,15 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
  * Package: `@aws-blocks/auth-common`
  * Full docs: `docs/auth-common/README.md` in `@aws-blocks/blocks`.
  */
-export type { AuthAction, AuthActionInput, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type {
+	AuthAction,
+	AuthActionInput,
+	AuthField,
+	AuthState,
+	AuthUser,
+	AuthUserOf,
+	BlocksAuth,
+} from '@aws-blocks/auth-common';
 export type {
 	AgentConfig,
 	AgentResult,
@@ -104,6 +112,25 @@ export type {
  * Full docs: `docs/bb-async-job/README.md` in `@aws-blocks/blocks`.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+export type * from '@aws-blocks/bb-auth';
+/**
+ * **Authentication — email + password, social sign-in, OIDC and SAML in one block.**
+ *
+ * Use for any sign-in: email + password backed by a Cognito user pool (MFA,
+ * passkeys, groups + `requireRole`, the opt-in `auth.admin` surface), social
+ * and SAML providers federated through Cognito, and OIDC / OAuth 2.0 providers
+ * federated directly by your backend (no user pool needed). One options object
+ * configures every mechanism, and methods your configuration doesn't support
+ * don't compile. Runs locally with no AWS account; `stubIdp()` is an offline
+ * identity provider for development. Replaces `AuthBasic`, `AuthCognito` and
+ * `AuthOIDC`.
+ *
+ * Package: `@aws-blocks/bb-auth`
+ * Full docs: `docs/bb-auth/README.md` in `@aws-blocks/blocks`.
+ *
+ * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
+ */
+export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 /**
  * **`Compute` — choose where a workload runs by stating its type.**
  *
@@ -128,106 +155,6 @@ export type {
 	ScalingSignal,
 	ServerlessComputeOptions,
 } from '@aws-blocks/core';
-/**
- * **Username/password authentication with JWT sessions.**
- *
- * Use when you need simple credential-based auth for prototypes, internal
- * tools, or MVPs. Includes password hashing (bcrypt), HTTP-only cookie
- * sessions, optional email-confirmed signup, and password reset flows.
- *
- * Package: `@aws-blocks/bb-auth-basic`
- * Full docs: `docs/bb-auth-basic/README.md` in `@aws-blocks/blocks`.
- *
- * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
- */
-export {
-	AuthBasic,
-	AuthBasicErrors,
-	type AuthBasicOptions,
-	type AuthBasicUser,
-	type PasswordPolicy,
-} from '@aws-blocks/bb-auth-basic';
-export type {
-	AdminAction,
-	AdminActionGate,
-	AdminCreateInit,
-	AdminDisabled,
-	AdminGetterOf,
-	AdminGrants,
-	AdminOptions,
-	AdminSurface,
-	AdminUser,
-	AdminUserFilter,
-	AuthCognitoOptions,
-	AuthFlowType,
-	CodeDeliveryDetails,
-	CodeDeliveryFn,
-	CognitoUser,
-	ConfirmSignInOptions,
-	DeviceRecord,
-	ExternalUserPoolRef,
-	GroupAdmin,
-	LifecycleAdmin,
-	MFAPreference,
-	ResetPasswordResult,
-	SetPasswordOptions,
-	SignInNextStep,
-	SignInOptions,
-	SignInResult,
-	SignUpOptions,
-	SignUpResult,
-	UpdateAttributeOutcome,
-	UserAttribute,
-} from '@aws-blocks/bb-auth-cognito';
-/**
- * **Cognito authentication — username/password + MFA + groups.**
- *
- * Use for Cognito auth with MFA (SMS / TOTP / Email OTP), user pool groups +
- * role-based access control, custom attributes, and device tracking. Sessions
- * are opaque HMAC-signed cookies — Cognito tokens never reach the browser.
- *
- * For simple username/password without Cognito, use `AuthBasic`. For direct
- * OIDC (no Cognito), use `AuthOIDC`.
- *
- * Package: `@aws-blocks/bb-auth-cognito`
- * Full docs: `docs/bb-auth-cognito/README.md` in `@aws-blocks/blocks`.
- *
- * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
- */
-export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
-export type {
-	AuthOIDCErrorName,
-	MappedClaims,
-	OIDCUser,
-	RelayOrigin,
-} from '@aws-blocks/bb-auth-oidc';
-/**
- * **OIDC sign-in gate for Google, GitHub, Okta, Cognito User Pools, and any
- * OIDC-compliant IdP.**
- *
- * Use when you want users to sign in with an external identity provider
- * rather than managing credentials yourself. Sessions outlive the IdP's
- * ~1 hour ID token TTL with transparent background refresh, and sign-out
- * invalidates the session server-side. No session storage to configure.
- * Two lifecycle hooks (`onSignIn`, `onSignOut`) hand customers the seam
- * for profile-row upserts and audit logging.
- *
- * Package: `@aws-blocks/bb-auth-oidc`
- * Full docs: `docs/bb-auth-oidc/README.md` in `@aws-blocks/blocks`.
- *
- * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
- */
-export {
-	AuthOIDC,
-	AuthOIDCErrors,
-	cognitoFederated,
-	customOauth2,
-	customOidc,
-	github,
-	google,
-	relayOrigin,
-	stubIdp,
-} from '@aws-blocks/bb-auth-oidc';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 /**
  * **Scheduled task execution backed by EventBridge Scheduler and Lambda.**
@@ -266,7 +193,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
  *
  * Use only when you specifically need complex multi-table JOINs, SQL
  * transactions, foreign key constraints, or complex aggregations. For most
- * application data, prefer `DistributedTable` (lower cost, simpler ops).
+ * application data, prefer `KVStore` (lower cost, simpler ops).
  * Requires a `migrations/` folder with `.sql` files.
  *
  * Package: `@aws-blocks/bb-data`
@@ -287,31 +214,6 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * Full docs: `docs/bb-distributed-data/README.md` in `@aws-blocks/blocks`.
  */
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-export type {
-	DeleteOptions as DTDeleteOptions,
-	DistributedTableOptions,
-	ExternalKmsKeyRef as DTExternalKmsKeyRef,
-	GetOptions as DTGetOptions,
-	PutOptions as DTPutOptions,
-	QueryOptions as DTQueryOptions,
-	ReadValidationMode,
-	ScanOptions as DTScanOptions,
-	TableKey,
-	TableKeyConfig,
-} from '@aws-blocks/bb-distributed-table';
-/**
- * **Structured data storage with secondary indexes backed by DynamoDB.**
- *
- * Default choice for most application data. Use for entities with composite
- * keys, range queries, secondary access patterns, and batch operations.
- * Supports Zod/Valibot schemas for type-safe validation. Zero cost at rest,
- * scales automatically. Use `KVStore` for simpler key-only access, or
- * `Database` when you need SQL JOINs/transactions.
- *
- * Package: `@aws-blocks/bb-distributed-table`
- * Full docs: `docs/bb-distributed-table/README.md` in `@aws-blocks/blocks`.
- */
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 /**
  * **Transactional email with AWS SES integration.**
@@ -344,8 +246,8 @@ export type {
  * Use for storing, retrieving, and serving binary files — user uploads,
  * generated reports, images, videos, or static assets. Supports presigned
  * URLs for direct browser upload/download, batch deletion, and prefix-scoped
- * listing. For structured key-value data, use `KVStore`. For queryable
- * records with indexes, use `DistributedTable`.
+ * listing. For key-value data and queryable records with indexes, use
+ * `KVStore`.
  *
  * Package: `@aws-blocks/bb-file-bucket`
  * Full docs: `docs/bb-file-bucket/README.md` in `@aws-blocks/blocks`.
@@ -354,6 +256,9 @@ export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
 	ChunkingConfig,
 	ChunkingStrategy,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentToolResult,
 	KnowledgeBaseOptions,
 	MetadataFilter,
 	RetrieveOptions,
@@ -374,20 +279,41 @@ export type {
  * Full docs: `docs/bb-knowledge-base/README.md` in `@aws-blocks/blocks`.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+// A type keeps its own name. It gets the block prefix only when another block
+// in this file exports a type with the same name (`PutOptions` and
+// `ScanOptions` are also names of `FileBucket`).
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	Entry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
+	GetOptions,
+	IndexConfig,
+	KeyConfig,
+	KeyOf,
 	KVStoreOptions,
+	PutBatchEntry,
 	PutOptions as KVPutOptions,
+	QueryOptions,
+	ReadValidationMode,
+	Results,
+	ScanOptions as KVScanOptions,
+	SortCondition,
+	ValueOf,
+	Where,
 } from '@aws-blocks/bb-kv-store';
 /**
- * **Simple key-value storage backed by DynamoDB.**
+ * **Key-value and document storage backed by DynamoDB, with optional secondary indexes.**
  *
- * Use for fast single-key get/put/delete: user preferences, feature flags,
- * session data, caches. Supports conditional writes and schema validation.
- * If you need queries, indexes, or structured data, use `DistributedTable`.
+ * Default choice for most application data. With no options it is a
+ * string-keyed store for caches, flags, sessions and user preferences. With a
+ * `schema` and a `key` it holds records you list or query as a collection
+ * (todos, orders, messages) with composite keys, range queries and batch
+ * operations; add `indexes` to read the same records by other fields. Supports
+ * Zod/Valibot schemas for type-safe validation and conditional writes. Zero
+ * cost at rest, scales automatically. Use `Database` when you need SQL
+ * JOINs/transactions.
  *
  * Package: `@aws-blocks/bb-kv-store`
  * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.

@@ -1,5 +1,5 @@
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('auth-container');

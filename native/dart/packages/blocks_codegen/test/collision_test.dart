@@ -80,6 +80,77 @@ RpcModel _nestedVsFlat() {
   );
 }
 
+/// `setState`-style methods (`ns.method`) whose input unions share the
+/// `signUp` and `signOut` arms but differ in shape. Dart names an `…Input`
+/// union's arms `<Value>Input`, so every union's arm wants `SignUpInput`.
+/// [extra] adds one more arm to the last union only. [fields] sets how many
+/// fields each method's `signUp` arm has (by default `i + 1`, all distinct),
+/// so that equal counts make structurally identical, deduplicated unions.
+RpcModel _sharedArmNames({
+  bool reversed = false,
+  List<String> methods = const ['basic.setState', 'cognito.setState'],
+  Map<String, TypeRef> schemas = const {},
+  String? extra,
+  List<int>? fields,
+}) {
+  RpcMethod setState(int i) {
+    final signUp = {
+      for (var f = 0; f < (fields?[i] ?? i + 1); f++)
+        'f$f': const PrimitiveRef('String'),
+    };
+    return RpcMethod(
+      name: methods[i],
+      params: [
+        RpcParam(
+          name: 'input',
+          isRequired: true,
+          schema: DiscriminatedUnionRef(
+            discriminant: 'action',
+            variants: [
+              UnionVariant(
+                discriminantValue: 'signUp',
+                properties: signUp,
+                required: signUp.keys.toSet(),
+              ),
+              const UnionVariant(
+                discriminantValue: 'signOut',
+                properties: {},
+                required: {},
+              ),
+              if (extra != null && i == methods.length - 1)
+                UnionVariant(
+                  discriminantValue: extra,
+                  properties: const {},
+                  required: const {},
+                ),
+            ],
+          ),
+        ),
+      ],
+      result: const PrimitiveRef('void'),
+    );
+  }
+
+  final built = [for (var i = 0; i < methods.length; i++) setState(i)];
+  return RpcModel(
+    title: 't',
+    version: '1',
+    schemas: schemas,
+    methods: reversed ? built.reversed.toList() : built,
+  );
+}
+
+/// The generated library's top-level class names, checked to be distinct.
+Set<String> _classes(CodegenModel model) {
+  final out = const DartCodeGenerator().generate(model);
+  final classes = RegExp(
+    r'^class (\w+)',
+    multiLine: true,
+  ).allMatches(out).map((m) => m[1]!).toList();
+  expect(classes.toSet(), hasLength(classes.length), reason: '$classes');
+  return classes.toSet();
+}
+
 void main() {
   group('param qualification', () {
     test(
@@ -394,6 +465,368 @@ void main() {
           ),
         ),
         returnsNormally,
+      );
+    });
+  });
+
+  group('a union embedded in an arm, deduplicated', () {
+    test('keeps the embedded union in every namespace', () {
+      // `alpha` and `beta` declare one union; its `confirmSignIn` arm embeds
+      // a `challenge` union, which the second occurrence deduplicates.
+      RpcMethod setState(String ns) => RpcMethod(
+        name: '$ns.setState',
+        params: [
+          RpcParam(
+            name: 'input',
+            isRequired: true,
+            schema: const DiscriminatedUnionRef(
+              discriminant: 'action',
+              variants: [
+                UnionVariant(
+                  discriminantValue: 'confirmSignIn',
+                  properties: {'session': PrimitiveRef('String')},
+                  required: {'session'},
+                  embeddedUnion: DiscriminatedUnionRef(
+                    discriminant: 'challenge',
+                    variants: [
+                      UnionVariant(
+                        discriminantValue: 'code',
+                        properties: {'code': PrimitiveRef('String')},
+                        required: {'code'},
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        result: const PrimitiveRef('void'),
+      );
+      final model = CodegenModelBuilder().build(
+        RpcModel(
+          title: 't',
+          version: '1',
+          schemas: {},
+          methods: [setState('alpha'), setState('beta')],
+        ),
+      );
+      for (final ns in model.namespaces) {
+        final type = ns.operations.single.params.single.type;
+        final union = type is SchemaReference ? model.types[type.name] : type;
+        expect(
+          (union! as SealedClassType).variants.single.embeddedUnion,
+          isNotNull,
+          reason: ns.name,
+        );
+      }
+      final out = const DartCodeGenerator().generate(model);
+      expect(
+        RegExp(
+          r'^class \w*ConfirmSignInInput extends',
+          multiLine: true,
+        ).allMatches(out),
+        hasLength(1),
+      );
+      expect(out, contains('final ConfirmSignInInputChallenge challenge;'));
+    });
+  });
+
+  group('union arms shared by two unions', () {
+    test('take the namespace prefix, whatever the spec order', () {
+      final names = <Set<String>>[];
+      for (final reversed in [false, true]) {
+        final model = CodegenModelBuilder().build(
+          _sharedArmNames(reversed: reversed),
+        );
+        final out = const DartCodeGenerator().generate(model);
+        names.add(_classes(model));
+        // The union whose name sorts first keeps the short names.
+        expect(out, contains('class SignUpInput extends BasicSetStateInput {'));
+        expect(
+          out,
+          contains('class SignOutInput extends BasicSetStateInput {'),
+        );
+        expect(
+          out,
+          contains('class CognitoSignUpInput extends CognitoSetStateInput {'),
+        );
+        expect(
+          out,
+          contains('class CognitoSignOutInput extends CognitoSetStateInput {'),
+        );
+        expect(
+          out,
+          contains("case 'signUp': return CognitoSignUpInput.fromJson(json);"),
+        );
+        // One compact line per renamed union.
+        expect(model.warnings, [
+          'Naming conflict: union CognitoSetStateInput shares Dart arm class '
+              'names with another type; generated as SignUpInput -> '
+              'CognitoSignUpInput, SignOutInput -> CognitoSignOutInput. '
+              'Rename the arms or the union in your spec to keep the short '
+              'names.',
+        ]);
+      }
+      expect(names.first, names.last);
+    });
+
+    test('in one namespace fall back to the union name', () {
+      for (final reversed in [false, true]) {
+        final model = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            methods: ['basic.setState', 'cognito.setState', 'cognito.update'],
+          ),
+        );
+        final classes = _classes(model);
+        expect(classes, containsAll(['SignUpInput', 'CognitoSignUpInput']));
+        expect(
+          classes,
+          containsAll([
+            'CognitoUpdateInputSignUp',
+            'CognitoUpdateInputSignOut',
+          ]),
+        );
+        expect(
+          model.warnings,
+          contains(
+            contains(
+              'union CognitoUpdateInput shares Dart arm class names with '
+              'another type; generated as SignUpInput -> '
+              'CognitoUpdateInputSignUp, SignOutInput -> '
+              'CognitoUpdateInputSignOut.',
+            ),
+          ),
+        );
+      }
+    });
+
+    test('fall back to the union name when the prefixed name is taken', () {
+      for (final reversed in [false, true]) {
+        // Taken by a model.
+        final byModel = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            schemas: {
+              'CognitoSignUpInput': const InlineObjectRef(
+                properties: {'x': PrimitiveRef('String')},
+                required: {'x'},
+              ),
+            },
+          ),
+        );
+        expect(
+          _classes(byModel),
+          containsAll([
+            'CognitoSignUpInput',
+            'CognitoSetStateInputSignUp',
+            'CognitoSignOutInput',
+          ]),
+        );
+
+        // Taken by another union's own arm (`cognitoSignUp` in `x.setState`),
+        // which keeps it.
+        final byArm = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            methods: ['basic.setState', 'cognito.setState', 'x.setState'],
+            extra: 'cognitoSignUp',
+          ),
+        );
+        final classes = _classes(byArm);
+        expect(
+          classes,
+          containsAll([
+            'CognitoSignUpInput',
+            'CognitoSetStateInputSignUp',
+            'XSignUpInput',
+          ]),
+        );
+        final out = const DartCodeGenerator().generate(byArm);
+        expect(
+          out,
+          contains('class CognitoSignUpInput extends XSetStateInput {'),
+        );
+      }
+    });
+
+    test('of a union two namespaces share take one prefix in any order', () {
+      // `bb` and `zz` declare one union, deduplicated into one class. Its
+      // arms take the prefix of the namespace that sorts first, whichever
+      // the spec lists first. (The union class itself is still named after
+      // the first one listed.)
+      final classes = [
+        for (final methods in [
+          ['aa.setState', 'bb.setState', 'zz.setState'],
+          ['aa.setState', 'zz.setState', 'bb.setState'],
+        ])
+          _classes(
+            CodegenModelBuilder().build(
+              _sharedArmNames(methods: methods, fields: [1, 2, 2]),
+            ),
+          ),
+      ];
+      expect(classes.first, containsAll(['SignUpInput', 'BbSignUpInput']));
+      expect(classes.first, classes.last);
+    });
+
+    test('keep the short name by smallest origin, in any spec order', () {
+      // `bb` and `zz` declare one union, `cc` another. The union with the
+      // smallest origin (`bb.setState`) keeps the short names in every
+      // order, whatever its class is named after.
+      const orders = [
+        ['bb', 'cc', 'zz'],
+        ['bb', 'zz', 'cc'],
+        ['cc', 'bb', 'zz'],
+        ['cc', 'zz', 'bb'],
+        ['zz', 'bb', 'cc'],
+        ['zz', 'cc', 'bb'],
+      ];
+      final classes = [
+        for (final order in orders)
+          _classes(
+            CodegenModelBuilder().build(
+              _sharedArmNames(
+                methods: [for (final ns in order) '$ns.setState'],
+                fields: [for (final ns in order) ns == 'cc' ? 1 : 2],
+              ),
+            ),
+          ),
+      ];
+      expect(classes.first, containsAll(['SignUpInput', 'CcSignUpInput']));
+      for (final c in classes) {
+        expect(c, classes.first);
+      }
+    });
+
+    test('of a \$ref union never take an inline twin\'s prefix', () {
+      // `zz.setState` declares the same union inline as the `ZInput` schema,
+      // so it deduplicates into it. A `schema:` origin ranks before every
+      // method origin, so `ZInput` keeps the short names and `bb`'s union
+      // takes its prefix.
+      final zInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          const UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              'f0': PrimitiveRef('String'),
+              'f1': PrimitiveRef('String'),
+            },
+            required: {'f0', 'f1'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      for (final reversed in [false, true]) {
+        final classes = _classes(
+          CodegenModelBuilder().build(
+            _sharedArmNames(
+              reversed: reversed,
+              methods: const ['bb.setState', 'zz.setState'],
+              fields: const [1, 2],
+              schemas: {'ZInput': zInput},
+            ),
+          ),
+        );
+        expect(
+          classes,
+          containsAll([
+            'SignUpInput',
+            'SignOutInput',
+            'BbSignUpInput',
+            'BbSignOutInput',
+          ]),
+        );
+        expect(classes, isNot(contains('ZzSignUpInput')));
+        expect(classes, isNot(contains('ZInputSignUp')));
+      }
+      // When a smaller schema (`AInput`) keeps the short names, `ZInput`'s
+      // arms are named after it, never after `zz`, its inline twin.
+      final aInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              for (var f = 0; f < 3; f++) 'f$f': const PrimitiveRef('String'),
+            },
+            required: {for (var f = 0; f < 3; f++) 'f$f'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      final classes = _classes(
+        CodegenModelBuilder().build(
+          _sharedArmNames(
+            methods: const ['bb.setState', 'zz.setState'],
+            fields: const [1, 2],
+            schemas: {'ZInput': zInput, 'AInput': aInput},
+          ),
+        ),
+      );
+      expect(
+        classes,
+        containsAll(['SignUpInput', 'ZInputSignUp', 'BbSignUpInput']),
+      );
+      expect(classes, isNot(contains('ZzSignUpInput')));
+    });
+
+    test('of a named schema win the short name over a method origin', () {
+      // `aa.setState#param:input` sorts before `schema:ZInput` as a string,
+      // but a `schema:` origin ranks first, so declaring the union as a
+      // named schema pins its arms' short names.
+      final zInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          const UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              'f0': PrimitiveRef('String'),
+              'f1': PrimitiveRef('String'),
+            },
+            required: {'f0', 'f1'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      final out = const DartCodeGenerator().generate(
+        CodegenModelBuilder().build(
+          _sharedArmNames(
+            methods: const ['aa.setState'],
+            fields: const [1],
+            schemas: {'ZInput': zInput},
+          ),
+        ),
+      );
+      expect(out, contains('class SignUpInput extends ZInput {'));
+      expect(out, contains('class AaSignUpInput extends AaSetStateInput {'));
+    });
+
+    test('throws with --fail-on-collision', () {
+      expect(
+        () =>
+            CodegenModelBuilder(failOnCollision: true).build(_sharedArmNames()),
+        throwsA(
+          isA<NamingConflictException>().having(
+            (e) => e.message,
+            'message',
+            contains('SignUpInput -> CognitoSignUpInput'),
+          ),
+        ),
       );
     });
   });

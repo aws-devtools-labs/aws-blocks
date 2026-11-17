@@ -1,0 +1,257 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The comprehensive app's test-only RPCs (`testSupport`: account creation, the
+ * `authC.admin` surface, a secret setting's value, the delivered-code sweep)
+ * and the Admin* IAM behind them exist only on an e2e build. This proves it on
+ * the synthesized stack, offline: a normal synth registers none of the methods
+ * (neither in `testSupport` nor back in `api`), records no `testSupport`
+ * namespace, grants no admin-surface `cognito-idp` action on any pool, and
+ * carries no test-support secret. The e2e synth (`BLOCKS_TEST_ENV=sandbox`)
+ * registers exactly `TEST_SUPPORT_METHODS`, grants admin only on the pools
+ * those methods use, and passes the run's secret only as config — never as an
+ * SSM parameter or a value in the template.
+ *
+ * The e2e synth also runs with `E2E_FROM_EMAIL` set, as CI's e2e jobs do: every
+ * user pool then sends through that SES identity (`EmailSendingAccount:
+ * DEVELOPER`), and without it every pool keeps Cognito's default sender.
+ *
+ * Each synth runs in its own process (`test-support-synth.probe.ts`, under
+ * `--conditions=cdk`), because the flag is read when the backend module loads.
+ */
+
+import { before, describe, test } from 'node:test';
+import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { TEST_SUPPORT_METHODS } from './test-support.js';
+
+const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The secret the e2e synth runs with (a stand-in for the per-run one). */
+const E2E_SECRET = `synth-probe-secret-${'0'.repeat(48)}`;
+
+/** The SES sender the e2e synth runs with (a stand-in for the `E2E_FROM_EMAIL` secret). */
+const E2E_SENDER = 'e2e-sender@example.com';
+
+/** Every `Auth` block of the app that creates a user pool (the OIDC-only ones create none). */
+const POOL_BLOCKS = ['auth', 'auth-same-origin', 'auth-cross-domain', 'authC', 'authCMfa', 'auth-gated', 'auth-delivery-fails'];
+
+/**
+ * `cognito-idp` actions only the `admin` surface grants (bb-auth's
+ * `adminIamActions`). `AdminListGroupsForUser` is left out: every pool with
+ * groups gets it for `requireRole`'s live membership read.
+ */
+const ADMIN_LIFECYCLE = [
+	'cognito-idp:AdminCreateUser',
+	'cognito-idp:AdminDeleteUser',
+	'cognito-idp:AdminEnableUser',
+	'cognito-idp:AdminDisableUser',
+	'cognito-idp:AdminResetUserPassword',
+	'cognito-idp:AdminSetUserPassword',
+	'cognito-idp:AdminGetUser',
+	'cognito-idp:ListUsers',
+	'cognito-idp:AdminUserGlobalSignOut',
+];
+const ADMIN_GROUPS = ['cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup', 'cognito-idp:ListUsersInGroup'];
+/**
+ * Every email + password pool grants these outside the `admin` surface: a completed
+ * password reset resolves the pool username and signs the user out everywhere (#912).
+ * So they're checked on their own (user pools only), not as admin surface.
+ */
+const PASSWORD_RESET = ['cognito-idp:AdminGetUser', 'cognito-idp:AdminUserGlobalSignOut'];
+const ADMIN_SURFACE = new Set([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS].filter((a) => !PASSWORD_RESET.includes(a)));
+const withoutReset = (actions: readonly string[]) => actions.filter((a) => !PASSWORD_RESET.includes(a));
+
+interface CfnResource {
+	Type: string;
+	Properties?: Record<string, unknown>;
+}
+
+interface ProbeResult {
+	apiMethods: string[] | null;
+	testSupportMethods: string[] | null;
+	namespaces: string[];
+	configKeys: string[];
+	template: { Resources: Record<string, CfnResource>; Outputs?: Record<string, unknown> };
+}
+
+/** Synthesize the stack in a fresh `--conditions=cdk` process and return the probe's summary. */
+function synth(testEnv: string | undefined): ProbeResult {
+	const dir = mkdtempSync(join(tmpdir(), 'test-support-synth-'));
+	try {
+		const out = join(dir, 'probe.json');
+		const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', CDK_CONTEXT_JSON: JSON.stringify({ sandboxMode: 'true' }) };
+		delete env.BLOCKS_TEST_ENV;
+		delete env.BLOCKS_TEST_SUPPORT_SECRET;
+		delete env.E2E_FROM_EMAIL;
+		if (testEnv) {
+			env.BLOCKS_TEST_ENV = testEnv;
+			env.BLOCKS_TEST_SUPPORT_SECRET = E2E_SECRET;
+			env.E2E_FROM_EMAIL = E2E_SENDER;
+		}
+		execFileSync('npx', ['tsx', '-C', 'cdk', 'test/test-support-synth.probe.ts', out], { cwd: APP_ROOT, env, stdio: 'pipe' });
+		return JSON.parse(readFileSync(out, 'utf-8'));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+/** Actions of `surface` (default: the admin surface) granted per resource logical id (`Fn::GetAtt [id, 'Arn']`), across every IAM policy. */
+function adminGrants(template: ProbeResult['template'], surface: ReadonlySet<string> = ADMIN_SURFACE): Map<string, Set<string>> {
+	const grants = new Map<string, Set<string>>();
+	const statements = Object.values(template.Resources).flatMap((r) => {
+		if (r.Type !== 'AWS::IAM::Policy' && r.Type !== 'AWS::IAM::ManagedPolicy' && r.Type !== 'AWS::IAM::Role') return [];
+		const docs = [r.Properties?.PolicyDocument, ...asArray(r.Properties?.Policies).map((p) => field(p, 'PolicyDocument'))];
+		return docs.flatMap((doc) => asArray(field(doc, 'Statement')));
+	});
+	for (const statement of statements) {
+		const actions = asArray(field(statement, 'Action')).filter((a): a is string => typeof a === 'string');
+		const admin = actions.filter((a) => surface.has(a));
+		if (admin.length === 0) continue;
+		for (const resource of asArray(field(statement, 'Resource'))) {
+			const getAtt = asArray(field(resource, 'Fn::GetAtt'));
+			const id = typeof getAtt[0] === 'string' ? getAtt[0] : JSON.stringify(resource);
+			const set = grants.get(id) ?? new Set<string>();
+			for (const a of admin) set.add(a);
+			grants.set(id, set);
+		}
+	}
+	return grants;
+}
+
+/** The logical id of the user pool of the `Auth` block `blockId` (CDK path `test-app/<blockId>/pool`). */
+function poolId(template: ProbeResult['template'], blockId: string): string {
+	const pattern = new RegExp(`^testapp${blockId.replace(/-/g, '')}pool[0-9A-F]{8}$`);
+	const ids = Object.entries(template.Resources)
+		.filter(([id, r]) => r.Type === 'AWS::Cognito::UserPool' && pattern.test(id))
+		.map(([id]) => id);
+	assert.strictEqual(ids.length, 1, `expected one user pool for ${blockId}, found ${JSON.stringify(ids)}`);
+	return ids[0];
+}
+
+function asArray(value: unknown): unknown[] {
+	if (value === undefined) return [];
+	return Array.isArray(value) ? value : [value];
+}
+
+function field(value: unknown, key: string): unknown {
+	return typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+/** The ungated `api.*` names these methods had before they were gated. */
+const LEGACY_API_NAMES: readonly string[] = TEST_SUPPORT_METHODS.map((m) => (m === 'provisionUser' ? 'authProvisionUser' : m));
+
+describe('comprehensive test support: normal synth vs e2e synth', () => {
+	let normal: ProbeResult;
+	let e2e: ProbeResult;
+
+	before(() => {
+		normal = synth(undefined);
+		e2e = synth('sandbox');
+	});
+
+	describe('normal synth (no BLOCKS_TEST_ENV)', () => {
+		test('registers no testSupport namespace', () => {
+			assert.strictEqual(normal.testSupportMethods, null);
+			assert.ok(!normal.namespaces.includes('testSupport'), `namespaces: ${JSON.stringify(normal.namespaces)}`);
+		});
+
+		test('none of the test-only methods is on api either', () => {
+			assert.ok(normal.apiMethods && normal.apiMethods.length > 0, 'expected the api namespace to load');
+			const leaked = normal.apiMethods.filter((m) => LEGACY_API_NAMES.includes(m));
+			assert.deepStrictEqual(leaked, []);
+		});
+
+		test('grants no admin-surface cognito-idp action on any resource', () => {
+			const grants = Object.fromEntries([...adminGrants(normal.template)].map(([id, s]) => [id, [...s].sort()]));
+			assert.deepStrictEqual(grants, {});
+		});
+
+		test('grants the password-reset actions only on user pools', () => {
+			const t = normal.template;
+			const grants = [...adminGrants(t, new Set(PASSWORD_RESET))];
+			assert.ok(grants.length > 0, 'expected the email + password pools to grant the password-reset actions');
+			for (const [id, actions] of grants) {
+				assert.strictEqual(t.Resources[id]?.Type, 'AWS::Cognito::UserPool', `${id} is not a user pool`);
+				assert.deepStrictEqual([...actions].sort(), [...PASSWORD_RESET].sort(), id);
+			}
+		});
+
+		test('every user pool keeps the default sender without E2E_FROM_EMAIL', () => {
+			const pools = Object.values(normal.template.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');
+			assert.strictEqual(pools.length, POOL_BLOCKS.length);
+			for (const pool of pools) {
+				const account = field(pool.Properties?.EmailConfiguration, 'EmailSendingAccount');
+				assert.ok(account === undefined || account === 'COGNITO_DEFAULT', `EmailSendingAccount: ${account}`);
+			}
+		});
+
+		test('carries no test-support secret or handler flag', () => {
+			const json = JSON.stringify(normal.template);
+			assert.ok(!json.includes('test-support-secret'), 'a test-support-secret parameter is synthesized');
+			assert.ok(!json.includes('BLOCKS_TEST_SUPPORT_SECRET'), 'BLOCKS_TEST_SUPPORT_SECRET reaches the handler');
+			assert.ok(!json.includes('BLOCKS_TEST_ENV'), 'BLOCKS_TEST_ENV reaches the handler');
+		});
+	});
+
+	describe('e2e synth (BLOCKS_TEST_ENV=sandbox)', () => {
+		test('registers exactly the gated testSupport methods, and none on api', () => {
+			assert.deepStrictEqual(e2e.testSupportMethods, [...TEST_SUPPORT_METHODS].sort());
+			assert.ok(e2e.namespaces.includes('testSupport'), `namespaces: ${JSON.stringify(e2e.namespaces)}`);
+			assert.deepStrictEqual(
+				(e2e.apiMethods ?? []).filter((m) => LEGACY_API_NAMES.includes(m)),
+				[],
+			);
+		});
+
+		test('grants admin only on the pools testSupport drives', () => {
+			const t = e2e.template;
+			const grants = Object.fromEntries([...adminGrants(t)].map(([id, s]) => [id, [...s].sort()]));
+			assert.deepStrictEqual(grants, {
+				[poolId(t, 'auth')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'auth-same-origin')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'auth-cross-domain')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'authC')]: withoutReset([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS]).sort(),
+			});
+		});
+
+		test('every user pool sends through the E2E_FROM_EMAIL SES identity', () => {
+			const t = e2e.template;
+			const pools = Object.values(t.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');
+			assert.strictEqual(pools.length, POOL_BLOCKS.length);
+			for (const block of POOL_BLOCKS) {
+				const config = t.Resources[poolId(t, block)]?.Properties?.EmailConfiguration;
+				assert.strictEqual(field(config, 'EmailSendingAccount'), 'DEVELOPER', block);
+				assert.strictEqual(field(config, 'From'), E2E_SENDER, block);
+				// arn:<partition>:ses:<stack region>:<stack account>:identity/<address>
+				const arn = asArray(field(field(config, 'SourceArn'), 'Fn::Join'))[1];
+				assert.ok(JSON.stringify(arn).endsWith(`":identity/${E2E_SENDER}"]`), `${block} SourceArn: ${JSON.stringify(arn)}`);
+				assert.ok(JSON.stringify(arn).includes('":ses:",{"Ref":"AWS::Region"}'), `${block} SourceArn: ${JSON.stringify(arn)}`);
+			}
+		});
+
+		test('forwards the flag and the secret as config, never as an SSM parameter or a template value', () => {
+			const json = JSON.stringify(e2e.template);
+			assert.ok(json.includes('BLOCKS_TEST_ENV'), 'BLOCKS_TEST_ENV is forwarded');
+			assert.ok(e2e.configKeys.includes('BLOCKS_TEST_SUPPORT_SECRET'), `config keys: ${JSON.stringify(e2e.configKeys)}`);
+			// Core serializes the whole config object through one CDK token, so the value
+			// sits in the config deployment's properties, readable by principals in the
+			// stack's account. It must be nowhere else: no output, parameter or env var.
+			const holders = Object.entries(e2e.template.Resources)
+				.filter(([, r]) => JSON.stringify(r).includes(E2E_SECRET))
+				.map(([id, r]) => `${id} (${r.Type})`);
+			assert.deepStrictEqual(
+				holders.map((h) => h.replace(/[0-9A-F]{8} /, ' ')),
+				['BlocksConfigDeploymentCustomResource (Custom::CDKBucketDeployment)'],
+			);
+			assert.ok(!JSON.stringify(e2e.template.Outputs ?? {}).includes(E2E_SECRET), 'the secret is in an output');
+			assert.ok(!json.includes('test-support-secret'), 'a test-support-secret SSM parameter is synthesized');
+			assert.ok(!('TestSupportSecretParameter' in (e2e.template.Outputs ?? {})), 'a TestSupportSecretParameter output');
+		});
+	});
+});

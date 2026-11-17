@@ -1,0 +1,118 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The stub IdP's **route table** and issuer URL, without the IdP itself.
+ *
+ * `RawRoute`s must be registered while the `Auth` constructor runs, but the
+ * stub's handlers (`stub-idp.ts`: key derivation, token signing, the account
+ * picker) are needed only when a request arrives. This module mounts the
+ * routes and loads the handlers on the first request through the `load`
+ * callback it is given. The mock entry passes a static import; the AWS entry
+ * passes a dynamic `import('./engines/stub-idp.js')`, and only on a sandbox
+ * deployment — so any other deployed app's module graph never contains the
+ * stub IdP (`index.aws.bearer.test.ts` pins this).
+ *
+ * Imports nothing heavier than core's `RawRoute`.
+ *
+ * @internal
+ */
+
+import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-blocks/core';
+import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+
+/** Root under which every stub issuer is mounted (inside the reserved auth subtree). */
+export const STUB_ROOT = `${BLOCKS_AUTH_PREFIX}/idp`;
+
+/** Path of a provider's stub issuer. */
+export function stubIssuerPath(providerId: string): string {
+	return `${STUB_ROOT}/${encodeURIComponent(providerId)}`;
+}
+
+/**
+ * The absolute issuer URL of a provider's stub for this request: the
+ * deploy-injected `BLOCKS_API_URL` (which the server can reach itself) with any
+ * stage prefix before `/aws-blocks`, else the request's base URL, origin plus any
+ * API Gateway stage (`getRequestBaseUrl()`; `ctx.request.url` is the route path
+ * and never has the stage) — `bb-auth-oidc`'s rule.
+ *
+ * `apiUrl` overrides `BLOCKS_API_URL`: the deployed stub passes the gateway URL
+ * the CDK layer registered (`stubIdpConfigKeys`), so its issuer is always the
+ * HTTPS gateway — reachable by the Lambda itself, and the same value whichever
+ * front door the request came through.
+ */
+export function stubIssuerUrl(
+	providerId: string,
+	ctx: { request: { url: URL } },
+	apiUrl: string | undefined = process.env.BLOCKS_API_URL,
+): string {
+	if (!apiUrl) return `${getRequestBaseUrl(ctx).replace(/\/+$/, '')}${stubIssuerPath(providerId)}`;
+	const url = new URL(apiUrl);
+	const routeStart = url.pathname.search(/\/aws-blocks\b/);
+	const stagePrefix = routeStart > 0 ? url.pathname.slice(0, routeStart) : '';
+	return `${url.protocol}//${url.host}${stagePrefix}${stubIssuerPath(providerId)}`;
+}
+
+/** One request handler of the stub IdP. */
+type StubHandler = (ctx: BlocksContext) => Promise<void>;
+
+/** The stub IdP's handlers, one per route (built by `createStubIdp()` in `stub-idp.ts`). */
+export interface StubIdpHandlers {
+	discovery: StubHandler;
+	jwks: StubHandler;
+	authorize: StubHandler;
+	authorizeSubmit: StubHandler;
+	token: StubHandler;
+	userinfo: StubHandler;
+	revoke: StubHandler;
+	logout: StubHandler;
+}
+
+/**
+ * Mount one provider's stub IdP routes on `scope` (the `Auth` instance). The
+ * handlers are built by `load()` on the first request and reused; a failed
+ * load is not cached, so the next request retries it.
+ *
+ * @throws Error when another `Auth` block already serves a stub IdP under the
+ *   same provider key (the routes do not depend on `redirects`), naming the fix.
+ */
+export function mountStubIdpRoutes(scope: Scope, providerId: string, load: () => Promise<StubIdpHandlers>): void {
+	let pending: Promise<StubIdpHandlers> | undefined;
+	const handlers = (): Promise<StubIdpHandlers> => {
+		if (!pending) {
+			const attempt = load();
+			pending = attempt;
+			attempt.catch(() => {
+				if (pending === attempt) pending = undefined;
+			});
+		}
+		return pending;
+	};
+	const base = stubIssuerPath(providerId);
+	const id = (suffix: string) => `auth-idp-${providerId}-${suffix}`;
+	const routes: ReadonlyArray<[suffix: string, method: 'GET' | 'POST', path: string, name: keyof StubIdpHandlers]> = [
+		['discovery', 'GET', '/.well-known/openid-configuration', 'discovery'],
+		['jwks', 'GET', '/jwks.json', 'jwks'],
+		['authorize', 'GET', '/authorize', 'authorize'],
+		['authorize-submit', 'POST', '/authorize', 'authorizeSubmit'],
+		['token', 'POST', '/token', 'token'],
+		['userinfo', 'GET', '/userinfo', 'userinfo'],
+		['revoke', 'POST', '/revoke', 'revoke'],
+		['logout', 'GET', '/logout', 'logout'],
+	];
+	try {
+		for (const [suffix, method, path, name] of routes) {
+			new RawRoute(scope, id(suffix), {
+				method,
+				path: `${base}${path}`,
+				handler: async (ctx) => (await handlers())[name](ctx),
+			});
+		}
+	} catch (e) {
+		if (!(e instanceof Error) || e.name !== RawRouteErrors.DuplicateRoute) throw e;
+		throw new Error(
+			`Auth '${scope.id}': providers.${providerId} is a stubIdp() provider, but another Auth block already serves a ` +
+				`stub IdP under that key (${base}/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.`,
+		);
+	}
+}
