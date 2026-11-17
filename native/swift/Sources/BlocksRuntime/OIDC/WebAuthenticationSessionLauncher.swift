@@ -61,8 +61,8 @@ public struct WebAuthenticationSessionLauncher: BrowserLauncher {
     ///     ``prefersEphemeralWebBrowserSession``.
     ///   - presentationAnchor: Returns the window to show the sign-in sheet over, such as the window of the view that
     ///     started sign-in. Called once, on the main actor, as the sign-in opens. When it is `nil` or returns `nil`, the
-    ///     launcher uses a key window of one of the app's foreground scenes (on macOS, the key window). An app that can
-    ///     show more than one window, such as on iPad, should pass this.
+    ///     launcher uses a key window of one of the app's scenes, preferring a foreground one (on macOS, the key window).
+    ///     An app that can show more than one window, such as on iPad, should pass this, and an app extension must.
     public init(
         prefersEphemeralWebBrowserSession: Bool = false,
         presentationAnchor: (@MainActor @Sendable () -> ASPresentationAnchor?)? = nil
@@ -205,11 +205,16 @@ public struct WebAuthenticationSessionLauncher: BrowserLauncher {
         return .failure(OIDCError.callbackError("The sign-in session failed: \(error.localizedDescription)", error))
     }
 
-    /// A key window of a foreground scene (on macOS, the key window), or `nil` when the app shows no window.
+    /// A key window of one of the app's scenes, foreground ones first (on macOS, the key window). `nil` when the app shows
+    /// no window, or in an app extension, which has no application to ask.
     @MainActor
     static func keyWindow() -> ASPresentationAnchor? {
         #if canImport(UIKit)
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        // Looked up by name: `UIApplication.shared` doesn't compile in an app extension, which can link this runtime too.
+        guard let app = UIApplication.value(forKey: "sharedApplication") as? UIApplication else {
+            return nil
+        }
+        let scenes = app.connectedScenes.compactMap { $0 as? UIWindowScene }
         let foreground = scenes.filter { $0.activationState == .foregroundActive }
         let background = scenes.filter { $0.activationState != .foregroundActive }
         return (foreground + background).lazy.compactMap { $0.keyWindow ?? $0.windows.first }.first
