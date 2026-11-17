@@ -198,6 +198,8 @@ export const CLIENT_IAM_ACTIONS: readonly string[] = [
 	'cognito-idp:ConfirmSignUp',
 	'cognito-idp:ResendConfirmationCode',
 	'cognito-idp:InitiateAuth',
+	// Session refresh (`native-cognito.ts` `refresh()`): the only refresh call a rotating client accepts.
+	'cognito-idp:GetTokensFromRefreshToken',
 	'cognito-idp:RespondToAuthChallenge',
 	'cognito-idp:GetUser',
 	'cognito-idp:ChangePassword',

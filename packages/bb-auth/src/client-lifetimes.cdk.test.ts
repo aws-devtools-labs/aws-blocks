@@ -64,6 +64,13 @@ describe('app client lifetimes', () => {
 		assert.strictEqual(q?.RefreshTokenValidity, 90 * 1440);
 	});
 
+	test('a non-numeric ttlSeconds from an untyped caller is reported against ttlSeconds', () => {
+		assert.throws(
+			() => clients("new Auth(stack, 'auth', { session: { ttlSeconds: '2592000' } })"),
+			/session\.ttlSeconds must be a number/,
+		);
+	});
+
 	test('values Cognito would reject fail at synth', () => {
 		for (const session of [
 			'accessTokenValiditySeconds: 60',

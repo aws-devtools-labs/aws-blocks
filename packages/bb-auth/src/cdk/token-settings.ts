@@ -59,6 +59,10 @@ export function clientLifetimes(options: ResolvedAuthOptions): ClientLifetimePro
 	const access = s?.accessTokenValiditySeconds ?? DEFAULT_ACCESS_ID_SECONDS;
 	const id = s?.idTokenValiditySeconds ?? DEFAULT_ACCESS_ID_SECONDS;
 	// Default: the session lifetime, so the refresh credential never ends a session sooner than `ttlSeconds` says.
+	if (s?.ttlSeconds !== undefined && typeof s.ttlSeconds !== 'number') {
+		// Shape-only option validation lets an untyped caller pass a string.
+		throw new Error(`Auth: session.ttlSeconds must be a number of seconds (got ${JSON.stringify(s.ttlSeconds)}).`);
+	}
 	const ttl = s?.ttlSeconds !== undefined && s.ttlSeconds > 0 ? s.ttlSeconds : DEFAULT_SESSION_TTL_SECONDS;
 	const refresh =
 		s?.refreshTokenValiditySeconds ??

@@ -317,7 +317,8 @@ export function provisionHostedUiFederation(
 		userPool: pool,
 		generateSecret: false,
 		preventUserExistenceErrors: true,
-		// No SDK sign-in flow on this client: refresh only.
+		// No SDK flow on this client. With refresh rotation on (the default) CDK also leaves out
+		// `ALLOW_REFRESH_TOKEN_AUTH`, so `ExplicitAuthFlows` is empty; refresh goes through the OAuth token endpoint.
 		authFlows: { userPassword: false, userSrp: false, custom: false, adminUserPassword: false, user: false },
 		oAuth: {
 			flows: { authorizationCodeGrant: true },
