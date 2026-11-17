@@ -35,7 +35,7 @@ class FileDownloadHandle(
         if (!response.status.isSuccess()) {
             throw FileTransferException(
                 "Download failed: HTTP ${response.status.value}",
-            response.status.value,
+                response.status.value,
             )
         }
         response.readRawBytes()
