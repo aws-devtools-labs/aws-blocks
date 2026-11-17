@@ -257,7 +257,9 @@ void main() {
       // `Event` is a result, so it is open: an unknown arm keeps the object.
       expect(
         base,
-        contains('      default: return EventUnknown(Map.unmodifiable(json));'),
+        contains(
+          '      default: return EventUnknown(_blocksFrozenObject(json));',
+        ),
       );
       expect(
         _decl(output, 'EventUnknown'),

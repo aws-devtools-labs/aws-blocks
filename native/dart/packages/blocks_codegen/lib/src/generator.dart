@@ -149,6 +149,11 @@ class DartCodeGenerator {
       }
     }
 
+    if (openUnions.isNotEmpty) {
+      buf.writeln(_frozenJsonHelpers);
+      buf.writeln();
+    }
+
     // Emit namespace API classes with their single-use types grouped nearby
     buf.writeln('// --- API Namespaces ---');
     buf.writeln();
@@ -628,8 +633,11 @@ class DartCodeGenerator {
         );
       }
       if (unknown != null) {
-        // Unmodifiable, so the value (and its hash) can't change after decoding.
-        buf.writeln('      default: return $unknown(Map.unmodifiable(json));');
+        // Unmodifiable at every depth, so the value (and its hash, which reads
+        // the whole tree) can't change after decoding.
+        buf.writeln(
+          '      default: return $unknown(_blocksFrozenObject(json));',
+        );
       } else {
         buf.writeln(
           "      default: throw ArgumentError('Unknown ${_escapeStringContent(sealed.discriminant)}: \${$discriminant}');",
@@ -1805,6 +1813,24 @@ class DartCodeGenerator {
     }
     return open;
   }
+
+  /// The helpers an open union's unknown arm uses to keep the JSON it decoded
+  /// unmodifiable at every depth: each map and list in it is copied into an
+  /// unmodifiable one. Private, so no spec name can take them.
+  static const _frozenJsonHelpers = '''
+/// [json] with every map and list in it unmodifiable, at any depth.
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};''';
 
   /// A bare transferable with neither a runtime binding nor a declared native
   /// binding (the fallback case). A nested/nullable/list-wrapped one is out of

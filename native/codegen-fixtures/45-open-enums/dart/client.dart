@@ -609,6 +609,20 @@ final class GetSettingsResultModeUnknown implements GetSettingsResultMode {
 }
 
 
+/// [json] with every map and list in it unmodifiable, at any depth.
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
+
 // --- API Namespaces ---
 
 sealed class Status {
@@ -960,7 +974,7 @@ sealed class GetEventResult {
       case 'moved': return MovedGetEventResult.fromJson(json);
       case 'flagged': return FlaggedGetEventResult.fromJson(json);
       case 'unknown': return UnknownGetEventResult.fromJson(json);
-      default: return GetEventResultUnknown(Map.unmodifiable(json));
+      default: return GetEventResultUnknown(_blocksFrozenObject(json));
     }
   }
 }

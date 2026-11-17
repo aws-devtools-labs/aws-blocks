@@ -101,6 +101,11 @@ final class OpenUnionTests: XCTestCase {
         check(moved.unknownDiscriminator == nil, "no discriminator for a known arm")
         let tagged = try JSONDecoder().decode(Api.GetEvent.Result.self, from: Data(#"{"kind":"unknown","note":"n"}"#.utf8))
         check(label(tagged) == "arm tagged unknown", "arm tagged unknown")
+        // An object without a string discriminator matches no arm and throws.
+        for text in [#"{"kind":3}"#, #"{"kind":null}"#, #"{"by":"someone"}"#] {
+            let decoded = try? JSONDecoder().decode(Api.GetEvent.Result.self, from: Data(text.utf8))
+            check(decoded == nil, "\(text) throws")
+        }
         check(String(decoding: try encoder.encode(moved), as: UTF8.self) == #"{"kind":"moved","to":"done"}"#, "known round trip")
         print("ok")
         """#

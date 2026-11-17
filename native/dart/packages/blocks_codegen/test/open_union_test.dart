@@ -25,7 +25,7 @@ void main() {
     expect(
       output,
       contains(
-        '      default: return GetEventResultUnknown(Map.unmodifiable(json));',
+        '      default: return GetEventResultUnknown(_blocksFrozenObject(json));',
       ),
     );
     expect(
@@ -64,9 +64,8 @@ dependencies:
     path: $runtime
 ''');
     Directory('${work.path}/bin').createSync();
-    File(
-      '${work.path}/bin/tasks.dart',
-    ).writeAsStringSync(_generate('45-open-enums'));
+    final tasksFile = File('${work.path}/bin/tasks.dart');
+    tasksFile.writeAsStringSync(_generate('45-open-enums'));
     File('${work.path}/bin/collide.dart').writeAsStringSync(
       const DartCodeGenerator().generate(
         CodegenModelBuilder().build(
@@ -112,6 +111,9 @@ void main() {
     'kind': 'archived',
     'by': 'someone',
     'at': {'day': 3},
+    'tags': [
+      {'k': 'v'},
+    ],
   };
   final event = GetEventResult.fromJson(wire);
   check(event is GetEventResultUnknown, 'unknown arm');
@@ -132,6 +134,40 @@ void main() {
     threw = true;
   }
   check(threw, 'decoded json is unmodifiable');
+  // Nested maps and lists are unmodifiable too, so the hash, which reads the
+  // whole tree, can't change after decoding.
+  final hash = event.hashCode;
+  for (final change in <void Function()>[
+    () => (event.json['at'] as Map<String, dynamic>)['day'] = 4,
+    () => (event.json['tags'] as List<dynamic>).add('x'),
+    () => ((event.json['tags'] as List<dynamic>)[0] as Map<String, dynamic>)['k'] = 'w',
+  ]) {
+    var nestedThrew = false;
+    try {
+      change();
+    } on UnsupportedError {
+      nestedThrew = true;
+    }
+    check(nestedThrew, 'nested json is unmodifiable');
+  }
+  check(event.hashCode == hash, 'hash is stable');
+  // A tag that isn't a string matches no arm and throws, as it always has.
+  for (final tag in <Object?>[3, null, true]) {
+    var tagThrew = false;
+    try {
+      GetEventResult.fromJson({'kind': tag});
+    } on TypeError {
+      tagThrew = true;
+    }
+    check(tagThrew, 'non-string tag $tag throws');
+  }
+  var missingThrew = false;
+  try {
+    GetEventResult.fromJson({'by': 'someone'});
+  } on TypeError {
+    missingThrew = true;
+  }
+  check(missingThrew, 'missing tag throws');
   // `EventUnknown` is a spec type, so the fallback is `EventUnknown$`.
   final odd = collide.Event.fromJson({'kind': 'later'});
   check(odd is collide.EventUnknown$, 'renamed fallback');

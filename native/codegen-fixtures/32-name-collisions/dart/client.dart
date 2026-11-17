@@ -247,7 +247,7 @@ sealed class TicketPayload {
     switch (json['type'] as String) {
       case 'text': return TextTicketPayload.fromJson(json);
       case 'count': return CountTicketPayload.fromJson(json);
-      default: return TicketPayloadUnknown(Map.unmodifiable(json));
+      default: return TicketPayloadUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -353,7 +353,7 @@ sealed class TicketPayloads {
     switch (json['format'] as String) {
       case 'plain': return PlainTicketPayloads.fromJson(json);
       case 'rich': return RichTicketPayloads.fromJson(json);
-      default: return TicketPayloadsUnknown(Map.unmodifiable(json));
+      default: return TicketPayloadsUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -550,6 +550,20 @@ class PickActResultItems {
   String toString() => 'PickActResultItems(qty: $qty)';
 }
 
+
+/// [json] with every map and list in it unmodifiable, at any depth.
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
 
 // --- API Namespaces ---
 
@@ -887,7 +901,7 @@ sealed class ActResult {
     switch (json['action'] as String) {
       case 'pick': return PickActResult.fromJson(json);
       case 'skip': return SkipActResult.fromJson(json);
-      default: return ActResultUnknown(Map.unmodifiable(json));
+      default: return ActResultUnknown(_blocksFrozenObject(json));
     }
   }
 }

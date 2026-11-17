@@ -430,7 +430,7 @@ sealed class ContinueSignInCognitoConfirmSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json);
-      default: return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(Map.unmodifiable(json));
+      default: return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -1164,7 +1164,7 @@ sealed class ContinueSignInCognitoSignInResultNextStep {
       case 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN': return CONFIRM_SIGN_IN_WITH_WEB_AUTHNContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'RESET_PASSWORD': return RESET_PASSWORDContinueSignInCognitoSignInResultNextStep.fromJson(json);
       case 'CONFIRM_SIGN_UP': return CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep.fromJson(json);
-      default: return ContinueSignInCognitoSignInResultNextStepUnknown(Map.unmodifiable(json));
+      default: return ContinueSignInCognitoSignInResultNextStepUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -1749,6 +1749,20 @@ final class ContinueSignInCognitoSignInResultNextStepUnknown extends ContinueSig
 
 
 
+/// [json] with every map and list in it unmodifiable, at any depth.
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
+
 // --- API Namespaces ---
 
 sealed class CognitoConfirmSignInResult {
@@ -1758,7 +1772,7 @@ sealed class CognitoConfirmSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoConfirmSignInResult.fromJson(json);
-      default: return CognitoConfirmSignInResultUnknown(Map.unmodifiable(json));
+      default: return CognitoConfirmSignInResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -1864,7 +1878,7 @@ sealed class CognitoSignInResult {
     switch (json['status'] as String) {
       case 'continueSignIn': return ContinueSignInCognitoSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoSignInResult.fromJson(json);
-      default: return CognitoSignInResultUnknown(Map.unmodifiable(json));
+      default: return CognitoSignInResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
