@@ -621,7 +621,7 @@ void main() {
       );
       expect(output, contains('class Doc {'));
       expect(output, contains('class CONFIRM_SIGN_IN {'));
-      expect(output, contains('  late final ApiApi api;'));
+      expect(output, contains('  late final Api api;'));
     });
   });
 

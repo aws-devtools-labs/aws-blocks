@@ -166,9 +166,9 @@ class DoActionResult {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<DoActionResult> doAction({required ApiDoActionInput input}) async {
     final params = <dynamic>[
@@ -183,11 +183,11 @@ class ApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    api = Api(client);
   }
 }
 

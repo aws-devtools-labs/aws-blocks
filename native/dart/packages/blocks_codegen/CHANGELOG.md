@@ -56,6 +56,18 @@
   `blocks_runtime` type, because the generated library imports the runtime
   wholesale and the name would be ambiguous.
 
+### Breaking
+
+- A namespace whose export name already ends in `Api` no longer gets a second
+  `Api` on its generated class, matching the Kotlin and Swift clients. The
+  class for `oidcAuthApi` is `OidcAuthApi` (was `OidcAuthApiApi`), its provider
+  enum is `OidcAuthApiGetClientProvider` (was
+  `OidcAuthApiApiGetClientProvider`), and `api` is `Api` (was `ApiApi`). Rename
+  those references in your app; the `Blocks` field names (`blocks.oidcAuthApi`)
+  are unchanged. Two exports that would now share a class, such as `oidcAuth`
+  and `oidcAuthApi` (both `OidcAuthApi`), are a generation error naming both;
+  rename one of them.
+
 ## 0.2.0
 
 - Fix two arms of one union whose discriminator values generate the same

@@ -228,9 +228,9 @@ class DoActionResult {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<Widget> get$x({required String id}) async {
     final params = <dynamic>[
@@ -260,11 +260,11 @@ class Servers {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl ?? Servers.primary, sessionStore: sessionStore);
-    api = ApiApi(client);
+    api = Api(client);
   }
 }
 
