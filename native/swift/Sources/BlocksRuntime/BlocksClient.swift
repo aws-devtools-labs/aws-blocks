@@ -174,19 +174,25 @@ public final class BlocksClient: Sendable {
         if let errorObj = responseJson?["error"] as? [String: Any] {
             let errorData = errorObj["data"] as? [String: Any]
             let code = errorObj["code"] as? Int ?? -1
+            // True only for the JSON boolean `true`. A plain `as? Bool` cast would also accept the
+            // number 1 (and 0), because JSONSerialization hands back NSNumber for both.
+            let retriable = errorData?["retriable"].flatMap(JSONValue.init(serialized:)) == .bool(true)
             throw ApiError(
                 message: errorObj["message"] as? String ?? "Unknown error",
                 status: code > 0 ? code : 500,
                 name: errorData?["name"] as? String ?? reservedRpcErrorName(code),
-                retriable: errorData?["retriable"] as? Bool == true
+                retriable: retriable
             )
         }
 
         if let status, !(200 ..< 300).contains(status) {
             // Not a JSON-RPC error (a gateway or route error such as `{ "error": "Not Found" }`,
-            // or no JSON at all): a transport failure.
-            let message = (responseJson?["error"] as? String)
-                ?? (responseJson?["message"] as? String)
+            // or no JSON at all): a transport failure. API Gateway's own errors put their text
+            // under `message` (a 504 `{ "message": "Endpoint request timed out" }`), so that is
+            // read first, as the TypeScript client does; an empty string falls through.
+            let message = [responseJson?["message"], responseJson?["error"]]
+                .compactMap { $0 as? String }
+                .first { !$0.isEmpty }
                 ?? "HTTP \(status)"
             throw TransportError(message: message, statusCode: status)
         }

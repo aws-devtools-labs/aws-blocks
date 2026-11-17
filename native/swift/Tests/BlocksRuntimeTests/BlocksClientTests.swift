@@ -124,6 +124,30 @@ final class BlocksClientTests: XCTestCase {
         }
     }
 
+    /// API Gateway's own errors carry their text under `message`, e.g. a 504
+    /// `{"message":"Endpoint request timed out"}` or a 429 `{"message":"Too Many Requests"}`.
+    func testAGatewaysMessageBodyIsReadBeforeItsErrorBody() async throws {
+        let cases: [(status: Int, body: String, message: String)] = [
+            (504, #"{"message":"Endpoint request timed out"}"#, "Endpoint request timed out"),
+            (429, #"{"message":"Too Many Requests"}"#, "Too Many Requests"),
+            (502, #"{"message":"Bad gateway","error":"ignored"}"#, "Bad gateway"),
+            (404, #"{"error":"Not Found"}"#, "Not Found"),
+            (503, #"{"message":"","error":"Unavailable"}"#, "Unavailable"),
+            (503, #"{"message":"","error":""}"#, "HTTP 503"),
+            (500, #"{"message":42}"#, "HTTP 500")
+        ]
+        for (status, body, message) in cases {
+            let client = makeClient(status: status, body: body)
+            do {
+                _ = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
+                XCTFail("\(body): expected a TransportError")
+            } catch let error as TransportError {
+                XCTAssertEqual(error.statusCode, status, body)
+                XCTAssertEqual(error.message, message, body)
+            }
+        }
+    }
+
     func testA2xxResponseThatIsNotJSONIsATransportError() async throws {
         let client = makeClient(status: 200, body: "<html>not json</html>")
         do {
