@@ -83,10 +83,11 @@ Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a
 On iOS and macOS, an `OIDCClient` signs in through `ASWebAuthenticationSession`: the system's sign-in sheet on iOS, and on macOS the user's default browser when it supports this, else Safari.
 
 ```swift
+let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
 let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth")
 ```
 
-`oidc` is the `OIDCClient` your API returns. The sheet opens the provider's sign-in page; the backend's callback receives the provider's redirect and relays it to `relayTo`, and the client exchanges the code to sign in.
+`oidcAuthApi` is the namespace a backend exports with `auth.createOidcApi()` (see the `Auth` block's README, "Native apps"). The sheet opens the provider's sign-in page; the backend's callback receives the provider's redirect and relays it to `relayTo`, and the client exchanges the code to sign in.
 
 - **`relayTo`** must use a custom URL scheme, `myapp` here, and the `Auth` block must allow it: `redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] }`. The sheet catches the redirect to that scheme itself, so the scheme doesn't go in your Info.plist. A relay target with no scheme, or with `http` or `https`, throws `OIDCError.callbackError` before anything opens.
 - **The window, and a private session.** By default the sheet opens over a key window of one of the app's foreground scenes (on macOS, the key window), and it shares the browser's cookies, so a user already signed in to the provider can skip the password; the system asks for consent first. To choose either, pass a launcher: `signIn(provider: .google, relayTo: "myapp://auth", launcher: WebAuthenticationSessionLauncher(prefersEphemeralWebBrowserSession: true, presentationAnchor: { window }))`. An app that can show more than one window, such as on iPad, should pass `presentationAnchor`. A private session has no consent prompt and asks the browser to share no cookies; Safari always does, but on macOS another default browser might not.
