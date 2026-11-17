@@ -195,6 +195,15 @@ public struct CodegenModelBuilder {
         // Inline types use short names and are tracked for nesting.
         var namespaceMap: [String: [Operation]] = [:]
 
+        // A union parameter the spec names (`x-blocks-type-name`) is declared once at the top level under that
+        // name, if no other type there has it, and shared by every operation whose parameter has that shape.
+        var topLevelTypeNames = Set(typeDefinitions.map(\.name)).union(rpcModel.componentSchemas.keys)
+        for typeDef in typeDefinitions {
+            if case .union(_, let variants, _) = typeDef.type { topLevelTypeNames.formUnion(variants.map(\.name)) }
+        }
+        var sharedTypes: [NestedTypeNode] = []
+        var sharedSchemas: [String: TypeRef] = [:]
+
         for method in rpcModel.methods {
             let parts = method.name.split(separator: ".", maxSplits: 1)
             let namespaceName = parts.count > 1 ? String(parts[0]) : "_default"
@@ -211,8 +220,43 @@ public struct CodegenModelBuilder {
                     + method.params.map { NameClaimant(key: $0.name, name: specTypeName($0.name), type: $0.schema) }
             )
 
+            var sharedTypeAliases: [SharedTypeAlias] = []
             let parameters = method.params.map { param -> OperationParameter in
                 let shortName = specTypeName(param.name)
+                if let typeName = param.typeName,
+                   isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas) {
+                    // The type the operation's enum declared before, for the aliases that keep its old names.
+                    var oldInlineTypes = inlineTypes
+                    var scratchDefinitions = typeDefinitions
+                    var scratchNames = declaredNames
+                    let old = resolveType(
+                        param.schema, name: shortName, parentSchemaName: nil,
+                        componentSchemas: rpcModel.componentSchemas, typeDefinitions: &scratchDefinitions,
+                        declaredNames: &scratchNames, inlineTypes: &oldInlineTypes, currentParentId: nil,
+                        origin: NameOrigin(key: param.name, name: shortName), siblingClaims: rootClaims
+                    )
+                    var sharedInlineTypes: [InlineTypeEntry] = []
+                    let shared = resolveType(
+                        param.schema, name: typeName, parentSchemaName: nil,
+                        componentSchemas: rpcModel.componentSchemas, typeDefinitions: &typeDefinitions,
+                        declaredNames: &declaredNames, inlineTypes: &sharedInlineTypes, currentParentId: nil,
+                        origin: NameOrigin(key: param.name, name: typeName)
+                    )
+                    let oldNode = buildNestedTypeNodes(from: Array(oldInlineTypes.dropFirst(inlineTypes.count)))
+                        .first { node in
+                            if case .union(let name, _, _) = old { return node.name == name }
+                            return false
+                        }
+                    if case .union = shared, let oldNode,
+                       let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }) {
+                        if sharedSchemas[typeName] == nil {
+                            sharedSchemas[typeName] = param.schema
+                            sharedTypes.append(sharedNode)
+                        }
+                        sharedTypeAliases.append(SharedTypeAlias(old: oldNode, target: typeName))
+                        return OperationParameter(name: param.name, type: .typeReference(name: typeName), required: param.required)
+                    }
+                }
                 let resolved = resolveType(
                     param.schema,
                     name: shortName,
@@ -254,7 +298,8 @@ public struct CodegenModelBuilder {
                 name: opName,
                 parameters: parameters,
                 result: OperationResult(type: resultType),
-                nestedTypes: nestedTypes
+                nestedTypes: nestedTypes,
+                sharedTypeAliases: sharedTypeAliases
             ))
         }
 
@@ -271,8 +316,22 @@ public struct CodegenModelBuilder {
             servers: servers,
             declaredTransferableBindings: rpcModel.declaredTransferableBindings,
             unboundTransferableCauses: rpcModel.unboundTransferableCauses,
-            nativeCatalogWarnings: rpcModel.nativeCatalogWarnings
+            nativeCatalogWarnings: rpcModel.nativeCatalogWarnings,
+            sharedTypes: sharedTypes
         )
+    }
+
+    /// Whether a union parameter can take the name the spec gives it (`typeName`) as a shared top-level type: the
+    /// name is an identifier no component schema, top-level type or Swift or runtime type has, and a parameter
+    /// that already took it has the same shape. A parameter that can't keeps its operation's nested `Input`.
+    private func isSharedTypeName(
+        _ typeName: String, schema: TypeRef, taken: Set<String>, shared: [String: TypeRef]
+    ) -> Bool {
+        if let existing = shared[typeName] { return existing == schema }
+        return isValidSwiftIdentifier(typeName) && !swiftKeywords.contains(typeName)
+            && !taken.contains(typeName)
+            && !reservedTypeNames.contains(typeName) && !nestedShadowingTypeNames.contains(typeName)
+            && !["Blocks", "Servers"].contains(typeName)
     }
 
     // MARK: - Nested Type Node Construction

@@ -149,7 +149,7 @@ extension SwiftCodeGenerator {
         }
         var enumScope = SwiftNameScope(taken: members.taken.union(spelled))
         var enums: [String: String] = [:]
-        for operation in operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
+        for operation in operations where operation.declaresNestedTypes || oidcProviderEnum(operation) != nil {
             enums[operation.name] = enumScope.claim(specTypeName(operation.name))
         }
         return APIClassNames(

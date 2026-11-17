@@ -106,6 +106,15 @@ public struct SwiftCodeGenerator {
         for typeDef in model.typeDefinitions {
             emitType(typeDef.type, name: typeDef.name, lines: &modelLines, emitted: &emittedTypes)
         }
+        // Shared parameter unions (`AuthActionInput`), with their variants nested inside.
+        let sharedTypes = Dictionary(model.sharedTypes.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        for node in model.sharedTypes {
+            guard case .union(_, let variants, let discriminator) = node.type else { continue }
+            emitNestedUnion(
+                name: node.name, variants: variants, discriminator: discriminator, children: node.children,
+                indent: "", lines: &modelLines, sharedTopLevel: true
+            )
+        }
 
         // Build per-operation qualified-name lookup from nested types.
         // Types nest inside operation enums inside the class, so the qualified
@@ -152,6 +161,7 @@ public struct SwiftCodeGenerator {
                 topLevelNames.formUnion(variants.map(\.name))
             }
         }
+        topLevelNames.formUnion(model.sharedTypes.map(\.name))
         let classNames = apiClassNames(model.apiNamespaces, topLevelNames: topLevelNames)
         let entryPoint = entryPointNames(for: model.apiNamespaces, classNames: classNames)
         warnings += entryPoint.warnings
@@ -186,11 +196,11 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
+            for operation in namespace.operations where operation.declaresNestedTypes || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
                 emitOperationEnum(
                     operation: operation, name: memberNames.enums[operation.name] ?? specTypeName(operation.name),
-                    namespace: namespace.name, indent: "    ", lines: &apiLines
+                    namespace: namespace.name, shared: sharedTypes, indent: "    ", lines: &apiLines
                 )
             }
 
@@ -220,7 +230,7 @@ public struct SwiftCodeGenerator {
         }
 
         // Only include models file content if there are actual type definitions
-        let hasTypes = !model.typeDefinitions.isEmpty
+        let hasTypes = !model.typeDefinitions.isEmpty || !model.sharedTypes.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
         return GeneratedSources(models: modelsContent, api: apiContent, warnings: warnings)
@@ -229,12 +239,14 @@ public struct SwiftCodeGenerator {
     // MARK: - Nested Type Emission
 
     private func emitOperationEnum(
-        operation: Operation, name opName: String, namespace: String, indent: String, lines: inout [String]
+        operation: Operation, name opName: String, namespace: String, shared: [String: NestedTypeNode],
+        indent: String, lines: inout [String]
     ) {
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
+        emitSharedTypeAliases(operation, shared: shared, indent: indent + "    ", lines: &lines)
         emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
         lines.append("\(indent)}")
     }
@@ -401,20 +413,22 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)}")
     }
 
-    private func emitNestedUnion(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
-        // Emit variant structs before the enum
-        for variant in variants {
-            guard !variant.fields.isEmpty
-                    || variant.additionalPropertiesType != nil
-                    || variant.embeddedUnion != nil
-                    || !variant.nestedTypes.isEmpty else { continue }
-            if variant.payloadTypeName != nil || variant.valueType != nil { continue }
+    /// Emits a union with the types it declares for its variants (their structs, a value arm's own types) beside
+    /// it, or, for a shared top-level union (`sharedTopLevel`), nested inside it (`AuthActionInput.SignIn`).
+    private func emitNestedUnion(
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode],
+        indent: String, lines: inout [String], sharedTopLevel: Bool = false
+    ) {
+        let memberIndent = sharedTopLevel ? indent + "    " : indent
+        var memberLines: [String] = []
+        // Variant structs
+        for variant in variants where declaresVariantStruct(variant) {
             emitNestedRecordStruct(
                 name: variant.name, fields: variant.fields,
                 additionalPropertiesType: variant.additionalPropertiesType,
                 embeddedUnion: variant.embeddedUnion,
                 children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                indent: indent, lines: &lines
+                indent: memberIndent, lines: &memberLines
             )
         }
 
@@ -422,23 +436,69 @@ public struct SwiftCodeGenerator {
         // variant structs.
         for variant in variants where variant.valueType != nil {
             for node in valueArmTypes(variant) {
-                emitNestedTypeNode(node, indent: indent, lines: &lines)
+                emitNestedTypeNode(node, indent: memberIndent, lines: &memberLines)
             }
         }
+        if !sharedTopLevel { lines.append(contentsOf: memberLines) }
 
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
+        let declaration = sharedTopLevel ? "public nonisolated enum" : "public enum"
+        emitDeclaration(name, line: "\(indent)\(declaration) \(name): Codable {", lines: &lines)
         lines.append(contentsOf: unionCaseLines(variants, indent: indent))
         if let disc = discriminator {
             emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
         } else {
             emitTransparentUnionCoding(name: name, variants: variants, indent: indent, lines: &lines)
         }
+        if sharedTopLevel {
+            lines.append(contentsOf: memberLines)
+            for child in children {
+                emitNestedTypeNode(child, indent: memberIndent, lines: &lines)
+            }
+        }
         lines.append("\(indent)}")
 
         // Emit children
-        for child in children {
-            emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+        if !sharedTopLevel {
+            for child in children {
+                emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+            }
+        }
+    }
+
+    /// Whether a union variant gets a struct of its own (rather than a payload-less case, or a case carrying an
+    /// existing type or a value).
+    private func declaresVariantStruct(_ variant: UnionVariant) -> Bool {
+        guard !variant.fields.isEmpty
+                || variant.additionalPropertiesType != nil
+                || variant.embeddedUnion != nil
+                || !variant.nestedTypes.isEmpty else { return false }
+        return variant.payloadTypeName == nil && variant.valueType == nil
+    }
+
+    /// The names a union's node declares in the scope it's declared in, in order: the union, its variant structs,
+    /// a value arm's own types and the union's children. Nested inside a shared union, the same list is its members.
+    private func declaredScopeNames(_ node: NestedTypeNode) -> [String] {
+        guard case .union(_, let variants, _) = node.type else { return [node.name] }
+        return [node.name]
+            + variants.filter(declaresVariantStruct).map(\.name)
+            + variants.filter { $0.valueType != nil }.flatMap { valueArmTypes($0).map(\.name) }
+            + node.children.map(\.name)
+    }
+
+    /// The deprecated typealiases that keep a shared parameter type's old names in its operation's enum:
+    /// `Input` for `AuthActionInput`, `SignIn` for `AuthActionInput.SignIn`.
+    private func emitSharedTypeAliases(_ operation: Operation, shared: [String: NestedTypeNode], indent: String, lines: inout [String]) {
+        for alias in operation.sharedTypeAliases {
+            guard let target = shared[alias.target] else { continue }
+            let oldNames = declaredScopeNames(alias.old)
+            let newNames = declaredScopeNames(target)
+            for (index, (old, new)) in zip(oldNames, newNames).enumerated() {
+                let qualified = index == 0 ? target.name : "\(target.name).\(new)"
+                lines.append("")
+                lines.append("\(indent)@available(*, deprecated, renamed: \"\(swiftStringContent(qualified))\")")
+                emitDeclaration(old, line: "\(indent)public typealias \(old) = \(qualified)", lines: &lines)
+            }
         }
     }
 
