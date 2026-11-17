@@ -409,18 +409,18 @@ class OidcClient<P : OidcProvider> internal constructor(
     }
 
     /**
-     * Signs out on the backend and moves [authState] to [OidcAuthState.SignedOut]. The backend's
-     * status is not checked: the local state is signed out even when it answers with an error.
+     * Signs out on the backend and moves [authState] to [OidcAuthState.SignedOut]. The order of
+     * the local sign-out relative to a failure is owned by a separate change (#1477) and is
+     * deliberately unspecified here.
      *
-     * @throws TransportException if the request never completed; [authState] is left as it was.
+     * @throws TransportException if the request never completed.
      * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
     suspend fun signOut() {
         ensureOpen()
         val signOutUrl = server.rawRoute(config.signOutPath)
-        // The response status is deliberately not checked: the local state is signed out even when
-        // the backend answers with an error. A request that never completed is reported, and
-        // leaves the state alone.
+        // A request that never completed is reported as a TransportException, not a raw Ktor
+        // exception. What happens to the local state around a failure is #1477's to define.
         try {
             httpClient.post(signOutUrl) {
                 contentType(ContentType.Application.Json)

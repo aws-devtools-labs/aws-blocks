@@ -885,13 +885,12 @@ class OidcClientTest {
     }
 
     @Test
-    fun `signOut reports a connection failure as a TransportException and keeps the state`() = runTest {
+    fun `signOut reports a connection failure as a TransportException`() = runTest {
         val client = newClient(HttpClient(MockEngine { throw IllegalStateException("Connection refused") }))
 
         val failure = shouldThrow<TransportException> { client.signOut() }
 
         failure.statusCode shouldBe null
-        client.authState.value shouldBe OidcAuthState.Loading
     }
 
     @Test
