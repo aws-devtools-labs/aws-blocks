@@ -36,6 +36,7 @@ import { BlocksAuth } from '@aws-blocks/auth-common';
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { ChunkingConfig } from '@aws-blocks/bb-knowledge-base';
 import { ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+import { ClusterType } from '@aws-blocks/bb-database';
 import { Compute } from '@aws-blocks/bb-compute';
 import { ComputeOptions } from '@aws-blocks/core';
 import { ComputeProps } from '@aws-blocks/bb-compute';
@@ -54,21 +55,27 @@ import { customOauth2 } from '@aws-blocks/bb-auth';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
 import { DashboardErrors } from '@aws-blocks/bb-dashboard';
 import { DashboardOptions } from '@aws-blocks/bb-dashboard';
-import { Database } from '@aws-blocks/bb-data';
-import { DatabaseErrors } from '@aws-blocks/bb-data';
-import { DatabaseOptions } from '@aws-blocks/bb-data';
+import { Database } from '@aws-blocks/bb-database';
+import { DatabaseCluster } from '@aws-blocks/bb-database';
+import { DatabaseClusterOptions } from '@aws-blocks/bb-database';
+import { DatabaseErrors } from '@aws-blocks/bb-database';
+import { DatabaseOptions } from '@aws-blocks/bb-database';
 import { DefaultToolContext } from '@aws-blocks/bb-agent';
 import { DisconnectReason } from '@aws-blocks/bb-realtime';
-import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-import { DistributedDatabaseOptions } from '@aws-blocks/bb-distributed-data';
+import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
+import { DeleteOptions as DTDeleteOptions } from '@aws-blocks/bb-distributed-table';
+import { ExternalKmsKeyRef as DTExternalKmsKeyRef } from '@aws-blocks/bb-distributed-table';
+import { GetOptions as DTGetOptions } from '@aws-blocks/bb-distributed-table';
+import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';
+import { QueryOptions as DTQueryOptions } from '@aws-blocks/bb-distributed-table';
+import { ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 import { EmailClient } from '@aws-blocks/bb-email-client';
 import { EmailErrors } from '@aws-blocks/bb-email-client';
 import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
-import { Entry } from '@aws-blocks/bb-kv-store';
-import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
 import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
@@ -81,15 +88,10 @@ import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import { FileBucketOptions } from '@aws-blocks/bb-file-bucket';
 import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
-import { fromExisting } from '@aws-blocks/bb-data';
 import { GetChannelOptions } from '@aws-blocks/bb-realtime';
-import { GetOptions } from '@aws-blocks/bb-kv-store';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth';
-import { IndexConfig } from '@aws-blocks/bb-kv-store';
 import { isAuthError } from '@aws-blocks/bb-auth';
-import { KeyConfig } from '@aws-blocks/bb-kv-store';
-import { KeyOf } from '@aws-blocks/bb-kv-store';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentTool } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentToolOptions } from '@aws-blocks/bb-knowledge-base';
@@ -97,14 +99,9 @@ import { KnowledgeBaseAgentToolResult } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
 import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
-import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
-import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
-import { LegacyKVStoreDeleteOptions } from '@aws-blocks/bb-kv-store';
-import { LegacyKVStoreOptions } from '@aws-blocks/bb-kv-store';
-import { LegacyKVStorePutOptions } from '@aws-blocks/bb-kv-store';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -125,15 +122,12 @@ import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { ModelConfig } from '@aws-blocks/bb-agent';
 import { ObjectLockOptions } from '@aws-blocks/bb-file-bucket';
 import { OllamaModels } from '@aws-blocks/bb-agent';
-import { PutBatchEntry } from '@aws-blocks/bb-kv-store';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
-import { QueryOptions } from '@aws-blocks/bb-kv-store';
-import { ReadValidationMode } from '@aws-blocks/bb-kv-store';
+import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { relayOrigin } from '@aws-blocks/bb-auth';
-import { Results } from '@aws-blocks/bb-kv-store';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { ScalingSignal } from '@aws-blocks/core';
@@ -147,14 +141,15 @@ import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
 import { ServerlessComputeOptions } from '@aws-blocks/core';
-import { SortCondition } from '@aws-blocks/bb-kv-store';
 import { SourceConfig } from '@aws-blocks/bb-knowledge-base';
-import { sql } from '@aws-blocks/bb-data';
-import { SqlQuery } from '@aws-blocks/bb-data';
+import { sql } from '@aws-blocks/bb-database';
+import { SqlQuery } from '@aws-blocks/bb-database';
 import { StreamOptions } from '@aws-blocks/bb-agent';
 import { stubIdp } from '@aws-blocks/bb-auth';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
 import { SubscribeOptions } from '@aws-blocks/bb-realtime';
+import { TableKey } from '@aws-blocks/bb-distributed-table';
+import { TableKeyConfig } from '@aws-blocks/bb-distributed-table';
 import { TokenUsage } from '@aws-blocks/bb-agent';
 import { ToolCallRecord } from '@aws-blocks/bb-agent';
 import { ToolDefinition } from '@aws-blocks/bb-agent';
@@ -163,12 +158,10 @@ import { ToolHandlerArgs } from '@aws-blocks/bb-agent';
 import { ToolsConfig } from '@aws-blocks/bb-agent';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { TracerOptions } from '@aws-blocks/bb-tracer';
-import { Transaction } from '@aws-blocks/bb-data';
-import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
-import { ValueOf } from '@aws-blocks/bb-kv-store';
+import { Transaction } from '@aws-blocks/bb-database';
+import { TransactionOptions } from '@aws-blocks/bb-database';
 import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
-import { Where } from '@aws-blocks/bb-kv-store';
 
 export { Agent }
 
@@ -234,6 +227,8 @@ export { ChunkingConfig }
 
 export { ChunkingStrategy }
 
+export { ClusterType }
+
 export { Compute }
 
 export { ComputeOptions }
@@ -272,6 +267,10 @@ export { DashboardOptions }
 
 export { Database }
 
+export { DatabaseCluster }
+
+export { DatabaseClusterOptions }
+
 export { DatabaseErrors }
 
 export { DatabaseOptions }
@@ -280,11 +279,23 @@ export { DefaultToolContext }
 
 export { DisconnectReason }
 
-export { DistributedDatabase }
+export { DistributedTable }
 
-export { DistributedDatabaseErrors }
+export { DistributedTableErrors }
 
-export { DistributedDatabaseOptions }
+export { DistributedTableOptions }
+
+export { DTDeleteOptions }
+
+export { DTExternalKmsKeyRef }
+
+export { DTGetOptions }
+
+export { DTPutOptions }
+
+export { DTQueryOptions }
+
+export { DTScanOptions }
 
 export { EmailClient }
 
@@ -295,10 +306,6 @@ export { EmailMessage }
 export { EmailOptions }
 
 export { EmitOptions }
-
-export { Entry }
-
-export { ExternalDatabaseRef }
 
 export { ExternalKmsKeyRef }
 
@@ -324,14 +331,15 @@ export { FileContent }
 
 export { FileInfo }
 
-export { fromExisting }
-
 export { GetChannelOptions }
 
-export { GetOptions }
-
 // @public
-export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): {
+export function getSdkIdentifiers(bb: KVStore<any>): {
+    tableName: string;
+};
+
+// @public (undocumented)
+export function getSdkIdentifiers(bb: DistributedTable<any, any, any>): {
     tableName: string;
 };
 
@@ -366,14 +374,16 @@ export function getSdkIdentifiers(bb: Auth<any>): {
 
 // @public (undocumented)
 export function getSdkIdentifiers(bb: Database): {
-    clusterArn: string;
-    secretArn: string;
-    databaseName: string;
+    clusterId: string;
+    schemaName: string;
+    clusterEndpoint?: string;
+    region?: string;
 };
 
 // @public (undocumented)
-export function getSdkIdentifiers(bb: DistributedDatabase): {
+export function getSdkIdentifiers(bb: DatabaseCluster): {
     clusterEndpoint: string;
+    region?: string;
 };
 
 // @public (undocumented)
@@ -415,13 +425,7 @@ export { GetUrlOptions }
 
 export { github }
 
-export { IndexConfig }
-
 export { isAuthError }
-
-export { KeyConfig }
-
-export { KeyOf }
 
 export { KnowledgeBase }
 
@@ -437,21 +441,11 @@ export { KnowledgeBaseOptions }
 
 export { KVPutOptions }
 
-export { KVScanOptions }
-
 export { KVStore }
 
 export { KVStoreErrors }
 
 export { KVStoreOptions }
-
-export { LegacyKVStore }
-
-export { LegacyKVStoreDeleteOptions }
-
-export { LegacyKVStoreOptions }
-
-export { LegacyKVStorePutOptions }
 
 export { LifecycleRule }
 
@@ -493,11 +487,7 @@ export { ObjectLockOptions }
 
 export { OllamaModels }
 
-export { PutBatchEntry }
-
 export { PutUrlOptions }
-
-export { QueryOptions }
 
 export { ReadValidationMode }
 
@@ -508,8 +498,6 @@ export { RealtimeChannel }
 export { RealtimeSubscription }
 
 export { relayOrigin }
-
-export { Results }
 
 export { RetrieveOptions }
 
@@ -537,8 +525,6 @@ export { SendResult }
 
 export { ServerlessComputeOptions }
 
-export { SortCondition }
-
 export { SourceConfig }
 
 export { sql }
@@ -552,6 +538,10 @@ export { stubIdp }
 export { SubmitOptions }
 
 export { SubscribeOptions }
+
+export { TableKey }
+
+export { TableKeyConfig }
 
 export { TokenUsage }
 
@@ -573,13 +563,9 @@ export { Transaction }
 
 export { TransactionOptions }
 
-export { ValueOf }
-
 export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
-
-export { Where }
 
 
 export * from "@aws-blocks/bb-auth";

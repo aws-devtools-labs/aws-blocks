@@ -358,7 +358,7 @@ describe('formatUserAgentString', () => {
 	test('never truncates mid-token: result is always a fitting subset', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '10.20.30' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '10.20.30' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '10.20.30' });
 		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '10.20.30' });
 
 		const s = leaf.testFormatUserAgentString();

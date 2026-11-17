@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { SqlQuery } from '@aws-blocks/data-common/core';
+import type { SqlQuery } from './common/sql.js';
 import { DEFAULT_SCHEMA, quoteIdent } from './constants.js';
 import { RulesEngine } from './dialect/rules-engine.js';
 import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';

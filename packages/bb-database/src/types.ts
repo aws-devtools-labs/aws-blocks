@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { SqlQuery } from '@aws-blocks/data-common/core';
+import type { SqlQuery } from './common/sql.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**

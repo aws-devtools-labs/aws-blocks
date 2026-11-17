@@ -3,7 +3,7 @@
 
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import type { SqlQuery } from '@aws-blocks/data-common/core';
+import type { SqlQuery } from './common/sql.js';
 import { clusterConfigKey, sanitizeDbRoleName, searchPathFor } from './constants.js';
 import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';

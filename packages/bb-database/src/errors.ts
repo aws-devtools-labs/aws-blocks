@@ -7,8 +7,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 /**
  * Error names for query and transaction failures. Match with
  * `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` on either side of
- * the RPC wire. The strings are bb-data's, so an app moving between the two
- * blocks keeps its catch clauses. See the README's Errors table for when each
+ * the RPC wire. See the README's Errors table for when each
  * is raised and how it is retried. `ResultValidationFailed` is this block's
  * own: a row did not match the `schema` passed to `query()` or `queryOne()`.
  */

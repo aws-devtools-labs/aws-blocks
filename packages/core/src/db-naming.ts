@@ -11,7 +11,7 @@
  * stage get distinct names and cannot overwrite each other's credentials.
  *
  * Two call sites compute the name: the pre-deploy writer (`ensure-secrets`) and
- * the `db pull` generated wiring at synth. Both pass the result of
+ * the app's wiring at synth. Both pass the result of
  * `getStackName({ sandbox, projectRoot })` into this function, so they produce
  * the same name by construction. The runtime Lambda does not call this function;
  * it reads the name recorded at synth.

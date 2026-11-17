@@ -38,7 +38,7 @@ export interface ArgSpec {
 }
 
 /** Root help groups, in display order. */
-export const GROUPS = ['Develop', 'Deploy', 'Configure', 'Generate', 'Data and blocks', 'Project'] as const;
+export const GROUPS = ['Develop', 'Deploy', 'Configure', 'Generate', 'Project'] as const;
 export type HelpGroup = (typeof GROUPS)[number];
 
 export type FlagValues = Record<string, string | boolean | string[] | undefined>;
@@ -489,31 +489,6 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'cdk-blocks generate types --check', description: 'Fail when they are stale' },
 		],
 		handler: commands.generateTypes,
-	},
-	// ── Data and blocks ──────────────────────────────────────────────────────
-	{
-		path: ['db'],
-		group: 'Data and blocks',
-		summary: 'Data block operations: migrate, status, generate-types, pull',
-		description:
-			'Run a data block operation. The verb and the tokens after it are forwarded unchanged to the\n' +
-			'bb-data CLI of @aws-blocks/bb-data, except the global options (--profile, --output, …) before\n' +
-			'a "--". "cdk-blocks db <verb> --help" shows its options.',
-		args: [
-			{ name: 'verb', description: 'migrate | status | generate-types | pull', required: true },
-			{ name: 'args', description: 'Forwarded; a relative path is resolved from your directory', variadic: true },
-		],
-		passthrough: true,
-		verbs: ['migrate', 'status', 'generate-types', 'pull'],
-		examples: [
-			{
-				command: 'cdk-blocks db migrate aws-blocks/migrations',
-				description: 'Apply pending migrations to the local database',
-			},
-			{ command: 'cdk-blocks db status aws-blocks/migrations', description: 'Show applied and pending migrations' },
-			{ command: 'cdk-blocks db pull', description: 'Introspect the database and write its files' },
-		],
-		handler: commands.db,
 	},
 	// ── Project ──────────────────────────────────────────────────────────────
 	{

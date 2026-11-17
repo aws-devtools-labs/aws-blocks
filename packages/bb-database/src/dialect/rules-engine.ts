@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { blocksError } from '@aws-blocks/core';
-import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import type { TransactionHandle } from '../common/engine.js';
 import { type CountedRows, EngineTransaction, type RowCountingEngine, withTransaction } from '../engines/handle.js';
 import { PERMISSION_ERROR_NAME, serializationConflict } from '../errors.js';
 import type { ClusterType } from '../types.js';

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine } from '@aws-blocks/data-common/core';
+import type { DatabaseEngine } from '../common/engine.js';
 import { configError } from '../errors.js';
 import type { Session } from './session.js';
 

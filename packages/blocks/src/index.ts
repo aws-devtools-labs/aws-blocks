@@ -178,33 +178,28 @@ export type {
  * Full docs: `docs/bb-dashboard/README.md` in `@aws-blocks/blocks`.
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
+export type {
+	ClusterType,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	SqlQuery,
+	Transaction,
+	TransactionOptions,
+} from '@aws-blocks/bb-database';
 /**
- * **SQL database with Kysely query builder backed by Aurora Serverless v2.**
+ * **SQL database on PostgreSQL.**
  *
- * Use only when you specifically need complex multi-table JOINs, SQL
- * transactions, foreign key constraints, or complex aggregations. For most
- * application data, prefer `KVStore` (lower cost, simpler ops).
- * Requires a `migrations/` folder with `.sql` files.
+ * Use when you need multi-table JOINs, SQL transactions or aggregations. For
+ * most application data, prefer `KVStore` (lower cost, simpler ops).
+ * `new Database(scope, id)` owns an Aurora DSQL cluster. To use Aurora
+ * PostgreSQL Serverless v2 (express configuration), or to put several
+ * databases on one cluster, pass a `DatabaseCluster` as `cluster`.
+ * Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
  *
- * Package: `@aws-blocks/bb-data`
- * Full docs: `docs/bb-data/README.md` in `@aws-blocks/blocks`.
+ * Package: `@aws-blocks/bb-database`
+ * Full docs: `docs/bb-database/README.md` in `@aws-blocks/blocks`.
  */
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-/**
- * **Serverless SQL database backed by Aurora DSQL.**
- *
- * Use for zero-ops SQL with instant provisioning, scale-to-zero, and
- * optionally multi-region active-active writes. DSQL is a strict PostgreSQL
- * subset — no foreign keys, RLS, triggers, or views. Transactions use
- * optimistic concurrency control (OCC) and may conflict at commit.
- * For full PostgreSQL with FK/RLS/triggers, use `Database`.
- *
- * Package: `@aws-blocks/bb-distributed-data`
- * Full docs: `docs/bb-distributed-data/README.md` in `@aws-blocks/blocks`.
- */
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 /**
  * **Transactional email with AWS SES integration.**

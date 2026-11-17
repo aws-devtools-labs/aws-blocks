@@ -68,7 +68,7 @@ describe('parseArgv', () => {
 		assert.deepStrictEqual(parseArgv(['generate', 'client', 'in.ts', '--']).positionals, ['in.ts']);
 		assert.deepStrictEqual(parseArgv(['--', 'whoami']).command?.path, ['whoami']);
 		// Passthrough commands still forward everything, `--` included.
-		assert.deepStrictEqual(parseArgv(['db', 'migrate', '--', '--x']).passthrough, ['migrate', '--', '--x']);
+		assert.deepStrictEqual(parseArgv(['config', 'set', 'K', '--', '--x']).passthrough, ['set', 'K', '--', '--x']);
 	});
 
 	it('rejects an unknown command with a suggestion', () => {
@@ -145,7 +145,7 @@ describe('parseArgv', () => {
 	it('forwards everything after a passthrough command verbatim', () => {
 		const argv = ['set', 'KEY', '--stage', 'prod', '--value-stdin', '--', '-x'];
 		assert.deepStrictEqual(parseArgv(['secret', ...argv]).passthrough, argv);
-		const help = parseArgv(['db', '--help']);
+		const help = parseArgv(['secret', '--help']);
 		assert.strictEqual(help.globals.help, true);
 		assert.deepStrictEqual(help.passthrough, []);
 		assert.strictEqual(help.helpVerb, undefined);
@@ -153,12 +153,12 @@ describe('parseArgv', () => {
 
 	it('turns --help anywhere after a passthrough command into help, keeping only the verb', () => {
 		for (const [argv, verb] of [
-			[['db', 'status', '--help'], 'status'],
-			[['db', 'pull', './out', '-h'], 'pull'],
+			[['config', 'list', '--help'], 'list'],
+			[['secret', 'set', 'KEY', '-h'], 'set'],
 			[['config', 'remove', 'KEY', '--help'], 'remove'],
 			[['secret', '--stage', 'prod', 'remove', 'KEY', '--force', '--yes', '--help'], 'remove'],
 			[['vendorize', '@aws-blocks/bb-kv-store', '--help'], undefined],
-			[['db', 'drop', 'x', '--help'], undefined],
+			[['config', 'drop', 'x', '--help'], undefined],
 		] as const) {
 			const parsed = parseArgv(argv);
 			assert.strictEqual(parsed.globals.help, true, argv.join(' '));
@@ -191,20 +191,19 @@ describe('parseArgv', () => {
 		assert.strictEqual(secret.globals.noInput, true);
 		assert.strictEqual(secret.globals.profile, undefined);
 		// The tool's own options stay, with their values, even next to a global one.
-		const db = parseArgv(['db', 'migrate', 'dir', '--stage', 'prod', '--debug', '--url=postgres://x', '-x']);
-		assert.deepStrictEqual(db.passthrough, ['migrate', 'dir', '--stage', 'prod', '--url=postgres://x', '-x']);
-		assert.strictEqual(db.globals.debug, true);
+		const own = parseArgv(['config', 'set', 'K', 'v', '--stage', 'prod', '--debug', '--prefix=/p', '-x']);
+		assert.deepStrictEqual(own.passthrough, ['set', 'K', 'v', '--stage', 'prod', '--prefix=/p', '-x']);
+		assert.strictEqual(own.globals.debug, true);
 		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "cdk-blocks secret"/);
 		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "cdk-blocks config"/);
 		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "cdk-blocks telemetry"/);
 		usageError(['--output', 'json', 'telemetry'], /^--output json is not supported for "cdk-blocks telemetry"/);
-		usageError(['db', 'status', '--profile'], /option --profile needs a value/);
+		usageError(['config', 'list', '--profile'], /option --profile needs a value/);
 	});
 
 	it('prints the version for --version after any command, and runs nothing', () => {
 		for (const argv of [
 			['generate', 'client', '--version', 'a', 'b', 'c'],
-			['db', '--version'],
 			['secret', '--version'],
 			['config', 'set', 'K', '--version'],
 			['vendorize', '--version'],

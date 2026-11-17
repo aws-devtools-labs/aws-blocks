@@ -7,8 +7,6 @@
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
-import { sql } from '@aws-blocks/data-common/core';
-import { SqlQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // @public
@@ -114,9 +112,18 @@ export interface SharedDatabaseOptions extends DatabaseBlockOptions {
     cluster: DatabaseClusterLike;
 }
 
-export { sql }
+// @public
+export function sql(strings: TemplateStringsArray, ...values: unknown[]): SqlQuery;
 
-export { SqlQuery }
+// @public
+export interface SqlQuery {
+    // (undocumented)
+    readonly [SQL_BRAND]: true;
+    // (undocumented)
+    readonly params: readonly unknown[];
+    // (undocumented)
+    readonly sql: string;
+}
 
 // @public
 export interface Transaction {

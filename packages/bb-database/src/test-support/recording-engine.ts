@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import type { TransactionHandle } from '../common/engine.js';
 import type { CountedRows, RowCountingEngine } from '../engines/handle.js';
 
 export interface RecordedCall {

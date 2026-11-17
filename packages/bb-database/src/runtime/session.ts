@@ -3,7 +3,7 @@
 
 // One connection of the Kysely dialect over the block's engine: auto-commit statements, or one transaction.
 // Nothing here imports Kysely.
-import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import type { TransactionHandle } from '../common/engine.js';
 import { type CountedRows, EngineTransaction, type RowCountingEngine } from '../engines/handle.js';
 import { configError, DatabaseErrors, reTagged } from '../errors.js';
 

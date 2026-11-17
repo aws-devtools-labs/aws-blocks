@@ -117,7 +117,7 @@ Start from what you need:
 - **Store data**
   - Values that you read by one key (caches, flags, user preferences) → `KVStore` (bb-kv-store) with no options
   - Records that you list or query, with indexes → `KVStore` (bb-kv-store) with a `schema` and a `key` — **default for most data**
-  - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
+  - Relational / SQL (joins, transactions) → `Database` (bb-database); see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
   - A single config value → `AppSetting` (bb-app-setting)
   - A high-value credential (API key, OAuth secret, connection string) → `Secret` (bb-secret), backed by AWS Secrets Manager
@@ -145,9 +145,9 @@ Start from what you need:
 
 Default to `KVStore` for your data models unless your domain specifically requires SQL engine capabilities. Give a store a `schema` and a `key` for records that you list or query as a collection; use it with no options for values that you read by one key. Decide before you create the store: a store cannot change its key.
 
-Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
+Reach for `Database` when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
-If you need SQL, prefer `DistributedDatabase` for Aurora DSQL, which is PostgreSQL wire-protocol compatible; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for supported SQL features. Use `Database` specifically when you need a full (more expensive) Postgres implementation with row level security, triggers, procedures, or PL/pgSQL functions; large transactions (more than 3,000 rows); or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
+`Database` runs on Aurora DSQL by default, which is PostgreSQL wire-protocol compatible; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for supported SQL features. Put the block on an `aurora` cluster (`new DatabaseCluster(scope, 'main', { type: 'aurora' })`, Aurora PostgreSQL Serverless v2) when you need full PostgreSQL: triggers, extensions, PL/pgSQL functions, Row Level Security on raw SQL, or large transactions (more than 3,000 rows). An `aurora` cluster pauses after five idle minutes, and the first request afterwards waits about 20 seconds for it to resume, unless `minCapacity` is at least `0.5`, which carries an idle cost.
 
 ### Choosing a sign-in method
 
@@ -186,8 +186,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
-| bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
-| bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
+| bb-database | `Database` is a PostgreSQL schema on a cluster: Aurora DSQL by default, or Aurora PostgreSQL Serverless v2 created with the express configuration. | — |
 | bb-email-client | Transactional email sending via Amazon SES. | — |
 | bb-file-bucket | File storage backed by Amazon S3. | — |
 | bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
@@ -258,12 +257,11 @@ npx --no -- cdk-blocks --version
 | Generate | `cdk-blocks generate client [foundation] [output]` | Generate the typed client (`aws-blocks/client.js`) |
 | | `cdk-blocks generate spec [backend] [output]` | Generate the OpenRPC spec |
 | | `cdk-blocks generate types [--check]` | Generate secret/config key types; `--check` exits 1 when stale |
-| Data and blocks | `cdk-blocks db <migrate\|status\|generate-types\|pull> [args...]` | Data block operations, forwarded unchanged to the `bb-data` CLI |
 | Project | `cdk-blocks vendorize <package> [--force]` | Copy a Building Block into the app for customization |
 | | `cdk-blocks migrate [--dry-run] [--force]` | Move an app from `aws-blocks/scripts/*.ts` wrappers to `cdk-blocks` commands |
 | | `cdk-blocks help [command...]` | Help |
 
-The npm-script spellings also work as hidden aliases: `dev:stop`, `sandbox:deploy`, `sandbox:preview`, `sandbox:destroy`, `sandbox:console`, `console`, `typegen`, `generate-client`, `spec`, `cleanup` (`dev stop --all`), `sandbox --deploy-only` (`sandbox deploy`), and `sandbox --preview` (`sandbox preview`). Global options can go before the command, between its words (`cdk-blocks generate --debug client`) or after it. `db`, `secret`, `config` and `vendorize` forward the tokens after their name to their tool unchanged, except the global options before a `--`, which apply to the run: `cdk-blocks secret list --profile prod` lists the secrets of that profile's account, and `cdk-blocks config list --output json` exits 2 because `config` has no JSON output. After `--`, every token is the tool's: `cdk-blocks config set GREETING -- -hello-`. A relative path given to `db` or `generate client|spec|types` (including `--out` and `--include`) is resolved from the directory you run the command in, as it was with the tools themselves. The exception is `-h`/`--help`: anywhere after one of these commands it shows help and never runs the tool with your arguments. For a verb of the tool (`cdk-blocks db pull ./out --help`, `cdk-blocks help secret remove KEY`), only `<verb> --help` reaches the tool, which prints that verb's usage.
+The npm-script spellings also work as hidden aliases: `dev:stop`, `sandbox:deploy`, `sandbox:preview`, `sandbox:destroy`, `sandbox:console`, `console`, `typegen`, `generate-client`, `spec`, `cleanup` (`dev stop --all`), `sandbox --deploy-only` (`sandbox deploy`), and `sandbox --preview` (`sandbox preview`). Global options can go before the command, between its words (`cdk-blocks generate --debug client`) or after it. `secret`, `config` and `vendorize` forward the tokens after their name to their tool unchanged, except the global options before a `--`, which apply to the run: `cdk-blocks secret list --profile prod` lists the secrets of that profile's account, and `cdk-blocks config list --output json` exits 2 because `config` has no JSON output. After `--`, every token is the tool's: `cdk-blocks config set GREETING -- -hello-`. A relative path given to `generate client|spec|types` (including `--out` and `--include`) is resolved from the directory you run the command in, as it was with the tools themselves. The exception is `-h`/`--help`: anywhere after one of these commands it shows help and never runs the tool with your arguments. For a verb of the tool (`cdk-blocks secret remove KEY --help`, `cdk-blocks help secret remove KEY`), only `<verb> --help` reaches the tool, which prints that verb's usage.
 
 The CLI collects usage data to improve AWS Blocks and prints a notice the first time it does. An event can include random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years. To opt out everywhere, set `AWS_BLOCKS_DISABLE_TELEMETRY` to `1`, `true` or `yes`, or run `npx --no -- cdk-blocks telemetry disable --global` or `npx --no -- blocks-telemetry --disable --global` inside an AWS Blocks app. Without `--global`, these commands opt out the current app only. Pass `--telemetry-file <path>` to see the exact events a run sends.
 
@@ -366,7 +364,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
-- **`Database` when `KVStore` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
+- **`Database` when `KVStore` would do** — `KVStore` has no cluster to manage; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations

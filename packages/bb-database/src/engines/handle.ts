@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common/core';
+import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
 import { foreignTransactionHandle, transactionEnded } from '../errors.js';
 
 // The handle an engine's `beginTransaction()` returns. `settled` is set by the first of commitTransaction()

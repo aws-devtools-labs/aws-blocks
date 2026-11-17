@@ -8,7 +8,6 @@ import { join, resolve, dirname } from "node:path";
 import { deleteSandboxSecrets, ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
-import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
@@ -670,10 +669,6 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   if (secrets.updated.length > 0) {
     log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
   }
-
-  // Apply external-database migrations to the sandbox database before
-  // deploying. No-op unless this app uses an external DB and has ./migrations.
-  await applyExternalMigrations({ stage: 'sandbox' });
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the

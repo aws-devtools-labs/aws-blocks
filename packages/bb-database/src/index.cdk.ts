@@ -15,6 +15,7 @@ import {
 	resolveClusterOptions,
 } from './runtime/construction.js';
 import type { ClusterRef, ClusterType, DatabaseClusterOptions, DatabaseOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 // DSQL is reached over its public endpoint, so an app in a VPC needs egress.
 const VPC_REQUIREMENTS = { requiresEgress: true };
@@ -48,8 +49,8 @@ export class DatabaseCluster extends BuildingBlockScope {
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
-		// First-party, but passes no official `bbName`: mark it so the
-		// service-principal trust check treats its roles as AWS Blocks roles.
+		// Part of the `Database` block but not a block: it passes no `bbName`, so mark it for the
+		// service-principal trust check, which then treats its roles as AWS Blocks roles.
 		markBlocksOwned(this);
 		const resolved = resolveClusterOptions(options, this.fullId);
 		this.type = resolved.type;
@@ -73,10 +74,7 @@ export class Database extends BuildingBlockScope {
 	 * `DatabaseCluster`, whose own options then apply.
 	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
-		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
-		// First-party, but passes no official `bbName`: mark it so the
-		// service-principal trust check treats its roles as AWS Blocks roles.
-		markBlocksOwned(this);
+		super(id, { parent: scope, bbName: BB_NAME, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
 		const resolved = registerDatabase(this, id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;

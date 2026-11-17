@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import type { TransactionHandle } from '../common/engine.js';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { Signer as RdsSigner } from '@aws-sdk/rds-signer';
 import pg from 'pg';

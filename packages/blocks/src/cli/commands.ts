@@ -8,7 +8,6 @@
  */
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,7 +74,7 @@ import {
 interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	operation: string;
 	/**
-	 * The tool, for a child that is not a lifecycle runner (`bb-data`): its own
+	 * The tool, for a child that is not a lifecycle runner (`blocks-vendorize`): its own
 	 * output explains a failure, and `--verbose` adds nothing to it. Absent for a runner.
 	 */
 	tool?: string;
@@ -133,7 +132,7 @@ function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): n
 /**
  * A child command line, safe to echo with --verbose: the password in a URL's
  * userinfo (`postgres://user:***@host`) and the value of `--url` are masked,
- * because `cdk-blocks db … --url <connection-string>` forwards credentials.
+ * because a forwarded argument can carry credentials.
  */
 export function redactArgs(args: readonly string[]): string[] {
 	return args.map((arg, i) => {
@@ -198,7 +197,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	}
 
 	// A child that is not long-running and exited 0 finished its work before the
-	// Ctrl-C reached it (`cdk-blocks db migrate` applied every migration): report that.
+	// Ctrl-C reached it (`cdk-blocks vendorize` copied the package): report that.
 	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
 	const completed = result.code === 0 && !run.longRunning;
 	const code = result.interrupted && !completed ? ExitCode.Interrupted : exitCodeForChild(result.code, result.signal);
@@ -1049,7 +1048,7 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 	return { interactive: !ctx.globals.noInput && !isCi(ctx.env), yes: ctx.globals.yes };
 }
 
-/** A bare `cdk-blocks secret` or `cdk-blocks config` is a usage error that points to its help, as a bare `cdk-blocks db` is. */
+/** A bare `cdk-blocks secret` or `cdk-blocks config` is a usage error that points to its help. */
 function requireValueVerb(name: 'secret' | 'config', input: CommandInput): void {
 	if (input.flags.help !== true && input.passthrough.length === 0) {
 		throw new UsageError(`"cdk-blocks ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
@@ -1192,97 +1191,6 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 	return code === 0 ? ExitCode.Ok : ExitCode.Failure;
 }
 
-// ── Data and blocks ──────────────────────────────────────────────────────────
-
-/**
- * The absolute path of a package's bin: from the app's own install first, then
- * from the dependencies of `@aws-blocks/blocks`.
- */
-export function resolvePackageBin(root: string, packageName: string, bin: string): string | undefined {
-	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
-		let entry: string;
-		try {
-			entry = createRequire(from).resolve(packageName);
-		} catch {
-			continue;
-		}
-		for (let dir = dirname(entry); dir !== dirname(dir); dir = dirname(dir)) {
-			const manifest = join(dir, 'package.json');
-			if (!existsSync(manifest)) continue;
-			const pkg = JSON.parse(readFileSync(manifest, 'utf-8')) as { name?: string; bin?: Record<string, string> };
-			if (pkg.name !== packageName) continue;
-			const target = pkg.bin?.[bin];
-			if (target) return join(dir, target);
-			break;
-		}
-	}
-	return undefined;
-}
-
-export async function db(ctx: Context, input: CommandInput): Promise<number> {
-	const verbs = findCommand(['db'])?.verbs ?? [];
-	// bb-data reads no `--`: drop the one that ended the CLI's own options.
-	const dashes = input.passthrough.indexOf('--');
-	const passthrough = input.passthrough.filter((_, i) => i !== dashes);
-	const [verb] = passthrough;
-	if (verb === undefined) {
-		throw new UsageError('"cdk-blocks db" needs a verb: migrate, status, generate-types or pull.', {
-			hint: blocksCommand('db', '--help'),
-		});
-	}
-	if (!verbs.includes(verb)) {
-		const hint = suggest(verb, verbs);
-		throw new UsageError(
-			`unknown db verb "${verb}"; expected migrate, status, generate-types or pull.${hint ? ` Did you mean "${hint}"?` : ''}`,
-			{ hint: blocksCommand('db', '--help') },
-		);
-	}
-	const help = input.flags.help === true;
-	if (verb === 'pull' && !help && !ctx.interactive) {
-		throw new UsageError(
-			'"cdk-blocks db pull" asks for the database and its connection string, and this run cannot prompt (no TTY, --no-input or CI).',
-			{ hint: `run "${BLOCKS_COMMAND} db pull" in a terminal` },
-		);
-	}
-	// A verb's help works outside an app too: the bb-data CLI of @aws-blocks/blocks prints it.
-	const root = help ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
-	const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
-	if (!cli) throw new CliError('cannot find the bb-data CLI of @aws-blocks/bb-data.', { hint: 'npm install' });
-	return runChild(ctx, {
-		operation: `cdk-blocks db ${verb}`,
-		tool: 'bb-data',
-		command: process.execPath,
-		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough))],
-		cwd: root,
-		// bb-data's verb help names the command that runs it.
-		env: { BB_DATA_COMMAND: 'cdk-blocks db' },
-	});
-}
-
-/**
- * The bb-data arguments, with each path made absolute from `startDir`: bb-data
- * runs from the project root, and a path such as `./migrations` names the
- * user's own directory. The values of `--url` and `--stage` are not paths.
- */
-function dbArgsFrom(startDir: string, passthrough: readonly string[]): string[] {
-	const [verb, ...rest] = passthrough;
-	const args = [verb];
-	for (let i = 0; i < rest.length; i++) {
-		const token = rest[i];
-		if (token === '--url' || token === '--stage') {
-			args.push(token);
-			if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(rest[++i]);
-		} else if (token.startsWith('--regenerate-types=')) {
-			args.push(`--regenerate-types=${resolve(startDir, token.slice('--regenerate-types='.length))}`);
-		} else if (token.startsWith('-') || /^[a-z][a-z0-9+.-]*:\/\//i.test(token)) {
-			args.push(token);
-		} else {
-			args.push(resolve(startDir, token));
-		}
-	}
-	return args;
-}
-
 // ── Project ──────────────────────────────────────────────────────────────────
 
 export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
@@ -1315,7 +1223,7 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 
 export interface HelpTarget {
 	command: CommandSpec;
-	/** The tokens after the command, for a passthrough command: `migrate` in `cdk-blocks help db migrate`. */
+	/** The tokens after the command, for a passthrough command: `set` in `cdk-blocks help secret set`. */
 	rest: string[];
 }
 
@@ -1356,7 +1264,7 @@ export function verbHelp(ctx: Context, command: CommandSpec, verb: string): Prom
 
 /**
  * `cdk-blocks help [command...]`. For a verb of a passthrough command
- * (`cdk-blocks help db migrate`) it shows the tool's own help for that verb; any
+ * (`cdk-blocks help secret set`) it shows the tool's own help for that verb; any
  * further tokens are ignored and never reach the tool.
  */
 export async function help(ctx: Context, input: CommandInput): Promise<number> {

@@ -4,8 +4,9 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializePgliteWithRetry, type TransactionHandle } from '@aws-blocks/data-common/core';
-import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
+import { initializePgliteWithRetry } from '../common/pglite-init.js';
+import type { TransactionHandle } from '../common/engine.js';
+import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
 import { PGlite } from '@electric-sql/pglite';
 import { quoteIdent, SESSION_TRANSACTION_WAIT_MS } from '../constants.js';
 import { ASYNC_DDL } from '../dialect/validation.js';

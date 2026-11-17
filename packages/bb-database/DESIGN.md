@@ -1,6 +1,6 @@
 # Database: design
 
-Status: implemented, preview (`dsql` and `aurora` clusters). Usage is documented in [README.md](./README.md).
+Status: implemented (`dsql` and `aurora` clusters). Usage is documented in [README.md](./README.md).
 
 ## Abstract
 
@@ -10,7 +10,7 @@ Status: implemented, preview (`dsql` and `aurora` clusters). Usage is documented
 
 ### 1.1 Motivation
 
-AWS Blocks previously offered SQL through two packages, `bb-data` (Aurora) and `bb-distributed-data` (DSQL). Each had its own class, options, migration runner and error set, so moving an application between them required rewriting every call site. Each block also provisioned its own cluster. This package replaces both with a single block whose cluster is a constructor option. The two earlier packages are unchanged.
+A SQL block per service (one for Aurora, one for DSQL) gives each service its own class, options, migration runner and error set, so moving an application between them means rewriting every call site. Each block also provisions its own cluster. This package is a single block whose cluster is a constructor option.
 
 ### 1.2 Requirements
 
@@ -23,7 +23,6 @@ AWS Blocks previously offered SQL through two packages, `bb-data` (Aurora) and `
 
 - **In-place cluster migration.** Moving data between clusters is a copy whose timing depends on the application. The README documents the procedure; the package does not automate it.
 - **Emulation of DSQL limits.** A `dsql` cluster keeps optimistic concurrency and its per-transaction limits. The package reports these early rather than hiding them.
-- **Replacement of `bb-data` and `bb-distributed-data`.** Both remain supported, and the umbrella package's `Database` export still refers to `bb-data`.
 
 ## 2. Data model
 
@@ -113,11 +112,11 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 
 **Static factory methods** (`Database.dsql()`, `Database.aurora()`). This retains a single class with concise call sites. It exposes service names in the public interface and provides no value that several blocks could share, so R3 would need a second mechanism.
 
-**A hand-written compatibility rule table.** The first cut of this package kept `bb-distributed-data`'s regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments. #446 had already shown `dsql-lint` working in `bb-distributed-data`'s mock and at synth; this package follows it.
+**A hand-written compatibility rule table.** The first cut of this package kept a table of regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments.
 
 **Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
 
-**A Kysely adapter in the block's root entry**, as `bb-data` has in `createKyselyAdapter()`. It makes Kysely a dependency that every application installs and loads. The dialect is in its own entry, so only an application that imports it loads Kysely (§4.4).
+**A Kysely adapter in the block's root entry.** It makes Kysely a dependency that every application installs and loads. The dialect is in its own entry, so only an application that imports it loads Kysely (§4.4).
 
 **A `pg`-pool-shaped object for Kysely's own `PostgresDialect`.** It needs no Kysely import at all, and it was the first cut of the Kysely support. It has to read `begin`, `commit` and `rollback` out of statement text and invent a command tag so that Kysely's `pg` driver counts affected rows, and it looks like a `pg` pool to libraries that it does not support. Kysely's driver interface is the documented extension point and has none of these problems.
 

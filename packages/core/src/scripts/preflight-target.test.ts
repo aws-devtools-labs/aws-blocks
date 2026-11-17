@@ -68,9 +68,6 @@ for (const [name, Client, response] of [
 mock.method(childProcess, 'execFileSync', () => Buffer.alloc(0));
 syncBuiltinESMExports();
 
-mock.module(moduleUrl('external-migrations-step'), {
-  namedExports: { applyExternalMigrations: async () => {} },
-});
 mock.module(new URL('../telemetry/trackCommand.js', scripts).href, {
   namedExports: { trackCommand: async (_command, callback) => callback(), classifyError: () => ({}) },
 });

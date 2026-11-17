@@ -89,7 +89,7 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(calls[1], ['set', 'FLAG', 'on']);
 	});
 
-	it('applies the global options after secret, config and db, and never forwards them to the tool', async () => {
+	it('applies the global options after secret, config and vendorize, and never forwards them to the tool', async () => {
 		const root = fixtureApp();
 		const calls: string[][] = [];
 		const record = async (args: string[]) => {
@@ -123,9 +123,9 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(calls.at(-1), ['set', 'K', '--', '--profile', '-q']);
 		assert.strictEqual(literal.env.AWS_PROFILE, undefined);
 
-		const db = await runCli(['db', 'generate-types', '--no-input', '-y'], { cwd: root });
-		assert.strictEqual(db.code, 0, db.stderr);
-		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['generate-types']);
+		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
+		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
+		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-blocks/bb-kv-store']);
 
 		// A bad global option is a usage error before anything runs: never a value, never ignored.
 		const callsBefore = calls.length;
@@ -133,7 +133,7 @@ describe('passthrough commands', () => {
 			['config', 'list', '--output', 'json'],
 			['secret', 'list', '--query', 'keys'],
 			['secret', 'list', '--region', 'nowhere'],
-			['db', 'status', '--output', 'json'],
+			['vendorize', '@aws-blocks/bb-kv-store', '--output', 'json'],
 			['config', 'set', 'K', 'v', '--profile'],
 		]) {
 			const run = await runCli(argv, { cwd: root, core });
@@ -156,43 +156,9 @@ describe('passthrough commands', () => {
 		assert.match(run.stderr, /^Error: Usage: cdk-blocks secret set <KEY>\n/);
 	});
 
-	it('forwards db verbs and every argument to the bb-data CLI', async () => {
-		const root = fixtureApp();
-		const run = await runCli(['db', 'status', './db/migrations', '--url', 'postgres://x'], { cwd: root });
-		assert.strictEqual(run.code, 0, run.stderr);
-		const [spec] = run.spawned;
-		assert.strictEqual(spec.command, process.execPath);
-		assert.match(spec.args[0], /bb-data[\\/]dist[\\/]cli\.js$/);
-		assert.deepStrictEqual(spec.args.slice(1), ['status', './db/migrations', '--url', 'postgres://x']);
-		assert.strictEqual(spec.cwd, root);
-	});
-
-	it('resolves the relative paths of db and generate types from the directory the command runs in', async () => {
+	it('resolves the relative paths of generate types from the directory the command runs in', async () => {
 		const root = fixtureApp();
 		const sub = join(root, 'aws-blocks');
-		const db = await runCli(['db', 'status', './migrations', '--url', 'postgres://x', '--stage', 's'], {
-			cwd: sub,
-		});
-		assert.strictEqual(db.code, 0, db.stderr);
-		assert.deepStrictEqual(db.spawned[0].args.slice(1), [
-			'status',
-			join(sub, 'migrations'),
-			'--url',
-			'postgres://x',
-			'--stage',
-			's',
-		]);
-		assert.strictEqual(db.spawned[0].cwd, root);
-		const types = await runCli(['db', 'generate-types', 'out.ts', '--regenerate-types=gen'], { cwd: sub });
-		assert.deepStrictEqual(types.spawned[0].args.slice(1), [
-			'generate-types',
-			join(sub, 'out.ts'),
-			`--regenerate-types=${join(sub, 'gen')}`,
-		]);
-		// bb-data reads no `--`; the CLI drops the one that ends its own options.
-		const dashes = await runCli(['db', 'migrate', '--', 'dir'], { cwd: root });
-		assert.deepStrictEqual(dashes.spawned[0].args.slice(1), ['migrate', 'dir']);
-
 		const argvs: string[][] = [];
 		const run = await runCli(
 			['generate', 'types', '--out', 'mine.d.ts', '--include', '*.ts', '--include', '!skip/**'],
@@ -302,48 +268,33 @@ describe('passthrough commands', () => {
 		assert.match(run.stderr, /option --out names a directory/);
 	});
 
-	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
+	it('forwards only "<verb> --help" when --help appears anywhere after secret or config', async () => {
 		const root = fixtureApp();
-		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });
-		assert.strictEqual(db.code, 0, db.stderr);
-		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['status', '--help']);
 		const calls: string[][] = [];
+		const record = async (args: string[]) => {
+			calls.push(args);
+		};
+		const core = { runSecretCli: record, runConfigCli: record };
 		const secret = await runCli(['secret', '--stage', 'prod', 'remove', 'API_KEY', '--force', '--yes', '-h'], {
 			cwd: root,
-			core: {
-				runSecretCli: async (args) => {
-					calls.push(args);
-				},
-			},
+			core,
 		});
 		assert.strictEqual(secret.code, 0, secret.stderr);
 		assert.deepStrictEqual(calls, [['remove', '--help']]);
+		const config = await runCli(['config', 'set', 'FLAG', 'on', '--stage', 'prod', '--help'], { cwd: root, core });
+		assert.strictEqual(config.code, 0, config.stderr);
+		assert.deepStrictEqual(calls, [
+			['remove', '--help'],
+			['set', '--help'],
+		]);
 		// No verb (or an unknown one): the CLI's own help, and nothing runs.
 		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force', '--help'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
 		assert.match(vendorize.stdout, /Usage: cdk-blocks vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
-		const unknown = await runCli(['db', 'drop', '--help'], { cwd: root });
-		assert.match(unknown.stdout, /Usage: cdk-blocks db <verb>/);
-		assert.strictEqual(unknown.spawned.length, 0);
-	});
-
-	it('requires a db verb', async () => {
-		const run = await runCli(['db'], { cwd: fixtureApp() });
-		assert.strictEqual(run.code, 2);
-		assert.match(run.stderr, /needs a verb/);
-		assert.strictEqual(run.spawned.length, 0);
-	});
-
-	it('shows db examples with the migrations directory of an app, and runs the verb help as cdk-blocks db', async () => {
-		const root = fixtureApp();
-		const help = await runCli(['db', '--help'], { cwd: root });
-		assert.strictEqual(help.code, 0, help.stderr);
-		assert.match(help.stdout, /cdk-blocks db migrate aws-blocks\/migrations /);
-		assert.match(help.stdout, /cdk-blocks db status aws-blocks\/migrations /);
-		const verb = await runCli(['db', 'migrate', '--help'], { cwd: root });
-		assert.strictEqual(verb.code, 0, verb.stderr);
-		assert.strictEqual(verb.spawned[0].env.BB_DATA_COMMAND, 'cdk-blocks db');
+		const unknown = await runCli(['config', 'drop', 'FLAG', '--help'], { cwd: root, core });
+		assert.match(unknown.stdout, /Usage: cdk-blocks config /);
+		assert.strictEqual(calls.length, 2);
 	});
 
 	it('forwards vendorize arguments verbatim', async () => {
@@ -915,9 +866,9 @@ describe('lifecycle commands', () => {
 			/^Error: cdk-blocks vendorize failed: blocks-vendorize exited with code 7; its output is above\.\n {2}project: /,
 		);
 		// The child finished its work before a Ctrl-C reached it: that is the result, not an interruption.
-		const finished = await runCli(['db', 'migrate'], { cwd, onSpawn: () => ({ code: 0, interrupted: true }) });
+		const finished = await runCli(['vendorize', 'x'], { cwd, onSpawn: () => ({ code: 0, interrupted: true }) });
 		assert.strictEqual(finished.code, 0);
-		assert.match(finished.stderr, /cdk-blocks db migrate finished before the interrupt stopped it\./);
+		assert.match(finished.stderr, /cdk-blocks vendorize finished before the interrupt stopped it\./);
 		// A long-running child exits 0 when Ctrl-C stops it: that is an interruption.
 		const dev = await runCli(['dev'], { cwd, onSpawn: () => ({ code: 0, interrupted: true }) });
 		assert.strictEqual(dev.code, 130);
@@ -1211,16 +1162,27 @@ describe('lifecycle commands', () => {
 });
 
 describe('help for passthrough subcommands', () => {
-	it('runs "help db migrate" as "db migrate --help", forwarding --help to bb-data', async () => {
+	it('runs "help config set" as "config set --help", forwarding --help to the config CLI', async () => {
 		const root = fixtureApp();
-		const viaHelp = await runCli(['help', 'db', 'migrate'], { cwd: root });
-		const direct = await runCli(['db', 'migrate', '--help'], { cwd: root });
+		const calls: string[][] = [];
+		const core = {
+			runConfigCli: async (args: string[]) => {
+				calls.push(args);
+			},
+		};
+		const viaHelp = await runCli(['help', 'config', 'set'], { cwd: root, core });
+		const direct = await runCli(['config', 'set', '--help'], { cwd: root, core });
 		assert.strictEqual(viaHelp.code, 0, viaHelp.stderr);
-		assert.deepStrictEqual(viaHelp.spawned, direct.spawned);
-		assert.deepStrictEqual(viaHelp.spawned[0].args.slice(1), ['migrate', '--help']);
+		assert.strictEqual(direct.code, 0, direct.stderr);
+		assert.deepStrictEqual(calls, [
+			['set', '--help'],
+			['set', '--help'],
+		]);
 		// Extra tokens after the verb never reach the tool.
-		const extra = await runCli(['help', 'db', 'migrate', './dir', 'postgres://u:p@h/db'], { cwd: root });
-		assert.deepStrictEqual(extra.spawned[0].args.slice(1), ['migrate', '--help']);
+		const extra = await runCli(['help', 'config', 'set', 'FLAG', 'postgres://u:p@h/db'], { cwd: root, core });
+		assert.strictEqual(extra.code, 0, extra.stderr);
+		assert.deepStrictEqual(calls.at(-1), ['set', '--help']);
+		assert.strictEqual(calls.length, 3);
 		const vendorize = await runCli(['help', 'vendorize', '@aws-blocks/bb-kv-store'], { cwd: root });
 		assert.match(vendorize.stdout, /Usage: cdk-blocks vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
@@ -1239,9 +1201,10 @@ describe('help for passthrough subcommands', () => {
 		});
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(calls, [['set', '--help']]);
-		const db = await runCli(['help', 'db'], { cwd });
-		assert.match(db.stdout, /Usage: cdk-blocks db <verb>/);
-		assert.strictEqual(db.spawned.length, 0);
+		// No verb: the CLI's own help, and the secret CLI does not run again.
+		const group = await runCli(['help', 'secret'], { cwd });
+		assert.match(group.stdout, /Usage: cdk-blocks secret /);
+		assert.strictEqual(calls.length, 1);
 		const unknown = await runCli(['help', 'sandbox', 'destory'], { cwd });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /unknown command "sandbox destory"\. Did you mean "sandbox destroy"\?/);
@@ -1249,7 +1212,7 @@ describe('help for passthrough subcommands', () => {
 		assert.match(alias.stderr, /unknown command "typegn"\. Did you mean "generate types"\?/);
 	});
 
-	it('shows the help of a db, secret or config verb outside an app', async () => {
+	it('shows the help of a secret or config verb outside an app', async () => {
 		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
 		const calls: string[][] = [];
 		const record = async (args: string[]) => {
@@ -1270,15 +1233,6 @@ describe('help for passthrough subcommands', () => {
 			['remove', '--help'],
 			['list', '--help'],
 		]);
-		for (const argv of [
-			['db', 'migrate', '--help'],
-			['help', 'db', 'pull'],
-		]) {
-			const run = await runCli(argv, { cwd: outside });
-			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
-			assert.match(run.spawned[0].args[0], /bb-data[\\/]dist[\\/]cli\.js$/);
-			assert.strictEqual(run.spawned[0].cwd, outside);
-		}
 		// Running a verb still needs the app.
 		const run = await runCli(['secret', 'list'], { cwd: outside, core });
 		assert.strictEqual(run.code, 1);
@@ -1464,26 +1418,14 @@ describe('verbose echo', () => {
 			'./dir',
 			'https://example.com/a',
 		]);
-		const run = await runCli(
-			[
-				'--verbose',
-				'db',
-				'migrate',
-				'postgres://admin:hunter2@db.example.com/app',
-				'--url',
-				'postgres://u:pw@h/db',
-			],
-			{ cwd: fixtureApp() },
-		);
+		const run = await runCli(['--verbose', 'vendorize', 'https://admin:hunter2@registry.example.com/pkg'], {
+			cwd: fixtureApp(),
+		});
 		assert.strictEqual(run.code, 0, run.stderr);
-		assert.match(run.stderr, /> .*migrate 'postgres:\/\/admin:\*\*\*@db\.example\.com\/app' --url '\*\*\*'/);
-		assert.doesNotMatch(run.stderr, /hunter2|u:pw/);
+		assert.match(run.stderr, /> .*vendorize\.js 'https:\/\/admin:\*\*\*@registry\.example\.com\/pkg'/);
+		assert.doesNotMatch(run.stderr, /hunter2/);
 		// The child still gets the real arguments.
-		assert.deepStrictEqual(run.spawned[0].args.slice(-3), [
-			'postgres://admin:hunter2@db.example.com/app',
-			'--url',
-			'postgres://u:pw@h/db',
-		]);
+		assert.deepStrictEqual(run.spawned[0].args.slice(-1), ['https://admin:hunter2@registry.example.com/pkg']);
 	});
 
 	it('quotes the words of the echoed command line that a shell would split', async () => {
@@ -1511,19 +1453,19 @@ describe('error format', () => {
 			runner.stderr,
 			/\nError: cdk-blocks deploy failed \(exit code 1\)\.\n(.*\n)*Run with --verbose for the full tool output, or --debug for a stack trace\.\n$/,
 		);
-		// A tool such as bb-data printed its own error; the CLI names it, and --verbose adds nothing.
-		const tool = await runCli(['db', 'status'], { cwd: root, onSpawn: () => ({ code: 1 }) });
+		// A tool such as blocks-vendorize printed its own error; the CLI names it, and --verbose adds nothing.
+		const tool = await runCli(['vendorize', 'x'], { cwd: root, onSpawn: () => ({ code: 1 }) });
 		assert.strictEqual(tool.code, 1);
 		assert.strictEqual(
 			tool.stderr,
-			`Error: cdk-blocks db status failed: bb-data exited with code 1; its output is above.\n  project: ${root}\n`,
+			`Error: cdk-blocks vendorize failed: blocks-vendorize exited with code 1; its output is above.\n  project: ${root}\n`,
 		);
 		// A tool stopped by a signal may have printed nothing: no "its output is above".
-		const killed = await runCli(['db', 'migrate'], { cwd: root, onSpawn: () => ({ code: null, signal: 'SIGTERM' }) });
+		const killed = await runCli(['vendorize', 'x'], { cwd: root, onSpawn: () => ({ code: null, signal: 'SIGTERM' }) });
 		assert.strictEqual(killed.code, 1);
 		assert.strictEqual(
 			killed.stderr,
-			`Error: cdk-blocks db migrate failed: bb-data was stopped by SIGTERM.\n  project: ${root}\n`,
+			`Error: cdk-blocks vendorize failed: blocks-vendorize was stopped by SIGTERM.\n  project: ${root}\n`,
 		);
 		// generate spec and generate client end the same way.
 		for (const [command, tool] of [
@@ -2320,7 +2262,6 @@ describe('cdk-blocks dev stop', () => {
 			['sandbox', 'console'],
 			['deploy', '--wait-live-timeout=5'],
 			['secret'],
-			['db'],
 			['vendorize'],
 			['--profile', 'deploy'],
 			['generate', 'types', '--check', '--watch'],

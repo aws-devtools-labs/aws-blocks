@@ -12,7 +12,7 @@ npm install @aws-blocks/bb-database
 
 **Which cluster:** the default `dsql` cluster for most apps. Triggers, PL/pgSQL, extensions, Row Level Security on raw SQL, and transactions over 3,000 rows need full PostgreSQL: put the block on an `aurora` cluster (`new DatabaseCluster(scope, 'main', { type: 'aurora' })`). It is created in seconds, scales to zero, needs no VPC, and runs the PostgreSQL migration files you already have. Its storage is encrypted with an AWS-owned key (the express configuration accepts no customer managed KMS key) and the first request after five idle minutes waits about 20 seconds for the cluster to resume unless `minCapacity` is at least `0.5`.
 
-This is a preview. `@aws-blocks/bb-data` and `@aws-blocks/bb-distributed-data` are unchanged. The umbrella package `@aws-blocks/blocks` still exports `bb-data`'s `Database`. Import this block from `@aws-blocks/bb-database`. Internals and local-versus-AWS differences are in [DESIGN.md](./DESIGN.md).
+The umbrella package `@aws-blocks/blocks` exports this block: `import { Database, DatabaseCluster, sql } from '@aws-blocks/blocks'`. Internals and local-versus-AWS differences are in [DESIGN.md](./DESIGN.md).
 
 ## Quick start
 
@@ -329,4 +329,4 @@ Per block: one CloudFormation custom resource that applies its migrations, and o
 
 ## Access through the AWS SDK
 
-`getSdkIdentifiers(db)` from `@aws-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` (`dsql`) or an RDS `Signer` from `@aws-sdk/rds-signer` (`aurora`, port 5432) needs to open your own `pg` connection as the same role. The umbrella's typed overloads do not know this block yet, so the result is a `Record<string, string>`.
+`getSdkIdentifiers(db)` from `@aws-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` (`dsql`) or an RDS `Signer` from `@aws-sdk/rds-signer` (`aurora`, port 5432) needs to open your own `pg` connection as the same role. `getSdkIdentifiers` from `@aws-blocks/blocks` types this result.
