@@ -20,6 +20,7 @@
 "@aws-blocks/bb-realtime": patch
 "@aws-blocks/bb-secret": patch
 "@aws-blocks/bb-tracer": patch
+"@aws-blocks/blocks": patch
 "@aws-blocks/data-common": patch
 "@aws-blocks/hosting": patch
 "@aws-blocks/pipeline": patch
@@ -33,5 +34,6 @@ Each package now tells bundlers (esbuild, Rollup, webpack, Vite) which of its mo
 - `@aws-blocks/bb-realtime` and `@aws-blocks/bb-file-bucket` also list their client middleware modules. The generated `client.js` imports them only so that they register themselves.
 - `@aws-blocks/bb-agent` also lists its AgentCore entry (`@aws-blocks/bb-agent/agentcore`).
 - `@aws-blocks/data-common`, `@aws-blocks/hosting` and `@aws-blocks/pipeline` declare `"sideEffects": false`.
+- `@aws-blocks/blocks` adds a test that fails when a client middleware module would be left out of a browser bundle. The package itself stays without a `sideEffects` declaration.
 
 No API or runtime behavior changes. A bundle that uses only part of a package can get smaller.
