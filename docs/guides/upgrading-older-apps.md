@@ -89,7 +89,7 @@ Keep the old table with `LegacyKVStore`, and move its items to a `KVStore` with 
 1. In `aws-blocks/index.ts`, change the class on the line of the old store to `LegacyKVStore`. Keep its id and every option it had. Add a `KVStore` with a new id next to it:
 
    ```ts
-   import { KVStore, KVStoreErrors, LegacyKVStore, isBlocksError } from '@aws-blocks/blocks';
+   import { KVStore, LegacyKVStore } from '@aws-blocks/blocks';
 
    // Before: const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
    const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
@@ -98,19 +98,7 @@ Keep the old table with `LegacyKVStore`, and move its items to a `KVStore` with 
 
    Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete` and `scan` of release 0.4.0, so code that still calls the old store keeps working.
 
-2. Migrate the data however is appropriate for your app. `LegacyKVStore` doesn't copy for you. A copy reads each entry with its expiry and writes it to the new store, and `ifNotExists` makes it safe to run again. Run it in a handler or a job, for example an `AsyncJob`:
-
-   ```ts
-   for await (const { key, value, expiresAt } of oldPrefs.scan()) {
-     try {
-       await prefs.put(key, value, { ifNotExists: true, expiresAt });
-     } catch (e: unknown) {
-       if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-     }
-   }
-   ```
-
-   The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) has steps that are suitable for some migrations, and what to check before you use them.
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` doesn't copy for you. The tools for a copy are `scan` of the old store, which gives each entry with its expiry and reads in pages with `limit` and `cursor`, `put` on the new store with `ifNotExists` and `expiresAt`, and a job such as an `AsyncJob` to run it. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) has steps that are suitable for some migrations, and what to check before you use them.
 
 3. When the data is in the new store, remove the `LegacyKVStore` line and any read of the old store, and deploy. The old table leaves the stack: a table with a removal policy of `destroy` is deleted, and a retained table (the default of the production preset) stays in your account until you delete it.
 

@@ -496,52 +496,11 @@ Steps that are suitable for some migrations are as follows:
 2. Copy the items of the old store to the new store, in a handler or a job, for example an `AsyncJob`.
 3. When the copy is done, remove the reads of the old store.
 
-The reads and the writes of step 1:
+The tools for a copy:
 
-```typescript
-// A read: the new store first, then the old one.
-const alicePrefs = (await prefs.get('alice')) ?? (await oldPrefs.get('alice'));
-
-// A write goes to the new store.
-await prefs.put('alice', { theme: 'dark' });
-```
-
-The copy of step 2. `scan` gives each entry with its expiry. `ifNotExists` keeps a value that the new store has, so the copy is safe to run again.
-
-```typescript
-for await (const { key, value, expiresAt } of oldPrefs.scan()) {
-	try {
-		await prefs.put(key, value, { ifNotExists: true, expiresAt });
-	} catch (e: unknown) {
-		// The new store has this key.
-		if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-	}
-}
-```
-
-For a store that is too large for one run, copy one page in each run of a job, and pass the cursor to the next run. The copy is done when the cursor is `undefined`. An `AsyncJob` is one way to do that: each run copies one page, and then submits the next run.
-
-```typescript
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-
-const copyPrefs: AsyncJob<{ cursor?: string }> = new AsyncJob(scope, 'copy-prefs', {
-	handler: async ({ cursor }: { cursor?: string }) => {
-		const page = oldPrefs.scan({ limit: 500, cursor });
-		for await (const { key, value, expiresAt } of page) {
-			try {
-				await prefs.put(key, value, { ifNotExists: true, expiresAt });
-			} catch (e: unknown) {
-				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-			}
-		}
-		// The next run starts after the last entry of this page.
-		if (page.cursor) await copyPrefs.submit({ cursor: page.cursor });
-	},
-});
-
-// Start the copy once, for example from an API method.
-await copyPrefs.submit({});
-```
+- **`scan` of the `LegacyKVStore`** gives each entry with its key, its value, and its expiry (`expiresAt`). With `limit` and `cursor` it reads one page at a time, so a copy of a large store can run in parts.
+- **`put` of the `KVStore`** takes `expiresAt`, so a copied entry keeps its expiry. With `ifNotExists` it keeps a value that the new store has, so a copy is safe to run again.
+- **`AsyncJob`** runs a copy outside a request. Each run can copy one page, and submit the next run with the cursor.
 
 These steps do not fit every app. While the app reads both stores:
 

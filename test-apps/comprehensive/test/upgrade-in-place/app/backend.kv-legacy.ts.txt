@@ -52,7 +52,7 @@ async function expiriesOf(s: Readable, e: Readable) {
 }
 
 /**
- * The copy of the README: every entry of the old store, with its expiry, unless the new store has the key.
+ * A copy with the tools that the README names: every entry of the old store, with its expiry, unless the new store has the key.
  * It also copies the expired entries (`includeExpired`): a read of the new store must hide them too.
  */
 async function copy<T>(

@@ -14,10 +14,9 @@
  *
  * What the generator does to a block, and nothing else:
  * - `import { a, b } from 'module'` lines move to the top of the file. The
- *   package's own name resolves to the mock entry. `@aws-blocks/bb-auth` and
- *   `@aws-blocks/bb-async-job` depend on this package, so they cannot be
- *   imported here: `Auth` and `AsyncJob` get a declared stand-in with what
- *   the README uses.
+ *   package's own name resolves to the mock entry. `@aws-blocks/bb-auth`
+ *   depends on this package, so it cannot be imported here: `Auth` gets a
+ *   declared stand-in with the one method the README calls.
  * - A leading `export ` is dropped, because the code is inside a function.
  * - A line of the form `// <code>;   compile error...` is a claim that `<code>`
  *   does not compile. It becomes `<code>` under `// @ts-expect-error`, so the
@@ -51,13 +50,6 @@ const STAND_INS = {
 		'declare class Auth {',
 		'\tconstructor(scope: ScopeParent, id: string);',
 		'\trequireAuth(context: unknown): Promise<{ userSub: string; username: string }>;',
-		'}',
-	],
-	'@aws-blocks/bb-async-job': [
-		'/** Stand-in for `AsyncJob`: bb-async-job depends on this package, so it cannot be imported here. */',
-		'declare class AsyncJob<T = unknown> {',
-		'\tconstructor(scope: ScopeParent, id: string, options: { handler: (payload: T) => Promise<void> });',
-		'\tsubmit(payload: T): Promise<{ jobId: string }>;',
 		'}',
 	],
 };
