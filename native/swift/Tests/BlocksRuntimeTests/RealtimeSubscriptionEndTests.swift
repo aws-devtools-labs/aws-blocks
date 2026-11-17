@@ -123,13 +123,72 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
         }
     }
 
-    func testErrorFrameWithoutMessageGetsADefault() async {
+    func testErrorFrameWithMissingOrEmptyMessageOrNonStringCodeGetsDefaults() async {
+        let frames = [
+            #"{"type":"error","channel":"c","code":"token_expired"}"#,
+            #"{"type":"error","channel":"c","code":"token_expired","message":""}"#,
+            #"{"type":"error","channel":"c","code":"token_expired","message":7}"#
+        ]
+        for frame in frames {
+            let harness = FakeRealtimeHarness()
+            let recorder = await subscribed(harness.channel("c"), on: harness)
+            harness.sockets[0].deliver(frame)
+            assertSubscriptionEnded(
+                await recorder.ended(),
+                channel: "c",
+                code: "token_expired",
+                message: #"The server ended the subscription to "c""#
+            )
+        }
+
         let harness = FakeRealtimeHarness()
         let recorder = await subscribed(harness.channel("c"), on: harness)
+        harness.sockets[0].deliver(#"{"type":"error","channel":"c","code":42,"message":"m"}"#)
+        assertSubscriptionEnded(await recorder.ended(), channel: "c", code: nil, message: "m")
+    }
 
-        harness.sockets[0].deliver(#"{"type":"error","channel":"c","code":"token_expired"}"#)
+    func testFramesThatArentJSONObjectsOrLackAStringChannelAreIgnored() async {
+        let harness = FakeRealtimeHarness()
+        let channel = harness.channel("c")
+        let recorder = await subscribed(channel, on: harness)
+        let socket = harness.sockets[0]
 
-        assertSubscriptionEnded(await recorder.ended(), channel: "c", code: "token_expired", message: "Subscription ended")
+        for frame in [
+            "not json",
+            "[1,2]",
+            #""a string""#,
+            "null",
+            #"{"type":"message","data":{"x":1}}"#,
+            #"{"type":"message","channel":5,"data":{"x":1}}"#,
+            #"{"type":"subscribe_success","channel":"c"}"#,
+            #"{"channel":"c","data":{"x":1}}"#
+        ] {
+            socket.deliver(frame)
+        }
+        socket.deliver(message("c", x: 2))
+
+        await waitUntil("the message arrives") { recorder.values.count == 1 }
+        XCTAssertEqual(recorder.values, [["x": 2]])
+        XCTAssertNil(recorder.end)
+        channel.close()
+    }
+
+    func testHandlesForDifferentChannelsOnOneURLShareOneSocket() async {
+        let harness = FakeRealtimeHarness()
+        let first = harness.channel("a", token: "token-a")
+        let second = harness.channel("b", token: "token-b")
+        let firstRecorder = await subscribed(first, on: harness)
+        let secondRecorder = await subscribed(second, on: harness)
+        XCTAssertEqual(harness.sockets.count, 1)
+
+        harness.sockets[0].deliver(message("b", x: 2))
+        harness.sockets[0].deliver(message("a", x: 1))
+
+        await waitUntil("each gets its own channel") {
+            firstRecorder.values == [["x": 1]] && secondRecorder.values == [["x": 2]]
+        }
+        first.close()
+        second.close()
     }
 
     func testErrorFrameEndsOnlyItsChannelAndTheSocketKeepsServingTheOthers() async {
@@ -181,15 +240,53 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
         harness.sockets[0].deliver(#"{"type":"error","message":"Invalid channel"}"#)
 
         for recorder in [first, second] {
-            guard case .threw(let error)? = await recorder.ended(),
-                  case RealtimeError.connectionFailed(let message, let underlying)? = error as? RealtimeError else {
-                XCTFail("Expected connectionFailed, got \(String(describing: recorder.end))")
-                continue
-            }
-            XCTAssertEqual(message, "Invalid channel")
-            XCTAssertNil(underlying)
+            assertConnectionFailed(await recorder.ended(), message: "Invalid channel")
         }
-        await waitUntil("the socket closes") { harness.sockets[0].isCancelled }
+        XCTAssertEqual(harness.session.connectionCount, 0, "the socket left the pool")
+        XCTAssertTrue(harness.sockets[0].isCancelled)
+
+        let later = await subscribed(harness.channel("a"), on: harness, socket: 1)
+        XCTAssertEqual(harness.sockets.count, 2, "a later subscribe opens a new socket")
+        later.cancel()
+    }
+
+    func testErrorFrameWithoutChannelOrMessageGetsTheDefault() async {
+        for frame in [#"{"type":"error"}"#, #"{"type":"error","message":""}"#, #"{"type":"error","channel":3}"#] {
+            let harness = FakeRealtimeHarness()
+            let recorder = await subscribed(harness.channel("c"), on: harness)
+            harness.sockets[0].deliver(frame)
+            assertConnectionFailed(await recorder.ended(), message: "The server reported a connection error")
+        }
+    }
+
+    private func assertConnectionFailed(
+        _ end: StreamEnd?,
+        message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case .threw(let error)? = end,
+              case RealtimeError.connectionFailed(let got, let underlying)? = error as? RealtimeError else {
+            return XCTFail("Expected connectionFailed, got \(String(describing: end))", file: file, line: line)
+        }
+        XCTAssertEqual(got, message, file: file, line: line)
+        XCTAssertNil(underlying, file: file, line: line)
+    }
+
+    func testServerCloseEndsTheStreamWithConnectionFailedCarryingTheCloseCodeAndReason() async {
+        let harness = FakeRealtimeHarness()
+        let recorder = await subscribed(harness.channel("c"), on: harness)
+        harness.sockets[0].fail(RealtimeSocketClosed(code: 1_001, reason: "Going away"))
+        assertConnectionFailed(
+            await recorder.ended(),
+            message: #"The server closed the WebSocket (code 1001, reason "Going away")"#
+        )
+        XCTAssertEqual(harness.session.connectionCount, 0)
+
+        let noReason = FakeRealtimeHarness()
+        let other = await subscribed(noReason.channel("c"), on: noReason)
+        noReason.sockets[0].fail(RealtimeSocketClosed(code: 1_006, reason: ""))
+        assertConnectionFailed(await other.ended(), message: "The server closed the WebSocket (code 1006)")
     }
 
     // MARK: - Socket failure
@@ -228,17 +325,23 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
 
     // MARK: - Decode failure
 
-    func testMessageThatFailsToDecodeEndsTheStreamWithTheDecodingError() async {
+    func testMessageThatFailsToDecodeEndsOnlyThatSubscriptionWithTheDecodingError() async {
         let harness = FakeRealtimeHarness()
-        let recorder = await subscribed(harness.channel("c"), on: harness)
+        let broken = harness.channel("a")
+        let healthy = harness.channel("b")
+        let brokenRecorder = await subscribed(broken, on: harness)
+        let healthyRecorder = await subscribed(healthy, on: harness)
 
-        harness.sockets[0].deliver(#"{"type":"message","channel":"c","data":{"x":"not a number"}}"#)
+        harness.sockets[0].deliver(#"{"type":"message","channel":"a","data":{"x":"not a number"}}"#)
 
-        guard case .threw(let error)? = await recorder.ended() else {
-            return XCTFail("Expected a throw, got \(String(describing: recorder.end))")
+        guard case .threw(let error)? = await brokenRecorder.ended() else {
+            return XCTFail("Expected a throw, got \(String(describing: brokenRecorder.end))")
         }
         XCTAssertTrue(error is DecodingError, "got \(error)")
-        await waitUntil("the socket closes") { harness.sockets[0].isCancelled }
+        harness.sockets[0].deliver(message("b", x: 4))
+        await waitUntil("b still receives") { healthyRecorder.values == [["x": 4]] }
+        XCTAssertFalse(harness.sockets[0].isCancelled)
+        healthy.close()
     }
 
     // MARK: - App-initiated ends
@@ -296,6 +399,7 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
 
         await waitUntil("the socket closes") { harness.sockets[0].isCancelled }
         XCTAssertEqual(harness.session.connectionCount, 0)
+        XCTAssertFalse(harness.sockets[0].sent.contains { $0.contains("unsubscribe") }, "no unsubscribe frame is sent")
     }
 
     // MARK: - Renewal is the app's call

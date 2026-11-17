@@ -75,8 +75,8 @@ final class UserAgentHeaderTests: XCTestCase {
         let session = WebSocketSession()
         let delegate = NoopWebSocketDelegate()
         let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
-        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
-        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
+        _ = try session.acquire(wsUrl: wsUrl, listener: delegate)
+        defer { session.release(wsUrl: wsUrl, listener: delegate) }
 
         let head = listener.waitForRequestHead()
         XCTAssertTrue(
@@ -94,8 +94,8 @@ final class UserAgentHeaderTests: XCTestCase {
         let session = WebSocketSession(session: bareSession)
         let delegate = NoopWebSocketDelegate()
         let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
-        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
-        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
+        _ = try session.acquire(wsUrl: wsUrl, listener: delegate)
+        defer { session.release(wsUrl: wsUrl, listener: delegate) }
 
         let head = listener.waitForRequestHead()
         XCTAssertTrue(

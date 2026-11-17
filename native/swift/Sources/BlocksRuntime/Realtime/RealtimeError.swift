@@ -19,6 +19,10 @@ public enum RealtimeError: BlocksError {
     /// (API Gateway closes a socket after 10 minutes with no traffic, and after 2 hours in any case). Also thrown
     /// when the server sends an error frame that names no channel, which ends every subscription on the socket.
     /// The socket is gone; get the channel again and subscribe to the new handle.
+    ///
+    /// The underlying error is the platform error when the socket failed. It is `nil` when the server or the gateway
+    /// closed the socket (the message carries the close code and reason) or sent an error frame with no channel (the
+    /// message is the server's).
     case connectionFailed(String, Error?)
     /// The server ended this channel's subscription with an error frame: it refused the subscribe, or ended the
     /// subscription when it re-checked it on a keep-alive ping. The socket may still serve other channels.

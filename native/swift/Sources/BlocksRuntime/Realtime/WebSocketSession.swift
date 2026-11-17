@@ -38,11 +38,17 @@ protocol RealtimeSocket: AnyObject {
     func resume()
     /// Sends a text frame.
     func send(_ text: String) async throws
-    /// Waits for the next frame. Returns `nil` for a frame that carries no text. Throws when the socket fails or
-    /// closes, including a close by the server or the gateway.
+    /// Waits for the next frame. Returns `nil` for a frame that carries no text. Throws `RealtimeSocketClosed` when
+    /// the other side closes the socket with a close frame, and the platform error when the socket fails.
     func receive() async throws -> String?
     /// Closes the socket from this side.
     func cancel(reason: String)
+}
+
+/// The server or the gateway closed the socket with a close frame.
+struct RealtimeSocketClosed: Error {
+    let code: Int
+    let reason: String
 }
 
 /// Receives the events of one pooled socket.
@@ -51,7 +57,8 @@ protocol RealtimeSocketListener: AnyObject {
     func onOpen(_ socket: RealtimeSocket)
     /// A text frame arrived. Every listener on the socket gets every frame.
     func onMessage(_ text: String)
-    /// The socket failed or was closed by the other side. The pool has already dropped it.
+    /// The socket failed (the platform error) or was closed by the other side (`RealtimeSocketClosed`). The pool has
+    /// already dropped it.
     func onFailure(_ error: Error)
 }
 
@@ -72,7 +79,18 @@ final class URLSessionRealtimeSocket: RealtimeSocket {
     }
 
     func receive() async throws -> String? {
-        switch try await task.receive() {
+        let message: URLSessionWebSocketTask.Message
+        do {
+            message = try await task.receive()
+        } catch {
+            // After a close frame, receive() fails with a generic socket error; the task holds the close code.
+            if task.closeCode != .invalid {
+                let reason = task.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                throw RealtimeSocketClosed(code: task.closeCode.rawValue, reason: reason)
+            }
+            throw error
+        }
+        switch message {
         case .string(let text):
             return text
         case .data(let data):
@@ -87,13 +105,15 @@ final class URLSessionRealtimeSocket: RealtimeSocket {
     }
 }
 
-/// Reference-counted pool that shares one WebSocket per `wsUrl` and token, and dispatches its frames to every
-/// registered listener.
+/// Reference-counted pool that shares one WebSocket per `wsUrl` (which carries the connect token), with one reader
+/// that dispatches every frame to every registered listener. Each listener picks out its own channel's frames.
+/// Subscriptions to different channels, or several to one channel, share the socket.
 ///
 /// While a socket has a listener, the pool sends the JSON keep-alive `{"action":"ping"}` every
 /// ``keepAliveInterval``. The server re-checks the socket's subscriptions only on that message, and ends an expired
 /// or revoked one with an error frame. A socket that fails or closes is dropped from the pool, so the next
-/// `acquire` opens a new one. When the last listener is released, the socket is closed.
+/// `acquire` opens a new one. So is a socket that gets an error frame naming no channel, which ends every
+/// subscription on it. When the last listener is released, the socket is closed. No `unsubscribe` frame is sent.
 class WebSocketSession {
 
     /// The keep-alive interval, 9 minutes, as the web client sends it. API Gateway closes a socket after 10 minutes
@@ -189,10 +209,6 @@ class WebSocketSession {
         self.sleep = sleep
     }
 
-    private func key(_ wsUrl: String, _ token: String) -> String {
-        "\(wsUrl)|\(token)"
-    }
-
     // MARK: - Receive loop and keep-alive
 
     private func start(_ entry: ConnectionEntry, key: String) {
@@ -206,13 +222,19 @@ class WebSocketSession {
             while !Task.isCancelled {
                 do {
                     guard let text = try await socket.receive() else { continue }
+                    let endsSocket = RealtimeFrame.isConnectionError(text)
+                    if endsSocket {
+                        // Drop it before telling listeners, so a subscribe made in response opens a new socket.
+                        self?.drop(entry, key: key, reason: "Server reported a connection error")
+                    }
                     for listener in entry.snapshot {
                         listener.onMessage(text)
                     }
+                    if endsSocket { return }
                 } catch {
                     if Task.isCancelled { return }
                     // Drop the dead socket before telling listeners, so a subscribe made in response opens a new one.
-                    self?.drop(entry, key: key)
+                    self?.drop(entry, key: key, reason: "Connection failed")
                     for listener in entry.snapshot {
                         listener.onFailure(error)
                     }
@@ -240,27 +262,27 @@ class WebSocketSession {
     }
 
     /// Removes `entry` from the pool if it is still the pooled socket for `key`, and stops it.
-    private func drop(_ entry: ConnectionEntry, key: String) {
+    private func drop(_ entry: ConnectionEntry, key: String, reason: String) {
         lock.lock()
         if connections[key] === entry {
             connections.removeValue(forKey: key)
         }
         lock.unlock()
         entry.keepAlive?.cancel()
-        entry.socket.cancel(reason: "Connection failed")
+        entry.socket.cancel(reason: reason)
     }
 
     // MARK: - API
 
-    /// Adds `listener` to the pooled socket for the endpoint and token, opening one if none is pooled.
+    /// Adds `listener` to the pooled socket for `wsUrl`, opening one if none is pooled.
     ///
     /// - Throws: `RealtimeError.connectionFailed` if `wsUrl` is not a URL.
-    func acquire(wsUrl: String, token: String, listener: RealtimeSocketListener) throws {
+    func acquire(wsUrl: String, listener: RealtimeSocketListener) throws {
         guard let url = URL(string: wsUrl) else {
             throw RealtimeError.connectionFailed("Invalid WebSocket URL: \(wsUrl)", nil)
         }
 
-        let connectionKey = key(wsUrl, token)
+        let connectionKey = wsUrl
         lock.lock()
         if let existing = connections[connectionKey] {
             // Join under the pool lock, so a concurrent release can't close the socket between lookup and join.
@@ -286,8 +308,8 @@ class WebSocketSession {
 
     /// Removes `listener` from the pooled socket it joined. Closes that socket, and stops its keep-alive, when no
     /// listeners remain. A listener whose socket was already dropped is a no-op.
-    func release(wsUrl: String, token: String, listener: RealtimeSocketListener) {
-        let connectionKey = key(wsUrl, token)
+    func release(wsUrl: String, listener: RealtimeSocketListener) {
+        let connectionKey = wsUrl
         lock.lock()
         guard let entry = connections[connectionKey], entry.remove(listener) else {
             lock.unlock()

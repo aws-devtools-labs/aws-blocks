@@ -37,17 +37,25 @@ enum RealtimeFrame: Equatable {
             guard frameChannel == channel, let data = payload(of: json) else { return nil }
             return .message(data)
         case "error":
-            // An error frame with no channel is about the socket, so every subscriber on it gets it.
+            // An error frame with no string channel is about the socket, so every subscriber on it gets it.
             if let frameChannel, frameChannel != channel { return nil }
-            let message = json["message"] as? String
-            return .error(
-                channel: frameChannel,
-                code: json["code"] as? String,
-                message: message ?? (frameChannel == nil ? "Realtime server error" : "Subscription ended")
-            )
+            let serverMessage = (json["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let fallback = frameChannel.map { "The server ended the subscription to \"\($0)\"" }
+                ?? "The server reported a connection error"
+            return .error(channel: frameChannel, code: json["code"] as? String, message: serverMessage ?? fallback)
         default:
             return nil
         }
+    }
+
+    /// True for an error frame that names no channel. It ends every subscription on the socket, so the pool drops
+    /// the socket.
+    static func isConnectionError(_ text: String) -> Bool {
+        guard let raw = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
+            return false
+        }
+        return json["type"] as? String == "error" && !(json["channel"] is String)
     }
 
     /// Returns the payload bytes of a `message` frame for `channel`, or nil for
@@ -285,7 +293,7 @@ public final class RealtimeChannel<T> {
     /// subscription, so a message published before the server confirms can be missed. A refused subscribe finishes
     /// the stream with `RealtimeError.subscriptionEnded`.
     ///
-    /// Subscriptions on the same `wsUrl` and token share one WebSocket. While it has a subscriber, the SDK sends the
+    /// Subscriptions on the same `wsUrl` share one WebSocket, whatever their channel. While it has a subscriber, the SDK sends the
     /// keep-alive `{"action":"ping"}` every 9 minutes, as the web client does. The server re-checks each subscription
     /// on that ping, and that is how an expired or revoked one is reported.
     ///
@@ -333,11 +341,11 @@ public final class RealtimeChannel<T> {
                 self.lock.lock()
                 self.activeListeners.removeAll { $0 === listener }
                 self.lock.unlock()
-                webSocketSession.release(wsUrl: wsUrl, token: channelToken, listener: listener)
+                webSocketSession.release(wsUrl: wsUrl, listener: listener)
             }
 
             do {
-                try webSocketSession.acquire(wsUrl: wsUrl, token: channelToken, listener: listener)
+                try webSocketSession.acquire(wsUrl: wsUrl, listener: listener)
             } catch {
                 continuation.finish(throwing: error)
             }
@@ -438,6 +446,14 @@ private final class ChannelListener<T>: RealtimeSocketListener {
     }
 
     func onFailure(_ error: Error) {
+        if let closed = error as? RealtimeSocketClosed {
+            let message = closed.reason.isEmpty
+                ? "The server closed the WebSocket (code \(closed.code))"
+                : "The server closed the WebSocket (code \(closed.code), reason \"\(closed.reason)\")"
+            logger.debug("\(message)")
+            continuation.finish(throwing: RealtimeError.connectionFailed(message, nil))
+            return
+        }
         logger.error("WS failure: \(error.localizedDescription)")
         continuation.finish(throwing: RealtimeError.connectionFailed("WebSocket failure", error))
     }

@@ -55,7 +55,7 @@ final class WebSocketSessionTests: XCTestCase {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
 
-        XCTAssertThrowsError(try harness.session.acquire(wsUrl: "", token: "tok", listener: listener)) { error in
+        XCTAssertThrowsError(try harness.session.acquire(wsUrl: "", listener: listener)) { error in
             guard case RealtimeError.connectionFailed(let msg, _)? = error as? RealtimeError else {
                 return XCTFail("Expected .connectionFailed, got \(error)")
             }
@@ -68,14 +68,14 @@ final class WebSocketSessionTests: XCTestCase {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
 
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: listener)
+        try harness.session.acquire(wsUrl: url, listener: listener)
 
         XCTAssertEqual(harness.sockets.count, 1)
         XCTAssertTrue(harness.sockets[0].isResumed)
         XCTAssertEqual(harness.sockets[0].request.url?.absoluteString, url)
         XCTAssertEqual(harness.sockets[0].request.value(forHTTPHeaderField: "User-Agent"), blocksUserAgentToken)
         await waitUntil("the listener sees the socket open") { listener.opens == 1 }
-        harness.session.release(wsUrl: url, token: "tok", listener: listener)
+        harness.session.release(wsUrl: url, listener: listener)
     }
 
     func testAcquireReusesSameConnectionAndDispatchesToEveryListener() async throws {
@@ -83,8 +83,8 @@ final class WebSocketSessionTests: XCTestCase {
         let first = RecordingListener()
         let second = RecordingListener()
 
-        try harness.session.acquire(wsUrl: url, token: "abc", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "abc", listener: second)
+        try harness.session.acquire(wsUrl: url, listener: first)
+        try harness.session.acquire(wsUrl: url, listener: second)
         XCTAssertEqual(harness.sockets.count, 1)
 
         harness.sockets[0].deliver("frame")
@@ -92,37 +92,65 @@ final class WebSocketSessionTests: XCTestCase {
         // A listener that joins an open socket is told it's open, so it can send its subscribe.
         await waitUntil("both listeners see the socket open") { first.opens == 1 && second.opens == 1 }
 
-        harness.session.release(wsUrl: url, token: "abc", listener: first)
-        harness.session.release(wsUrl: url, token: "abc", listener: second)
+        harness.session.release(wsUrl: url, listener: first)
+        harness.session.release(wsUrl: url, listener: second)
     }
 
-    func testDifferentTokensCreateDifferentConnections() throws {
+    func testDifferentURLsCreateDifferentConnections() throws {
+        // The connect token is part of the URL, so a different connect token is a different socket.
         let harness = FakeRealtimeHarness()
         let first = RecordingListener()
         let second = RecordingListener()
 
-        try harness.session.acquire(wsUrl: url, token: "token1", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "token2", listener: second)
+        try harness.session.acquire(wsUrl: url + "?token=a", listener: first)
+        try harness.session.acquire(wsUrl: url + "?token=b", listener: second)
 
         XCTAssertEqual(harness.sockets.count, 2)
-        harness.session.release(wsUrl: url, token: "token1", listener: first)
-        harness.session.release(wsUrl: url, token: "token2", listener: second)
+        harness.session.release(wsUrl: url + "?token=a", listener: first)
+        harness.session.release(wsUrl: url + "?token=b", listener: second)
+    }
+
+    func testConnectionErrorFrameDropsTheSocketBeforeListenersHearIt() async throws {
+        let harness = FakeRealtimeHarness()
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+
+        harness.sockets[0].deliver(#"{"type":"error","message":"Invalid channel"}"#)
+
+        await waitUntil("the listener gets the frame") { listener.messages.count == 1 }
+        XCTAssertEqual(harness.session.connectionCount, 0)
+        XCTAssertTrue(harness.sockets[0].isCancelled)
+        await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
+    }
+
+    func testServerCloseReachesListenersAsRealtimeSocketClosed() async throws {
+        let harness = FakeRealtimeHarness()
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+
+        harness.sockets[0].fail(RealtimeSocketClosed(code: 1_001, reason: "Going away"))
+
+        await waitUntil("the listener gets the close") { listener.errors.count == 1 }
+        let closed = listener.errors.first as? RealtimeSocketClosed
+        XCTAssertEqual(closed?.code, 1_001)
+        XCTAssertEqual(closed?.reason, "Going away")
+        XCTAssertEqual(harness.session.connectionCount, 0)
     }
 
     func testReleaseLastListenerClosesConnection() throws {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
 
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: listener)
-        harness.session.release(wsUrl: url, token: "tok", listener: listener)
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        harness.session.release(wsUrl: url, listener: listener)
 
         XCTAssertTrue(harness.sockets[0].isCancelled)
         XCTAssertEqual(harness.session.connectionCount, 0)
 
         let again = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: again)
+        try harness.session.acquire(wsUrl: url, listener: again)
         XCTAssertEqual(harness.sockets.count, 2, "acquiring after the last release opens a new socket")
-        harness.session.release(wsUrl: url, token: "tok", listener: again)
+        harness.session.release(wsUrl: url, listener: again)
     }
 
     func testReleaseWithMultipleListenersKeepsConnection() throws {
@@ -130,23 +158,23 @@ final class WebSocketSessionTests: XCTestCase {
         let first = RecordingListener()
         let second = RecordingListener()
 
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: second)
-        harness.session.release(wsUrl: url, token: "tok", listener: first)
+        try harness.session.acquire(wsUrl: url, listener: first)
+        try harness.session.acquire(wsUrl: url, listener: second)
+        harness.session.release(wsUrl: url, listener: first)
 
         XCTAssertFalse(harness.sockets[0].isCancelled)
         let third = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: third)
+        try harness.session.acquire(wsUrl: url, listener: third)
         XCTAssertEqual(harness.sockets.count, 1)
 
-        harness.session.release(wsUrl: url, token: "tok", listener: second)
-        harness.session.release(wsUrl: url, token: "tok", listener: third)
+        harness.session.release(wsUrl: url, listener: second)
+        harness.session.release(wsUrl: url, listener: third)
         XCTAssertTrue(harness.sockets[0].isCancelled)
     }
 
     func testReleaseNonExistentConnectionDoesNotCrash() {
         let harness = FakeRealtimeHarness()
-        harness.session.release(wsUrl: "wss://nonexistent.com/ws", token: "tok", listener: RecordingListener())
+        harness.session.release(wsUrl: "wss://nonexistent.com/ws", listener: RecordingListener())
     }
 
     // MARK: - Dead sockets
@@ -155,8 +183,8 @@ final class WebSocketSessionTests: XCTestCase {
         let harness = FakeRealtimeHarness()
         let first = RecordingListener()
         let second = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: second)
+        try harness.session.acquire(wsUrl: url, listener: first)
+        try harness.session.acquire(wsUrl: url, listener: second)
 
         harness.sockets[0].fail()
 
@@ -166,14 +194,14 @@ final class WebSocketSessionTests: XCTestCase {
 
         // A later acquire on the same key opens a new socket rather than joining the dead one.
         let later = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: later)
+        try harness.session.acquire(wsUrl: url, listener: later)
         XCTAssertEqual(harness.sockets.count, 2)
         let newSocket = try XCTUnwrap(harness.sockets.dropFirst().first)
 
         // A stale release from a listener of the dead socket leaves the new one alone.
-        harness.session.release(wsUrl: url, token: "tok", listener: first)
+        harness.session.release(wsUrl: url, listener: first)
         XCTAssertFalse(newSocket.isCancelled)
-        harness.session.release(wsUrl: url, token: "tok", listener: later)
+        harness.session.release(wsUrl: url, listener: later)
         XCTAssertTrue(newSocket.isCancelled)
     }
 
@@ -182,7 +210,7 @@ final class WebSocketSessionTests: XCTestCase {
     func testPingsEveryNineMinutesWhileTheSocketHasAListener() async throws {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: listener)
+        try harness.session.acquire(wsUrl: url, listener: listener)
         let socket = harness.sockets[0]
 
         await waitUntil("the keep-alive waits") { harness.clock.pendingDurations == [9 * 60 * 1_000_000_000] }
@@ -200,15 +228,15 @@ final class WebSocketSessionTests: XCTestCase {
         harness.clock.advance(by: 9 * 60 * 1_000_000_000)
         await waitUntil("the second ping") { socket.pingCount == 2 }
 
-        harness.session.release(wsUrl: url, token: "tok", listener: listener)
+        harness.session.release(wsUrl: url, listener: listener)
     }
 
     func testOneKeepAlivePerSocketNotPerListener() async throws {
         let harness = FakeRealtimeHarness()
         let first = RecordingListener()
         let second = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: second)
+        try harness.session.acquire(wsUrl: url, listener: first)
+        try harness.session.acquire(wsUrl: url, listener: second)
 
         await waitUntil("one keep-alive waits") { harness.clock.pendingDurations.count == 1 }
         harness.clock.advance(by: WebSocketSession.keepAliveInterval)
@@ -216,23 +244,23 @@ final class WebSocketSessionTests: XCTestCase {
         try await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(harness.sockets[0].pingCount, 1)
 
-        harness.session.release(wsUrl: url, token: "tok", listener: first)
-        harness.session.release(wsUrl: url, token: "tok", listener: second)
+        harness.session.release(wsUrl: url, listener: first)
+        harness.session.release(wsUrl: url, listener: second)
     }
 
     func testKeepAliveStopsWhenTheLastListenerLeaves() async throws {
         let harness = FakeRealtimeHarness()
         let first = RecordingListener()
         let second = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: first)
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: second)
+        try harness.session.acquire(wsUrl: url, listener: first)
+        try harness.session.acquire(wsUrl: url, listener: second)
         await waitUntil("the keep-alive waits") { harness.clock.pendingDurations.count == 1 }
 
-        harness.session.release(wsUrl: url, token: "tok", listener: first)
+        harness.session.release(wsUrl: url, listener: first)
         try await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(harness.clock.pendingDurations.count, 1, "the keep-alive runs while a listener remains")
 
-        harness.session.release(wsUrl: url, token: "tok", listener: second)
+        harness.session.release(wsUrl: url, listener: second)
         await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
         harness.clock.advance(by: WebSocketSession.keepAliveInterval)
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -242,12 +270,12 @@ final class WebSocketSessionTests: XCTestCase {
     func testKeepAliveStopsWhenTheSocketFails() async throws {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
-        try harness.session.acquire(wsUrl: url, token: "tok", listener: listener)
+        try harness.session.acquire(wsUrl: url, listener: listener)
         await waitUntil("the keep-alive waits") { harness.clock.pendingDurations.count == 1 }
 
         harness.sockets[0].fail()
 
         await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
-        harness.session.release(wsUrl: url, token: "tok", listener: listener)
+        harness.session.release(wsUrl: url, listener: listener)
     }
 }
