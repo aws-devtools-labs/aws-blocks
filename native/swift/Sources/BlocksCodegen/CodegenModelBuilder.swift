@@ -72,6 +72,14 @@ public struct CodegenModelBuilder {
         mutating func release(_ name: String, for typeRef: TypeRef) {
             if !declared.contains(name), inlineTypes[name] == typeRef { inlineTypes[name] = nil }
         }
+
+        /// The variant structs top-level unions declare beside them (`Text` for `TicketPayload.text`), each with
+        /// its shape, so an inline type or another union's variant doesn't take one of their names.
+        private var variantStructs: [String: String] = [:]
+        func variantStruct(named name: String) -> String? { variantStructs[name] }
+        mutating func claimVariantStruct(_ name: String, shape: String) {
+            if variantStructs[name] == nil { variantStructs[name] = shape }
+        }
     }
 
     /// Whether `typeRef` declares a type of its own named after its property (an inline object, enum or union).
@@ -127,19 +135,22 @@ public struct CodegenModelBuilder {
         return transform("\(candidate)_\(suffix)")
     }
 
-    /// The name a top-level enum or union is derived from. For an array property it's the property's own name, not
-    /// the element's singular (`AuthenticatedUser.groups: [enum]` → `AuthenticatedUserGroups`), as on Dart. A nested
-    /// type keeps the element's singular name (`Shipment.parcels: [{…}]` → `Shipment.Parcel`).
+    /// The name a top-level enum or union is derived from. For an array or map property it's the property's own
+    /// name, not the element's singular or `…Value` (`AuthenticatedUser.groups: [enum]` → `AuthenticatedUserGroups`,
+    /// `Feature.flags: Record<string, enum>` → `FeatureFlags`), as on Dart. A nested type keeps the element's
+    /// singular name (`Shipment.parcels: [{…}]` → `Shipment.Parcel`).
     private func topLevelBaseName(_ name: String, origin: NameOrigin?) -> String {
-        guard let origin, origin.key.hasSuffix("[]") else { return specTypeName(name) }
-        return specTypeName(origin.alternate)
+        guard let origin, origin.key.hasSuffix("[]") || origin.key.hasSuffix("{}"), !origin.key.contains("<")
+        else { return specTypeName(name) }
+        return specTypeName(String(origin.key.prefix { $0 != "[" && $0 != "{" }))
     }
 
     /// The name an inline type registered at the top level takes, claimed for it in `names`. It's prefixed with
     /// its schema's name (`Ticket.status` → `TicketStatus`, `AuthAction.capability` → `AuthActionCapability`), so
-    /// a generated enum or union doesn't take a generic name (`Status`, `Kind`) an app declares too. A name that
-    /// already starts with the schema's name (`AuthFieldType`) isn't prefixed again. If another type has the
-    /// name, it gets a numeric suffix (`TicketStatus_2`).
+    /// a generated enum or union doesn't take a generic name (`Status`, `Kind`) an app declares too. The prefix is
+    /// always added, as on Dart (`User.userType` → `UserUserType`). A name another type has, a top-level union's
+    /// variant struct has, or that a Swift, Foundation or runtime type has (`RPC.error` → `RPCError`), gets a
+    /// numeric suffix (`TicketStatus_2`, `RPCError_2`).
     private func allocateTopLevelName(
         _ name: String,
         for typeRef: TypeRef,
@@ -151,12 +162,15 @@ public struct CodegenModelBuilder {
             if let component = componentSchemas[candidate] {
                 return component == typeRef || component == .nullable(inner: typeRef)
             }
+            if names.variantStruct(named: candidate) != nil || Self.reservedTopLevelNames.contains(candidate) {
+                return false
+            }
             return names.inlineType(named: candidate).map { $0 == typeRef } ?? true
         }
         // The schema itself, and an inline type that is a same-named component schema, keep the name.
         let isOwnSchema = enclosing == nil
             || componentSchemas[name].map { $0 == typeRef || $0 == .nullable(inner: typeRef) } == true
-        let qualified = isOwnSchema || name.hasPrefix(enclosing ?? "") ? name : (enclosing ?? "") + name
+        let qualified = isOwnSchema ? name : (enclosing ?? "") + name
         var allocated = qualified
         var suffix = 2
         while !fits(allocated) {
@@ -166,6 +180,11 @@ public struct CodegenModelBuilder {
         if componentSchemas[allocated] == nil { names.claim(allocated, for: typeRef) }
         return allocated
     }
+
+    /// Names a top-level enum, union or shared parameter type can't take: Swift, Foundation and SwiftUI types, the
+    /// types the generated files name unqualified (`RPCError`, `BlocksClient`, `JSONDecoder`) and Swift keywords.
+    static let reservedTopLevelNames: Set<String> = reservedTypeNames.union(nestedShadowingTypeNames)
+        .union(reservedNamespaceClassNames).union(swiftKeywords)
 
     public func build(from rpcModel: RPCModel) -> CodegenModel {
         var typeDefinitions: [TypeDefinition] = []
@@ -793,8 +812,11 @@ public struct CodegenModelBuilder {
                     InlineTypeEntry(id: myId, shortName: unionName, type: resolved, parentId: nil),
                     allEntries: inlineTypes
                 )
-                registerTopLevel(name: unionName, type: node.type, into: &typeDefinitions, declaredNames: &declaredNames)
-                return hasNullMember ? .nullable(inner: node.type) : node.type
+                let type = claimVariantStructs(
+                    of: node.type, componentSchemas: componentSchemas, declaredNames: &declaredNames
+                )
+                registerTopLevel(name: unionName, type: type, into: &typeDefinitions, declaredNames: &declaredNames)
+                return hasNullMember ? .nullable(inner: type) : type
             } else {
                 inlineTypes.append(InlineTypeEntry(
                     id: myId,
@@ -896,6 +918,49 @@ public struct CodegenModelBuilder {
         )
     }
 
+    /// Claims the variant structs a top-level union declares beside it. A variant whose name another top-level
+    /// type has, or another union's differently shaped variant has, is renamed after its union, as on Dart
+    /// (`Notification.event`'s `orderStatus` arm → `NotificationEventOrderStatus` beside `OrderStatus`), so neither
+    /// declaration replaces the other.
+    private func claimVariantStructs(
+        of type: ResolvedType, componentSchemas: [String: TypeRef], declaredNames: inout TopLevelNames
+    ) -> ResolvedType {
+        guard case .union(let unionName, let variants, let discriminator) = type else { return type }
+        var renamed: [String: String] = [:]
+        let claimed = variants.map { variant -> UnionVariant in
+            let declaresStruct = (!variant.fields.isEmpty || variant.additionalPropertiesType != nil
+                || variant.embeddedUnion != nil || !variant.nestedTypes.isEmpty)
+                && variant.payloadTypeName == nil && variant.valueType == nil
+            guard declaresStruct else { return variant }
+            let shape = structuralKeyOfUnion(variants: [variant], discriminator: nil)
+            func isFree(_ name: String) -> Bool {
+                if let existing = declaredNames.variantStruct(named: name) { return existing == shape }
+                return componentSchemas[name] == nil && !declaredNames.contains(name)
+                    && declaredNames.inlineType(named: name) == nil && name != unionName
+            }
+            var name = variant.name
+            if !isFree(name) {
+                let base = unionName + variant.name
+                name = base
+                var suffix = 2
+                while !isFree(name) {
+                    name = "\(base)_\(suffix)"
+                    suffix += 1
+                }
+                renamed[variant.name] = name
+            }
+            declaredNames.claimVariantStruct(name, shape: shape)
+            return name == variant.name ? variant : variant.with(name: name)
+        }
+        guard !renamed.isEmpty else { return type }
+        let renamedDiscriminator = discriminator.map { disc in
+            DiscriminatorInfo(
+                fieldName: disc.fieldName, variants: disc.variants.mapValues { renamed[$0] ?? $0 }, kind: disc.kind
+            )
+        }
+        return .union(name: unionName, variants: claimed, discriminator: renamedDiscriminator)
+    }
+
     private func registerTopLevel(
         name: String,
         type: ResolvedType,
@@ -965,10 +1030,20 @@ public struct CodegenModelBuilder {
             // Use a variant-scoped parent ID for inline types found inside this variant's fields
             let variantParentId: String? = currentParentId.map { "\($0):variant:\(earlyVariantName)" }
 
+            // Within a schema, an enum or union declared at the top level for a discriminated variant's field is
+            // named after the variant and its union, as on Dart (`Notification.payload`'s `email` arm's
+            // `priority` → `EmailNotificationPayloadPriority`). A boolean arm is named after its field and value.
+            var memberPrefix = parentSchemaName
+            if parentSchemaName != nil, discriminator != nil, refName == nil, case .inlineObject = member {
+                let isBoolean = discriminator?.kind == .boolean
+                let suffix = unionName.hasSuffix("Input") ? "Input" : unionName
+                memberPrefix = isBoolean ? earlyVariantName : earlyVariantName + suffix
+            }
+
             let resolvedMember = resolveType(
                 member,
                 name: resolveName,
-                parentSchemaName: parentSchemaName,
+                parentSchemaName: memberPrefix,
                 componentSchemas: componentSchemas,
                 typeDefinitions: &typeDefinitions,
                 declaredNames: &declaredNames,

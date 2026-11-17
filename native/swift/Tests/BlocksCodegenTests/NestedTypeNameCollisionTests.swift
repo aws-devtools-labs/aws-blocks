@@ -48,6 +48,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         return #"{ "type": "object", "properties": { \#(props) }, "required": [\#(required)] }"#
     }
 
+    private func union(_ members: String...) -> String { #"{ "oneOf": [\#(members.joined(separator: ", "))] }"# }
     private func array(_ items: String) -> String { #"{ "type": "array", "items": \#(items) }"# }
     private func map(_ values: String) -> String { #"{ "type": "object", "additionalProperties": \#(values) }"# }
     private func channel(_ message: String) -> String {
@@ -189,6 +190,97 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         assertContains(output.models, "public nonisolated enum AuthenticatedUserGroups: String, Codable, Sendable {")
         assertContains(output.models, "public let groups: [AuthenticatedUserGroups]\n")
         assertNotContains(output.models, "enum AuthenticatedUserGroup:")
+    }
+
+    /// The schema's prefix is always added, as on Dart, so a name that starts with the schema's name (`userType`)
+    /// or is the schema's name (`status` on `Status`) still gets it.
+    func testTheSchemaPrefixIsAlwaysAdded() throws {
+        let schemas = """
+        { "User": \(object(["userType": strings("admin", "member")])),
+          "Car": \(object(["cardType": strings("visa", "amex")])),
+          "Status": \(object(["status": strings("up", "down")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["User", "Car", "Status"].map(returning))
+
+        assertContains(output.models, "public let userType: UserUserType\n")
+        assertContains(output.models, "public let cardType: CarCardType\n")
+        assertContains(output.models, "public let status: StatusStatus\n")
+    }
+
+    /// A prefixed name that is a Swift or runtime type (`RPC.error` → `RPCError`) gets a suffix instead.
+    func testAPrefixedNameThatIsARuntimeTypeGetsASuffix() throws {
+        let schemas = """
+        { "RPC": \(object(["error": strings("timeout", "refused")])),
+          "Err": \(object(["or": strings("a", "b")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["RPC", "Err"].map(returning))
+
+        assertContains(output.models, "public let error: RPCError_2\n")
+        assertContains(output.models, "public let or: ErrOr\n")
+        assertNotContains(output.models, "enum RPCError:")
+    }
+
+    /// A map of enums is named after its property, as an array of them is, and as on Dart.
+    func testAMapOfEnumsKeepsThePropertysName() throws {
+        let feature = object(["flags": map(strings("on", "off")), "rows": array(map(strings("x", "y")))])
+        let output = try generate(schemas: #"{ "Feature": \#(feature) }"#, methods: [returning("Feature")])
+
+        assertContains(output.models, "public let flags: [String: FeatureFlags]\n")
+        assertContains(output.models, "public let rows: [[String: FeatureRows]]\n")
+    }
+
+    /// An enum on a discriminated variant's field is named after the variant and its union, as on Dart.
+    func testAnEnumOnAVariantIsNamedAfterTheVariant() throws {
+        let email = object(["channel": strings("email"), "priority": strings("low", "high")])
+        let sms = object(["channel": strings("sms"), "priority": strings("urgent", "normal")])
+        let notification = object(["payload": union(email, sms)])
+        let output = try generate(schemas: #"{ "Notification": \#(notification) }"#, methods: [returning("Notification")])
+
+        assertContains(output.models, "public let priority: EmailNotificationPayloadPriority\n")
+        assertContains(output.models, "public let priority: SmsNotificationPayloadPriority\n")
+        assertNotContains(output.models, "NotificationPriority")
+    }
+
+    /// A top-level union's variant struct and an inline type don't take one name, whichever comes first.
+    func testAVariantStructAndAnInlineTypeDontShareAName() throws {
+        let event = object(["event": union(object(["type": strings("orderStatus"), "at": string]), object(["type": strings("ping"), "id": string]))])
+        let order = object(["status": strings("pending", "shipped")])
+        // `Notification` resolves before `Order`, `Order` before `Zone`.
+        let output = try generate(
+            schemas: #"{ "Notification": \#(event), "Order": \#(order), "Zone": \#(event) }"#,
+            methods: ["Notification", "Order", "Zone"].map(returning)
+        )
+
+        XCTAssertEqual(count("struct OrderStatus:", in: output.models), 1)
+        assertContains(output.models, "public let status: OrderStatus_2\n")
+        assertContains(output.models, "case orderStatus(OrderStatus)")
+        // `Zone.event`'s identical union is the same type, so it shares the declaration.
+        assertContains(output.models, "public let event: NotificationEvent\n")
+    }
+
+    /// Two top-level unions whose variant structs share a name but not a shape each declare their own.
+    func testDifferentlyShapedVariantStructsOfOneNameAreBothDeclared() throws {
+        let alpha = object(["payload": union(object(["type": strings("text"), "body": string]), object(["type": strings("none"), "why": string]))])
+        let beta = object(["payload": union(object(["type": strings("text"), "html": string]), object(["type": strings("none"), "code": string]))])
+        let output = try generate(schemas: #"{ "Alpha": \#(alpha), "Beta": \#(beta) }"#, methods: ["Alpha", "Beta"].map(returning))
+
+        assertContains(output.models, "public nonisolated struct Text: Codable, Sendable {\n    public let body: String\n")
+        assertContains(output.models, "public nonisolated struct BetaPayloadText: Codable, Sendable {\n    public let html: String\n")
+        assertContains(output.models, "case betaPayloadText(BetaPayloadText)")
+    }
+
+    func testRenamedNamesCompile() throws {
+        #if os(macOS)
+        let event = object(["event": union(object(["type": strings("orderStatus"), "at": string]), object(["type": strings("ping"), "id": string]))])
+        let schemas = """
+        { "Notification": \(event), "Order": \(object(["status": strings("pending", "shipped")])),
+          "RPC": \(object(["error": strings("timeout", "refused")])), "Status": \(object(["status": strings("up", "down")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["Notification", "Order", "RPC", "Status"].map(returning))
+        try typecheckConsumer(models: output.models, api: output.api, consumer: "import Generated\n", moduleFlags: ["-warnings-as-errors"])
+        #else
+        throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
+        #endif
     }
 
     func testInlineTypeDoesntReplaceAComponentSchemaOfItsName() throws {
