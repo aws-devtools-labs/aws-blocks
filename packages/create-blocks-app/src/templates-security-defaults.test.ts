@@ -272,6 +272,11 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
       '.gitignore': 'node_modules\t\n',
     },
+    // A negation that reverses no earlier line is no choice about node_modules.
+    'a project whose .gitignore only has !node_modules/*': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '!node_modules/*\n',
+    },
   };
   for (const [label, files] of Object.entries(withoutNodeModules)) {
     it(`ignores node_modules in ${label}`, () => {
@@ -285,14 +290,23 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
   }
 
   // An explicit `!node_modules` (vendored dependencies) is the project's choice: git
-  // applies the last matching line, so appending `node_modules` would reverse it.
-  for (const gitignore of ['node_modules\n!node_modules\n', '!node_modules\n']) {
+  // applies the last matching line, so appending `node_modules` would reverse it. The
+  // same goes for `!node_modules/*` after `node_modules/*`, which leaves the directory
+  // itself included, so git re-includes its contents.
+  const unignoring = [
+    'node_modules\n!node_modules\n',
+    '!node_modules\n',
+    'node_modules/*\n!node_modules/*\n',
+    'node_modules/**\n!node_modules/**\n',
+  ];
+  for (const gitignore of unignoring) {
     it(`adds no node_modules line when the existing .gitignore is ${JSON.stringify(gitignore)}`, () => {
       const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
       try {
         const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
         assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
         assert.match(stdout, /Left node_modules as your \.gitignore configures it/);
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), ['node_modules/pkg/index.js'], 'git agrees it is un-ignored');
       } finally {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }

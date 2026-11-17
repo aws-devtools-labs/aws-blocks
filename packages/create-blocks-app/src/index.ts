@@ -330,23 +330,28 @@ function mayIgnore(pattern: string, name: string): boolean {
 
 /**
  * How the `.gitignore` lines treat a directory called `name` at the project
- * root: `'ignored'`, `'unignored'` (the last matching line is `!name` or
- * `!name/`, an explicit choice to keep it), or `undefined` when no line
- * matches. Git applies the last matching line.
+ * root: `'ignored'`, `'unignored'` (a negated line reverses the match, an
+ * explicit choice to keep it), or `undefined` when no line matches.
  *
- * Only literal forms count: `name`, `name/`, `/name`, `name/*`, `name/**`,
- * `name` after a leading double-star segment, and a bare `*`. Unlike
- * {@link mayIgnore}, this check is biased towards no match, so the caller adds
- * the line: a wrong match leaves `name` unignored, while a duplicate line is
- * harmless. So globs and character classes (`[!n]ode_modules`, `n*s`) do not
- * count, nor does a line with leading whitespace or a trailing tab, which git
- * reads as part of the pattern. A negated `!name/*` or `!name/**` changes
- * nothing: git can't re-include a file whose parent directory is excluded.
- * Pass the raw lines; a pattern for a path below the root
- * (`packages/site/node_modules`) does not count either.
+ * Git applies the last matching line per path, and can't re-include a file
+ * whose parent directory is excluded. So the directory itself (`name`, `name/`,
+ * a bare `*`) and its contents (`name/*`, `name/**`) are tracked apart:
+ * `!name/*` re-includes the contents after `name/*`, but changes nothing after
+ * `name`, which excludes the directory.
+ *
+ * Only literal forms count: those above, with an optional leading `/` or
+ * double-star segment. Unlike {@link mayIgnore}, this check is biased towards
+ * no match, so the caller adds the line: a wrong match leaves `name`
+ * unignored, while a duplicate line is harmless. So globs and character
+ * classes (`[!n]ode_modules`, `n*s`) do not count, nor does a line with
+ * leading whitespace or a trailing tab, which git reads as part of the pattern,
+ * nor a negation that reverses no earlier match. Pass the raw lines; a pattern
+ * for a path below the root (`packages/site/node_modules`) does not count
+ * either.
  */
 function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'unignored' | undefined {
-  let state: 'ignored' | 'unignored' | undefined;
+  let directory: 'ignored' | 'unignored' | undefined;
+  let contents: 'ignored' | 'unignored' | undefined;
   for (const raw of lines) {
     // Git strips trailing spaces (unless escaped), but not tabs or leading spaces.
     // A loop rather than / +$/, which backtracks quadratically on a long run of spaces.
@@ -356,15 +361,21 @@ function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'u
     if (!line || line.startsWith('#')) continue;
     const negated = line.startsWith('!');
     const path = (negated ? line.slice(1) : line).replace(/^(\*\*\/|\/)/, '');
-    const pattern = path.replace(/\/\**$/, '');
-    if (pattern === name) {
-      if (!negated) state = 'ignored';
-      else if (path === name || path === `${name}/`) state = 'unignored';
+    if (path === name || path === `${name}/`) {
+      directory = negated ? 'unignored' : 'ignored';
+    } else if (path === `${name}/*` || path === `${name}/**`) {
+      if (!negated) contents = 'ignored';
+      // Re-including the contents works only while the directory itself isn't excluded.
+      else if (contents === 'ignored' && directory !== 'ignored') contents = 'unignored';
+    } else if (path === '*' || path === '*/') {
+      // `!*` or `!*/` (an allow-list re-including directories) is no choice about `name`.
+      directory = negated ? undefined : 'ignored';
+      if (negated) contents = undefined;
     }
-    // `!*` or `!*/` (an allow-list re-including directories) is no choice about `name`.
-    else if (pattern === '*') state = negated ? undefined : 'ignored';
   }
-  return state;
+  if (directory === 'ignored' || contents === 'ignored') return 'ignored';
+  if (directory === 'unignored' || contents === 'unignored') return 'unignored';
+  return undefined;
 }
 
 /**
