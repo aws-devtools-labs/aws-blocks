@@ -15,18 +15,9 @@ public enum OIDCAuthState: Sendable, Equatable {
 }
 
 /// The authenticated user surfaced after token exchange.
-///
-/// The values are for display only. After `exchange` they are what the server's exchange response
-/// reports; after `restore()` they are decoded on the device from the stored access token's payload
-/// (`sub`, `username`, `groups`) without verifying its signature. Neither is verified by this client,
-/// so do not use them to decide what the user may see or do. Make authorization decisions on the server, which verifies the token sent with each request.
 public struct OIDCUser: Sendable, Equatable, Codable {
-    /// The user's identifier (the token's `sub` claim). For display only; not verified on the device.
     public let userId: String
-    /// The user's name (the token's `username` claim). For display only; not verified on the device.
     public let username: String
-    /// The groups the token lists (its `groups` claim). For display only, such as choosing which
-    /// screens to offer; not verified on the device, so the server must enforce group membership.
     public let groups: [String]
 
     public init(userId: String, username: String, groups: [String]) {

@@ -1,9 +1,10 @@
 ## Unreleased
 
 - `PersistentSessionStore` no longer reads the name → value map written before
-  0.2.0: `load()` deletes it and the cookies it held are not used, so users
-  whose session was stored in that format sign in again. A stored cookie
-  record without a `secure` field is read as `Secure`.
+  0.2.0: `load()` deletes it and the cookies it held are not used. Anyone
+  signed in with cookies stored in that format is signed out once and needs to
+  sign in again after upgrading. A stored cookie record without a `secure`
+  field is read as `Secure`.
 
 ## 0.2.0
 
