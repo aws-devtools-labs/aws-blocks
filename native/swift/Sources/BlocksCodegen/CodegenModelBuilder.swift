@@ -232,63 +232,91 @@ public struct CodegenModelBuilder {
             var inlineTypes: [InlineTypeEntry] = []
 
             // The operation's root scope: an inline result keeps `Result`, then each parameter its own name.
-            // The result's key can't be a parameter name.
+            // The result's key can't be a parameter name. A name the spec gives a union parameter
+            // (`x-blocks-type-name`) is claimed too, so no type the operation's enum declares hides the shared
+            // type from the enum's aliases.
             let resultKey = "#result"
             let rootClaims = directClaims(
                 (method.result.map { [NameClaimant(key: resultKey, name: "Result", type: $0.schema)] } ?? [])
                     + method.params.map { NameClaimant(key: $0.name, name: specTypeName($0.name), type: $0.schema) }
+                    + method.params.compactMap { param in
+                        param.typeName.map { NameClaimant(key: "#type:\($0)", name: $0, type: param.schema) }
+                    }
             )
 
             var sharedTypeAliases: [SharedTypeAlias] = []
+            // The types each shared parameter's operation declared before, kept in `inlineTypes` so later
+            // parameters and the result name and deduplicate against them, but declared only as aliases.
+            var aliasEntryIds: Set<String> = []
+            // Each old root name (`Input`) and the shared type it now names (`AuthActionInput`).
+            var aliasTargets: [String: String] = [:]
             let parameters = method.params.map { param -> OperationParameter in
                 let shortName = specTypeName(param.name)
-                if let typeName = param.typeName,
-                   isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas) {
-                    // The type the operation's enum declared before, for the aliases that keep its old names.
-                    var oldInlineTypes = inlineTypes
-                    var scratchDefinitions = typeDefinitions
-                    var scratchNames = declaredNames
-                    let old = resolveType(
-                        param.schema, name: shortName, parentSchemaName: nil,
-                        componentSchemas: rpcModel.componentSchemas, typeDefinitions: &scratchDefinitions,
-                        declaredNames: &scratchNames, inlineTypes: &oldInlineTypes, currentParentId: nil,
-                        origin: NameOrigin(key: param.name, name: shortName), siblingClaims: rootClaims
+                func resolveNested() -> ResolvedType {
+                    resolveType(
+                        param.schema,
+                        name: shortName,
+                        parentSchemaName: nil,
+                        componentSchemas: rpcModel.componentSchemas,
+                        typeDefinitions: &typeDefinitions,
+                        declaredNames: &declaredNames,
+                        inlineTypes: &inlineTypes,
+                        currentParentId: nil,
+                        origin: NameOrigin(key: param.name, name: shortName),
+                        siblingClaims: rootClaims
                     )
-                    var sharedInlineTypes: [InlineTypeEntry] = []
-                    let shared = resolveType(
-                        param.schema, name: typeName, parentSchemaName: nil,
-                        componentSchemas: rpcModel.componentSchemas, typeDefinitions: &typeDefinitions,
-                        declaredNames: &declaredNames, inlineTypes: &sharedInlineTypes, currentParentId: nil,
-                        origin: NameOrigin(key: param.name, name: typeName)
-                    )
-                    let oldNode = buildNestedTypeNodes(from: Array(oldInlineTypes.dropFirst(inlineTypes.count)))
-                        .first { node in
-                            if case .union(let name, _, _) = old { return node.name == name }
-                            return false
-                        }
-                    if case .union = shared, let oldNode,
-                       let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }) {
-                        if sharedSchemas[typeName] == nil {
-                            sharedSchemas[typeName] = param.schema
-                            sharedTypes.append(sharedNode)
-                        }
-                        sharedTypeAliases.append(SharedTypeAlias(old: oldNode, target: typeName))
-                        return OperationParameter(name: param.name, type: .typeReference(name: typeName), required: param.required)
-                    }
                 }
-                let resolved = resolveType(
-                    param.schema,
-                    name: shortName,
-                    parentSchemaName: nil,
-                    componentSchemas: rpcModel.componentSchemas,
-                    typeDefinitions: &typeDefinitions,
-                    declaredNames: &declaredNames,
-                    inlineTypes: &inlineTypes,
-                    currentParentId: nil,
-                    origin: NameOrigin(key: param.name, name: shortName),
-                    siblingClaims: rootClaims
+                guard let typeName = param.typeName,
+                      isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas)
+                else {
+                    let resolved = resolveNested()
+                    return OperationParameter(name: param.name, type: resolved, required: param.required)
+                }
+                // The type the operation's enum declared before: its nested types become the aliases that keep
+                // the old names, or, if the parameter can't share, the parameter's own nested types.
+                let firstNew = inlineTypes.count
+                let old = resolveNested()
+                let added = Array(inlineTypes[firstNew...])
+                var sharedInlineTypes: [InlineTypeEntry] = []
+                var sharedDefinitions = typeDefinitions
+                var sharedNames = declaredNames
+                let shared = resolveType(
+                    param.schema, name: typeName, parentSchemaName: nil,
+                    componentSchemas: rpcModel.componentSchemas, typeDefinitions: &sharedDefinitions,
+                    declaredNames: &sharedNames, inlineTypes: &sharedInlineTypes, currentParentId: nil,
+                    origin: NameOrigin(key: param.name, name: typeName)
                 )
-                return OperationParameter(name: param.name, type: resolved, required: param.required)
+                let oldRoot: String? = {
+                    switch old {
+                    case .union(let name, _, _), .typeReference(let name): return name
+                    case .nullable(.union(let name, _, _)), .nullable(.typeReference(let name)): return name
+                    default: return nil
+                    }
+                }()
+                let oldNode = buildNestedTypeNodes(from: added).first { $0.name == oldRoot }
+                let addedNames = Set(added.map(\.shortName))
+                // Only a discriminated union is shared: a transparent union's cases are named after the union
+                // (`to_Variant0`), so its old case names couldn't be kept.
+                if case .union(_, _, let discriminator?) = shared, !discriminator.fieldName.isEmpty,
+                   let oldRoot, !addedNames.contains(typeName),
+                   let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }),
+                   oldNode != nil || aliasTargets[oldRoot] == typeName {
+                    if sharedSchemas[typeName] == nil {
+                        sharedSchemas[typeName] = param.schema
+                        sharedTypes.append(sharedNode)
+                        typeDefinitions = sharedDefinitions
+                        declaredNames = sharedNames
+                    }
+                    aliasEntryIds.formUnion(added.map(\.id))
+                    if let oldNode {
+                        aliasTargets[oldRoot] = typeName
+                        sharedTypeAliases.append(SharedTypeAlias(old: oldNode, target: typeName))
+                    }
+                    let ref: ResolvedType = .typeReference(name: typeName)
+                    if case .nullable = old { return OperationParameter(name: param.name, type: .nullable(inner: ref), required: param.required) }
+                    return OperationParameter(name: param.name, type: ref, required: param.required)
+                }
+                return OperationParameter(name: param.name, type: old, required: param.required)
             }
 
             let resultType: ResolvedType
@@ -311,12 +339,25 @@ public struct CodegenModelBuilder {
                 resultType = .primitive(.void)
             }
 
-            let nestedTypes = buildNestedTypeNodes(from: inlineTypes)
+            // A later parameter or the result deduplicated against an old type names the shared type instead.
+            let resultNamingShared = renamingReferences(in: resultType, aliasTargets)
+            let liveInlineTypes = inlineTypes.filter { !aliasEntryIds.contains($0.id) }.map { entry in
+                InlineTypeEntry(
+                    id: entry.id, shortName: entry.shortName,
+                    type: renamingReferences(in: entry.type, aliasTargets), parentId: entry.parentId
+                )
+            }
+            let parametersNamingShared = parameters.map { param in
+                OperationParameter(
+                    name: param.name, type: renamingReferences(in: param.type, aliasTargets), required: param.required
+                )
+            }
+            let nestedTypes = buildNestedTypeNodes(from: liveInlineTypes)
 
             namespaceMap[namespaceName, default: []].append(Operation(
                 name: opName,
-                parameters: parameters,
-                result: OperationResult(type: resultType),
+                parameters: parametersNamingShared,
+                result: OperationResult(type: resultNamingShared),
                 nestedTypes: nestedTypes,
                 sharedTypeAliases: sharedTypeAliases
             ))
@@ -347,10 +388,48 @@ public struct CodegenModelBuilder {
         _ typeName: String, schema: TypeRef, taken: Set<String>, shared: [String: TypeRef]
     ) -> Bool {
         if let existing = shared[typeName] { return existing == schema }
-        return isValidSwiftIdentifier(typeName) && !swiftKeywords.contains(typeName)
-            && !taken.contains(typeName)
-            && !reservedTypeNames.contains(typeName) && !nestedShadowingTypeNames.contains(typeName)
-            && !["Blocks", "Servers"].contains(typeName)
+        return isValidSwiftIdentifier(typeName) && !taken.contains(typeName)
+            && !Self.reservedTopLevelNames.contains(typeName)
+    }
+
+    /// `type` with each reference to a key of `targets` (an old root name, `Input`) naming its value instead.
+    private func renamingReferences(in type: ResolvedType, _ targets: [String: String]) -> ResolvedType {
+        guard !targets.isEmpty else { return type }
+        func rename(_ type: ResolvedType) -> ResolvedType {
+            switch type {
+            case .typeReference(let name): return .typeReference(name: targets[name] ?? name)
+            case .list(let element, let constraints): return .list(elementType: rename(element), constraints: constraints)
+            case .map(let value): return .map(valueType: rename(value))
+            case .nullable(let inner): return .nullable(inner: rename(inner))
+            case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
+                return .record(
+                    name: name, fields: fields.map(renameField),
+                    additionalPropertiesType: additionalPropertiesType.map(rename), embeddedUnion: embeddedUnion.map(rename)
+                )
+            case .union(let name, let variants, let discriminator):
+                return .union(name: name, variants: variants.map { variant in
+                    UnionVariant(
+                        name: variant.name, fields: variant.fields.map(renameField),
+                        discriminatorValue: variant.discriminatorValue,
+                        payloadTypeName: variant.payloadTypeName.map { targets[$0] ?? $0 },
+                        additionalPropertiesType: variant.additionalPropertiesType.map(rename),
+                        embeddedUnion: variant.embeddedUnion.map(rename), nestedTypes: variant.nestedTypes,
+                        valueType: variant.valueType.map(rename), literal: variant.literal
+                    )
+                }, discriminator: discriminator)
+            case .transferable(let blocksType, let typeArgs):
+                return .transferable(blocksType: blocksType, typeArgs: typeArgs.map(rename))
+            case .primitive, .formattedType, .enum:
+                return type
+            }
+        }
+        func renameField(_ field: ResolvedField) -> ResolvedField {
+            ResolvedField(
+                name: field.name, type: rename(field.type), required: field.required, description: field.description,
+                defaultValue: field.defaultValue, positional: field.positional
+            )
+        }
+        return rename(type)
     }
 
     // MARK: - Nested Type Node Construction

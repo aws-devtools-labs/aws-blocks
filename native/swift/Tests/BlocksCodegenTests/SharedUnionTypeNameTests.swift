@@ -78,10 +78,10 @@ final class SharedUnionTypeNameTests: XCTestCase {
         XCTAssertEqual(count("""
             public enum SetAuthState {
 
-                @available(*, deprecated, renamed: "AuthActionInput")
+                @available(*, deprecated, message: "Use AuthActionInput")
                 public typealias Input = AuthActionInput
 
-                @available(*, deprecated, renamed: "AuthActionInput.SignIn")
+                @available(*, deprecated, message: "Use AuthActionInput.SignIn")
                 public typealias SignIn = AuthActionInput.SignIn
             }
         """, in: output.api), 2)
@@ -123,6 +123,108 @@ final class SharedUnionTypeNameTests: XCTestCase {
         assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
     }
 
+    // MARK: - Parameters and results around the shared type
+
+    private func figureArm(_ kind: String, _ field: String) -> String {
+        let props = #""kind": { "type": "string", "enum": ["\#(kind)"] }, "\#(field)": { "type": "number" }"#
+        return #"{ "type": "object", "properties": { \#(props) }, "required": ["kind", "\#(field)"] }"#
+    }
+
+    private var figureArms: [String] { [figureArm("circle", "r"), figureArm("square", "side")] }
+
+    /// A parameter of the figure union: its name, the type name the spec gives it and whether it's required.
+    private struct FigureParam {
+        let name: String
+        let hint: String?
+        let required: Bool
+
+        init(_ name: String, _ hint: String?, _ required: Bool) {
+            self.name = name
+            self.hint = hint
+            self.required = required
+        }
+    }
+
+    /// A method taking `params` of the figure union, returning `result`.
+    private func figureMethod(_ name: String, params: [FigureParam], result: String = #"{ "type": "string" }"#) -> String {
+        let union = #"{ "oneOf": [\#(figureArms.joined(separator: ", "))]"#
+        let list = params.map { param in
+            let hint = param.hint.map { #", "x-blocks-type-name": "\#($0)""# } ?? ""
+            return #"{ "name": "\#(param.name)", "required": \#(param.required), "schema": \#(union)\#(hint) } }"#
+        }.joined(separator: ", ")
+        return #"{ "name": "\#(name)", "params": [\#(list)], "result": { "name": "R", "schema": \#(result) } }"#
+    }
+
+    /// A result holding a nested `figure` object.
+    private let deepFigureResult = """
+    { "type": "object", "properties": { "figure": { "type": "object", "properties": { "x": { "type": "number" } },
+      "required": ["x"] } }, "required": ["figure"] }
+    """
+
+    private var figureResult: String { #"{ "oneOf": [\#(figureArms.joined(separator: ", "))] }"# }
+
+    /// A hint that is the parameter's own name (`command: Command`) would alias itself, so the parameter keeps its
+    /// nested type.
+    func testAHintThatIsTheParametersNameKeepsTheNestedType() throws {
+        let output = try generate([figureMethod("api.send", params: [FigureParam("command", "Command", true)])])
+
+        assertNotContains(output.api, "typealias Command = Command")
+        assertNotContains(output.models, "enum Command")
+        assertContains(output.api, "public func send(command: Send.Command) async throws -> String {")
+    }
+
+    /// Two parameters of the shared shape take the shared type, and the operation's enum aliases each old name once.
+    func testTwoParametersOfTheSharedShapeAliasEachOldNameOnce() throws {
+        let output = try generate([figureMethod("api.compare", params: [FigureParam("left", "Figure", true), FigureParam("right", "Figure", true)])])
+
+        assertContains(output.api, "public func compare(left: Figure, right: Figure) async throws -> String {")
+        XCTAssertEqual(count("public typealias Circle = Figure.Circle", in: output.api), 1)
+        assertNotContains(output.api, "public struct Circle")
+    }
+
+    /// A result of the shared shape names the shared type rather than declaring the variants again.
+    func testAResultOfTheSharedShapeNamesTheSharedType() throws {
+        let output = try generate([figureMethod("api.normalize", params: [FigureParam("input", "Figure", true)], result: figureResult)])
+
+        assertContains(output.api, "public func normalize(input: Figure) async throws -> Figure {")
+        assertNotContains(output.api, "public struct Circle")
+        XCTAssertEqual(count("public typealias Circle = Figure.Circle", in: output.api), 1)
+    }
+
+    func testAnOptionalParameterTakesTheSharedType() throws {
+        let output = try generate([figureMethod("api.draw", params: [FigureParam("input", "Figure", false)])])
+
+        assertContains(output.api, "public func draw(input: Figure? = nil) async throws -> String {")
+    }
+
+    /// A deeper nested type of the shared type's name (`Place.Result.Figure`) doesn't take the parameter's type.
+    func testASharedTypeBesideADeeperNestedTypeOfItsName() throws {
+        let output = try generate([figureMethod("api.place", params: [FigureParam("input", "Figure", true)], result: deepFigureResult)])
+
+        assertContains(output.api, "public func place(input: Figure) async throws -> Place.Result {")
+    }
+
+    /// A union without a discriminator names its cases after the union (`input_Variant0`), so sharing it would rename
+    /// them under the old names; it keeps its nested type.
+    func testAUnionWithoutADiscriminatorIsNotShared() throws {
+        let object = #"{ "type": "object", "properties": { "to": { "type": "string" } }, "required": ["to"] }"#
+        let union = #"{ "oneOf": [{ "type": "string" }, \#(object)], "x-blocks-type-name": "Recipient" }"#
+        let params = #"[{ "name": "input", "required": true, "schema": \#(union) }]"#
+        let method = #"{ "name": "api.send", "params": \#(params), "result": { "name": "R", "schema": { "type": "string" } } }"#
+        let output = try generate([method])
+
+        assertNotContains(output.models, "Recipient")
+        assertContains(output.api, "public func send(input: Send.Input) async throws -> String {")
+    }
+
+    /// A hint naming a type the generated files use unqualified (`RPCError`, `BlocksClient`) keeps the nested type.
+    func testAHintThatIsARuntimeNameKeepsTheNestedType() throws {
+        for name in ["RPCError", "BlocksClient", "JSONDecoder", "BlocksRuntime"] {
+            let output = try generate([setAuthState("alphaAuth", typeName: name)])
+            assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
+        }
+    }
+
     // MARK: - Compiling against the generated module
 
     /// App code written against the names swift 0.1.1 and the per-namespace `Input` generated: each namespace's
@@ -144,6 +246,41 @@ final class SharedUnionTypeNameTests: XCTestCase {
             _ = try await zeta.setAuthState(input: input)
         }
         """)
+        #else
+        throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
+        #endif
+    }
+
+    /// Every shape above compiles as its own module with warnings as errors, and the old names still compile.
+    func testParametersAndResultsAroundTheSharedTypeCompile() throws {
+        #if os(macOS)
+        let output = try generate([
+            figureMethod("api.send", params: [FigureParam("command", "Command", true)]),
+            figureMethod("api.compare", params: [FigureParam("left", "Figure", true), FigureParam("right", "Figure", true)]),
+            figureMethod("api.normalize", params: [FigureParam("input", "Figure", true)], result: figureResult),
+            figureMethod("api.draw", params: [FigureParam("input", "Figure", false)]),
+            figureMethod("api.place", params: [FigureParam("input", "Figure", true)], result: deepFigureResult)
+        ])
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+
+            let figure: Figure = .circle(Figure.Circle(r: 1))
+            let old: Api.Compare.Left = figure
+            let oldVariant: Api.Normalize.Circle = Figure.Circle(r: 2)
+            let command: Api.Send.Command = .square(Api.Send.Square(side: 1))
+
+            func call(_ api: Api) async throws {
+                _ = try await api.compare(left: figure, right: old)
+                let normalized: Figure = try await api.normalize(input: .circle(oldVariant))
+                _ = try await api.draw()
+                _ = try await api.place(input: normalized).figure.x
+                _ = try await api.send(command: command)
+            }
+            """,
+            moduleFlags: ["-warnings-as-errors"]
+        )
         #else
         throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
         #endif
