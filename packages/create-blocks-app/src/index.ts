@@ -14,10 +14,18 @@ import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function generateStackId(name: string): string {
+/**
+ * The `stackId` written to `.blocks/config.json`: `name` reduced to letters, digits and hyphens, cut to
+ * 16 characters, plus a 6-character random suffix. A name that starts with a character other than a
+ * letter, or with "aws" in any letter case, gets the prefix `app-`.
+ */
+export function generateStackId(name: string): string {
   const sanitized = name
     .replace(/[^A-Za-z0-9-]/g, '-')
     .replace(/^[^A-Za-z]+/, 'app-')
+    // AWS Resource Groups refuses a group name that starts with "aws" in any letter case, and the
+    // stack's two groups are named after the stack, so such an id would fail the deploy.
+    .replace(/^aws/i, 'app-$&')
     .replace(/-+/g, '-')
     .replace(/-$/, '')
     .slice(0, 16)

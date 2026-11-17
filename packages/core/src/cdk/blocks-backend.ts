@@ -221,6 +221,21 @@ export function assertBlocksDefaults(
 	);
 }
 
+// CloudFormation reports such a name only after it has created other resources, so it is refused at synth.
+// An error annotation, not a throw: `cdk synth`, `cdk diff` and `cdk deploy` stop on it, while `cdk destroy`
+// and `cdk ls` do not check annotations, so a stack that such a deploy left behind can still be destroyed.
+function checkStackNameAllowsResourceGroups(scope: Construct, stackName: string, groupPrefix: string): void {
+	if (!/^aws/i.test(stackName)) return;
+	cdk.Annotations.of(scope).addError(
+		`Stack name '${stackName}' starts with 'aws'. AWS Blocks names two AWS Resource Groups after the stack ` +
+			`('${groupPrefix}-resources' and '${groupPrefix}-settings'), and AWS Resource Groups refuses a group name ` +
+			"that starts with 'AWS' in any letter case, so the deploy would fail in CloudFormation. " +
+			'AWS Systems Manager refuses the same prefix for the parameters that blocks name after the stack. ' +
+			"Use a stack name that does not start with 'aws'. In an app made by create-blocks-app, change " +
+			'"stackId" in .blocks/config.json, for example with the prefix \'app-\'.',
+	);
+}
+
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
 	// Belt and braces for callers that reach here without create().
 	assertBlocksDefaults(props, 'BlocksBackend');
@@ -282,6 +297,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	let rootStack = cdk.Stack.of(scope);
 	while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
 	const groupPrefix = id && id !== rootStack.stackName ? `${rootStack.stackName}-${id}` : rootStack.stackName;
+	checkStackNameAllowsResourceGroups(scope, rootStack.stackName, groupPrefix);
 
 	new CfnGroup(scope, 'StackResources', {
 		name: `${groupPrefix}-resources`,

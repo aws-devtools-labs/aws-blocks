@@ -3201,6 +3201,21 @@ describe('Hosting', () => {
       assert.strictEqual(warnings.length, 1);
     });
 
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes the plain-HTTP ALB door with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `AlbAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb', allowPlainHttp: true } });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction'));
+      };
+      const found = synthProd(false);
+      assert.strictEqual(found.length, 1);
+      assert.match(JSON.stringify(found[0].entry.data), /session cookie without `Secure`/);
+      assert.strictEqual(synthProd(true).length, 0, 'acknowledged on the stack');
+    });
+
     it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
       createSpaBuildOutput(tmpDir);
       // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
@@ -3816,6 +3831,40 @@ describe('Hosting', () => {
             frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
           }),
         (e: Error) => e.name === 'OriginSecretOverPlainHttpError',
+      );
+    });
+
+    it('`allowPlainHttp: true` lets an internet-facing router without a certificate synthesize outside a sandbox, with one acknowledgeable warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `StackedAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true },
+        });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        const count = (code: string) => Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(code));
+        return { allowed: count('PlainHttpAllowedInProduction'), sandboxOnly: [...count('StackedRouterPlainHttp'), ...count('OriginSecretOverPlainHttp')] };
+      };
+      const { allowed, sandboxOnly } = synthProd(false);
+      assert.strictEqual(allowed.length, 1);
+      assert.match(JSON.stringify(allowed[0].entry.data), /origin secret crosses the edge → router hop in cleartext/);
+      assert.strictEqual(sandboxOnly.length, 0, 'one warning id to acknowledge, not the sandbox ones');
+      assert.strictEqual(synthProd(true).allowed.length, 0, 'acknowledged on the stack');
+      // A non-boolean fails synth.
+      createSpaBuildOutput(tmpDir);
+      const bad = new Stack(new App(), 'StackedAllowPlainHttpBad', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(bad, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: 'true' },
+          }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
       );
     });
 

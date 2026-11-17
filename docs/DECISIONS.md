@@ -435,6 +435,8 @@ earlier planning decisions and removed a released behavior:
 
 CloudFormation stack names are derived from a `stackId` stored in `.blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
 
+A sanitized name that starts with `aws` in any letter case gets the prefix `app-` before the cut, so `aws-blocks-demo` gives `app-aws-blocks-d-k7x2mf`. AWS Resource Groups refuses a group name that starts with `AWS`, and every stack names two groups after itself (`<stackName>-resources`, `<stackName>-settings`). A name that does not start with `aws` is not changed. A `stackId` written by hand is not changed either: a stack name that starts with `aws` is an error at synth (`cdk synth`, `cdk deploy`), with the two group names and the fix in the message. `cdk destroy` still runs, so a stack that an earlier deploy with such a name left behind can be removed.
+
 Stack name scheme:
 - **Production:** `<stackId>-prod` (e.g., `my-app-9f3a2b-prod`)
 - **Sandbox:** `<stackId>-<username(8)>-<random(6)>` (e.g., `my-app-9f3a2b-alice-0d7e1c`)

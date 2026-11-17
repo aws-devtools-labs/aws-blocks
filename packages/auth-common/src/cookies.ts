@@ -21,7 +21,7 @@
  * @module
  */
 
-import { type BlocksContext, blocksError, getDeploymentType } from '@aws-blocks/core';
+import { type BlocksContext, blocksError, getCachedConfigValue, getDeploymentType } from '@aws-blocks/core';
 import { AuthErrors } from './errors.js';
 
 /**
@@ -64,6 +64,13 @@ export interface CookieSecurityInput {
 	 * otherwise), {@link resolveCookieSecurity} refuses to issue the same-origin
 	 * cookie and throws `AuthErrors.InsecureTransport` instead (unless
 	 * {@link CookieSecurityInput.clearing}).
+	 *
+	 * The one exception outside a sandbox is the front door's explicit
+	 * `allowPlainHttp: true` opt-out, which `Hosting` delivers to the runtime as
+	 * the config entry `BLOCKS_ALLOW_PLAIN_HTTP` with the exact value `'true'`:
+	 * the cookie is then issued without `Secure`, as in a sandbox. A missing or
+	 * any other value refuses, as above. On deployed compute only the loaded
+	 * config entry counts (an environment variable of the same name is ignored).
 	 */
 	plainHttpOrigin?: boolean;
 	/**
@@ -93,7 +100,7 @@ export interface CookieSecurityAttributes {
  * | crossDomain | isLocalhost | plainHttpOrigin | result                                 |
  * |-------------|-------------|-----------------|----------------------------------------|
  * | `false`     | `false`     | `false`         | `SameSite=Lax; Secure`                 |
- * | `false`     | `false`     | `true`          | `SameSite=Lax` (sandbox, or a clearing cookie); throws (production) |
+ * | `false`     | `false`     | `true`          | `SameSite=Lax` (sandbox, a clearing cookie, or the door's `allowPlainHttp` opt-out); throws (production) |
  * | `false`     | `true`      | any             | `SameSite=Lax`                         |
  * | `true`      | `false`     | any             | `SameSite=None; Secure; Partitioned`   |
  * | `true`      | `true`      | any             | `SameSite=None; Secure`                |
@@ -105,7 +112,8 @@ export interface CookieSecurityAttributes {
  *   branded Blocks error) for a same-origin cookie over a plain-HTTP front door
  *   (`plainHttpOrigin`, not localhost) outside a sandbox deploy: a session is
  *   never issued without `Secure` in production. A clearing cookie
- *   (`clearing`) is never refused.
+ *   (`clearing`) is never refused, and neither is a cookie behind a door that
+ *   set `allowPlainHttp: true` (config `BLOCKS_ALLOW_PLAIN_HTTP` is `'true'`).
  */
 export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurityAttributes {
 	// Plain-HTTP transport — localhost OR a deployed HTTP-only front door — cannot
@@ -136,13 +144,15 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
 		!input.isLocalhost &&
 		input.plainHttpOrigin === true &&
 		input.clearing !== true &&
-		getDeploymentType() === 'production'
+		getDeploymentType() === 'production' &&
+		!isPlainHttpAllowed()
 	) {
 		throw blocksError(
 			AuthErrors.InsecureTransport,
 			'The auth block refuses to issue a session cookie over a plain-HTTP front door outside a sandbox deploy: ' +
 				'the cookie could not carry `Secure`. Give the front door a certificate and a domain (an HTTPS listener), ' +
-				'or use the CloudFront door.',
+				'or use the CloudFront door. Only if the network path is trusted (a private network, or TLS ended upstream), ' +
+				'set `allowPlainHttp: true` on the front door and redeploy.',
 		);
 	}
 	return {
@@ -150,6 +160,23 @@ export function resolveCookieSecurity(input: CookieSecurityInput): CookieSecurit
 		secure: !plainHttp,
 		partitioned: false,
 	};
+}
+
+/**
+ * Whether the deploy's front door opted out of the plain-HTTP refusal
+ * (`allowPlainHttp: true`): the config entry `BLOCKS_ALLOW_PLAIN_HTTP`, which
+ * `Hosting` registers at synth, is exactly `'true'`. Fails closed: a missing,
+ * empty or any other value is `false`.
+ *
+ * Read like `getDeploymentType()` reads `BLOCKS_DEPLOYMENT_TYPE`: on deployed
+ * compute (`BLOCKS_CONFIG_BUCKET` and `BLOCKS_CONFIG_KEY` set) only the loaded
+ * config counts, so an environment variable set on the compute cannot opt
+ * out; elsewhere (synth, local processes, tests) `process.env` is read.
+ */
+function isPlainHttpAllowed(): boolean {
+	const deployed = Boolean(process.env.BLOCKS_CONFIG_BUCKET) && Boolean(process.env.BLOCKS_CONFIG_KEY);
+	const value = deployed ? getCachedConfigValue('BLOCKS_ALLOW_PLAIN_HTTP') : process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+	return value === 'true';
 }
 
 /**
@@ -232,7 +259,8 @@ export function isLocalDevRequest(ctx: BlocksContext): boolean {
  * `X-Forwarded-Proto`, which a client can forge. Returns `false` (assume HTTPS)
  * when the origin is unset or not parseable, so HTTPS deploys keep `Secure`.
  * Outside a sandbox deploy a `true` here makes {@link resolveCookieSecurity}
- * refuse the same-origin cookie (`AuthErrors.InsecureTransport`).
+ * refuse the same-origin cookie (`AuthErrors.InsecureTransport`), unless the
+ * door set `allowPlainHttp: true` (config `BLOCKS_ALLOW_PLAIN_HTTP`).
  */
 export function isInsecurePublicOrigin(): boolean {
 	const origin = process.env.BLOCKS_PUBLIC_ORIGIN;

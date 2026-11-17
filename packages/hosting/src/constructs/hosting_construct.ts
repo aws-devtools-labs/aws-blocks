@@ -44,7 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import { isSandboxDeploy } from './deploy_stage.js';
+import { isSandboxDeploy, PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID } from './deploy_stage.js';
 import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
@@ -2158,17 +2158,35 @@ export class HostingConstruct extends Construct {
                   resolution:
                     'Give the ALB door a `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront or stacked door.',
                 };
-          if (!isSandboxDeploy(this)) {
+          // `allowPlainHttp: true` (the ALB and custom doors) is the explicit
+          // opt-out for a trusted network path: a production deploy then warns
+          // instead (acknowledgeable). A sandbox deploy is unchanged.
+          const allowPlainHttp = (fd?.kind === 'alb' || fd?.kind === 'custom') && fd.allowPlainHttp === true;
+          const sandbox = isSandboxDeploy(this);
+          if (!sandbox && allowPlainHttp) {
+            Annotations.of(this).addWarningV2(
+              PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID,
+              `${message} \`allowPlainHttp: true\` lets this production deploy serve it anyway: sign-in, session cookies and every RPC ` +
+                'can be read or altered by anyone on the network path, and `Auth` issues a session cookie without `Secure`. ' +
+                'Keep it only when that path is a trusted network (an internal door reached only inside a private network, ' +
+                `or TLS ended upstream by a proxy or another load balancer). ${resolution} ` +
+                'If serving over plain HTTP is intended, acknowledge it with ' +
+                `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID}')\`.`,
+            );
+          } else if (!sandbox) {
             throw new HostingError('PlainHttpFrontDoorError', {
               message: `${message} A production deploy refuses to serve it.`,
-              resolution: `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns.`,
+              resolution:
+                `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns. Only if the network path is trusted ` +
+                '(a private network, or TLS ended upstream), set `allowPlainHttp: true` on the door to serve it anyway.',
             });
+          } else {
+            Annotations.of(this).addWarningV2(
+              PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+              `${message} \`Auth\` drops \`Secure\` from its session cookie behind such a door so that sign-in still works. ` +
+                `This is allowed in a sandbox only; a production deploy fails synth unless the door sets \`allowPlainHttp: true\`. ${resolution}`,
+            );
           }
-          Annotations.of(this).addWarningV2(
-            PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
-            `${message} \`Auth\` drops \`Secure\` from its session cookie behind such a door so that sign-in still works. ` +
-              `This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
-          );
         }
       }
       this.distributionUrl = built.url;
