@@ -570,9 +570,14 @@ class OidcClient implements AuthProvider {
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
-    _refreshCompleter = Completer<void>();
+    final completer = _refreshCompleter = Completer<void>();
+    // Captured before the first await: a sign-in or sign-out that finishes
+    // while the token is read, or while the request is in flight, makes this
+    // refresh stale.
+    final generation = _generation;
     try {
       final refreshToken = await tokenStore.get(_key('refresh_token'));
+      if (generation != _generation) return;
       if (refreshToken == null) {
         _emit(OidcSignedOut());
         return;
@@ -584,6 +589,8 @@ class OidcClient implements AuthProvider {
         body: jsonEncode({'refreshToken': refreshToken}),
       );
 
+      // A sign-in or sign-out finished meanwhile: its tokens are newer.
+      if (generation != _generation) return;
       if (response.statusCode != 200) {
         await _clearTokens();
         _emit(OidcSignedOut());
@@ -599,8 +606,16 @@ class OidcClient implements AuthProvider {
           json['refreshToken'] as String,
         );
       }
+    } catch (e, stackTrace) {
+      // The callers that joined this refresh fail with it too, instead of
+      // going on with the expired token. `ignore` keeps the error from being
+      // reported as unhandled when no caller joined.
+      completer
+        ..future.ignore()
+        ..completeError(e, stackTrace);
+      rethrow;
     } finally {
-      _refreshCompleter!.complete();
+      if (!completer.isCompleted) completer.complete();
       _refreshCompleter = null;
     }
   }

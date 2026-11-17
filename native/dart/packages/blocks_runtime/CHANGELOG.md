@@ -81,6 +81,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 
 ### Other changes
 
+- A token refresh that a sign-in or sign-out overtakes, even while it is
+  still reading the stored refresh token, sends nothing or ignores its
+  response. Callers that join a refresh already in flight now get its error
+  when it fails; they used to see it succeed and go on with the expired
+  token.
 - A `restore()` still in flight when a sign-in or sign-out finishes ignores
   its response and returns the current user, or null. A late 401 used to sign
   out, and clear the tokens of, a sign-in that had just finished, and a late
