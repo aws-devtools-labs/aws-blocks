@@ -485,6 +485,10 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	async function superviseDevServer(failureFile: string): Promise<number> {
 		let restarts: number[] = [];
 		for (;;) {
+			// A record that the last session left (a crash) must not be read as this session's: a runner
+			// that exits before it records anything (tsx's preflight, a failing import) would look like a
+			// new crash, and a restarted runner would not see its start as a first start (runners/fail.ts).
+			rmSync(failureFile, { force: true });
 			const code = await runRunner(ctx, {
 				runner: 'dev-server',
 				operation: 'cdk-blocks dev',

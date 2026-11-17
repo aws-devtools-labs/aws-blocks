@@ -15,6 +15,7 @@ import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks
 import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
 import { DEV_RESTART_POLICY, decideDevRestart, redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
+import { blocksCommand } from './errors.js';
 import type { LastDeploy } from './runners/last-deploy.js';
 import {
 	DEV_OPTIONS_ENV,
@@ -1035,10 +1036,66 @@ describe('lifecycle commands', () => {
 			[...looping.stderr.matchAll(/restarting it in (\d+) ms/g)].map((m) => Number(m[1])),
 			[500, 1000, 2000, 4000, 5000],
 		);
+		const again = blocksCommand('dev').replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 		assert.match(
 			looping.stderr,
-			/Error: cdk-blocks dev ended: its dev server crashed 6 times within 60 s, so it was not restarted again\. Fix the error in its output above, then run .*cdk-blocks dev again\./,
+			new RegExp(
+				`Error: cdk-blocks dev ended: its dev server crashed 6 times within 60 s, so it was not restarted again\\. Fix the error in its output above, then run ${again} again\\.`,
+			),
 		);
+		// A restarted runner that exits before it records anything (tsx's preflight, a failing import): the
+		// last session's crash record is gone, so this is a failed start, not a new crash to restart.
+		const before: (string | undefined)[] = [];
+		const failedRestart = await runCli(['dev'], {
+			cwd,
+			beforeSpawn: (spec) => {
+				const file = String(spec.env.BLOCKS_DEV_FAILURE_FILE);
+				before.push(existsSync(file) ? readFileSync(file, 'utf-8') : undefined);
+			},
+			onSpawn: (spec) => {
+				const file = String(spec.env.BLOCKS_DEV_FAILURE_FILE);
+				if (before.length === 1) {
+					writeFileSync(file, devCrashState(1));
+					return { code: 143 };
+				}
+				// This runner wrote nothing: the file holds what it held before it ran.
+				const previous = before.at(-1);
+				if (previous === undefined) rmSync(file, { force: true });
+				else writeFileSync(file, previous);
+				return { code: 1 };
+			},
+		});
+		assert.strictEqual(failedRestart.code, 1, failedRestart.stderr);
+		assert.deepStrictEqual(before, [undefined, undefined]);
+		assert.strictEqual(failedRestart.spawned.length, 2);
+		assert.strictEqual([...failedRestart.stderr.matchAll(/restarting it in/g)].length, 1, failedRestart.stderr);
+	});
+
+	it('records a crash of a started dev server runner and SIGTERMs its tsx watch parent', () => {
+		const fail = pathToFileURL(fileURLToPath(new URL('./runners/fail.js', import.meta.url))).href;
+		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-crash-')), 'failure');
+		// The runner: it starts, then crashes outside any request.
+		const runner = [
+			`const { trackDevSession } = await import(${JSON.stringify(fail)});`,
+			'trackDevSession().started();',
+			"setTimeout(() => { throw new Error('the backend crashed'); }, 10);",
+		].join('\n');
+		// Its parent, in the place of tsx watch: it reports the SIGTERM that it gets and the runner's exit code.
+		const watcher = [
+			"const { spawn } = await import('node:child_process');",
+			"let signalled = false;",
+			"process.on('SIGTERM', () => { signalled = true; });",
+			`const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(runner)}], { stdio: 'ignore' });`,
+			"child.on('exit', (code) => { console.log(JSON.stringify({ signalled, code })); process.exit(0); });",
+		].join('\n');
+		const run = spawnSync(process.execPath, ['--input-type=module', '-e', watcher], {
+			env: { ...process.env, BLOCKS_DEV_FAILURE_FILE: file },
+			encoding: 'utf-8',
+			timeout: 20_000,
+		});
+		assert.strictEqual(run.status, 0, run.stderr);
+		assert.deepStrictEqual(JSON.parse(run.stdout), { signalled: true, code: 1 });
+		assert.strictEqual(readFileSync(file, 'utf-8'), devCrashState(1));
 	});
 
 	it('decides a dev server restart from the restarts within the window, with a doubling, capped backoff', () => {
@@ -1071,6 +1128,9 @@ describe('lifecycle commands', () => {
 			recent: [60_000],
 		});
 		assert.strictEqual(devCrashCode(devCrashState(7)), 7);
+		// A record without its code (a torn write) is a crash with exit code 1, not 0.
+		assert.strictEqual(devCrashCode(DEV_STATE.crashed), 1);
+		assert.strictEqual(devCrashCode(`${DEV_STATE.crashed}  `), 1);
 		assert.strictEqual(devCrashCode(DEV_STATE.running), undefined);
 		assert.strictEqual(devCrashCode(undefined), undefined);
 	});

@@ -30,6 +30,20 @@ function writeState(file: string, state: string): void {
 }
 
 /**
+ * SIGTERM the `tsx watch` that runs this dev server runner: its parent process, as
+ * `cdk-blocks dev` and the sandbox start it (`tsx watch <runner>`). A ppid of 1 means
+ * the watcher has gone and the runner was reparented, so there is nothing to signal.
+ */
+function stopWatcher(): void {
+	if (process.ppid <= 1) return;
+	try {
+		process.kill(process.ppid, 'SIGTERM');
+	} catch {
+		// The watcher has gone.
+	}
+}
+
+/**
  * End the `cdk-blocks dev` session on a failure of the first dev server start: record
  * `reason` for the CLI, and SIGTERM the `tsx watch` parent, which would otherwise
  * wait for a file change forever, or exit 0 when it watches nothing (the runner is
@@ -40,13 +54,7 @@ function failDevSession(reason: string): void {
 	const session = devSession;
 	if (!session?.firstRun || !session.starting || readState(session.file) !== DEV_STATE.running) return;
 	writeState(session.file, reason);
-	if (process.ppid > 1) {
-		try {
-			process.kill(process.ppid, 'SIGTERM');
-		} catch {
-			// The watcher has gone.
-		}
-	}
+	stopWatcher();
 }
 
 /** The exit codes of a stop by SIGHUP, SIGINT or SIGTERM: tsx's preflight exits 128 + the signal number on one that nothing handles yet. */
@@ -61,13 +69,7 @@ const STOP_EXIT_CODES = new Set([129, 130, 143]);
  */
 function endCrashedSession(file: string, code: number): void {
 	writeState(file, devCrashState(code));
-	if (process.ppid > 1) {
-		try {
-			process.kill(process.ppid, 'SIGTERM');
-		} catch {
-			// The watcher has gone.
-		}
-	}
+	stopWatcher();
 }
 
 /**

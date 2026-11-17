@@ -44,7 +44,8 @@ export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
  * A dev server that started and then exits with a failing code (an uncaught exception
  * outside any request) writes {@link DEV_STATE}`.crashed` and its exit code, and
  * `cdk-blocks dev` restarts it (see {@link devCrashState}).
- * Absent until the first runner starts.
+ * Absent until the first runner starts: `cdk-blocks dev` removes it before each `tsx watch`
+ * session it starts, so the first start of a restarted session is a first start too.
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
 
@@ -67,7 +68,9 @@ export function devCrashState(code: number): string {
 /** The exit code of a crash that `state` records (see {@link devCrashState}); `undefined` for any other state. */
 export function devCrashCode(state: string | undefined): number | undefined {
 	if (!state?.startsWith(DEV_STATE.crashed)) return undefined;
-	const code = Number(state.slice(DEV_STATE.crashed.length).trim());
+	// A record without a code (a torn write) is still a crash, with exit code 1.
+	const tail = state.slice(DEV_STATE.crashed.length).trim();
+	const code = tail === '' ? Number.NaN : Number(tail);
 	return Number.isInteger(code) ? code : 1;
 }
 
