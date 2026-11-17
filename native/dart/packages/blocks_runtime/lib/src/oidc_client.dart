@@ -12,6 +12,7 @@ import 'oidc_exception.dart';
 import 'oidc_types.dart';
 import 'response_url.dart';
 import 'session_store.dart';
+import 'timeout_client.dart';
 import 'token_store.dart';
 import 'transferable_descriptor.dart';
 
@@ -76,7 +77,7 @@ class OidcClient implements AuthProvider {
     SessionStore? sessionStore,
     http.Client? httpClient,
   }) : sessionStore = sessionStore ?? InMemorySessionStore(),
-       _httpClient = httpClient ?? http.Client();
+       _httpClient = httpClient ?? newBlocksHttpClient();
 
   /// The framework's JSON-RPC mount prefix. Auth routes do NOT live under it.
   static const String _rpcPathPrefix = '/aws-blocks/api';

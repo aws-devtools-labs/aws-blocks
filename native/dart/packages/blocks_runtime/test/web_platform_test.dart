@@ -2,6 +2,7 @@
 library;
 
 import 'package:blocks_runtime/src/rpc_user_agent_headers.dart';
+import 'package:blocks_runtime/src/timeout_client.dart';
 import 'package:blocks_runtime/src/web_socket_connect.dart';
 import 'package:test/test.dart';
 
@@ -19,5 +20,16 @@ void main() {
     final channel = connectWebSocket(Uri.parse('ws://127.0.0.1:1/'), const {});
     channel.stream.listen((_) {}, onError: (Object _) {}, cancelOnError: true);
     await channel.ready.then<void>((_) {}, onError: (Object _) {});
+  });
+
+  test('the default HTTP client runs on web without dart:io', () async {
+    // Sending is what surfaces an unsupported dart:io symbol. The closed port
+    // makes the request fail, which is expected.
+    final client = newBlocksHttpClient();
+    await expectLater(
+      client.get(Uri.parse('http://127.0.0.1:1/')),
+      throwsA(anything),
+    );
+    client.close();
   });
 }

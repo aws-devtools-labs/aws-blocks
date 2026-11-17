@@ -1,5 +1,18 @@
 ## 0.2.0
 
+- HTTP requests made with the runtime's own client (RPC calls, OIDC auth
+  routes, and file uploads and downloads) now time out instead of waiting
+  forever on a stalled connection: 30 seconds to connect, and 60 seconds
+  without progress (no request body sent, no response headers, or no
+  response body bytes). There is no limit on total time, so a large transfer
+  that keeps moving is not cut off. A timeout throws a `TimeoutException`.
+  The connect timeout applies only to the default dart:io client; on clients
+  that send the body in one piece (the browser, or a client chosen with
+  `http.runWithClient`) the response headers must arrive within 60 seconds
+  plus the time to send the body at 16 KiB per second. A client passed to
+  `BlocksClient` or `OidcClient` is used as is. The `OidcClient` a generated
+  client decodes, and file uploads and downloads, always use the runtime's
+  own client with the default timeouts. Requires `http` 1.5.0 or later.
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers

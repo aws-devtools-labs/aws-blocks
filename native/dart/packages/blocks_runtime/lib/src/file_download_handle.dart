@@ -1,6 +1,6 @@
 import 'dart:typed_data';
-import 'package:http/http.dart' as http;
 
+import 'timeout_client.dart';
 import 'transferable_descriptor.dart';
 import 'user_agent_client.dart';
 
@@ -32,7 +32,7 @@ class FileDownloadHandle {
   String getUrl() => url;
 
   Future<Uint8List> download() async {
-    final client = UserAgentClient(http.Client());
+    final client = UserAgentClient(newBlocksHttpClient());
     try {
       final response = await client.get(Uri.parse(url));
       if (response.statusCode != 200) {

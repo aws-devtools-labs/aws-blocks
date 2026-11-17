@@ -18,6 +18,17 @@ On web the token is dropped on every path. The RPC hop omits `x-blocks-user-agen
 
 The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
 
+## Timeouts
+
+HTTP requests the runtime makes with its own client (RPC calls, OIDC auth routes, and file uploads and downloads) fail with a `TimeoutException` from `dart:async` when they stop making progress:
+
+- 30 seconds to connect.
+- 60 seconds without progress: no request body sent, no response headers, or no response body bytes. There is no limit on a request's total time, so a large file transfer that keeps moving is not cut off.
+
+The connect timeout applies only to the default dart:io client. Other clients (the browser, and clients such as `cupertino_http` or `cronet_http` chosen with `http.runWithClient`) send a request body in one piece, so the runtime cannot see the connection or upload progress. On those, the response headers must arrive within 60 seconds plus the time to send the body at 16 KiB per second, and the response body is timed as above.
+
+A client you pass to `BlocksClient` or `OidcClient` is used as is, with its own timeout behavior. The `OidcClient` a generated client decodes, and file uploads and downloads, always use the runtime's own client with the default timeouts. Realtime WebSocket connections are not covered.
+
 ## License
 
 Apache 2.0

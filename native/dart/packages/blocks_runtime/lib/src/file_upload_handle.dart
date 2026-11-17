@@ -1,6 +1,6 @@
 import 'dart:typed_data';
-import 'package:http/http.dart' as http;
 
+import 'timeout_client.dart';
 import 'transferable_descriptor.dart';
 import 'user_agent_client.dart';
 
@@ -40,7 +40,7 @@ class FileUploadHandle {
   Future<void> upload(Uint8List bytes) async {
     final headers = <String, String>{};
     if (contentType != null) headers['Content-Type'] = contentType!;
-    final client = UserAgentClient(http.Client());
+    final client = UserAgentClient(newBlocksHttpClient());
     try {
       final response = await client.put(
         Uri.parse(url),
