@@ -339,6 +339,8 @@ describe('app-isolation rules — names the app gives its own resources', () => 
 		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: 'appa' }), ['scope-outside-app']);
 		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: 'appa' }), []);
 		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/blocks/appa/config/x' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/cdk/EdgeFunctionArn/eu-west-1/appa/Fn' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/cdk/EdgeFunctionArn/eu-west-1/appb/Fn' }), ['scope-outside-app']);
 		assert.deepStrictEqual(check('AWS::Logs::LogGroup', { LogGroupName: '/aws/rds/cluster/appa-db/postgresql' }), []);
 		assert.deepStrictEqual(check('AWS::RDS::DBCluster', { DBClusterIdentifier: 'APPA-DB' }), [], 'RDS lowercases identifiers');
 		const withRef = { 'Fn::Join': ['-', [{ Ref: 'AWS::StackName' }, 'items']] };

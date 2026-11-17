@@ -866,7 +866,7 @@ function isOwnPhysicalName(service: string, name: string, id: string): boolean {
 			return (
 				isUnderAppPrefix(name, id, 'ssm') ||
 				name.replace(/^\//, '').startsWith(`blocks/${id}/`) ||
-				new RegExp(`^/?cdk/EdgeFunctionArn/[^/]+/${id}/`).test(name)
+				/^\/?cdk\/EdgeFunctionArn\/[^/]+\/([^/]+)\//.exec(name)?.[1] === id
 			);
 		case 'rds':
 			// RDS stores identifiers in lowercase.
