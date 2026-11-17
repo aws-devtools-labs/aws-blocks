@@ -142,10 +142,12 @@ void describe('HostingConstruct — golden templates of the doors that route at 
 		return stack;
 	};
 
+	// The ALB door has no certificate, so a production synth with an API needs the explicit plain-HTTP opt-out.
+	const alb = { kind: 'alb', allowPlainHttp: true } as const;
 	const cases: Array<[string, () => DeployManifest, HostingConstructProps['frontDoor']]> = [
-		['door-alb-spa', spaManifest, { kind: 'alb' }],
-		['door-alb-lwa', lwaManifest, { kind: 'alb' }],
-		['door-alb-handler', () => handlerManifest(false), { kind: 'alb' }],
+		['door-alb-spa', spaManifest, alb],
+		['door-alb-lwa', lwaManifest, alb],
+		['door-alb-handler', () => handlerManifest(false), alb],
 		['door-apigw-http-spa', spaManifest, { kind: 'apiGateway' }],
 		['door-apigw-http-lwa', lwaManifest, { kind: 'apiGateway' }],
 		['door-custom-spa', spaManifest, { kind: 'custom', door: helperDoor }],
