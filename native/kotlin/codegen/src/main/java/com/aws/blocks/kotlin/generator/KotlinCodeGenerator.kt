@@ -237,7 +237,7 @@ class KotlinCodeGenerator(
             warnings.add(
                 "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
                     "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
-                    "  awsBlocks {\n" +
+                    "  cdkBlocks {\n" +
                     "      oidc {\n" +
                     "          relayTo = \"com.yourcompany.yourapp://auth/callback\"\n" +
                     "      }\n" +
@@ -1845,7 +1845,7 @@ class KotlinCodeGenerator(
     }
 
     private fun generateOidcStubMethod(functionName: String): FunSpec {
-        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your cdkBlocks block " +
             "to enable this method."
         return FunSpec.builder(functionName)
             .addModifiers(KModifier.SUSPEND)

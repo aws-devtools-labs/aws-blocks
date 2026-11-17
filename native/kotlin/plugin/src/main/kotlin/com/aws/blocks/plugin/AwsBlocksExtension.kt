@@ -11,7 +11,7 @@ import org.gradle.api.provider.SetProperty
 /**
  * Configuration extension for the AWS Blocks codegen plugin.
  *
- * Applied via the `awsBlocks` block in a module's `build.gradle.kts`.
+ * Applied via the `cdkBlocks` block in a module's `build.gradle.kts`.
  */
 abstract class AwsBlocksExtension(project: Project) {
 
@@ -61,7 +61,7 @@ abstract class AwsBlocksExtension(project: Project) {
      * Configure OIDC settings.
      *
      * ```kotlin
-     * awsBlocks {
+     * cdkBlocks {
      *     oidc {
      *         relayTo = "com.yourcompany.yourapp://auth/callback"
      *     }
@@ -76,7 +76,7 @@ abstract class AwsBlocksExtension(project: Project) {
      * Configure server URLs via a DSL block.
      *
      * ```kotlin
-     * awsBlocks {
+     * cdkBlocks {
      *     servers {
      *         local("http://10.0.2.2:3001")
      *         sandbox("https://sandbox.example.com")
@@ -129,7 +129,7 @@ class OidcDsl {
         val current = relayTo
         if (legacy != null && current != null && legacy != current) {
             throw GradleException(
-                "awsBlocks.oidc: relayTo (\"$current\") and the deprecated redirectUrl " +
+                "cdkBlocks.oidc: relayTo (\"$current\") and the deprecated redirectUrl " +
                     "(\"$legacy\") are set to different values. Remove redirectUrl.",
             )
         }
@@ -138,18 +138,18 @@ class OidcDsl {
 
     private fun validate(value: String) {
         if (value.any { it.isWhitespace() }) {
-            throw GradleException("awsBlocks.oidc.relayTo contains whitespace: \"$value\"")
+            throw GradleException("cdkBlocks.oidc.relayTo contains whitespace: \"$value\"")
         }
         val scheme = value.substringBefore("://")
         if (scheme.isEmpty() || scheme == value) {
             throw GradleException(
-                "awsBlocks.oidc.relayTo is missing a scheme: \"$value\". Expected something " +
+                "cdkBlocks.oidc.relayTo is missing a scheme: \"$value\". Expected something " +
                     "like \"com.yourcompany.yourapp://auth/callback\".",
             )
         }
         if (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) {
             throw GradleException(
-                "awsBlocks.oidc.relayTo uses the $scheme scheme: \"$value\". Android and iOS " +
+                "cdkBlocks.oidc.relayTo uses the $scheme scheme: \"$value\". Android and iOS " +
                     "sign-in needs a custom scheme the app registers with the operating system.",
             )
         }

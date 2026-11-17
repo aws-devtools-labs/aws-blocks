@@ -29,7 +29,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
  *     id("com.aws.blocks.kotlin")
  * }
  *
- * awsBlocks {
+ * cdkBlocks {
  *     apiSpec = file("path/to/blocks.spec.json")
  *     packageName.set("com.myapp.generated")
  * }
@@ -42,7 +42,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
 class AwsBlocksCodegenPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create(
-            "awsBlocks",
+            "cdkBlocks",
             AwsBlocksExtension::class.java,
             project,
         )

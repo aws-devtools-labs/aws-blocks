@@ -1,10 +1,10 @@
 # Gradle plugin reference
 
 The `com.aws.blocks.kotlin` plugin parses your AWS Blocks spec at build time and generates the
-client. This is the full `awsBlocks { }` surface; the [README](../README.md) covers the two
+client. This is the full `cdkBlocks { }` surface; the [README](../README.md) covers the two
 properties most projects set.
 
-## The `awsBlocks` block
+## The `cdkBlocks` block
 
 Every property is optional. Override one in your app module's `build.gradle.kts` when the default
 does not fit:
@@ -12,7 +12,7 @@ does not fit:
 ```kotlin
 import com.aws.blocks.plugin.GeneratedVisibility
 
-awsBlocks {
+cdkBlocks {
     // Path to the generated spec file (defaults to rootProject.file("blocks.spec.json"))
     apiSpec = rootProject.file("path/to/your/blocks.spec.json")
 

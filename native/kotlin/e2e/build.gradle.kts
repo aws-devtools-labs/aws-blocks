@@ -104,7 +104,7 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     providers.environmentVariable("RUN_OIDC").orNull?.let { environment("SIMCTL_CHILD_RUN_OIDC", it) }
 }
 
-awsBlocks {
+cdkBlocks {
     apiSpec = file("blocks.spec.json")
     packageName = "blocks.e2e"
     oidc {

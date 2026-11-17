@@ -37,7 +37,7 @@ Android and iOS hand the callback back through a URL scheme the operating system
 so the scheme is build-time configuration:
 
 ```kotlin
-awsBlocks {
+cdkBlocks {
     oidc {
         relayTo = "com.yourcompany.yourapp://auth/callback"
     }

@@ -33,7 +33,7 @@ class CodegenWarningLogTest : FunSpec({
                 id("org.jetbrains.kotlin.plugin.serialization")
                 id("com.aws.blocks.kotlin")
             }
-            awsBlocks {
+            cdkBlocks {
                 apiSpec.set(file("blocks.spec.json"))
                 packageName.set("com.example.app")
             }
