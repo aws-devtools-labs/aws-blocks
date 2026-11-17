@@ -34,6 +34,7 @@
     "TROUBLESHOOTING.md",
     "VPC.md",
     "VPC-DESIGN.md",
+    "MIGRATING-FROM-SCRIPTS.md",
     "LICENSE"
   ],
   "exports": {
