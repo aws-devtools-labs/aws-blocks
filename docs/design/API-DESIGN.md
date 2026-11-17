@@ -522,7 +522,7 @@ The server-side class has `toJSON()`. The client-side class does not (it never n
 2. The `toJSON()` return value must be plain JSON-serializable. No functions, no circular references.
 3. The BB's `types` export declares the hydrated client type, not the descriptor. The customer's IDE shows `RealtimeChannel` with full method autocomplete, never the raw `{ __blocks: ... }` shape.
 4. Transferables can be nested inside plain return values (e.g., `{ channel: RealtimeChannel, metadata: {...} }`). `JSON.stringify()` handles this automatically via `toJSON()`.
-5. Every BB that defines a Transferable must register a client plugin via `scope.registerClientMiddleware()`. Without the plugin, the raw descriptor leaks to the customer.
+5. Every BB that defines a Transferable must register a client plugin via `scope.registerClientMiddleware()`. Without the plugin, the raw descriptor leaks to the customer. The plugin module registers itself when the generated client imports it, so list its built file in the `sideEffects` array of the BB's `package.json` (see `bb-realtime`); a bundler removes the import of a module that is declared free of side effects.
 6. The mock implementation should also return a functional Transferable with `toJSON()`, so that local development exercises the same serialization path.
 
 **Relationship to G2 (Return Plain Objects):**

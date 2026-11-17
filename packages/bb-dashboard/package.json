@@ -17,6 +17,9 @@
     "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
   },
   "type": "module",
+  "sideEffects": [
+    "./dist/index.mock.js"
+  ],
   "files": [
     "dist",
     "README.md",
