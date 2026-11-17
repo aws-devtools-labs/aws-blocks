@@ -44,7 +44,8 @@ export type {
  * Re-exported from the canonical definition so `/client` consumers get the SAME
  * discriminated union createChat uses: narrowing on `role === 'approval'` types
  * `metadata` as {@link ApprovalMetadata}, so `m.metadata?.approved` is typed with
- * no cast.
+ * no cast. (Previously `/client` shipped a flat duplicate whose `metadata` was
+ * `Record<string, any>`, silently shadowing the union — this re-export removes that.)
  */
 export type { ChatMessage, ApprovalMetadata } from './index.chat.js';
 
