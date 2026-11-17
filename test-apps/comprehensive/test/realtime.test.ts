@@ -276,6 +276,61 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 		});
 
+		describe('Channel token principal binding', () => {
+			const cursor: Cursor = { userId: 'u1', x: 3, y: 4, color: 'green' };
+
+			async function firstMessage(channel: Awaited<ReturnType<typeof apiType.realtimeGetPrincipalChannel>>, publish: () => Promise<unknown>) {
+				return new Promise<Cursor>((resolve, reject) => {
+					const timer = globalThis.setTimeout(() => reject(new Error('No message within 10s')), 10000);
+					const sub = channel.subscribe((msg) => {
+						clearTimeout(timer);
+						sub.unsubscribe();
+						resolve(msg);
+					});
+					sub.established.then(publish).catch(reject);
+				});
+			}
+
+			test('a handle bound to a user subscribes and receives messages', async () => {
+				const api = getApi();
+				const channel = await api.realtimeGetPrincipalChannel('bound-ok', 'user-a');
+				assert.deepStrictEqual(await firstMessage(channel, () => api.realtimePublishToChannel('bound-ok', cursor)), cursor);
+			});
+
+			test("a channel token bound to one user is refused on another user's connection", async () => {
+				const api = getApi();
+				const channel = await api.realtimeGetMismatchedPrincipalChannel('bound-mismatch', 'user-a', 'user-b');
+				const sub = channel.subscribe(() => {});
+				await assert.rejects(
+					sub.established,
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
+					"a channel token bound to user-a must not subscribe on user-b's connection",
+				);
+				sub.unsubscribe();
+			});
+
+			test('getChannel rejects an empty principal', async () => {
+				const api = getApi();
+				await assert.rejects(
+					() => api.realtimeGetPrincipalChannel('bound-empty', ''),
+					(err: unknown) => isBlocksError(err, 'ValidationFailedException'),
+				);
+			});
+
+			test('revokeAccess refuses a channel token minted before it and accepts one minted after', async () => {
+				const api = getApi();
+				const { stale, fresh } = await api.realtimeRevokeBetweenHandles('bound-revoke', `revoked-user-${Date.now()}`);
+				const refused = stale.subscribe(() => {});
+				await assert.rejects(
+					refused.established,
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
+					'a channel token minted before revokeAccess must be refused',
+				);
+				refused.unsubscribe();
+				assert.deepStrictEqual(await firstMessage(fresh, () => api.realtimePublishToChannel('bound-revoke', cursor)), cursor);
+			});
+		});
+
 		describe('Subscribe Options Form', () => {
 			test('options form receives messages via onMessage', async () => {
 				const api = getApi();

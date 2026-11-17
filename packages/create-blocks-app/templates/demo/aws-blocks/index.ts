@@ -69,7 +69,14 @@ const apiKey = new Secret<string>(scope, 'api-key', { allowRuntimeWrite: true })
 const docs = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 // EmailClient: transactional email. The mock captures sent mail (no SES).
-const email = new EmailClient(scope, 'mailer', { fromAddress: 'noreply@example.com' });
+// Replace EMAIL_SENDER with a verified SES identity before deploying to
+// production: an address on a domain (or the exact address) you have verified
+// in SES in the deployment account and Region. The placeholder is on the
+// reserved `.invalid` domain, which can never be verified, so it works locally
+// but every send fails on AWS; synth warns about it
+// (@aws-blocks/bb-email-client:UnverifiableSender) until you change it.
+const EMAIL_SENDER = 'noreply@replace-with-your-verified-domain.invalid';
+const email = new EmailClient(scope, 'mailer', { fromAddress: EMAIL_SENDER });
 
 // AsyncJob: background processing. The handler runs locally (no SQS/Lambda).
 // trackStatus lets a caller await completion. This demo handler records that it

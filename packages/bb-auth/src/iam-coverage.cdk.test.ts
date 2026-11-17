@@ -54,6 +54,7 @@ const REPLIES: Record<string, () => unknown> = {
 	AdminEnableUserCommand: () => ({}),
 	AdminResetUserPasswordCommand: () => ({}),
 	AdminSetUserPasswordCommand: () => ({}),
+	AdminUpdateUserAttributesCommand: () => ({}),
 	AdminGetUserCommand: () => ({ Username: 'bob', UserAttributes: [] }),
 	ListUsersCommand: () => ({ Users: [] }),
 	ConfirmForgotPasswordCommand: () => ({}),
@@ -162,6 +163,7 @@ describe("IAM coverage — admin: { actions: ['groups'] }", () => {
 			'AdminDeleteUser',
 			'AdminDisableUser',
 			'AdminSetUserPassword',
+			'AdminUpdateUserAttributes',
 			'ListUsers',
 		]) {
 			assert.ok(!grants.has(`cognito-idp:${a}`), `${a} must not be granted`);
@@ -179,6 +181,7 @@ describe("IAM coverage — admin: { actions: ['lifecycle'] }", () => {
 			await h.auth.admin.enableUser('bob');
 			await h.auth.admin.resetUserPassword('bob');
 			await h.auth.admin.setUserPassword('bob', 'Final!1234', { permanent: true });
+			await h.auth.admin.updateUserAttributes('bob', { name: 'Bob' });
 			await h.auth.admin.revokeUserSessions('bob');
 			await h.auth.admin.deleteUser('bob');
 		});

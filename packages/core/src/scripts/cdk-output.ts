@@ -29,6 +29,7 @@ import {
   isRollbackStatus,
   type OutputSink,
   parseCdkEventLine,
+  runStreaming,
   STREAM_FLUSH_GRACE_MS,
 } from './deploy-stream.js';
 import {
@@ -98,7 +99,7 @@ export function formatRetainedOutput(ring: OutputRing, label: string, level: Blo
   ].join('\n');
 }
 
-// ── Line classification (ported from the `blocks` CLI prototype's stream filter) ──
+// ── Line classification (ported from the `cdk-blocks` CLI prototype's stream filter) ──
 
 /** Runtime/SDK chatter that is never worth showing, even as a milestone. */
 const NOISE_LINE =
@@ -161,7 +162,7 @@ export interface CdkProgressReporter {
  * Failure lines are written verbatim to the stream they came from; everything
  * else is dropped (the caller retains it for the failure dump).
  *
- * Adapted from the `blocks` CLI prototype's deploy-progress reporter.
+ * Adapted from the `cdk-blocks` CLI prototype's deploy-progress reporter.
  */
 export function createCdkProgressReporter(
   stdout: OutputSink,
@@ -275,6 +276,15 @@ export interface CdkOutputOptions {
 export interface CdkRunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Run under {@link runStreaming}'s signal policy, as `deploy()` runs `cdk
+   * deploy`: the child gets its own process group, a first SIGTERM or a SIGHUP
+   * only warns, and a second SIGTERM or a Ctrl-C stops the whole cdk tree and
+   * throws a `DeployProcessError` with `aborted` and `operatorSignal`. For the
+   * long CloudFormation steps (a sandbox deploy, a destroy): without it, a lone
+   * SIGTERM killed this process and left cdk running, unwatched.
+   */
+  deferSignals?: boolean;
 }
 
 /** One operation's CDK output policy: how its children are run and relayed. */
@@ -358,10 +368,19 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
     streams,
     run(command: string, args: string[], runOptions: CdkRunOptions = {}): void | Promise<void> {
       runStart = ring.total();
-      if (!streams) {
-        return runSync(command, args, { stdio: toStderr ? ['inherit', 2, 'inherit'] : 'inherit', ...runOptions });
+      const { deferSignals, ...spawnOptions } = runOptions;
+      if (deferSignals) {
+        return runStreaming(command, args, {
+          ...spawnOptions,
+          label: options.label,
+          operation: options.verb ?? 'deploy',
+          curated: streams,
+        });
       }
-      return runCurated(command, args, runOptions, streams);
+      if (!streams) {
+        return runSync(command, args, { stdio: toStderr ? ['inherit', 2, 'inherit'] : 'inherit', ...spawnOptions });
+      }
+      return runCurated(command, args, spawnOptions, streams);
     },
     printRetained(): void {
       if (!curated) return;

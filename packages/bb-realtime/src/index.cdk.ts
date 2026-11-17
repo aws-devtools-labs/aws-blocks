@@ -191,4 +191,5 @@ export class Realtime extends BuildingBlockScope {
 	publish(..._args: unknown[]): never { return synthGuard('Realtime', 'publish'); }
 	subscribe(..._args: unknown[]): never { return synthGuard('Realtime', 'subscribe'); }
 	getChannel(..._args: unknown[]): never { return synthGuard('Realtime', 'getChannel'); }
+	revokeAccess(..._args: unknown[]): never { return synthGuard('Realtime', 'revokeAccess'); }
 }

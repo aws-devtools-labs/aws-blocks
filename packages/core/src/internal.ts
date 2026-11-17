@@ -13,3 +13,4 @@
  */
 
 export { CONFIG_REFRESH_MIN_INTERVAL_MS, refreshConfig } from './common/config.js';
+export { markServerOnlyFunction } from './rpc-dispatch.js';

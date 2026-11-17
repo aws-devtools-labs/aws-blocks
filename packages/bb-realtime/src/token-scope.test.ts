@@ -109,13 +109,15 @@ describe('Token scope isolation: connect tokens cannot subscribe to channels', (
 
 describe('isClientChannelPath', () => {
 	it('accepts the <instance>/<namespace>/<channel> paths getChannel() mints', () => {
-		for (const ch of [CHANNEL, `${INSTANCE_PREFIX}/chat/`, `${INSTANCE_PREFIX}/chat/a/b`, `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024 - INSTANCE_PREFIX.length - 6)}`]) {
+		for (const ch of [CHANNEL, `${INSTANCE_PREFIX}/chat/a/b`, `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024 - INSTANCE_PREFIX.length - 6)}`]) {
 			assert.strictEqual(isClientChannelPath(ch), true, ch);
 		}
 	});
 
-	it('rejects non-strings, empty and oversized paths, and paths without an instance and namespace', () => {
-		for (const ch of [undefined, null, 42, {}, ['a/b/c'], '', 'room-1', `${INSTANCE_PREFIX}/chat`, '/chat/room-1', '__connection__', `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024)}`]) {
+	it('rejects non-strings, empty and oversized paths, paths without an instance and namespace, and paths with an empty, "." or ".." segment', () => {
+		for (const ch of [undefined, null, 42, {}, ['a/b/c'], '', 'room-1', `${INSTANCE_PREFIX}/chat`, '/chat/room-1', '__connection__', `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024)}`,
+			// empty, `.` and `..` segments never come from getChannel()
+			`${INSTANCE_PREFIX}/chat/`, `${INSTANCE_PREFIX}/chat//room-1`, `${INSTANCE_PREFIX}/chat/room-1/..`, `${INSTANCE_PREFIX}/chat/room-1/../room-2`, `${INSTANCE_PREFIX}/chat/./room-1`, `${INSTANCE_PREFIX}/../chat/room-1`, `${INSTANCE_PREFIX}/chat/..`]) {
 			assert.strictEqual(isClientChannelPath(ch), false, JSON.stringify(ch)?.slice(0, 40));
 		}
 	});
@@ -144,14 +146,14 @@ describe('Channel token scope: exact vs subtree', () => {
 		assert.strictEqual(validateChannelToken(token, SECRET, `${TENANT}-other`), null, 'subtree scope is /-separated, not a string prefix');
 	});
 
-	it('the default token payload is byte-identical to the pre-scope format', () => {
+	it('the default token payload carries channel, exp, iat and jti, and no sub without a principal', () => {
 		const token = mintChannelToken(TENANT, SECRET, 60);
 		const payload = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString());
-		assert.deepStrictEqual(Object.keys(payload), ['channel', 'exp']);
+		assert.deepStrictEqual(Object.keys(payload), ['channel', 'exp', 'iat', 'jti']);
 	});
 
-	it('a token without a scope field (issued before scope existed) still validates for sub-channels', () => {
-		const payload = JSON.stringify({ channel: TENANT, exp: Math.floor(Date.now() / 1000) + 60 });
+	it('a token without a scope field still validates for sub-channels', () => {
+		const payload = JSON.stringify({ channel: TENANT, exp: Math.floor(Date.now() / 1000) + 60, iat: Math.floor(Date.now() / 1000), jti: 'legacy-shape' });
 		const sig = createHmac('sha256', SECRET).update(payload).digest('base64url');
 		const legacy = `${Buffer.from(payload).toString('base64url')}.${sig}`;
 		assert.ok(validateChannelToken(legacy, SECRET, TENANT));
@@ -159,7 +161,8 @@ describe('Channel token scope: exact vs subtree', () => {
 	});
 
 	function signed(payload: Record<string, unknown>): string {
-		const json = JSON.stringify(payload);
+		// Every minted token carries `iat` and `jti`; default them so each case below fails for its own reason.
+		const json = JSON.stringify({ iat: Math.floor(Date.now() / 1000), jti: 'test-id', ...payload });
 		const sig = createHmac('sha256', SECRET).update(json).digest('base64url');
 		return `${Buffer.from(json).toString('base64url')}.${sig}`;
 	}
@@ -178,18 +181,18 @@ describe('Channel token scope: exact vs subtree', () => {
 	it('an exact token carries its path under "exact", not "channel"', () => {
 		const token = mintChannelToken(TENANT, SECRET, 60, 'exact');
 		const payload = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString());
-		assert.deepStrictEqual(Object.keys(payload), ['exact', 'exp']);
+		assert.deepStrictEqual(Object.keys(payload), ['exact', 'exp', 'iat', 'jti']);
 		assert.strictEqual(payload.exact, TENANT);
 	});
 
 	it('returns the normalized channel and scope', () => {
 		assert.deepStrictEqual(
-			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60, 'exact'), SECRET, TENANT), exp: 0 },
-			{ channel: TENANT, exp: 0, scope: 'exact' },
+			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60, 'exact'), SECRET, TENANT), exp: 0, iat: 0, jti: '' },
+			{ channel: TENANT, exp: 0, scope: 'exact', iat: 0, jti: '', sub: undefined },
 		);
 		assert.deepStrictEqual(
-			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60), SECRET, `${TENANT}/billing`), exp: 0 },
-			{ channel: TENANT, exp: 0, scope: 'subtree' },
+			{ ...validateChannelToken(mintChannelToken(TENANT, SECRET, 60), SECRET, `${TENANT}/billing`), exp: 0, iat: 0, jti: '' },
+			{ channel: TENANT, exp: 0, scope: 'subtree', iat: 0, jti: '', sub: undefined },
 		);
 	});
 

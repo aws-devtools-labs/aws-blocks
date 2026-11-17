@@ -391,7 +391,7 @@ describe('blocks-generate-spec CLI output streams', () => {
 		assert.strictEqual(stderr, header + details);
 	});
 
-	it('the blocks CLI default (normal, stderr): the header on stderr, the result on stdout', () => {
+	it('the cdk-blocks CLI default (normal, stderr): the header on stderr, the result on stdout', () => {
 		const { stdout, stderr, header, result } = runFixture({
 			BLOCKS_LOG_LEVEL: 'normal',
 			BLOCKS_LOG_STREAM: 'stderr',

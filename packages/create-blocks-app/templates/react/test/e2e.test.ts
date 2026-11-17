@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
 import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
@@ -36,6 +36,10 @@ let authApi: typeof AuthApiType;
 
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // A fresh user per run, so the suite also passes against existing local data.
@@ -57,14 +61,14 @@ async function waitForServer() {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
 }
 
 test.before(async () => {
   // Use existing dev server if running, otherwise start one
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -75,7 +79,11 @@ test.before(async () => {
     server.unref();
   }
 
-  await waitForServer();
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
   // aws-blocks/client.js before it listens, so an earlier import could load a
@@ -96,7 +104,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -117,7 +125,7 @@ test.after(async () => {
 
 // ─── App readiness (independent of the sample API) ────────────────────────────
 
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -274,7 +282,99 @@ test('todos: another user can neither see nor change them', async () => {
 });
 
 // ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.
+// `subscribeTodos()` returns a channel the client hydrates into a live
+// WebSocket subscription (dev server runs a local WS server — no AWS). We
+// subscribe, mutate over the API, and assert the broadcast arrives. This is
+// the same subscription App.tsx uses to reload the list in every open tab.
+
+type TodoEvent = { action: 'created' | 'updated' | 'deleted'; todoId: string };
+
+/**
+ * Subscribe to `channel` and return a promise for the NEXT message, plus an
+ * `established` promise that resolves once the server confirms the subscription.
+ * Awaiting `established` before triggering a mutation closes the race where a
+ * publish could fire before the subscribe is confirmed. Rejects after
+ * `timeoutMs` so a dropped broadcast fails loudly instead of hanging.
+ */
+function nextMessage<T>(
+  channel: {
+    subscribe(handler: (message: T) => void): { unsubscribe(): void; established: Promise<void> };
+  },
+  timeoutMs = 5000,
+): { received: Promise<T>; established: Promise<void>; unsubscribe(): void } {
+  let unsubscribe = () => {};
+  let established: Promise<void> = Promise.resolve();
+  const received = new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const sub = channel.subscribe((message: T) => {
+      clearTimeout(timer);
+      resolve(message);
+    });
+    established = sub.established;
+    unsubscribe = () => { clearTimeout(timer); sub.unsubscribe(); };
+  });
+  return { received, established, unsubscribe };
+}
+
+test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    const todo = await api.createTodo('Realtime create');
+    const message = await received;
+    assert.strictEqual(message.action, 'created');
+    assert.strictEqual(message.todoId, todo.todoId);
+    await api.deleteTodo(todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('realtime: a priority change broadcasts an updated event', async (t) => {
+  const todo = await api.createTodo('Realtime priority', 3);
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.updatePriority(todo.todoId, 1);
+    const message = await received;
+    assert.strictEqual(message.action, 'updated');
+    assert.strictEqual(message.todoId, todo.todoId);
+    const updated = (await api.listTodos()).find(item => item.todoId === todo.todoId);
+    assert.strictEqual(updated?.priority, 1);
+    assert.strictEqual(updated?.version, todo.version + 1);
+  } finally {
+    unsubscribe();
+    await api.deleteTodo(todo.todoId);
+  }
+});
+
+test('realtime: a deleted todo broadcasts a deleted event', async (t) => {
+  const todo = await api.createTodo('Realtime delete');
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<TodoEvent>(channel);
+  try {
+    await established;
+    await api.deleteTodo(todo.todoId);
+    const message = await received;
+    assert.strictEqual(message.action, 'deleted');
+    assert.strictEqual(message.todoId, todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});

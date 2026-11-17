@@ -3,11 +3,16 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { execSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs';
+import { execFile, execSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { isBuiltin } from 'node:module';
+import type { AddressInfo } from 'node:net';
+import { promisify } from 'node:util';
+import { writeFileSync, unlinkSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import ts from 'typescript';
 
 /**
  * Tests for the client's URL resolution defensive guard (issue #730).
@@ -19,7 +24,7 @@ import { tmpdir } from 'node:os';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MODULE = join(__dirname, '..', 'client', 'index.js');
 
-function runScript(scriptBody: string, env: Record<string, string>): string {
+function runScript(scriptBody: string, env: Record<string, string>, cwd?: string): string {
   const tmp = mkdtempSync(join(tmpdir(), 'blocks-client-test-'));
   const scriptPath = join(tmp, 'test.mjs');
   // Use absolute path to import the client module
@@ -27,7 +32,9 @@ function runScript(scriptBody: string, env: Record<string, string>): string {
   const fullScript = `import { ApiNamespaceClient } from '${importPath}';\n${scriptBody}`;
   writeFileSync(scriptPath, fullScript);
   try {
+    // By default a fresh directory, so no `.blocks-sandbox/config.json` of the cwd answers before the browser fetch.
     return execSync(`node ${scriptPath}`, {
+      cwd: cwd ?? tmp,
       encoding: 'utf-8',
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
       timeout: 10000,
@@ -114,6 +121,27 @@ try {
 }
 `, { BLOCKS_API_URL: '/aws-blocks/api' });
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
+  });
+
+  it('calls a relative apiUrl from the fetched config.json at the page origin', () => {
+    // A dev server bound to all interfaces serves {"apiUrl": "/aws-blocks/api"}. The browser
+    // resolves each request against the page, so the client must pass the path on as it is.
+    const result = runScript(`
+const calls = [];
+globalThis.fetch = async (input) => {
+  calls.push(String(input));
+  const body = calls.length === 1
+    ? { apiUrl: '/aws-blocks/api', environment: 'local' }
+    : { jsonrpc: '2.0', result: 'ok', id: 1 };
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const api = ApiNamespaceClient('greet');
+console.log(JSON.stringify({ result: await api.hello(), calls }));
+`, {});
+    assert.deepStrictEqual(JSON.parse(result.split('\n').at(-1) ?? ''), {
+      result: 'ok',
+      calls: ['/.blocks-sandbox/config.json', '/aws-blocks/api/greet'],
+    });
   });
 });
 
@@ -362,5 +390,182 @@ describe('ApiNamespaceClient — non-JSON-RPC response bodies', () => {
   it('resolves a valid result envelope sent with a custom non-200 status', async () => {
     assert.deepStrictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: { queued: true }, id: 1 }), 202), { queued: true });
     assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: 'teapot', id: 1 }), 418), 'teapot');
+  });
+});
+
+/**
+ * The client entry is bundled for browsers and React Native. Expo's Metro
+ * honors `webpackIgnore` and leaves a dynamic `import()` in the bundle, which
+ * Hermes cannot compile, and Metro cannot resolve a Node built-in at all. So
+ * nothing the client entry reaches may contain a dynamic `import()` or import a
+ * Node built-in, even behind a runtime `process.versions.node` guard.
+ */
+describe('Client bundle safety (React Native / Hermes)', () => {
+  const distDir = join(dirname(CLIENT_MODULE), '..');
+
+  /**
+   * Walk the built import graph from the client entry, the way a bundler does,
+   * and collect what breaks a React Native bundle. The specifier text does not
+   * matter for `import()`: Hermes rejects the expression itself.
+   */
+  function clientGraph(): { files: string[]; dynamicImports: string[]; nonRelativeImports: string[] } {
+    const files = new Set<string>();
+    const dynamicImports: string[] = [];
+    const nonRelativeImports: string[] = [];
+    const queue = [CLIENT_MODULE];
+    while (queue.length > 0) {
+      const file = queue.pop() as string;
+      if (files.has(file)) continue;
+      files.add(file);
+      const sf = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+      const where = (node: ts.Node) =>
+        `${relative(distDir, file)}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
+      const visit = (node: ts.Node): void => {
+        if (
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          node.moduleSpecifier &&
+          ts.isStringLiteral(node.moduleSpecifier)
+        ) {
+          const specifier = node.moduleSpecifier.text;
+          if (specifier.startsWith('.')) queue.push(resolve(dirname(file), specifier));
+          else nonRelativeImports.push(`${where(node)} ${isBuiltin(specifier) ? 'Node built-in' : 'package'} '${specifier}'`);
+        } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          dynamicImports.push(`${where(node)} ${node.getText(sf)}`);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    return { files: [...files], dynamicImports, nonRelativeImports };
+  }
+
+  it('nothing the client entry reaches contains a dynamic import()', () => {
+    const graph = clientGraph();
+    assert.ok(graph.files.length > 1, 'expected the walk to leave dist/client');
+    assert.deepStrictEqual(graph.dynamicImports, [], 'a dynamic import() in the client graph breaks the Hermes compile');
+  });
+
+  it('the client entry reaches only files of this package: no Node built-in, no other package', () => {
+    // A Node built-in does not resolve in a browser or React Native bundle. A
+    // package import is outside this walk: follow it here before you add one.
+    assert.deepStrictEqual(clientGraph().nonRelativeImports, []);
+  });
+
+  /** Run `fn` in a project directory whose `.blocks-sandbox/config.json` names an API URL. */
+  function withConfigFile(fn: (projectDir: string) => void): void {
+    const projectDir = mkdtempSync(join(tmpdir(), 'blocks-client-cwd-'));
+    try {
+      mkdirSync(join(projectDir, '.blocks-sandbox'));
+      writeFileSync(
+        join(projectDir, '.blocks-sandbox', 'config.json'),
+        JSON.stringify({ apiUrl: 'https://from-config-file.example.com/aws-blocks' }),
+      );
+      fn(projectDir);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  }
+
+  it('still reads .blocks-sandbox/config.json from the working directory under Node', () => {
+    withConfigFile((projectDir) => {
+      const result = runScript(`
+globalThis.fetch = async (url) => {
+  console.log('FETCH:' + String(url));
+  throw new Error('stop');
+};
+const api = ApiNamespaceClient('test');
+try { await api.hello(); } catch {}
+`, {}, projectDir);
+      assert.ok(
+        result.includes('FETCH:https://from-config-file.example.com/aws-blocks'),
+        `Expected the request to use the config.json apiUrl, got: ${result}`,
+      );
+    });
+  });
+
+  it('without process.getBuiltinModule (Node.js older than 22.3) skips the config file and says why', () => {
+    withConfigFile((projectDir) => {
+      const result = runScript(`
+delete process.getBuiltinModule;
+globalThis.fetch = async (url) => {
+  console.log('FETCH:' + String(url));
+  throw new Error('stop');
+};
+const api = ApiNamespaceClient('test');
+try {
+  await api.hello();
+  console.log('FAIL:no_error');
+} catch (e) {
+  console.log('ERROR:' + e.message);
+}
+`, {}, projectDir);
+      // The only request is the fetch step: the apiUrl in the config file is never used.
+      const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
+      assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
+      assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
+      assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
+    });
+  });
+});
+
+describe('Node.js client and a config.json an older deploy wrote', () => {
+  /** Run a client call in a fresh app whose `.blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
+  async function callWith(config: (stub: string) => object, env: (stub: string) => Record<string, string> = () => ({})) {
+    let calls = 0;
+    const server = createServer((_req, res) => {
+      calls++;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ jsonrpc: '2.0', result: 'stub', id: 1 }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const stub = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-client-legacy-'));
+    try {
+      mkdirSync(join(dir, '.blocks-sandbox'));
+      writeFileSync(join(dir, '.blocks-sandbox', 'config.json'), JSON.stringify(config(stub)));
+      writeFileSync(
+        join(dir, 'test.mjs'),
+        `import { ApiNamespaceClient } from 'file://${CLIENT_MODULE}';\n` +
+          "try { console.log('RESULT ' + await ApiNamespaceClient('api').hello()); } catch (e) { console.log('ERROR ' + e.message); }\n",
+      );
+      const { stdout } = await promisify(execFile)(process.execPath, ['test.mjs'], {
+        cwd: dir,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env(stub) },
+        timeout: 10_000,
+      });
+      return { stdout, calls };
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('refuses a production config.json, without calling it', async () => {
+    const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment: 'production' }));
+    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed production stack .*written by an older deploy/);
+    assert.match(stdout, /npx --no -- cdk-blocks dev.*BLOCKS_API_URL/);
+    assert.strictEqual(calls, 0);
+  });
+
+  it('refuses a sandbox config.json with an https URL', async () => {
+    const { stdout } = await callWith(() => ({ apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', environment: 'sandbox' }));
+    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed sandbox stack/);
+  });
+
+  it('calls the stack BLOCKS_API_URL names on purpose', async () => {
+    const { stdout, calls } = await callWith(
+      () => ({ apiUrl: 'https://legacy.example/aws-blocks/api', environment: 'production' }),
+      (stub) => ({ BLOCKS_API_URL: stub }),
+    );
+    assert.match(stdout, /RESULT stub/);
+    assert.strictEqual(calls, 1);
+  });
+
+  it("uses a dev server's config.json, local or cdk-blocks sandbox's", async () => {
+    for (const environment of ['local', 'sandbox']) {
+      const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment }));
+      assert.match(stdout, /RESULT stub/, environment);
+      assert.strictEqual(calls, 1, environment);
+    }
   });
 });

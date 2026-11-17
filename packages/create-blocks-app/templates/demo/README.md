@@ -42,6 +42,12 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
+  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  Its placeholder works locally (the mock sends nothing), but replace it with a
+  verified SES identity before deploying to production: the placeholder is on the
+  reserved `.invalid` domain, which SES can never verify, so every send from it
+  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  until you do.
 - **KVStore with a `schema` and a `key`** — per-user todos, stored as records
   you list or query as a collection (a store fixes its key when you create
   it); `listTodos(sortBy)` sorts the list in

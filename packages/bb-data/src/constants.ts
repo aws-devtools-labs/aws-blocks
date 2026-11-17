@@ -28,5 +28,23 @@ export const DEFAULT_MAX_CAPACITY = 2;
  */
 export const DEFAULT_BACKUP_RETENTION_DAYS = 15;
 
+/** Default credentials-rotation interval (days). CDK's own default for the schedule. */
+export const DEFAULT_SECRET_ROTATION_DAYS = 30;
+
+/** Minimum credentials-rotation interval (days). Secrets Manager itself allows 4 hours. */
+export const MIN_SECRET_ROTATION_DAYS = 1;
+
+/** Maximum credentials-rotation interval (days). Secrets Manager's own limit. */
+export const MAX_SECRET_ROTATION_DAYS = 1000;
+
+/** How long the deploy waits for the rotation the schedule starts. */
+export const ROTATION_WAIT_MAX_MS = 5 * 60 * 1000;
+
+/** Margin over {@link ROTATION_WAIT_MAX_MS} for the wait Lambda's own timeout. */
+export const ROTATION_WAIT_MARGIN_MS = 2 * 60 * 1000;
+
+/** Partitions the rotation application is published in; CDK maps only these. */
+export const SAR_ROTATION_PARTITIONS = ['aws', 'aws-cn', 'aws-us-gov'];
+
 /** Number of availability zones for the Aurora VPC. */
 export const VPC_MAX_AZS = 2;

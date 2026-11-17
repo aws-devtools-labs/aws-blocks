@@ -9,6 +9,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
@@ -22,9 +23,11 @@ import { BlocksBackend } from './blocks-backend.js';
 import { BlocksStack } from './index.js';
 import {
 	addServicePrincipalTrustCheck,
+	KMS_KEY_POLICY_WARNING_ID,
 	SERVICE_PRINCIPAL_TRUST_WARNING_ID,
 	sourceScopedConditions,
 	unconditionedServicePrincipals,
+	unscopedKeyPolicyServicePrincipals,
 } from './service-principal-trust.js';
 
 // Same inline default-compute stub as blocks-stack.test.ts: core's tests can't
@@ -74,12 +77,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const trustBackendPath = join(__dirname, '__fixtures__', 'trust-check-backend.js');
 
+/** The sentence both checks' messages end with: the operators and values that don't count. */
+const CONDITION_RULES =
+	'A key does not count under an IfExists, negated (StringNotEquals, ArnNotLike, ...), Null or ForAllValues: ' +
+	'operator, or with a value that leaves the account open (* alone, a wildcard or empty account); nor do ' +
+	'aws:SourceOrgID and aws:SourceOrgPaths, which admit every account in the organization.';
+
 /** The full error a role AWS Blocks owns fails synth with. */
 function trustError(rolePath: string, service: string): string {
 	return (
 		`[${rolePath}] IAM role ${rolePath} trusts the service principal ${service} without an ` +
 		'aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack account) ' +
-		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement.'
+		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement. ' +
+		CONDITION_RULES
 	);
 }
 
@@ -122,6 +132,7 @@ function trustWarning(rolePath: string, service: string, index: number): string 
 		`IAM role ${rolePath} trusts the service principal ${service} without an ` +
 		'aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack account) ' +
 		'and aws:SourceArn (ArnLike, an ARN pattern for the resources of that service) to its trust statement. ' +
+		`${CONDITION_RULES} ` +
 		"For a role a CDK construct creates with no prop for its trust, set the condition on the role's L1 resource: " +
 		`role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.${index}.Condition', ` +
 		"{ StringEquals: { 'aws:SourceAccount': ... }, ArnLike: { 'aws:SourceArn': ... } }). " +
@@ -136,17 +147,32 @@ interface FixtureRoles {
 	readonly blockRole?: boolean;
 	/** Add a role a block hoists to stack scope and marks as its own. */
 	readonly helperRole?: boolean;
+	/** Add an unscoped service key inside a block with an official `bbName`. */
+	readonly blockKey?: boolean;
+	/** Add an unscoped service key on the root, where the app owns it. */
+	readonly appKey?: boolean;
+	/** Add an unscoped service key at stack scope of an embedded backend, where the app owns it. */
+	readonly appStackKey?: boolean;
 }
 
 /** Run `build` with the fixture's opt-in roles switched on. */
-async function withFixtureRoles<T>({ blockRole, helperRole }: FixtureRoles, build: () => Promise<T>): Promise<T> {
+async function withFixtureRoles<T>(
+	{ blockRole, helperRole, blockKey, appKey, appStackKey }: FixtureRoles,
+	build: () => Promise<T>,
+): Promise<T> {
 	if (blockRole) process.env.TRUST_CHECK_BLOCK_ROLE = '1';
 	if (helperRole) process.env.TRUST_CHECK_HELPER_ROLE = '1';
+	if (blockKey) process.env.TRUST_CHECK_BLOCK_KEY = '1';
+	if (appKey) process.env.TRUST_CHECK_APP_KEY = '1';
+	if (appStackKey) process.env.TRUST_CHECK_APP_STACK_KEY = '1';
 	try {
 		return await build();
 	} finally {
 		delete process.env.TRUST_CHECK_BLOCK_ROLE;
 		delete process.env.TRUST_CHECK_HELPER_ROLE;
+		delete process.env.TRUST_CHECK_BLOCK_KEY;
+		delete process.env.TRUST_CHECK_APP_KEY;
+		delete process.env.TRUST_CHECK_APP_STACK_KEY;
 	}
 }
 
@@ -302,6 +328,63 @@ describe('service-principal trust check', () => {
 			}),
 		});
 		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(role)), []);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('counts the source keys under the same operator and value rules as the key-policy check', () => {
+		const { app, stack } = checkedStack();
+		const rules = `arn:${stack.partition}:events:${stack.region}`;
+		const cases: [string, Record<string, unknown>][] = [
+			['IfExists', { StringEqualsIfExists: { 'aws:SourceAccount': stack.account } }],
+			['NullCheck', { Null: { 'aws:SourceArn': 'false' } }],
+			['Negated', { StringNotEquals: { 'aws:SourceAccount': '999999999999' } }],
+			['WildcardOnly', { ArnLike: { 'aws:SourceArn': '*' } }],
+			['WildcardAccount', { ArnLike: { 'aws:SourceArn': `${rules}:*:rule/*` } }],
+			['LiteralLedShortJoin', { StringLike: { 'aws:SourceArn': `arn:${stack.partition}:events:*` } }],
+		];
+		for (const [id, conditions] of cases) {
+			const role = new iam.Role(stack, id, {
+				assumedBy: new iam.ServicePrincipal('events.amazonaws.com', { conditions }),
+			});
+			assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(role)), ['events.amazonaws.com'], id);
+		}
+		// A wildcard-account ARN still passes beside a concrete aws:SourceAccount
+		// (sourceScopedConditions with accountInArn: false renders that shape).
+		const paired = new iam.Role(stack, 'Paired', {
+			assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com', {
+				conditions: sourceScopedConditions(stack, 'apigateway', '/*', { accountInArn: false }),
+			}),
+		});
+		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(paired)), []);
+		// Each error names the operator and value rules, so a key that is present
+		// but doesn't count isn't reported as if it were missing.
+		assertSynthErrors(
+			app,
+			cases.map(([id]) => trustError(`TrustCheckStack/${id}/Resource`, 'events.amazonaws.com')),
+		);
+	});
+
+	test('accepts an ARN-valued source key built as an Fn::Join that starts with an intrinsic', () => {
+		const { app, stack } = checkedStack();
+		const target = new kms.Key(stack, 'Target');
+		const cases: [string, string][] = [
+			['KeyArnSuffix', `${target.keyArn}/*`],
+			['ImportedArnSuffix', `${cdk.Fn.importValue('SomeArn')}:*`],
+		];
+		for (const [id, arn] of cases) {
+			const role = new iam.Role(stack, id, {
+				assumedBy: new iam.ServicePrincipal('events.amazonaws.com', {
+					conditions: { ArnLike: { 'aws:SourceArn': arn } },
+				}),
+			});
+			const trust = JSON.stringify(stack.resolve((roleResource(role) as iam.CfnRole).assumeRolePolicyDocument));
+			assert.match(
+				trust,
+				/"aws:SourceArn":\{"Fn::Join":\["",\[\{"Fn::/,
+				`${id} renders as an Fn::Join led by an intrinsic`,
+			);
+			assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(role)), [], id);
+		}
 		assert.doesNotThrow(() => app.synth());
 	});
 
@@ -465,5 +548,345 @@ describe('sourceScopedConditions', () => {
 				},
 			},
 		);
+	});
+});
+
+/** The full error a KMS key AWS Blocks owns fails synth with. */
+function keyPolicyError(keyPath: string, service: string, statement: number): string {
+	return `[${keyPath}] ${keyPolicyProblem(keyPath, service, statement)}`;
+}
+
+function keyPolicyProblem(keyPath: string, service: string, statement: number): string {
+	return (
+		`KMS key ${keyPath} lets the service principal ${service} use it (key policy statement ${statement}) ` +
+		'without an aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack ' +
+		"account) or aws:SourceArn (ArnLike, an ARN pattern for this account's resources of that service) to the " +
+		'statement. kms:EncryptionContext:aws:logs:arn also counts for CloudWatch Logs. ' +
+		CONDITION_RULES
+	);
+}
+
+/** The key-policy check warnings in `stack`'s synthesized messages: `[construct path, message]`. */
+function keyPolicyWarnings(assembly: cdk.cx_api.CloudAssembly, stack: cdk.Stack): [string, string][] {
+	return assembly
+		.getStackArtifact(stack.artifactId)
+		.messages.filter(
+			(m) =>
+				m.level === 'warning' &&
+				typeof m.entry.data === 'string' &&
+				m.entry.data.endsWith(`[ack: ${KMS_KEY_POLICY_WARNING_ID}]`),
+		)
+		.map((m) => [m.id, m.entry.data as string]);
+}
+
+/** A key on a checked stack whose second policy statement grants `service` under `conditions`. */
+function serviceKey(stack: cdk.Stack, id: string, service: string, conditions?: Record<string, unknown>): kms.Key {
+	const key = new kms.Key(stack, id);
+	key.addToResourcePolicy(
+		new iam.PolicyStatement({
+			principals: [new iam.ServicePrincipal(service)],
+			actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+			resources: ['*'],
+			conditions,
+		}),
+	);
+	return key;
+}
+
+const keyResource = (key: kms.Key) => key.node.defaultChild as cdk.CfnResource;
+
+describe('KMS key-policy check', () => {
+	test('passes for a service statement with StringEquals aws:SourceAccount and ArnLike aws:SourceArn', () => {
+		const { app, stack } = checkedStack();
+		const key = serviceKey(stack, 'Scoped', 'cloudwatch.amazonaws.com', {
+			StringEquals: { 'aws:SourceAccount': stack.account },
+			ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:${stack.region}:${stack.account}:alarm:*` },
+		});
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), []);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('accepts aws:SourceAccount or aws:SourceArn alone, keys compared case-insensitively', () => {
+		const { stack } = checkedStack();
+		const account = serviceKey(stack, 'AccountOnly', 'sns.amazonaws.com', {
+			StringEquals: { 'aws:sourceaccount': stack.account },
+		});
+		const arn = serviceKey(stack, 'ArnOnly', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:${stack.region}:${stack.account}:alarm:*` },
+		});
+		const anyValue = serviceKey(stack, 'ForAnyValue', 'sns.amazonaws.com', {
+			'ForAnyValue:StringEquals': { 'aws:SourceAccount': [stack.account] },
+		});
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(account)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(arn)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(anyValue)), []);
+	});
+
+	test('fails synth for an unconditioned service statement, naming the key path, principal and statement', () => {
+		const { app, stack } = checkedStack();
+		serviceKey(stack, 'Unscoped', 'cloudwatch.amazonaws.com');
+		assertSynthErrors(app, [keyPolicyError('TrustCheckStack/Unscoped/Resource', 'cloudwatch.amazonaws.com', 1)]);
+	});
+
+	test('does not count an IfExists, Null, ForAllValues or negated operator, or a value that leaves the account open', () => {
+		const { app, stack } = checkedStack();
+		const alarms = (account: string) => `arn:${stack.partition}:cloudwatch:${stack.region}:${account}:alarm:*`;
+		const cases: [string, Record<string, unknown>][] = [
+			['IfExists', { StringEqualsIfExists: { 'aws:SourceAccount': stack.account } }],
+			['NullCheck', { Null: { 'aws:SourceArn': 'false' } }],
+			['ForAllValues', { 'ForAllValues:StringEquals': { 'aws:SourceAccount': [stack.account] } }],
+			['StringNotEquals', { StringNotEquals: { 'aws:SourceAccount': '999999999999' } }],
+			['StringNotLike', { StringNotLike: { 'aws:SourceAccount': '9*' } }],
+			['ArnNotEquals', { ArnNotEquals: { 'aws:SourceArn': alarms('999999999999') } }],
+			['ArnNotLike', { ArnNotLike: { 'aws:SourceArn': alarms('999999999999') } }],
+			['Wildcard', { ArnLike: { 'aws:SourceArn': '*' } }],
+			['WildcardAccountArn', { ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:*:*:alarm:*` } }],
+			['LiteralLedShortJoin', { StringLike: { 'aws:SourceArn': `arn:${stack.partition}:cloudwatch:*` } }],
+			['EmptyAccountArn', { ArnLike: { 'aws:SourceArn': alarms('') } }],
+			['WildcardSourceAccount', { StringLike: { 'aws:SourceAccount': '?*' } }],
+			['OneOpenValue', { StringLike: { 'aws:SourceAccount': [stack.account, '*'] } }],
+			['SourceOrgID', { StringEquals: { 'aws:SourceOrgID': 'o-abc123' } }],
+		];
+		for (const [id, conditions] of cases) {
+			const key = serviceKey(stack, id, 'cloudwatch.amazonaws.com', conditions);
+			assert.deepStrictEqual(
+				unscopedKeyPolicyServicePrincipals(keyResource(key)),
+				['cloudwatch.amazonaws.com'],
+				id,
+			);
+		}
+		assertSynthErrors(
+			app,
+			cases.map(([id]) => keyPolicyError(`TrustCheckStack/${id}/Resource`, 'cloudwatch.amazonaws.com', 1)),
+		);
+	});
+
+	test('accepts an aws:SourceArn built as an Fn::Join that starts with an intrinsic', () => {
+		const { app, stack } = checkedStack();
+		const target = new kms.Key(stack, 'Target');
+		const key = serviceKey(stack, 'IntrinsicLed', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'aws:SourceArn': { 'Fn::Join': ['', [{ 'Fn::GetAtt': ['TargetResource', 'Arn'] }, '/*']] } },
+		});
+		const imported = serviceKey(stack, 'ImportLed', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'aws:SourceArn': `${cdk.Fn.importValue('SomeArn')}:*` },
+		});
+		assert.ok(target);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(imported)), []);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('accepts kms:EncryptionContext:aws:logs:arn for the CloudWatch Logs principal only', () => {
+		const { stack } = checkedStack();
+		const logGroups = `arn:${stack.partition}:logs:${stack.region}:${stack.account}:log-group:*`;
+		const logs = serviceKey(stack, 'Logs', `logs.${stack.region}.amazonaws.com`, {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': logGroups },
+		});
+		const china = serviceKey(stack, 'LogsChina', 'logs.cn-north-1.amazonaws.com.cn', {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': logGroups },
+		});
+		const other = serviceKey(stack, 'NotLogs', 'cloudwatch.amazonaws.com', {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': logGroups },
+		});
+		const anyAccount = serviceKey(stack, 'LogsAnyAccount', `logs.${stack.region}.amazonaws.com`, {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': `arn:${stack.partition}:logs:*:*:*` },
+		});
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(logs)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(china)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(other)), ['cloudwatch.amazonaws.com']);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(anyAccount)), [
+			`logs.${stack.region}.amazonaws.com`,
+		]);
+	});
+
+	test('matches the CloudWatch Logs principal of an environment-agnostic stack (an Fn::Join)', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'EnvAgnosticKeyStack');
+		coverBlocksRoot(stack);
+		addServicePrincipalTrustCheck(stack);
+		const logGroups = `arn:${stack.partition}:logs:${stack.region}:${stack.account}:log-group:*`;
+		const logs = serviceKey(stack, 'Logs', `logs.${stack.region}.amazonaws.com`, {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': logGroups },
+		});
+		const suffix = serviceKey(stack, 'LogsUrlSuffix', `logs.${stack.region}.${stack.urlSuffix}`, {
+			ArnLike: { 'kms:EncryptionContext:aws:logs:arn': logGroups },
+		});
+		const rendered = JSON.stringify(stack.resolve(keyResource(logs)._toCloudFormation()));
+		assert.match(rendered, /"Service":\{"Fn::Join"/, 'the logs principal renders as an Fn::Join');
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(logs)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(suffix)), []);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('does not count kms:ViaService, even with kms:CallerAccount, for a service principal', () => {
+		const { stack } = checkedStack();
+		const key = serviceKey(stack, 'ViaAndCaller', 'sqs.amazonaws.com', {
+			StringEquals: { 'kms:ViaService': `sqs.${stack.region}.amazonaws.com`, 'kms:CallerAccount': stack.account },
+		});
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), ['sqs.amazonaws.com']);
+	});
+
+	test('exempts events.amazonaws.com only for kms:GenerateDataKey* and kms:Decrypt', () => {
+		const { app, stack } = checkedStack();
+		const sns = new kms.Key(stack, 'EventBridgeToTopic');
+		sns.addToResourcePolicy(
+			new iam.PolicyStatement({
+				principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+				actions: ['kms:GenerateDataKey*', 'kms:Decrypt'],
+				resources: ['*'],
+			}),
+		);
+		const wider = new kms.Key(stack, 'EventBridgeEncrypt');
+		wider.addToResourcePolicy(
+			new iam.PolicyStatement({
+				principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+				actions: ['kms:Decrypt', 'kms:Encrypt'],
+				resources: ['*'],
+			}),
+		);
+		const notAction = new kms.Key(stack, 'EventBridgeNotAction');
+		notAction.addToResourcePolicy(
+			new iam.PolicyStatement({
+				principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+				notActions: ['kms:ScheduleKeyDeletion'],
+				resources: ['*'],
+			}),
+		);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(sns)), []);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(wider)), ['events.amazonaws.com']);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(notAction)), ['events.amazonaws.com']);
+		assertSynthErrors(app, [
+			keyPolicyError('TrustCheckStack/EventBridgeEncrypt/Resource', 'events.amazonaws.com', 1),
+			keyPolicyError('TrustCheckStack/EventBridgeNotAction/Resource', 'events.amazonaws.com', 1),
+		]);
+	});
+
+	test('reports only the unscoped principals of a statement whose Service lists several', () => {
+		const { stack } = checkedStack();
+		const key = new kms.Key(stack, 'Mixed');
+		key.addToResourcePolicy(
+			new iam.PolicyStatement({
+				principals: [
+					new iam.ServicePrincipal(`logs.${stack.region}.amazonaws.com`),
+					new iam.ServicePrincipal('sns.amazonaws.com'),
+				],
+				actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+				resources: ['*'],
+				conditions: {
+					ArnLike: {
+						'kms:EncryptionContext:aws:logs:arn': `arn:${stack.partition}:logs:${stack.region}:${stack.account}:log-group:*`,
+					},
+				},
+			}),
+		);
+		const statement = (
+			stack.resolve(keyResource(key)._toCloudFormation()) as {
+				Resources: Record<
+					string,
+					{ Properties: { KeyPolicy: { Statement: { Principal: { Service: unknown } }[] } } }
+				>;
+			}
+		).Resources;
+		const services = Object.values(statement)[0].Properties.KeyPolicy.Statement[1].Principal.Service;
+		assert.ok(Array.isArray(services) && services.length === 2, 'both principals share one statement');
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), ['sns.amazonaws.com']);
+	});
+
+	test('reads an L1 CfnKey whose policy has a single Statement object', () => {
+		const { app, stack } = checkedStack();
+		const key = new kms.CfnKey(stack, 'L1Key', {
+			keyPolicy: {
+				Version: '2012-10-17',
+				Statement: {
+					Effect: 'Allow',
+					Principal: { Service: 'cloudwatch.amazonaws.com' },
+					Action: ['kms:Decrypt'],
+					Resource: '*',
+				},
+			},
+		});
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(key), ['cloudwatch.amazonaws.com']);
+		assertSynthErrors(app, [keyPolicyError('TrustCheckStack/L1Key', 'cloudwatch.amazonaws.com', 0)]);
+	});
+
+	test('ignores the default account-root statement, Deny statements and non-service principals', () => {
+		const { app, stack } = checkedStack();
+		const key = new kms.Key(stack, 'NoService');
+		key.addToResourcePolicy(
+			new iam.PolicyStatement({
+				effect: iam.Effect.DENY,
+				principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+				actions: ['kms:Decrypt'],
+				resources: ['*'],
+			}),
+		);
+		key.addToResourcePolicy(
+			new iam.PolicyStatement({
+				principals: [new iam.ArnPrincipal(`arn:${stack.partition}:iam::${stack.account}:role/Reader`)],
+				actions: ['kms:Decrypt'],
+				resources: ['*'],
+			}),
+		);
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), []);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('reads the key policy after property overrides', () => {
+		const { stack } = checkedStack();
+		const key = serviceKey(stack, 'Overridden', 'cloudwatch.amazonaws.com', {
+			StringEquals: { 'aws:SourceAccount': stack.account },
+		});
+		keyResource(key).addPropertyDeletionOverride('KeyPolicy.Statement.1.Condition');
+		assert.deepStrictEqual(unscopedKeyPolicyServicePrincipals(keyResource(key)), ['cloudwatch.amazonaws.com']);
+	});
+
+	test('BlocksStack fails synth for an unscoped key a block creates', async () => {
+		const { app } = await trustCheckBlocksStack('KeyCheckBlockKey', { blockKey: true });
+		assertSynthErrors(app, [
+			keyPolicyError('KeyCheckBlockKey/keyblock/Key/Resource', 'cloudwatch.amazonaws.com', 1),
+		]);
+	});
+
+	test('embedded BlocksBackend fails synth for an unscoped key a block creates', async () => {
+		const { app } = await trustCheckEmbeddedBackend('KeyCheckEmbeddedBlockKey', { blockKey: true });
+		assertSynthErrors(app, [
+			keyPolicyError('KeyCheckEmbeddedBlockKey/Blocks/keyblock/Key/Resource', 'cloudwatch.amazonaws.com', 1),
+		]);
+	});
+
+	test('BlocksStack warns, without failing synth, for an unscoped key the app owns; the warning can be acknowledged', async () => {
+		const { app, stack } = await trustCheckBlocksStack('KeyCheckAppKey', { appKey: true });
+		const keyPath = 'KeyCheckAppKey/ModuleKey/Resource';
+		assert.deepStrictEqual(keyPolicyWarnings(app.synth(), stack), [
+			[
+				`/${keyPath}`,
+				`${keyPolicyProblem(keyPath, 'cloudwatch.amazonaws.com', 1)} To keep the statement as it is, acknowledge ` +
+					`this warning: Annotations.of(key).acknowledgeWarning('${KMS_KEY_POLICY_WARNING_ID}'), or on the ` +
+					`stack to acknowledge it for every key in the stack. [ack: ${KMS_KEY_POLICY_WARNING_ID}]`,
+			],
+		]);
+
+		const acked = await trustCheckBlocksStack('KeyCheckAppKeyAcknowledged', { appKey: true });
+		cdk.Annotations.of(acked.stack).acknowledgeWarning(KMS_KEY_POLICY_WARNING_ID);
+		assert.deepStrictEqual(keyPolicyWarnings(acked.app.synth(), acked.stack), []);
+	});
+
+	test('embedded BlocksBackend warns, without failing synth, for an unscoped key its backend module adds at stack scope', async () => {
+		const { app, stack } = await trustCheckEmbeddedBackend('KeyCheckEmbeddedStackKey', { appStackKey: true });
+		const keyPath = 'KeyCheckEmbeddedStackKey/ModuleStackKey/Resource';
+		assert.deepStrictEqual(keyPolicyWarnings(app.synth(), stack), [
+			[
+				`/${keyPath}`,
+				`${keyPolicyProblem(keyPath, 'cloudwatch.amazonaws.com', 1)} To keep the statement as it is, acknowledge ` +
+					`this warning: Annotations.of(key).acknowledgeWarning('${KMS_KEY_POLICY_WARNING_ID}'), or on the ` +
+					`stack to acknowledge it for every key in the stack. [ack: ${KMS_KEY_POLICY_WARNING_ID}]`,
+			],
+		]);
+	});
+
+	test('a key outside an embedded backend is not checked', async () => {
+		const { app, stack } = await trustCheckEmbeddedBackend('KeyCheckOutsideBackend', {});
+		serviceKey(stack, 'OutsideBackend', 'cloudwatch.amazonaws.com');
+		assert.deepStrictEqual(keyPolicyWarnings(app.synth(), stack), []);
 	});
 });

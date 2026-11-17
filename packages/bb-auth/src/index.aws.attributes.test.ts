@@ -29,13 +29,21 @@ import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { AuthErrors, type SignInNextStep, type SignInResult } from './index.aws.js';
-import { Browser, cognitoError, makeAwsAuth, signInAs, wireView } from './test-support/aws-harness.js';
+import { Browser, captureLogger, cognitoError, makeAwsAuth, signInAs, wireView } from './test-support/aws-harness.js';
 
+/** The block's log for the current test (`WRITES` passes it as `logger`). */
+let logs = captureLogger();
+beforeEach(() => {
+	logs = captureLogger();
+});
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
-const OPTIONS = { users: { attributes: [{ name: 'team' }] }, admin: {} } as const;
+const OPTIONS = {
+	users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] },
+	admin: {},
+} as const;
 
 const INVALID = { name: AuthErrors.InvalidParameter, code: 400, retriable: true } as const;
 const UNAUTHORIZED = { name: AuthErrors.NotAuthorized, code: 401, retriable: false } as const;
@@ -88,13 +96,13 @@ function serializationFailure(): never {
 /** The four writes that carry user attributes, each run from a fresh harness. */
 const WRITES = {
 	async signUp(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		h.on('SignUpCommand', serializationFailure);
 		const result = await outcome(untyped(h.auth, 'signUp', 'bob', PASSWORD, { attributes }));
 		return { result, sent: h.sentNames() };
 	},
 	async updateUserAttributes(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		const browser = new Browser();
 		await signInAs(h, browser, 'alice');
 		h.on('UpdateUserAttributesCommand', serializationFailure);
@@ -110,7 +118,7 @@ const WRITES = {
 		return { result, sent: h.sentNames() };
 	},
 	async newPasswordChallenge(attributes: Record<string, unknown>) {
-		const h = makeAwsAuth(OPTIONS);
+		const h = makeAwsAuth({ ...OPTIONS, logger: logs.logger });
 		const browser = new Browser();
 		h.on('InitiateAuthCommand', () => ({
 			ChallengeName: 'NEW_PASSWORD_REQUIRED',
@@ -180,6 +188,39 @@ describe('AWS: the other schema-independent rules are checked before the SDK cal
 		});
 	}
 
+	for (const write of ['signUp', 'updateUserAttributes', 'newPasswordChallenge'] as const) {
+		test(`${write}: a \`userWritable: false\` attribute is 401 NotAuthorizedException (not client-writable)`, async () => {
+			for (const name of ['role', 'custom:role']) {
+				const { result, sent } = await WRITES[write]({ [name]: 'admin' });
+				assert.deepStrictEqual(result, UNAUTHORIZED, name);
+				assert.deepStrictEqual(sent, [], name);
+			}
+		});
+	}
+
+	for (const write of ['signUp', 'updateUserAttributes', 'newPasswordChallenge'] as const) {
+		test(`${write}: a refused \`userWritable: false\` write logs a warning naming the attribute, never the value`, async () => {
+			for (const name of ['role', 'custom:role']) {
+				logs.entries.length = 0;
+				await WRITES[write]({ [name]: 'secret-admin-value' });
+				const warned = logs.entries.filter((e) => e.message.includes('admin-only attribute'));
+				assert.deepStrictEqual(
+					warned.map((e) => [e.level, e.message, e.context?.attribute]),
+					[['warn', '[bb-auth] refused end-user write to admin-only attribute', 'custom:role']],
+					name,
+				);
+				assert.ok(!JSON.stringify(logs.entries).includes('secret-admin-value'), 'the value is never logged');
+			}
+		});
+		test(`${write}: a refused verified flag is not logged as an admin-only write`, async () => {
+			await WRITES[write]({ email_verified: 'true' });
+			assert.deepStrictEqual(
+				logs.entries.filter((e) => e.message.includes('admin-only attribute')),
+				[],
+			);
+		});
+	}
+
 	test('signUp: a rejected value anywhere in the write sends nothing, valid attributes before it included', async () => {
 		const { result, sent } = await WRITES.signUp({ email: 'bob@example.com', name: 'Bob', team: { x: 1 } });
 		assert.deepStrictEqual(result, INVALID);
@@ -193,6 +234,19 @@ describe('AWS: what the engine leaves to Cognito', () => {
 		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-bob' }));
 		await h.auth.signUp('bob', PASSWORD, { attributes: { name: 'x'.repeat(2048) } });
 		assert.deepStrictEqual(h.sentNames(), ['SignUpCommand']);
+	});
+
+	test('admin.createUser may set a `userWritable: false` attribute (IAM-authorized): it is sent', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		h.on('AdminCreateUserCommand', (input) => ({
+			User: { Username: String(input.Username), Enabled: true, Attributes: [] },
+		}));
+		await h.auth.admin.createUser('bob', { attributes: { email: 'bob@example.com', role: 'admin' } });
+		const input = h.sent.find((c) => c.name === 'AdminCreateUserCommand')?.input;
+		assert.deepStrictEqual(input?.UserAttributes, [
+			{ Name: 'email', Value: 'bob@example.com' },
+			{ Name: 'custom:role', Value: 'admin' },
+		]);
 	});
 
 	test('admin.createUser may mark a contact verified (IAM-authorized): the flag is sent', async () => {

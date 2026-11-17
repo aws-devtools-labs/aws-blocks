@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
 import type { api as apiType } from '../aws-blocks/index.js';
 
@@ -29,7 +29,7 @@ async function isServerReady() {
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     if (await isServerReady()) return;
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Next.js dev server did not become ready at ${baseUrl}`);
 }
@@ -62,7 +62,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;

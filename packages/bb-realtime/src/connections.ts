@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The connections table of Realtime: one record for each WebSocket connection
- * and one for each channel subscription. The record type, the schema and the
+ * The connections table of Realtime: one record for each WebSocket connection,
+ * one for each channel subscription, and one for each revoked principal. The record type, the schema and the
  * KVStore options live here, so the CDK entry provisions exactly the table
  * that the runtime entry reads and writes.
  */
@@ -16,10 +16,20 @@ export interface ConnectionRecord {
 	expiresAt: number;
 	connectedAt?: number;
 	lastTtlSweep?: number;
+	/** Connection record: the principal its connect token is bound to. Subscription record: the principal its channel token is bound to. */
+	principal?: string;
+	/** Subscription record: expiry (unix seconds) of the channel token it was authorized with. */
+	tokenExp?: number;
+	/** Subscription record: issue time (unix seconds) of that channel token. */
+	tokenIat?: number;
+	/** Subscription record: unique id (`jti`) of that channel token. */
+	tokenId?: string;
+	/** Revocation record: when access for the principal was revoked (unix seconds). */
+	revokedAt?: number;
 }
 
-const STRING_FIELDS = ['connectionId', 'channel'] as const;
-const NUMBER_FIELDS = ['expiresAt', 'connectedAt', 'lastTtlSweep'] as const;
+const STRING_FIELDS = ['connectionId', 'channel', 'principal', 'tokenId'] as const;
+const NUMBER_FIELDS = ['expiresAt', 'connectedAt', 'lastTtlSweep', 'tokenExp', 'tokenIat', 'revokedAt'] as const;
 
 /**
  * Validation for connection records.
