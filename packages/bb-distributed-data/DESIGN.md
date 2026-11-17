@@ -162,7 +162,10 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| No real OCC conflicts | Single-connection PGlite has no concurrency | `simulateConflict()` test helper |
+| No real OCC conflicts | PGlite has one session, so local work is serialized: each auto-commit statement, or a whole `transaction()`, runs alone. Overlapping writes queue instead of conflicting | `simulateConflict()` test helper |
+| `db.query()` / `db.execute()` on the block inside its own `transaction()` callback | Locally the statement runs in that transaction and rolls back with it; on DSQL it auto-commits on another pooled connection | Run statements inside the callback on the transaction object |
+| `db.transaction()` inside another `transaction()` callback of the same block | Locally refused with `TransactionFailedException`, since the inner transaction would wait on the session the outer one holds; on DSQL it runs on another connection | Run the work on the enclosing transaction |
+| A statement that cannot get the session, such as a root Kysely query inside a Kysely transaction | Locally fails with `QueryFailedException` after 30 s (`SESSION_WAIT_MS`); on DSQL it runs on another connection | Run statements inside a transaction on the transaction object |
 | Available collations differ | String sorting may differ | `dsql-lint` rejects unsupported explicit collations |
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |

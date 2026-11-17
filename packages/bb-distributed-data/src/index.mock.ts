@@ -6,10 +6,12 @@
  * PGlite + DSQL validation layer.
  */
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DatabaseBase, type SqlQuery, type Transaction, trackEager, logRecovery } from '@aws-blocks/data-common';
 import { DsqlMockEngine } from './engines/dsql-mock-engine.js';
+import { DistributedDatabaseErrors } from './errors.js';
 import { runMigrations, loadMigrationsFromDir } from './migrations.js';
 import { transactionWithRetry } from './transaction.js';
 import type { DistributedDatabaseOptions, TransactionOptions } from './types.js';
@@ -27,6 +29,7 @@ export class DistributedDatabase extends Scope {
   private migrationsRun: Promise<void> | null = null;
   /** Restart the eager migration run after a transient PGlite init trap cleared the cache. */
   private startMigrations?: () => Promise<void>;
+  private readonly txScope = new AsyncLocalStorage<{ tx: Transaction; open: boolean }>();
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -75,9 +78,18 @@ export class DistributedDatabase extends Scope {
     if (this.migrationsRun) await this.migrationsRun;
   }
 
-  query<T>(query: SqlQuery): Promise<T[]> { return this.ready().then(() => this.base.query<T>(query)); }
-  queryOne<T>(query: SqlQuery): Promise<T | null> { return this.ready().then(() => this.base.queryOne<T>(query)); }
-  execute(query: SqlQuery): Promise<{ rowCount: number }> { return this.ready().then(() => this.base.execute(query)); }
+  query<T>(query: SqlQuery): Promise<T[]> {
+    const tx = this.openTransaction();
+    return tx ? tx.query<T>(query) : this.ready().then(() => this.base.query<T>(query));
+  }
+  queryOne<T>(query: SqlQuery): Promise<T | null> {
+    const tx = this.openTransaction();
+    return tx ? tx.queryOne<T>(query) : this.ready().then(() => this.base.queryOne<T>(query));
+  }
+  execute(query: SqlQuery): Promise<{ rowCount: number }> {
+    const tx = this.openTransaction();
+    return tx ? tx.execute(query) : this.ready().then(() => this.base.execute(query));
+  }
 
   /**
    * Execute a function within a transaction with optional OCC retry.
@@ -89,8 +101,28 @@ export class DistributedDatabase extends Scope {
    * DistributedDatabaseErrors.SerializationFailure)` still matches by name.
    */
   async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
+    if (this.openTransaction()) {
+      throw brandBlocksError(Object.assign(
+        new Error(`${DistributedDatabaseErrors.TransactionFailed}: The local database cannot open a transaction inside another transaction's callback. Run the work on the enclosing transaction.`),
+        { name: DistributedDatabaseErrors.TransactionFailed },
+      ));
+    }
     await this.ready();
-    return transactionWithRetry(this.base, fn, options);
+    return transactionWithRetry(this.base, async (tx) => {
+      const scope = { tx, open: true };
+      try { return await this.txScope.run(scope, () => fn(tx)); }
+      finally { scope.open = false; }
+    }, options);
+  }
+
+  /**
+   * The transaction whose callback is running, if any. The local database has
+   * one session, held by that transaction until it ends, so the block's own
+   * statements inside the callback run in it rather than wait for it.
+   */
+  private openTransaction(): Transaction | undefined {
+    const scope = this.txScope.getStore();
+    return scope?.open ? scope.tx : undefined;
   }
 
   /** Test helper: simulate OCC conflict on next commit. */

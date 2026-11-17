@@ -23,7 +23,61 @@ function cleanStaleLock(dataDir: string): void {
   if (existsSync(pidFile)) { try { unlinkSync(pidFile); } catch {} }
 }
 
-interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
+class MockTxHandle {
+  active = true;
+  readonly tracker = new TransactionTracker();
+  /** Frees the session for the next statement or transaction; safe to call more than once. */
+  constructor(readonly release: () => void) {}
+}
+
+/**
+ * How long a statement or `BEGIN` waits for the session. Local transactions
+ * last milliseconds, so a wait this long means the session is held by a
+ * transaction that is itself waiting on the caller, such as a query on the
+ * root Kysely instance inside a Kysely transaction.
+ */
+export const SESSION_WAIT_MS = 30_000;
+
+function blocksError(name: string, message: string): Error {
+  return brandBlocksError(Object.assign(new Error(message), { name }));
+}
+
+/**
+ * PGlite has a single session, so a statement issued while another caller's
+ * transaction is open would run inside that transaction. The lock serializes
+ * the session: one auto-commit statement, or one whole BEGIN … COMMIT, at a time.
+ */
+class SessionLock {
+  private tail: Promise<void> = Promise.resolve();
+
+  acquire(waitMs: number): Promise<() => void> {
+    let free!: () => void;
+    const held = new Promise<void>((resolve) => (free = resolve));
+    const previous = this.tail;
+    this.tail = previous.then(() => held);
+    let released = false;
+    const release = () => { if (!released) { released = true; free(); } };
+
+    return new Promise((resolve, reject) => {
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        reject(blocksError(
+          DistributedDatabaseErrors.QueryFailed,
+          `${DistributedDatabaseErrors.QueryFailed}: The local database waited ${waitMs / 1000}s for an open transaction to finish. ` +
+            'Inside a transaction callback, run statements on the transaction object.',
+        ));
+      }, waitMs);
+      timer.unref?.();
+      void previous.then(() => {
+        // A waiter that gave up still holds its place in the queue; pass it on.
+        if (timedOut) { release(); return; }
+        clearTimeout(timer);
+        resolve(release);
+      });
+    });
+  }
+}
 
 /**
  * Preprocess a SQL statement for execution on the DSQL mock (PGlite).
@@ -66,6 +120,7 @@ export class DsqlMockEngine implements DatabaseEngine {
   private exitClosing?: Promise<void>;
   private cancelExitClose?: () => void;
   private shouldConflict = false;
+  private readonly session = new SessionLock();
   private _allowDdl = false;
   private readonly dataDir: string;
   private readonly createClient: (dataDir: string) => PGlite;
@@ -165,56 +220,89 @@ export class DsqlMockEngine implements DatabaseEngine {
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
+    const release = await this.session.acquire(SESSION_WAIT_MS);
     try { await this.ensureReady(); return (await this.db.query<T>(normalized, params)).rows; }
     catch (e) { translateDsqlError(e as Error); }
+    finally { release(); }
   }
 
   async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
+    const release = await this.session.acquire(SESSION_WAIT_MS);
     try { await this.ensureReady(); return { rowCount: (await this.db.query(normalized, params)).affectedRows ?? 0 }; }
     catch (e) { translateDsqlError(e as Error); }
+    finally { release(); }
   }
 
   async beginTransaction(): Promise<TransactionHandle> {
+    const release = await this.session.acquire(SESSION_WAIT_MS);
     try {
       await this.ensureReady();
       await this.db.query('BEGIN');
-      return { active: true, tracker: new TransactionTracker() } as MockTxHandle;
-    } catch (e) { translateDsqlError(e as Error); }
+      return new MockTxHandle(release);
+    } catch (e) {
+      release();
+      translateDsqlError(e instanceof Error ? e : new Error(String(e)));
+    }
   }
 
   async commitTransaction(handle: TransactionHandle): Promise<void> {
-    if (this.shouldConflict) {
-      this.shouldConflict = false;
-      await this.db.query('ROLLBACK');
-      const err = Object.assign(
-        new Error('SerializationFailureException: OCC conflict — transaction not committed.'),
-        { code: PG_SERIALIZATION_FAILURE, name: DistributedDatabaseErrors.SerializationFailure }
-      );
-      // Route through translateDsqlError so the mock surfaces the SAME 409
-      // ApiError (name preserved, retriable) the real DSQL engine produces for
-      // SQLSTATE 40001 — keeping mock and aws paths behaviorally identical.
-      translateDsqlError(err);
+    const h = this.openHandle(handle);
+    // Whatever the outcome, the transaction has ended, so the session is freed
+    // and the caller's follow-up rollback becomes a no-op instead of ending the
+    // next holder's transaction.
+    try {
+      if (this.shouldConflict) {
+        this.shouldConflict = false;
+        await this.db.query('ROLLBACK');
+        const err = Object.assign(
+          new Error('SerializationFailureException: OCC conflict — transaction not committed.'),
+          { code: PG_SERIALIZATION_FAILURE, name: DistributedDatabaseErrors.SerializationFailure }
+        );
+        // Route through translateDsqlError so the mock surfaces the SAME 409
+        // ApiError (name preserved, retriable) the real DSQL engine produces for
+        // SQLSTATE 40001 — keeping mock and aws paths behaviorally identical.
+        translateDsqlError(err);
+      }
+      try { await this.db.query('COMMIT'); }
+      catch (e) { translateDsqlError(e instanceof Error ? e : new Error(String(e))); }
+    } finally {
+      this.settle(h);
     }
-    await this.db.query('COMMIT');
-    (handle as MockTxHandle).tracker.reset();
   }
 
   async rollbackTransaction(handle: TransactionHandle): Promise<void> {
-    await this.db.query('ROLLBACK');
-    (handle as MockTxHandle).tracker.reset();
+    if (!(handle instanceof MockTxHandle) || !handle.active) return;
+    try { await this.db.query('ROLLBACK'); }
+    finally { this.settle(handle); }
+  }
+
+  private openHandle(handle: TransactionHandle): MockTxHandle {
+    if (!(handle instanceof MockTxHandle) || !handle.active) {
+      throw blocksError(
+        DistributedDatabaseErrors.TransactionFailed,
+        `${DistributedDatabaseErrors.TransactionFailed}: The transaction has already ended.`,
+      );
+    }
+    return handle;
+  }
+
+  private settle(h: MockTxHandle): void {
+    h.active = false;
+    h.tracker.reset();
+    h.release();
   }
 
   async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
-    (handle as MockTxHandle).tracker.recordStatement(sql);
+    this.openHandle(handle).tracker.recordStatement(sql);
     try { return (await this.db.query<T>(normalized, params)).rows; }
     catch (e) { translateDsqlError(e as Error); }
   }
 
   async executeInTransaction(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     const normalized = preprocessSqlForDsqlMock(sql, { allowDdl: this._allowDdl });
-    const h = handle as MockTxHandle;
+    const h = this.openHandle(handle);
     h.tracker.recordStatement(sql);
     try {
       const rowCount = (await this.db.query(normalized, params)).affectedRows ?? 0;
