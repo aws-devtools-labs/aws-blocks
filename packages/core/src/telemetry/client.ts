@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { existsSync, readFileSync, mkdirSync, openSync, writeSync, closeSync, writeFileSync, constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';

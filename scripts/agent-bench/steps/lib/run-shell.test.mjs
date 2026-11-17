@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Regression tests for the agent-bench shell layer (runShell / WorkspaceSandbox in run-shell.ts) and
 // the judge's spec-leak `find`. Most don't import the TS directly (the step modules self-execute and
 // there's no TS loader under bare `node --test`), so they pin the platform SEMANTICS the fixes rely

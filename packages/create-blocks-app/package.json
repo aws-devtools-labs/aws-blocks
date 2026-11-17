@@ -47,6 +47,7 @@
     "dist",
     "templates",
     "resources",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ]
 }

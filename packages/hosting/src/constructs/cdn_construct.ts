@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { Construct, type IDependable } from 'constructs';
 import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';

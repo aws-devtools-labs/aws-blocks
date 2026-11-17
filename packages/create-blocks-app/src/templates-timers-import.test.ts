@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Every template's test/e2e.test.ts is where users add their own tests. Its imports must leave the
 // global callback-style `setTimeout(cb, ms)` intact, so a user test can call it. This compiles each
 // template's real import declarations, appends such a call, and runs the result in Node.

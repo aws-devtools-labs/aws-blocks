@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Shared adapter warnings for app features the hosting architecture cannot
  * fulfil. These are **warnings, never errors** — neither feature is widely

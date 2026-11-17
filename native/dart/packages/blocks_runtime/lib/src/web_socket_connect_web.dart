@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 // Browsers do not allow setting custom request headers (including User-Agent)

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Applies the E2E test schema to the Supabase project.
  * Run: npx tsx packages/bb-data/test/apply-schema.ts

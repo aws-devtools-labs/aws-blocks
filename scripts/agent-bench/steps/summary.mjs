@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // "Render summary": read every bench-result-*/result.json artifact and render a markdown report to
 // $GITHUB_STEP_SUMMARY (ONE results table with a value + colored delta per metric, glossary on top;
 // exec summary/analysis appended later by analyze.mjs). N=1 per cell. Formulas live in ./lib/scoring.mjs.

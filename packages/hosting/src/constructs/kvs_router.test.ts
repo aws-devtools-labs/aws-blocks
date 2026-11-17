@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Tests for the KVS edge router (kvs_router.ts).
 //
 // The router functions ship as generated JS strings that run at the CloudFront

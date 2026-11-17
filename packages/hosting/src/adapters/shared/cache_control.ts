@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import parseCacheControl from 'parse-cache-control';
 import { HostingError } from '../../hosting_error.js';
 

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 @file:OptIn(ExperimentalForeignApi::class)
 
 package com.aws.blocks.kotlin.oidc

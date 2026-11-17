@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Templates with a Vite frontend typecheck it and their backend as separate
 // TypeScript projects: `aws-blocks/tsconfig.json` sees Node types, the browser
 // code in `src/` does not, and reads the backend through a project reference that

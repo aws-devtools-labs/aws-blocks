@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // PR-vs-baseline results helpers, kept as PURE functions (no fs/env/process) so the diff math +
 // indicators are unit-testable under `node --test`. summary.mjs does the I/O and calls these to render
 // ONE results table: renderDetailed. Each metric cell shows the CURRENT value plus an emoji indicator

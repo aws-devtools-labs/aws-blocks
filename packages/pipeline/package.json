@@ -25,7 +25,8 @@
     "dist",
     "README.md",
     "src",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     ".": {

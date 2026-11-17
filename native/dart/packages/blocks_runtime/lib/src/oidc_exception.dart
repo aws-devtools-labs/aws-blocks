@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Sealed hierarchy of OIDC errors.
 ///
 /// All OIDC failures are subclasses of [OidcException] so callers can switch

@@ -25,7 +25,8 @@
     "README.md",
     "DESIGN.md",
     "src",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "bin": {
     "bb-data": "./dist/cli.js"

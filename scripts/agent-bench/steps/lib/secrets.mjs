@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Credential hygiene for the bench, in one place: (1) the env policy for every process that runs
 // agent-controlled code (the builder + judge shells in run-shell.ts and the app processes step 3
 // starts via agent-exec.mjs; all run as the isolated agent user, see isolation.mjs), and (2)

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Synth of a `stubIdp()` provider (real CDK, `--conditions=cdk`): refused
  * outside a sandbox (CDK context `sandboxMode`, as `npm run sandbox` sets it)

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // EncryptedSharedPreferences and MasterKey are deprecated upstream. They stay in use so that
 // values already stored by this store keep their on-disk format and remain readable.
 //

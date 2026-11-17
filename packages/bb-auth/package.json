@@ -31,7 +31,8 @@
     "MIGRATION.md",
     "CUSTOMIZING-AUTH-UI.md",
     "src",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     ".": {

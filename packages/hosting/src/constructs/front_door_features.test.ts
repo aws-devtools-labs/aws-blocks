@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * `frontDoor.features` on `HostingConstruct`: each door kind's settings reach
  * its door, the deprecated top-level props merge into them, and a setting set

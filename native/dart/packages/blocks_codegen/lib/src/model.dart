@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Intermediate representation produced by the parser.
 /// TypeRef is a sealed class representing unresolved type references from the spec.
 library;

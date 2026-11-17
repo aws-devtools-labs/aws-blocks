@@ -31,7 +31,8 @@
     "next.config.ts",
     "postcss.config.mjs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     "./server": {

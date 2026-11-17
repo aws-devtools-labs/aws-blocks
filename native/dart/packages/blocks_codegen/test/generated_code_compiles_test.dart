@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Analyzes generated clients as real Dart, in a scratch package that depends
 // on the in-repo blocks_runtime, and runs a JSON round trip through one. The
 // golden tests compare text only, so they cannot tell whether an identifier

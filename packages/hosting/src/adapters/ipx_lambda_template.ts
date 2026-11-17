@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Source for the IPX Lambda handler the Nitro adapter materialises
  * into the user's project at the image-optimization output directory

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Compile-time contract of `frontDoor.features`: each door kind accepts exactly
  * the settings its door implements. This file is typechecked by the package

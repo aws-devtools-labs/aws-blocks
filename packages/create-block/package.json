@@ -34,6 +34,7 @@
     "templates",
     "README.md",
     "DESIGN.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ]
 }

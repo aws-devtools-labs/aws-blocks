@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Pure helpers for `manifest.basePath` — the cross-framework URL prefix
  * that maps to Next.js `basePath`, Astro `base`, Nuxt `app.baseURL`.

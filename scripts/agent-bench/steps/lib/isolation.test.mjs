@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Tests for the agent-user boundary (lib/isolation.mjs) and the components that must refuse to run
 // without it: the builder (2-agent-run.ts), the judge (4-judge.ts) and step 3's executor
 // (agent-exec.mjs). The fail-closed tests run anywhere (they point BENCH_AGENT_USER at a user that

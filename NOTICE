@@ -1,2 +1,5 @@
 AWS Blocks
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+@aws-blocks/hosting includes third-party software. The license notices for
+that software are in dist/constructs/THIRD-PARTY-LICENSES.txt in that package.

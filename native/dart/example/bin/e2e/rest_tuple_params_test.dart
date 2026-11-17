@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'harness.dart';
 
 /// Tuples on the wire, against the real server, which calls a method with its

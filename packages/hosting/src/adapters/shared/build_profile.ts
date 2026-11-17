@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * How an adapter's build is shaped for the deploy around it, beyond the
  * compute target (see `compute_target.ts`).

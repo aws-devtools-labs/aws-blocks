@@ -25,7 +25,8 @@
     "dist",
     "README.md",
     "DESIGN.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     ".": {

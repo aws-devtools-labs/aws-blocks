@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execFile, execFileSync } from 'node:child_process';

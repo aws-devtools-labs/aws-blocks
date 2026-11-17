@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Windows E2E driver: scaffold the `backend` template from a local registry
 // (packed off this repo) and run the real user commands — `npm run dev`,
 // `npm run sandbox` (+destroy), `npm run deploy` (+destroy). Readiness is keyed

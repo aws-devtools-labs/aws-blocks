@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Astro adapter — works for any Astro 4+ project (`output: 'static' |
  * 'server' | 'hybrid'`). Reads the user's `astro.config.{ts,mjs,js}`

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Step 3's bridge to the agent-user boundary. 3-build-and-test.sh is the trusted supervisor (runner
 // uid): it alone writes GITHUB_OUTPUT and reads evidence. Every process that runs the agent's app or
 // its dependencies (package.json probes, npm install + lifecycle scripts, build, dev server,

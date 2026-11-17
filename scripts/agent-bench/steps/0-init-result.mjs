@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Step 0: write a baseline result.json before any other step runs.
 // Each subsequent step overwrites or augments fields. If any step fails,
 // the partial result still uploads as an artifact and shows up in the

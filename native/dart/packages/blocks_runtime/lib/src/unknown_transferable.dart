@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/src/transferable_descriptor.dart';
 
 /// Fallback for a direct-result transferable whose tag has no runtime binding

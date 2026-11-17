@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Bedrock invoke-layer retry primitives — thin typed re-export. The pure logic lives in
 // ./bedrock-retry.mjs so the .test.mjs suite can import it directly (a .test.mjs can't import .ts);
 // this file only adds the .ts type surface, runtime behavior is byte-identical.

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { createHash } from 'node:crypto';
 import { closeSync, openSync, readdirSync, readSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';

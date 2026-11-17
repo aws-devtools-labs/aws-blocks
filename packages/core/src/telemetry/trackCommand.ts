@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { CommandName, CommandState, TrackCommandOptions } from './types.js';
 import { isTelemetryEnabled } from './consent.js';
 import { buildAndSendEvent } from './client.js';

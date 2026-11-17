@@ -25,7 +25,8 @@
     "DESIGN.md",
     "PRODUCTION.md",
     "src",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     ".": {

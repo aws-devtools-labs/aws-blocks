@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// A transferable's `{"__blocks": tag, …}` descriptor for `toJson()`: a deep
 /// copy of [descriptor], the JSON it was hydrated from, led by [tag] when the
 /// descriptor names none. Key order is kept, so a descriptor the server sent

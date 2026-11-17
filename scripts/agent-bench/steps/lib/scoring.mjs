@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Single source of truth for bench scoring: cell classification (`klass`), the test pass-rate, the
 // verdict tiers, the composite formula + band, and the inclusion/exclusion rule for the headline mean.
 // Imported by finalize-result.mjs (stamps these onto each result.json) and summary.mjs (recomputes

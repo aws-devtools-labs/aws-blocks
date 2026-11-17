@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Step 4c: build the ONLY copy of the cell's files that gets published. The bench-result,
 // bench-source and bench-trace uploads and the S3 persist read STAGE_DIR, never the originals, and
 // run only if this step succeeded, so a failed or partial sanitize publishes nothing.

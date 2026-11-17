@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'harness.dart';
 
 /// The JSON-RPC wire contract the generated client relies on, against the

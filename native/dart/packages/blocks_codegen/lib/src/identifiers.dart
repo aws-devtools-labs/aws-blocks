@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// How a name from the spec becomes a Dart identifier. Shared by the builder,
 /// which names the generated types, and the generator, which names their
 /// members, the operations' parameters, the namespaces, the servers and the

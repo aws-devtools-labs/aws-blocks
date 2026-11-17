@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { DeployManifest, RouteBehavior } from '../manifest/types.js';

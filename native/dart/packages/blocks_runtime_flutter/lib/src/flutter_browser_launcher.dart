@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:app_links/app_links.dart';
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:url_launcher/url_launcher.dart';

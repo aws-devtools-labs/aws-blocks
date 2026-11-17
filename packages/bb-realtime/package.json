@@ -26,7 +26,8 @@
     "DESIGN.md",
     "USE-CASES.md",
     "src",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "exports": {
     ".": {

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';

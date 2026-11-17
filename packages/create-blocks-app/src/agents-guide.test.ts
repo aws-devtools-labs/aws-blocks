@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // The scaffolded AGENTS.md (resources/AGENTS.md) carries a polling snippet that
 // coding agents copy into generated apps. These tests pull that snippet out of
 // the doc, typecheck it against a stand-in for the generated `aws-blocks`

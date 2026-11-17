@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { TestEvent } from 'node:test/reporters';
 
 // Keep completion events machine-readable; the parallel TAP reporter preserves diagnostics.

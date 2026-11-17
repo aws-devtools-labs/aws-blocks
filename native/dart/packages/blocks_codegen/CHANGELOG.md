@@ -1,3 +1,7 @@
+## Unreleased
+
+- Ship the NOTICE file in the package.
+
 ## 0.2.0
 
 - Fix two arms of one union whose discriminator values generate the same

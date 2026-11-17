@@ -246,6 +246,15 @@ jobs:
       - name: Lint deps (blocking)
         run: npm run lint:deps
 
+      # Every tracked source file under packages/, native/ and scripts/ carries
+      # the Apache-2.0 license header (exclusions listed in the script).
+      - name: Check license headers
+        run: npm run check:headers
+
+      # Every published package ships the NOTICE files it needs.
+      - name: Check NOTICE files
+        run: npm run check:notices
+
       - name: Build
         run: npm run build
 
