@@ -217,9 +217,9 @@ final class SharedUnionTypeNameTests: XCTestCase {
         assertContains(output.api, "public func send(input: Send.Input) async throws -> String {")
     }
 
-    /// A hint naming a type the generated files use unqualified (`RPCError`, `BlocksClient`) keeps the nested type.
+    /// A hint naming a type the generated files use unqualified (`TransportError`, `BlocksClient`) keeps the nested type.
     func testAHintThatIsARuntimeNameKeepsTheNestedType() throws {
-        for name in ["RPCError", "BlocksClient", "JSONDecoder", "BlocksRuntime"] {
+        for name in ["TransportError", "ApiError", "BlocksClient", "JSONDecoder", "BlocksRuntime"] {
             let output = try generate([setAuthState("alphaAuth", typeName: name)])
             assertContains(output.api, "public func setAuthState(input: SetAuthState.Input) async throws -> String {")
         }

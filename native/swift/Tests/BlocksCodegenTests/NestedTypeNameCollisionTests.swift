@@ -207,17 +207,17 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         assertContains(output.models, "public let status: StatusStatus\n")
     }
 
-    /// A prefixed name that is a Swift or runtime type (`RPC.error` → `RPCError`) gets a suffix instead.
+    /// A prefixed name that is a Swift or runtime type (`Transport.error` → `TransportError`) gets a suffix instead.
     func testAPrefixedNameThatIsARuntimeTypeGetsASuffix() throws {
         let schemas = """
-        { "RPC": \(object(["error": strings("timeout", "refused")])),
+        { "Transport": \(object(["error": strings("timeout", "refused")])),
           "Err": \(object(["or": strings("a", "b")])) }
         """
-        let output = try generate(schemas: schemas, methods: ["RPC", "Err"].map(returning))
+        let output = try generate(schemas: schemas, methods: ["Transport", "Err"].map(returning))
 
-        assertContains(output.models, "public let error: RPCError_2\n")
+        assertContains(output.models, "public let error: TransportError_2\n")
         assertContains(output.models, "public let or: ErrOr\n")
-        assertNotContains(output.models, "enum RPCError:")
+        assertNotContains(output.models, "enum TransportError:")
     }
 
     /// A map of enums is named after its property, as an array of them is, and as on Dart.

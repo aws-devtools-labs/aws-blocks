@@ -149,8 +149,8 @@ public struct CodegenModelBuilder {
     /// its schema's name (`Ticket.status` → `TicketStatus`, `AuthAction.capability` → `AuthActionCapability`), so
     /// a generated enum or union doesn't take a generic name (`Status`, `Kind`) an app declares too. The prefix is
     /// always added, as on Dart (`User.userType` → `UserUserType`). A name another type has, a top-level union's
-    /// variant struct has, or that a Swift, Foundation or runtime type has (`RPC.error` → `RPCError`), gets a
-    /// numeric suffix (`TicketStatus_2`, `RPCError_2`).
+    /// variant struct has, or that a Swift, Foundation or runtime type has (`Transport.error` →
+    /// `TransportError`), gets a numeric suffix (`TicketStatus_2`, `TransportError_2`).
     private func allocateTopLevelName(
         _ name: String,
         for typeRef: TypeRef,
@@ -182,7 +182,7 @@ public struct CodegenModelBuilder {
     }
 
     /// Names a top-level enum, union or shared parameter type can't take: Swift, Foundation and SwiftUI types, the
-    /// types the generated files name unqualified (`RPCError`, `BlocksClient`, `JSONDecoder`) and Swift keywords.
+    /// types the generated files name unqualified (`TransportError`, `BlocksClient`, `JSONDecoder`) and Swift keywords.
     static let reservedTopLevelNames: Set<String> = reservedTypeNames.union(nestedShadowingTypeNames)
         .union(reservedNamespaceClassNames).union(swiftKeywords)
 
