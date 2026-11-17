@@ -91,11 +91,10 @@ abstract class AwsBlocksExtension(project: Project) {
      * or are added as new entries if no match exists.
      *
      * Each URL is the RPC URL the generated client posts to, so it carries the
-     * `/aws-blocks/api` path unless the spec declares a non-empty
-     * `x-blocks-endpoint`. Code generation rejects a URL that does not parse,
+     * `/aws-blocks/api` path. Code generation rejects a URL that does not parse,
      * has no `http://` or `https://` scheme or no host, carries a query or
-     * fragment, or (without such an endpoint) has no RPC path (nothing but
-     * slashes and dot segments), because such a server reaches no RPC.
+     * fragment, or has no RPC path (nothing but slashes and dot segments),
+     * because such a server reaches no RPC.
      */
     fun servers(action: Action<ServersDsl>) {
         val dsl = ServersDsl()

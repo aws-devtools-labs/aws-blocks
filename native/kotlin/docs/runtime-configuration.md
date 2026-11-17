@@ -90,7 +90,7 @@ configures it once with no platform-specific source sets — see [`example/kmp`]
 
 | Platform | Cookie storage |
 |---|---|
-| Android | `EncryptedSharedPreferences`, in the app's sandbox |
+| Android | Android Keystore AES-256-GCM key over `SharedPreferences`, in the app's sandbox |
 | iOS | Keychain Services, scoped to the app's access group |
 | JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, with the key held by the OS, or memory if no id is set |
 

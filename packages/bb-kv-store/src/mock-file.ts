@@ -19,7 +19,10 @@
  *   entry) is left out. The loader keeps a copy of the file and reports it.
  * - Version 1, the `store.json` of `KVStore` before it took over
  *   `DistributedTable`: an object of key to JSON string, or of key to
- *   `{ value, ttl }`. It has no version field. The loader converts it.
+ *   `{ value, ttl }`. It has no version field. The loader converts it, and
+ *   first keeps a copy of the file as it was (`store.json.bak`): the store
+ *   writes `store.json` again in the current format, and `LegacyKVStore` reads
+ *   the items of the release from that copy.
  * - The `data.json` of `DistributedTable`: an array of `[serializedKey, item]`
  *   pairs. The loader reads it only when the directory has no `store.json`,
  *   and converts it.
@@ -35,7 +38,16 @@ import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } fro
 import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { isPlainObject } from './errors.js';
-import { type Item, isStoredItem, itemExpired, type KeyModel, keyOfItem, layoutItem } from './item.js';
+import {
+	compareByBaseKey,
+	type Item,
+	isStoredItem,
+	itemExpired,
+	type KeyModel,
+	keyOfItem,
+	layoutItem,
+} from './item.js';
+import { RELEASE_MODEL, RELEASE_PK, RELEASE_TTL, RELEASE_VALUE } from './legacy/layout.js';
 import { nowEpochSeconds } from './ttl.js';
 
 /** The name of the data file in the mock data directory of a store. */
@@ -97,6 +109,11 @@ export function loadMockFile(
 				`The store left them out. ${backup} is a copy of the file as it was.`,
 			context,
 		);
+	}
+	if (hasStoreFile && content.converted) {
+		// The caller writes `store.json` again, in the current format. Keep the
+		// file of the release first (see `loadReleaseFile`).
+		copyFileSync(source, backupPath(source));
 	}
 	// Drop an item whose expiry has passed, as DynamoDB does in the background.
 	// Without this the file only grows, and every write rewrites the dead rows.
@@ -175,4 +192,87 @@ function backupPath(path: string): string {
 	let name = `${path}.bak`;
 	for (let n = 2; existsSync(name); n++) name = `${path}.bak.${n}`;
 	return name;
+}
+
+// ── The data file of a release up to 0.4.0, for `LegacyKVStore` ─────────────
+
+/**
+ * Load the data file of a store of a release up to 0.4.0 as the items of that
+ * release, `{ pk, value: <JSON text>, ttl? }`, in key order.
+ *
+ * The file is `store.json`, if it is a version 1 file. If a `KVStore` of this
+ * release loaded the directory first, with the old line of the app unchanged,
+ * `store.json` is not that file any more: the loader converted it, or it could
+ * not convert it and set it aside. In both cases the file of the release is a
+ * copy, `store.json.bak`, and this function reads the copy. What that
+ * `KVStore` wrote to the converted file is not read.
+ *
+ * An entry is read as the release reads it: a JSON string, or `{ value, ttl }`.
+ * Any other entry is left out. Expired items stay, so `includeExpired` works.
+ *
+ * This function does not write. When the directory holds a data file but no
+ * file of a release, it reports that once at warn level, and the store reads
+ * as empty.
+ */
+export function loadReleaseFile(dir: string, log: Pick<ChildLogger, 'warn'>, context: Record<string, unknown>): Item[] {
+	const candidates = releaseFileCandidates(dir);
+	for (const path of candidates) {
+		const items = readVersionOneFile(path);
+		if (items) return items.sort((a, b) => compareByBaseKey(RELEASE_MODEL, a, b));
+	}
+	if (candidates.length > 0) {
+		log.warn(
+			`KVStore mock: ${candidates[0]} is not the data file of a KVStore release up to 0.4.0, and the directory holds no copy of one. ` +
+				'LegacyKVStore reads the store as empty, and leaves the files as they are.',
+			context,
+		);
+	}
+	return [];
+}
+
+/** `store.json`, and then the files that a loader set aside (`store.json.bak`, `.bak.2`, …), oldest first. Only those that exist. */
+function releaseFileCandidates(dir: string): string[] {
+	const storePath = join(dir, FILE_NAME);
+	const paths = existsSync(storePath) ? [storePath] : [];
+	for (let n = 1; ; n++) {
+		const backup = n === 1 ? `${storePath}.bak` : `${storePath}.bak.${n}`;
+		if (!existsSync(backup)) return paths;
+		paths.push(backup);
+	}
+}
+
+/** The items of a version 1 file. `undefined` when the file is not JSON, is not an object, or is a current file. */
+function readVersionOneFile(path: string): Item[] | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, 'utf8'));
+	} catch {
+		return undefined;
+	}
+	if (!isPlainObject(parsed) || (parsed.version === FILE_VERSION && Array.isArray(parsed.items))) return undefined;
+	const items: Item[] = [];
+	for (const [key, entry] of Object.entries(parsed)) {
+		if (typeof entry === 'string') {
+			items.push(releaseItem(key, entry, undefined));
+		} else if (isPlainObject(entry) && typeof entry.value === 'string') {
+			items.push(releaseItem(key, entry.value, typeof entry.ttl === 'number' ? entry.ttl : undefined));
+		}
+	}
+	return items;
+}
+
+function releaseItem(key: string, value: string, ttl: number | undefined): Item {
+	return ttl === undefined
+		? { [RELEASE_PK]: key, [RELEASE_VALUE]: value }
+		: { [RELEASE_PK]: key, [RELEASE_VALUE]: value, [RELEASE_TTL]: ttl };
+}
+
+/** Write the items of a release to the data file of the store, as a version 1 file: the format of that release. */
+export function saveReleaseFile(dir: string, items: Iterable<Item>): void {
+	const entries: Record<string, unknown> = {};
+	for (const item of items) {
+		const value = item[RELEASE_VALUE];
+		entries[item[RELEASE_PK] as string] = RELEASE_TTL in item ? { value, ttl: item[RELEASE_TTL] } : value;
+	}
+	writeFileSync(join(dir, FILE_NAME), JSON.stringify(entries, null, 2));
 }

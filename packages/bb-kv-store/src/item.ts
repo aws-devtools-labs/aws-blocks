@@ -206,7 +206,9 @@ export function normalizeKey(model: KeyModel, key: unknown): Record<string, KeyV
 		if (typeof key !== 'string') {
 			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyMustBeString(describe(key)));
 		}
-		return { [PK_ATTRIBUTE]: checkKeyValue(PK_ATTRIBUTE, key, 'S') };
+		// The key attribute of the table: `_bkv_pk`, or `pk` for the table of a release up to 0.4.0 (`legacy/layout.ts`).
+		const field = model.table.partitionKey;
+		return { [field]: checkKeyValue(field, key, 'S') };
 	}
 	if (!isPlainObject(key)) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyMustBeObject(fields));
@@ -451,7 +453,7 @@ function readValue(item: Item): unknown {
 /** Turn a stored item back into `{ key, value, expiresAt }`. */
 function readItem(model: KeyModel, item: Item): ReadEntry {
 	const entry: ReadEntry = {
-		key: model.declared ? keyOfItem(model, item) : item[PK_ATTRIBUTE],
+		key: model.declared ? keyOfItem(model, item) : item[model.table.partitionKey],
 		value: readValue(item),
 	};
 	const ttl = item[model.ttlAttribute];
@@ -1021,4 +1023,94 @@ export class PagedResults<E> implements AsyncIterable<E> {
 		}
 		this.last = undefined;
 	}
+}
+
+/** One page of a DynamoDB `Query` or `Scan`, as the document client returns it. */
+export interface RequestPage {
+	Items?: Record<string, unknown>[];
+	LastEvaluatedKey?: Record<string, unknown>;
+}
+
+/** The part of a read that the caller controls. */
+export interface ReadWindow {
+	/** The most entries to return. `undefined` means no limit. */
+	limit: number | undefined;
+	/** The key attributes of the position after which the read starts: a decoded cursor. `undefined` means the start. */
+	startKey: Record<string, KeyValue> | undefined;
+	/** The index that the read uses, if any. The cursor of the results names it. */
+	indexName: string | undefined;
+	/** Whether the read returns items whose expiry has passed. */
+	includeExpired: boolean;
+}
+
+/**
+ * The results of a DynamoDB `Query` or `Scan`. `send` reads one page. The
+ * results read page after page until `limit` entries have been yielded or the
+ * read reaches the end, hiding expired items. The cursor of the results is the
+ * position after the last entry yielded when the read stopped at `limit`.
+ */
+export function requestResults<E>(
+	model: KeyModel,
+	toEntry: (item: Item) => E | Promise<E>,
+	window: ReadWindow,
+	send: (exclusiveStartKey: Record<string, unknown> | undefined, limit: number | undefined) => Promise<RequestPage>,
+): PagedResults<E> {
+	const { limit } = window;
+	return new PagedResults<E>(
+		async function* () {
+			let exclusiveStartKey: Record<string, unknown> | undefined = window.startKey;
+			let count = 0;
+			do {
+				const result = await send(exclusiveStartKey, limit === undefined ? undefined : limit - count);
+				const items = (result.Items ?? []) as Item[];
+				// One page of DynamoDB items becomes one page of live items; the
+				// clock is read once for the page.
+				const live = window.includeExpired ? items : liveItems(model, items);
+				count += live.length;
+				yield live;
+				exclusiveStartKey = result.LastEvaluatedKey;
+			} while (exclusiveStartKey && (limit === undefined || count < limit));
+		},
+		toEntry,
+		limit,
+		(item) => encodeCursor(model, window.indexName, item),
+	);
+}
+
+/**
+ * The results of a read of items that a local mock holds in memory. `ordered`
+ * gives the candidate items in read order, and `compare` is that order. The
+ * results hide expired items, start after the cursor position, and stop at
+ * `limit`. One page holds every item: a mock has no page size.
+ */
+export function orderedResults<E>(
+	model: KeyModel,
+	toEntry: (item: Item) => E | Promise<E>,
+	window: ReadWindow,
+	ordered: () => Item[],
+	compare: (a: Item, b: Item) => number,
+): PagedResults<E> {
+	const startAfter = window.startKey;
+	return new PagedResults<E>(
+		() => {
+			const items = window.includeExpired ? ordered() : liveItems(model, ordered());
+			return [startAfter ? items.filter((item) => compare(item, startAfter) > 0) : items];
+		},
+		toEntry,
+		window.limit,
+		(item) => encodeCursor(model, window.indexName, item),
+	);
+}
+
+/**
+ * Deterministic tie-break for ordering: compare two items by the base-table
+ * key (partition key, then sort key). Returns a stable -1/0/1. (String
+ * comparisons use JS UTF-16 order — see DESIGN.md.)
+ */
+export function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
+	for (const field of keyFields(model.table)) {
+		const c = compareKeyValues(a[field] as KeyValue, b[field] as KeyValue);
+		if (c !== 0) return c;
+	}
+	return 0;
 }
