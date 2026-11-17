@@ -714,17 +714,18 @@ function resultField(call: RpcCall, field: string): unknown {
 		: undefined;
 }
 
-// The drivers deploy with BLOCKS_STAGE=production, and each stage writes its own CDK outputs
-// document (core's `OUTPUTS_FILE`), so read the production one, not the sandbox's.
-const OUTPUTS_DOC = join('.blocks-sandbox', 'outputs.production.json');
+// The drivers deploy with BLOCKS_STAGE=production. The current core writes that stage's CDK
+// outputs to its own document (core's `OUTPUTS_FILE.production`); the pre-refactor revision's
+// core predates the per-stage split and writes the shared `outputs.json`. Step 1 deploys the
+// old revision and step 4 the new one, so read whichever document the deploying core wrote.
+const OUTPUTS_DOCS = [join('.blocks-sandbox', 'outputs.production.json'), join('.blocks-sandbox', 'outputs.json')];
 
 function readApiUrl(appDir: string, stackName: string): string {
-	const outputs = JSON.parse(readFileSync(join(appDir, OUTPUTS_DOC), 'utf8')) as Record<
-		string,
-		Record<string, string>
-	>;
+	const doc = OUTPUTS_DOCS.find((d) => existsSync(join(appDir, d)));
+	if (!doc) throw new HarnessFailure(`no CDK outputs document in ${appDir} (looked for ${OUTPUTS_DOCS.join(', ')})`);
+	const outputs = JSON.parse(readFileSync(join(appDir, doc), 'utf8')) as Record<string, Record<string, string>>;
 	const url = outputs[stackName]?.ApiUrl;
-	if (!url) throw new HarnessFailure(`no ApiUrl output for ${stackName} in ${appDir}/${OUTPUTS_DOC}`);
+	if (!url) throw new HarnessFailure(`no ApiUrl output for ${stackName} in ${appDir}/${doc}`);
 	return url;
 }
 
