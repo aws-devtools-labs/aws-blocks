@@ -135,4 +135,42 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         let authed = try await api.oidcCheckAuth()
         XCTAssertFalse(authed)
     }
+
+    /// Signs in through a real `ASWebAuthenticationSession` sheet. A private session has no consent prompt, so the IdP's
+    /// redirects finish it with no one tapping.
+    func testSignInThroughTheSystemSheet() async throws {
+        let oidc = try getOidcClient()
+        let launcher = WebAuthenticationSessionLauncher(prefersEphemeralWebBrowserSession: true)
+        let provider = provider
+        let relayTo = relayTo
+
+        let user = try await withSheetTimeout {
+            try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+        }
+        XCTAssertFalse(user.userId.isEmpty)
+
+        let currentUser = try await api.oidcRequireAuth()
+        XCTAssertEqual(currentUser.userId, user.userId)
+        XCTAssertEqual(currentUser.provider, provider)
+    }
+
+    /// Runs `signIn`, and cancels it (which dismisses the sheet) if it hasn't finished in `seconds`, so a sheet left
+    /// waiting for a tap fails the test instead of hanging the job.
+    private func withSheetTimeout(
+        seconds: UInt64 = 90,
+        _ signIn: @escaping @Sendable () async throws -> OIDCUser
+    ) async throws -> OIDCUser {
+        try await withThrowingTaskGroup(of: OIDCUser?.self) { group in
+            group.addTask { try await signIn() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                return nil
+            }
+            defer { group.cancelAll() }
+            guard let user = try await group.next() ?? nil else {
+                throw OIDCError.callbackError("The sign-in sheet didn't finish within \(seconds)s; it may be waiting for a tap", nil)
+            }
+            return user
+        }
+    }
 }
