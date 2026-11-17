@@ -125,6 +125,7 @@ export class KVStore<T = string> extends Scope {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.filePath = join(getMockDataDir(this), 'store.json');
 		this.data = this.loadFromDisk();
+		this.pruneExpired();
 		this.schema = options?.schema;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
@@ -147,12 +148,7 @@ export class KVStore<T = string> extends Scope {
 	 */
 	async get(key: string, _options?: GetOptions): Promise<T | null> {
 		const entry = this.data.get(key);
-		if (entry === undefined) return null;
-		if (isExpired(entry.ttl)) {
-			this.data.delete(key);
-			this.flushToDisk();
-			return null;
-		}
+		if (entry === undefined || isExpired(entry.ttl)) return null;
 		return JSON.parse(entry.value) as T;
 	}
 
@@ -246,14 +242,10 @@ export class KVStore<T = string> extends Scope {
 	 * @returns An async iterable of key-value entries.
 	 */
 	async *scan(options?: ScanOptions): AsyncIterable<{ key: string; value: T }> {
-		if (options?.includeExpired) {
-			for (const [key, entry] of this.data) {
-				yield { key, value: JSON.parse(entry.value) as T };
-			}
-			return;
-		}
-		this.pruneExpired();
+		const includeExpired = options?.includeExpired === true;
+		const now = nowEpochSeconds();
 		for (const [key, entry] of this.data) {
+			if (!includeExpired && isExpired(entry.ttl, now)) continue;
 			yield { key, value: JSON.parse(entry.value) as T };
 		}
 	}
@@ -275,8 +267,10 @@ export class KVStore<T = string> extends Scope {
 	// ── Disk persistence ──────────────────────────────────────────────────
 
 	/**
-	 * Drop every expired item in one sweep. Stands in for DynamoDB's background
-	 * TTL reaper, which the local store has no equivalent of.
+	 * Drop every expired item in one sweep, only when the store loads. Stands in
+	 * for DynamoDB's background TTL reaper. Reads and scans must not delete: on
+	 * AWS conditional writes still see an expired item until the reaper runs, and
+	 * a delete on read would make the outcome depend on whether a `get` ran first.
 	 */
 	private pruneExpired(): void {
 		const now = nowEpochSeconds();

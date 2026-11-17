@@ -200,13 +200,13 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		assert.strictEqual(await store.get('k'), null);
 	});
 
-	test('get prunes the expired item from disk', async () => {
-		const store = mockStore('ttl-prune-get');
+	test('get leaves the expired item on disk', async () => {
+		const store = mockStore('ttl-get-keeps');
 		await store.put('gone', 'v', { expiresAt: nowEpochSeconds() - 1 });
 		await store.put('stays', 'v');
 		await store.get('gone');
-		const onDisk = JSON.parse(readFileSync(storeFile('ttl-prune-get'), 'utf8'));
-		assert.deepStrictEqual(Object.keys(onDisk), ['stays']);
+		const onDisk = JSON.parse(readFileSync(storeFile('ttl-get-keeps'), 'utf8'));
+		assert.deepStrictEqual(Object.keys(onDisk).sort(), ['gone', 'stays']);
 	});
 
 	test('scan skips expired items and keeps live ones', async () => {
@@ -220,15 +220,21 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		assert.deepStrictEqual(seen.sort(), ['later', 'live']);
 	});
 
-	test('scan sweeps expired items off disk', async () => {
-		const store = mockStore('ttl-scan-prune');
-		await store.put('dead1', 'a', { expiresAt: nowEpochSeconds() - 5 });
-		await store.put('dead2', 'b', { expiresAt: nowEpochSeconds() - 5 });
-		await store.put('live', 'c');
+	test('loading the store sweeps expired items off disk', async () => {
+		const first = mockStore('ttl-load-prune');
+		await first.put('dead1', 'a', { expiresAt: nowEpochSeconds() - 5 });
+		await first.put('dead2', 'b', { expiresAt: nowEpochSeconds() - 5 });
+		await first.put('live', 'c');
 
-		for await (const _ of store.scan()) { /* drain */ }
-		const onDisk = JSON.parse(readFileSync(storeFile('ttl-scan-prune'), 'utf8'));
-		assert.deepStrictEqual(Object.keys(onDisk), ['live']);
+		for await (const _ of first.scan()) {
+			/* drain */
+		}
+		const beforeLoad = JSON.parse(readFileSync(storeFile('ttl-load-prune'), 'utf8'));
+		assert.deepStrictEqual(Object.keys(beforeLoad).sort(), ['dead1', 'dead2', 'live']);
+
+		mockStore('ttl-load-prune');
+		const afterLoad = JSON.parse(readFileSync(storeFile('ttl-load-prune'), 'utf8'));
+		assert.deepStrictEqual(Object.keys(afterLoad), ['live']);
 	});
 
 	test('scan({ includeExpired }) yields expired-but-unreaped items', async () => {
@@ -336,6 +342,67 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		assert.strictEqual(await store.get('good'), 'kept');
 		assert.strictEqual(await store.get('bad'), null);
 		assert.strictEqual(await store.get('alsoBad'), null);
+	});
+});
+
+// An expired item stays visible to conditions until the reaper deletes it, so a
+// conditional write must give the same answer whether or not a read ran first.
+// Expected outcomes match a run of the AWS runtime against real DynamoDB tables.
+describe('mock: expired items stay visible to conditions until reaped', () => {
+	async function expiredStore(id: string): Promise<MockKVStore> {
+		const store = mockStore(id);
+		await store.put('k', 'v', { expiresAt: nowEpochSeconds() - 1 });
+		return store;
+	}
+
+	function isConflict(err: any): boolean {
+		assert.strictEqual(err.name, KVStoreErrors.ConditionalCheckFailed);
+		assert.strictEqual(err.status, 409);
+		return true;
+	}
+
+	for (const readFirst of [false, true]) {
+		const label = readFirst ? 'after a get' : 'without a get';
+
+		test(`put({ ifNotExists }) fails ${label}`, async () => {
+			const store = await expiredStore(`ttl-cond-put-${readFirst}`);
+			if (readFirst) assert.strictEqual(await store.get('k'), null);
+			await assert.rejects(() => store.put('k', 'v2', { ifNotExists: true }), isConflict);
+		});
+
+		test(`delete({ ifExists }) succeeds ${label}`, async () => {
+			const store = await expiredStore(`ttl-cond-delete-${readFirst}`);
+			if (readFirst) assert.strictEqual(await store.get('k'), null);
+			await store.delete('k', { ifExists: true });
+			const seen: string[] = [];
+			for await (const { key } of store.scan({ includeExpired: true })) seen.push(key);
+			assert.deepStrictEqual(seen, []);
+		});
+
+		test(`put({ ifValueEquals }) matches the stored value ${label}`, async () => {
+			const store = await expiredStore(`ttl-cond-equals-${readFirst}`);
+			if (readFirst) assert.strictEqual(await store.get('k'), null);
+			await store.put('k', 'v2', { ifValueEquals: 'v' });
+			assert.strictEqual(await store.get('k'), 'v2');
+		});
+
+		test(`scan({ includeExpired }) still yields the item ${label}`, async () => {
+			const store = await expiredStore(`ttl-cond-scan-${readFirst}`);
+			if (readFirst) assert.strictEqual(await store.get('k'), null);
+			for await (const _ of store.scan()) {
+				/* drain */
+			}
+			const seen: string[] = [];
+			for await (const { key } of store.scan({ includeExpired: true })) seen.push(key);
+			assert.deepStrictEqual(seen, ['k']);
+		});
+	}
+
+	test('the key is free once a reload has reaped it', async () => {
+		await expiredStore('ttl-cond-reaped');
+		const reloaded = mockStore('ttl-cond-reaped');
+		await reloaded.put('k', 'v2', { ifNotExists: true });
+		assert.strictEqual(await reloaded.get('k'), 'v2');
 	});
 });
 
