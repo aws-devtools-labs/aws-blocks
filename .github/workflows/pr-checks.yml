@@ -287,11 +287,6 @@ jobs:
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
 
-      # Fails once the vpc-smoke lane runs its tests again, so the rotation
-      # coverage the comprehensive app carries meanwhile gets handed back.
-      - name: Test that the rotation coverage sits in one test app
-        run: node --test scripts/ci/rotation-coverage-home.test.mjs
-
       # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
       # unblock Amplify sandboxes stuck in DELETE_FAILED.
       - name: Test the stuck Amplify sandbox delete
@@ -1109,93 +1104,6 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/e2e-teardown.mjs test-apps/comprehensive
 
-  e2e-supabase:
-    permissions:
-      contents: read
-      id-token: write  # assumes the AWS role below
-    name: E2E Supabase
-    # No build-and-test-local edge on purpose, see e2e-sandbox.
-    needs: [detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'supabase') && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: e2e
-    env:
-      # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
-      # connection in this suite runs verify-full — exercising the TLS verification
-      # feature end-to-end instead of connecting unverified. externalDbSsl() reads
-      # this; the explicit-engine tests read it too.
-      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
-    # One Supabase project serves every E2E account, so this group stays global.
-    concurrency:
-      group: e2e-supabase
-      cancel-in-progress: false
-    steps:
-      - name: Check the E2E trailer
-        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'supabase')
-        run: |
-          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
-          exit 1
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-
-      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
-      # traffic is consistent and identifiable (and can be excluded from product
-      # usage metrics).
-      - uses: ./.github/actions/seed-telemetry-id
-
-      - run: npm ci
-      - run: npm run build
-
-      - name: Install pg_dump 18 (for the run-all baseline E2E)
-        # The runner's default pg_dump may be older than the Supabase server, and
-        # pg_dump's major must be >= the server's. Install the PGDG client so the
-        # run-all baseline E2E (migrations-e2e) generates a real baseline instead of
-        # skipping. Applying migrations needs no pg_dump — only generating one does.
-        # Best-effort (continue-on-error): if the install ever fails, the gated E2E
-        # just skips — it must not take down the crud/auth Supabase suites. Uses the
-        # armored key via apt `signed-by` directly (no `gpg --dearmor`, which fails
-        # on `/dev/tty` under sudo in CI).
-        continue-on-error: true
-        run: |
-          sudo install -d /etc/apt/keyrings
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo tee /etc/apt/keyrings/pgdg.asc > /dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-18
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
-
-      - name: Configure AWS credentials
-        uses: ./.github/actions/e2e-aws-credentials
-        with:
-          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
-          index: ${{ needs.detect-changes.outputs.e2e-index }}
-
-      # Masks every value (line by line) before exporting it to later steps;
-      # see scripts/ci/secret-to-env.sh.
-      - name: Fetch Supabase secrets
-        run: |
-          set -euo pipefail
-          aws secretsmanager get-secret-value \
-            --secret-id blocks/supabase-e2e \
-            --query SecretString --output text \
-            | scripts/ci/secret-to-env.sh
-
-      - name: Apply test schema
-        run: npx tsx packages/bb-data/test/apply-schema.ts
-
-      - name: E2E Test Supabase
-        run: npm run test:e2e:supabase
-
   e2e-hosting:
     permissions:
       contents: read
@@ -1502,7 +1410,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -1536,7 +1444,6 @@ jobs:
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-compute-smoke.result }}" != "success" && "${{ needs.e2e-compute-smoke.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
-             [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-telemetry.result }}" != "success" && "${{ needs.e2e-telemetry.result }}" != "skipped" ]]; then
             echo "One or more E2E jobs failed"

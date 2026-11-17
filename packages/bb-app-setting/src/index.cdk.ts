@@ -166,9 +166,8 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		}));
 
 		// Pass the parameter name to the runtime via config registry. The key is
-		// built from the block's local `id`, not its `fullId` (db-pull's generated
-		// code reads `BLOCKS_SSM_PARAM_DB_URL`, and the key is part of existing
-		// deployed config), so two settings with one local id under different scopes
+		// built from the block's local `id`, not its `fullId` (the key is part of
+		// existing deployed config), so two settings with one local id under different scopes
 		// share it; the AppSetting runtime itself resolves its parameter by `fullId`.
 		// It therefore keeps last-one-wins instead of registerConfig's conflict check.
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;

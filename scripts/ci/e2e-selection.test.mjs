@@ -24,7 +24,6 @@ const ALL = [
 	'production',
 	'sandbox',
 	'sandbox-vpc',
-	'supabase',
 	'telemetry',
 	'templates',
 	'templates-windows',
