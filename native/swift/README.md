@@ -57,9 +57,73 @@ _ = try await blocks.authApi.setAuthState(input: .signUp(AuthApi.SetAuthState.Si
 )))
 ```
 
-`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `tokenStore:` your own `TokenStore` to keep OIDC tokens across launches (each OIDC block keeps its own keys there), or `session:` a `URLSession` you own.
+`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there.
 
 Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
+
+## Using `Auth`
+
+The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state machine. `getAuthState()` returns the current `state` and the `actions` the block offers in it, each with the `fields` to collect; `setAuthState(input:)` runs one and returns the next state. Render the actions generically and the same screen covers sign-in, sign-up, MFA and password reset, whatever the block has turned on.
+
+Federated sign-in goes through an `OIDCClient`. Export the block's `createOidcApi()` beside `createApi()`, and `getClient()` returns the client, typed by the block's provider ids and carrying the block's own routes:
+
+```ts
+// aws-blocks/index.ts
+export const authApi = auth.createApi();
+export const oidcAuthApi = auth.createOidcApi();
+```
+
+Build the sign-in screen from two sources:
+
+- **Federated sign-in buttons come from the client.** Render one button per provider in `oidc.providers`, typed with the generated `Provider` enum, and have it call `oidc.signIn(provider:relayTo:launcher:)`, then `getAuthState()`. Don't render the state's `signIn:<id>` actions as buttons: their `url` signs the system browser in, not the app.
+- **Everything else comes from the state machine:** whether the user is signed in, password sign-in, sign-up, MFA steps, and which actions are `unavailable`. Run those actions through `setAuthState(input:)`.
+
+One action carries a `url` the app still handles itself: `signOut` with a `url`, a federated user's sign-out. Call `oidc.signOut()`, then `getAuthState()`. Never submit this one through `setAuthState`: that ends the session but drops the provider's logout URL. A `signOut` without a `url` goes through `setAuthState` like any other action.
+
+```swift
+let blocks = Blocks()
+let oidc = try await blocks.oidcAuthApi.getClient()
+// Your app's Universal Link or custom scheme, listed in the backend's `redirects.allowedRelayOrigins`.
+let relayTo = "myapp://auth"
+
+// On launch: the state reflects the session the Keychain cookie still holds.
+var state = try await blocks.authApi.getAuthState()
+
+// The federated sign-in buttons: one per provider the client signs in with.
+let providers = oidc.providers.compactMap(OidcAuthApi.GetClient.Provider.init(rawValue:))
+
+func signIn(with provider: OidcAuthApi.GetClient.Provider) async throws -> AuthState {
+    _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+    return try await blocks.authApi.getAuthState()
+}
+
+// The state's other actions, rendered generically. The buttons above cover `signIn:<id>`.
+let actions = state.actions.filter { !$0.name.hasPrefix("signIn:") }
+
+/// Runs `action`; `input` is what the form collected for it.
+func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throws -> AuthState {
+    if action.name == "signOut", action.url != nil {
+        if let logoutURL = try await oidc.signOut() {
+            await UIApplication.shared.open(logoutURL)
+        }
+    } else if let input {
+        return try await blocks.authApi.setAuthState(input: input)
+    }
+    return try await blocks.authApi.getAuthState()
+}
+```
+
+`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme.
+
+Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
+
+- **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also sets the client's `authState` and emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws (HTTP 404).
+- **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
+- **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it to end the provider's own session; otherwise the next sign-in can pick the same account without asking.
+- **Passkeys.** Hide actions whose `capability` is set (`webauthn-get`, `webauthn-create`): they need platform WebAuthn APIs the runtime doesn't call yet.
+- **New actions.** The block can add actions in a later release, so keep a `default` branch when you switch over action names.
+- **One client per block.** Fetch each block's client once with `getClient()` and keep it for the app's lifetime. Its `authState`, `authStateChanges()` and its guard against a stale `restore()` belong to that client, so a second client for the same block doesn't see the first one's sign-in.
+- **Several federated blocks.** Each block's `createOidcApi()` returns a client for its own routes, including a custom `redirects.callbackPath`, so a second block needs nothing extra: export its `createOidcApi()` under another name and use that client for its actions.
 
 ## Features
 
