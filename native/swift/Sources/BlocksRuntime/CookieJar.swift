@@ -36,13 +36,7 @@ struct CookieJar: Sendable {
         defer { lock.unlock() }
         var matching: [StoredCookie] = []
         for (account, value) in items.loadAll() {
-            guard let cookie = StoredCookie.decode(account: account, value: value) else {
-                // An earlier version's item has no known `Secure`/`Path`, so it is removed, not sent.
-                if StoredCookie.isEarlierVersionItem(account: account, value: value) {
-                    items.remove(name: account)
-                }
-                continue
-            }
+            guard let cookie = StoredCookie.decode(account: account, value: value) else { continue }
             if cookie.isExpired(at: now) {
                 items.remove(name: account)
             } else if cookie.matches(url) {
@@ -63,16 +57,15 @@ struct CookieJar: Sendable {
         defer { lock.unlock() }
 
         // As in the Kotlin runtime, a cookie replaces every stored cookie of the same name that would
-        // be sent on this request. An item stored by an earlier version under `host|name` is never
-        // sent, so it is removed here too (see `StoredCookie.isEarlierVersionItem`).
+        // be sent on this request. An item stored by an earlier version under `host|name` is replaced
+        // by a cookie of the same name from the same host, whatever the request's scheme, so the two
+        // are never both kept (see `StoredCookie.decode`).
         for (account, value) in items.loadAll() {
-            guard let stored = StoredCookie.decode(account: account, value: value) else {
-                if StoredCookie.isEarlierVersionItem(account: account, value: value) {
-                    items.remove(name: account)
-                }
-                continue
-            }
-            if stored.name == cookie.name, stored.matches(requestURL) {
+            guard let stored = StoredCookie.decode(account: account, value: value),
+                  stored.name == cookie.name else { continue }
+            let replacesEarlierVersionItem = StoredCookie.isEarlierVersionItem(account: account, value: value)
+                && stored.host.caseInsensitiveCompare(cookie.host) == .orderedSame
+            if replacesEarlierVersionItem || stored.matches(requestURL) {
                 items.remove(name: account)
             }
         }

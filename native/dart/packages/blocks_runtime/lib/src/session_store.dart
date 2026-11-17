@@ -64,10 +64,10 @@ class _StoredCookie {
 
   /// The host that set the cookie; `null` when it was stored without one.
   ///
-  /// A cookie read from the name → value map earlier versions wrote has no
-  /// host, because that format never recorded one. Such a cookie matches
-  /// every host until the server sets it again, when the new cookie replaces
-  /// it with a host-scoped one.
+  /// A cookie has no host when [setCookies] was called without a
+  /// `requestUri`. Such a cookie matches every host until the server sets it
+  /// again with a `requestUri`, when the new cookie replaces it with a
+  /// host-scoped one.
   final String? host;
   final String path;
   final bool secure;
@@ -146,8 +146,8 @@ class InMemorySessionStore implements SessionStore {
       if (parsed == null) continue;
       _cookies.remove(parsed.key);
       // As in the Kotlin runtime, a cookie replaces every stored cookie of the
-      // same name that would be sent on this request, including one persisted
-      // by an earlier version of this store without a host.
+      // same name that would be sent on this request, including one stored
+      // without a host because it was set without a `requestUri`.
       if (requestUri != null) {
         _cookies.removeWhere(
           (_, c) => c.name == parsed.name && c.matches(requestUri),

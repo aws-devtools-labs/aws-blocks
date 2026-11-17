@@ -1,10 +1,14 @@
 ## Unreleased
 
-- `PersistentSessionStore` no longer reads the name → value map written before
-  0.2.0: `load()` deletes it and the cookies it held are not used. Anyone
-  signed in with cookies stored in that format is signed out once and needs to
-  sign in again after upgrading. A stored cookie record without a `secure`
-  field is read as `Secure`.
+These changes ship in 0.3.0, not a 0.2.x patch, because of the sign-out below.
+
+- **Signs out users whose cookies are still in the format written before
+  0.2.0:** `PersistentSessionStore` no longer reads the name → value map:
+  `load()` deletes it and the cookies it held are not used. This applies to
+  apps upgrading from a version before 0.2.0 whose stored cookies have not
+  been replaced by a `Set-Cookie` since; those users are signed out once and
+  sign in again. A stored cookie record without a `secure` field is read as
+  `Secure`.
 
 ## 0.2.0
 

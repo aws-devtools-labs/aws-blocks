@@ -90,7 +90,7 @@ class HttpRelayLauncher implements BrowserLauncher {
         'Expected redirect chain to reach "$callbackScheme://" but got '
         'HTTP ${resp.statusCode} at ${_withoutQuery(current)}\n'
         // The body length only: the response may echo the request's query.
-        'body: ${resp.body.length} bytes',
+        'body: ${resp.bodyBytes.length} bytes',
       );
     }
     throw StateError(

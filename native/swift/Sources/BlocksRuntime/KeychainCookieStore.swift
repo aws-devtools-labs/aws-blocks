@@ -15,8 +15,8 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Keycha
 ///
 /// Each cookie is stored as a separate Keychain item keyed by `host|path|cookieName`, holding a
 /// JSON-encoded `StoredCookie` with the cookie's attributes. Items written by earlier versions,
-/// keyed by `host|cookieName` and holding the bare value, carry no attributes, so the jar removes
-/// them rather than sending them (see `StoredCookie.isEarlierVersionItem`).
+/// keyed by `host|cookieName` and holding the bare value, are read as `Path=/` and `Secure` until
+/// the server sets the cookie again (see `StoredCookie.decode`).
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.

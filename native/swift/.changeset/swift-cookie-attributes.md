@@ -17,8 +17,9 @@ sent on that request. When several same-named cookies apply to a request, the on
 responses that arrive together leave the same cookies as if they had arrived in sequence.
 
 Each Keychain item is now keyed by `host|path|name` and holds a JSON record of the cookie and its
-attributes. Items written by earlier versions, keyed by `host|name` and holding the bare value,
-do not record the cookie's `Secure` or `Path`, so they are not migrated: they are deleted instead
-of being sent, as the Kotlin runtime does with its earlier entries. Anyone signed in with them is
-signed out once and needs to sign in again after upgrading. Items written by this version are not
+attributes. Cookies stored by 0.1.x, keyed by `host|name` and holding the bare value, are kept:
+they are read as `Path=/` and `Secure` for the host that set them, the attributes the Auth block
+sets its session cookies with, and are replaced in the current format on the next `Set-Cookie` of
+the same name from that host. A session only used over plain `http` (for example, local
+development) is no longer sent, so those users sign in again. Items written by this version are not
 readable by earlier versions.
