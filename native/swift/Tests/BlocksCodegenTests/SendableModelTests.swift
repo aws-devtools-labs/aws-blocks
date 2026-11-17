@@ -9,8 +9,8 @@ import XCTest
 @testable import BlocksCodegen
 
 /// Generated value types are `Sendable` when everything they store is, so a Swift 6 actor can keep or return an
-/// `AuthState`. A type that stores a `RealtimeChannel` (a class with mutable state) or a declared native binding
-/// isn't, directly or through another generated type.
+/// `AuthState`. A type that stores a `RealtimeChannel` (a class with mutable state) isn't, directly or through
+/// another generated type.
 final class SendableModelTests: XCTestCase {
 
     private var fixturesURL: URL {
@@ -62,6 +62,27 @@ final class SendableModelTests: XCTestCase {
         assertContains(output.models, "public nonisolated struct Room: Codable {")
         assertContains(output.models, "public nonisolated struct Lobby: Codable {")
         assertContains(output.models, "public nonisolated struct Note: Codable, Sendable {")
+    }
+
+    /// A declared native binding below an operation's direct result is stored as a `JSONValue`, so it doesn't
+    /// drop the conformance.
+    func testATypeThatStoresADeclaredBindingIsSendable() throws {
+        let spec = """
+        { "openrpc": "1.3.2", "info": { "title": "t", "version": "1.0.0" },
+          "methods": [{ "name": "api.getRig", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Rig" } } }],
+          "components": { "schemas": { "Rig": { "type": "object", "required": ["handle", "name"], "properties": {
+            "handle": { "x-blocks-transferable": "example-iot/device-handle" }, "name": { "type": "string" } } } } },
+          "x-blocks-native-packages": { "schemaVersion": 1, "packages": { "example-iot-native": { "platforms": { "swift":
+            { "package": { "identity": "example-iot-native", "product": "ExampleIotNative", "module": "ExampleIotNative" } } } } } },
+          "x-blocks-native-bindings": { "schemaVersion": 1, "bindings": [{ "id": "example-device-handle", "kind": "transferable",
+            "tag": "example-iot/device-handle", "package": "example-iot-native", "export": "deviceHandle",
+            "abi": "blocks-transferable-v1", "genericArity": 0 }] } }
+        """
+        let rpcModel = try OpenRPCParser().parse(data: Data(spec.utf8))
+        let output = try SwiftCodeGenerator().generate(from: CodegenModelBuilder().build(from: rpcModel))
+
+        assertContains(output.models, "public let handle: JSONValue\n")
+        assertContains(output.models, "public nonisolated struct Rig: Codable, Sendable {")
     }
 
     /// A Swift 6 actor that keeps or returns an `AuthState`, and sends an

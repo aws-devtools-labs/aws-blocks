@@ -11,9 +11,10 @@ import Foundation
 //
 // A generated value type is `Sendable` when everything it stores is: strings, numbers, `Date`, `URL`, `UUID`,
 // `JSONValue`, the file handles, an `OIDCClient` (an actor), `UnknownTransferable`, and other generated types that
-// are `Sendable` themselves. A type that stores a `RealtimeChannel` (a class with mutable state) or a declared
-// native binding (a package's type, whose conformance codegen can't see), directly or through another generated
-// type, isn't. So an actor can keep or return an `AuthState`, and Swift 6 checks the rest as it does any type.
+// are `Sendable` themselves. A type that stores a `RealtimeChannel` (a class with mutable state), directly or
+// through another generated type, isn't. A declared native binding is never stored: below an operation's direct
+// result it's a `JSONValue`. So an actor can keep or return an `AuthState`, and Swift 6 checks the rest as it does
+// any type.
 //
 // Names are looked up the way Swift looks them up: each operation's enum is a scope of its own, and a name the
 // enum declares (`Result`) means that declaration there, while any other name means the top-level one. Two types
@@ -110,7 +111,7 @@ extension SwiftCodeGenerator {
             for declaration in declarations
             where analysis.nonSendable[declaration.scope]?.contains(declaration.name) != true {
                 let stores = declaration.stored.contains {
-                    storesNonSendable($0, scope: declaration.scope, analysis: analysis, bindings: model.declaredTransferableBindings)
+                    storesNonSendable($0, scope: declaration.scope, analysis: analysis)
                 }
                 if stores {
                     analysis.nonSendable[declaration.scope, default: []].insert(declaration.name)
@@ -121,9 +122,7 @@ extension SwiftCodeGenerator {
         return analysis
     }
 
-    private static func storesNonSendable(
-        _ type: ResolvedType, scope: String, analysis: SendableAnalysis, bindings: [String: DeclaredTransferableBinding]
-    ) -> Bool {
+    private static func storesNonSendable(_ type: ResolvedType, scope: String, analysis: SendableAnalysis) -> Bool {
         let names = { (name: String) in analysis.isNonSendable(name, in: scope) }
         func check(_ type: ResolvedType) -> Bool {
             switch type {
@@ -141,8 +140,8 @@ extension SwiftCodeGenerator {
             case .nullable(let inner): return check(inner)
             case .map(let value): return check(value)
             case .transferable(let blocksType, _):
-                // A declared binding is a package's type; an unbound tag decodes as `UnknownTransferable`.
-                return blocksType == "realtime/channel" || bindings[blocksType] != nil
+                // Every other stored tag is a `Sendable` runtime type or, declared or unbound, a `JSONValue`.
+                return blocksType == "realtime/channel"
             }
         }
         return check(type)
@@ -151,7 +150,7 @@ extension SwiftCodeGenerator {
     /// The conformances of a generated record or union that stores `stored`.
     func valueConformances(_ stored: [ResolvedType]) -> String {
         stored.contains {
-            Self.storesNonSendable($0, scope: emissionScope.current, analysis: sendable, bindings: declaredBindings)
+            Self.storesNonSendable($0, scope: emissionScope.current, analysis: sendable)
         } ? "Codable" : "Codable, \(sendableProtocol)"
     }
 
