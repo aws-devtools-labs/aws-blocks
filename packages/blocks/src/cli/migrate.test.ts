@@ -609,8 +609,9 @@ describe('cdk-blocks migrate', () => {
 			from: 'tsx aws-blocks/scripts/deploy.ts',
 			to: 'cdk-blocks deploy',
 		});
-		// The vite command equals what cdk-blocks dev detects from the vite dependency, so only the port moves:
-		// leaving frontendCommand out keeps `cdk-blocks dev --frontend-port` working.
+		// cdk-blocks dev detects the same vite dev server from the vite dependency (its command adds
+		// `--host 127.0.0.1`), so only the port moves: leaving frontendCommand out keeps
+		// `cdk-blocks dev --frontend-port` working.
 		assert.deepStrictEqual(after.blocks, { dev: { frontendPort: 3100 } });
 		assert.deepStrictEqual(result.devConfig, after.blocks?.dev, 'the JSON reports the blocks.dev it wrote');
 		assert.strictEqual(result.removed.length, 10);
