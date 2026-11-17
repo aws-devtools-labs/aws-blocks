@@ -44,11 +44,11 @@ final class BlocksErrorTests: XCTestCase {
     }
 
     func testReservedRpcErrorNameCoversTheFiveReservedCodes() {
-        XCTAssertEqual(reservedRpcErrorName(-32700), "ParseError")
-        XCTAssertEqual(reservedRpcErrorName(-32600), "InvalidRequest")
-        XCTAssertEqual(reservedRpcErrorName(-32601), "MethodNotFound")
-        XCTAssertEqual(reservedRpcErrorName(-32602), "InvalidParams")
-        XCTAssertEqual(reservedRpcErrorName(-32603), "InternalError")
+        XCTAssertEqual(reservedRpcErrorName(-32_700), "ParseError")
+        XCTAssertEqual(reservedRpcErrorName(-32_600), "InvalidRequest")
+        XCTAssertEqual(reservedRpcErrorName(-32_601), "MethodNotFound")
+        XCTAssertEqual(reservedRpcErrorName(-32_602), "InvalidParams")
+        XCTAssertEqual(reservedRpcErrorName(-32_603), "InternalError")
         XCTAssertNil(reservedRpcErrorName(409))
         XCTAssertNil(reservedRpcErrorName(-1))
     }

@@ -98,11 +98,11 @@ public extension Error {
 /// sent always takes precedence; this only fills a gap.
 func reservedRpcErrorName(_ code: Int) -> String? {
     switch code {
-    case -32700: return "ParseError"
-    case -32600: return "InvalidRequest"
-    case -32601: return "MethodNotFound"
-    case -32602: return "InvalidParams"
-    case -32603: return "InternalError"
+    case -32_700: return "ParseError"
+    case -32_600: return "InvalidRequest"
+    case -32_601: return "MethodNotFound"
+    case -32_602: return "InvalidParams"
+    case -32_603: return "InternalError"
     default: return nil
     }
 }
