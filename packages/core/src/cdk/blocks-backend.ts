@@ -234,10 +234,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
-	// When `@aws-blocks/core:mergeExecutionRolePolicies` is on, merge combinable
-	// statements before CDK packs any overflow into managed policies; either way,
-	// fail synth with a fix if the role would exceed the managed-policies-per-role
-	// quota. With the key unset the role is exactly what CDK produces
+	// Merge combinable statements before CDK packs any overflow into managed
+	// policies, give those overflow policies content-derived logical IDs so a
+	// deploy adds moved statements before it removes them, and fail synth with a
+	// fix if the role would exceed the managed-policies-per-role quota
 	// (role-policy-packing.ts).
 	enableRolePolicyPacking(executionRole, scope);
 

@@ -677,23 +677,19 @@ The file is written on **every** synth, whether or not `permissionsBoundary` is 
 
 ### When the role's grants outgrow its inline policy
 
-Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: CDK packs the overflow into managed policies (`BlocksRoleOverflowPolicy1`, `2`, …, sized to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before.
+Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: CDK packs the overflow into managed policies (sized to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before.
 
-To fit more grants into fewer policies, turn on statement merging for the role in `cdk.json`. New projects from `create-blocks-app` have it on; existing apps opt in:
+To fit more grants into fewer policies, the role's statements are merged before they are packed. Merging combines statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources. It never combines both lists at once, so no permission is added. The role's policy is merged at every size, so the template doesn't switch back and forth as grants are added.
 
-```json
-{ "context": { "@aws-blocks/core:mergeExecutionRolePolicies": true } }
-```
-
-Merging combines statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources. It never combines both lists at once, so no permission is added. With the key unset or `false`, the role is exactly what CDK produces. With it on, the role's policy is merged at every size, so the template changes once when you turn it on and doesn't switch back and forth as grants are added.
-
-If the role already overflows into managed policies, turning merging on moves statements between `BlocksRoleDefaultPolicy` and the overflow policies in one deploy. CloudFormation updates those policies in parallel, so during that deploy a permission can be missing for a short time and calls can fail with `AccessDenied` (about 40 seconds in a test with 50 Building Blocks on one role). Turn it on in a quiet window.
+CDK fills the default policy and the overflow policies in order, so adding or removing a grant can move statements from one policy to another, and CloudFormation updates those policies in parallel ([aws/aws-cdk#35611](https://github.com/aws/aws-cdk/issues/35611)). So that a deploy doesn't remove a statement from its old policy before its new policy is attached, each overflow policy gets a logical ID derived from its contents (`BlocksOverflowPolicy<hash>`), and `BlocksRoleDefaultPolicy` depends on them. A changed overflow policy is created as a new resource before the default policy is updated, and the old one is deleted in CloudFormation's cleanup phase. Overflow policies whose statements didn't change keep their logical IDs. IAM is eventually consistent, so a newly attached policy can still take a few seconds to apply. Because `BlocksRoleDefaultPolicy` depends on every overflow policy, making a resource depend on one specific grant to the execution role (for example `grant.applyBefore()`, a grant's `policyDependable`, or constructs such as AgentCore Memory given the execution role) while the role is also granted access to that resource can make CloudFormation report a circular dependency. To fix it, make the resource depend on the whole role, or use a separate role for it.
 
 IAM also limits how many managed policies one role can carry: 10 by default, up to 20 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
 
 ```json
 { "context": { "@aws-blocks/core:managedPoliciesPerRoleQuota": 20 } }
 ```
+
+The check counts the policies the role carries after the deploy. During a deploy that changes overflow policies, the role briefly carries both the old and the new copy of each changed one, so a role at or close to the quota can fail that deploy in CloudFormation; keep some room below the quota. Synth warns when the role is within the quota but a deploy that replaces every overflow policy would exceed it.
 
 Overflow statements appear in `<stack>.blocks-iam.json` like any other, with `policy` naming the managed policy they were packed into.
 
