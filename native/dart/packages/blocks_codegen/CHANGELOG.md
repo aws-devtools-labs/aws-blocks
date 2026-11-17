@@ -1,16 +1,8 @@
 ## Unreleased
 
-- **Breaking:** generated clients no longer send a realtime channel, a file
-  handle or an OIDC client back to the server, which 0.2.0 added. A method
-  with a transferable parameter (direct, optional, nullable, in a list, map
-  or tuple, or held by a model at any depth) is a generation error naming the
-  method and parameter, as in Kotlin, because `blocks_runtime`'s
-  transferables no longer have `toJson()` and the server never turns such a
-  value back into a live object. Pass the plain values the method needs
-  instead. Decoding transferables, including inside models, lists, maps and
-  realtime messages, is unchanged. Requires `blocks_runtime` with the
-  matching change.
-- **Breaking for apps whose spec names an OIDC client's providers:** a method
+### Breaking
+
+- For a spec that names an OIDC client's providers: a method
   whose direct or optional result is an `oidc/client` with a string enum in
   `x-blocks-type-args[0]` now generates an enum of those providers,
   `<Api class><Method>Provider` (`AuthApiGetClientProvider` for
@@ -46,18 +38,17 @@
   one identifier are told apart with a warning. When the library already
   declares the enum's name, it is `<Api class><Method>ResultProvider` and the
   codegen warns.
-- A spec that names no providers, and an OIDC client inside a model, list,
-  map or parameter, are still a plain `OidcClient`, unchanged.
-- A generated client with a typed OIDC result also re-exports
-  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
-  named like one of them (`OidcProvider$`). Any other client, including one
-  whose OIDC clients are all untyped, re-exports and reserves neither.
-- A declared native binding whose export is named `TypedOidcClient` or
-  `OidcProvider` is a generation error, as for every other public
-  `blocks_runtime` type, because the generated library imports the runtime
-  wholesale and the name would be ambiguous.
-
-### Breaking
+- Generated clients no longer send a realtime channel, a file
+  handle or an OIDC client back to the server, which 0.2.0 added. A method
+  with a transferable parameter (direct, optional, nullable, in a list, map
+  or tuple, or held by a model at any depth) is a generation error naming the
+  method and parameter, as in Kotlin, because `blocks_runtime`'s
+  transferables no longer have `toJson()` and the server never turns such a
+  value back into a live object. Pass the plain values the method needs
+  instead. Decoding transferables, including inside models, lists, maps and
+  realtime messages, is unchanged.
+- A transferable model field is passed through again instead of being
+  encoded with the `toJson()` that `blocks_runtime` removes.
 
 - A namespace whose export name already ends in `Api` no longer gets a second
   `Api` on its generated class, matching the Kotlin and Swift clients. The
@@ -68,6 +59,20 @@
   are unchanged. Two exports that would now share a class, such as `oidcAuth`
   and `oidcAuthApi` (both `OidcAuthApi`), are a generation error naming both;
   rename one of them.
+
+### Other changes
+
+- **Requires the `blocks_runtime` release with this change.**
+- A spec that names no providers, and an OIDC client inside a model, list,
+  map or parameter, are still a plain `OidcClient`, unchanged.
+- A generated client with a typed OIDC result also re-exports
+  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
+  named like one of them (`OidcProvider$`). Any other client, including one
+  whose OIDC clients are all untyped, re-exports and reserves neither.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
 
 ## 0.2.0
 
