@@ -452,13 +452,16 @@ for await (const { value, expiresAt } of todos.scan()) {
 
 A release up to 0.4.0 keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a `KVStore` of this release cannot take over the table of such a store. The deploy fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`, and the table keeps its items.
 
-`LegacyKVStore` is the store of such a release, for the time of the upgrade. It reads the old table, and deletes from it. It does not write. You copy the items into a `KVStore` with a new id, in your own code, at a time that you choose.
+`LegacyKVStore` is the store of such a release, for the time of the upgrade. It has the data methods of that store over the old table: `get`, `put`, `delete`, and `scan`. So the code that calls the store runs as before. You copy the items into a `KVStore` with a new id, in your own code, at a time that you choose.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `get(key, options?)` | `Promise<T \| null>` | Read one value of the old store. A consistent read by default. |
+| `put(key, value, options?)` | `Promise<void>` | Write one value to the old store, as the release does. Takes `ttlSeconds` or `expiresAt`, and the conditions `ifNotExists` and `ifValueEquals`. |
 | `scan(options?)` | `Results` | Read every entry of the old store, with its expiry. Takes `limit`, `cursor`, and `includeExpired`. |
 | `delete(key)` | `Promise<void>` | Remove a key from the old store. |
+
+`put` validates the value with the `schema`, and takes the options of release 0.4.0. With both conditions, the write goes ahead if the key is absent or its value matches. `delete` takes no condition.
 
 ### Step 1. Declare both stores, and deploy
 
@@ -477,11 +480,13 @@ const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
 const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
 ```
 
-The deploy creates the table of `prefs`. It does not change the table of `oldPrefs`. The app's role keeps read and delete access to that table, and loses write access.
+The deploy creates the table of `prefs`. It does not change the table of `oldPrefs`, and the app's role keeps its access to that table.
 
 `LegacyKVStore` takes the options that `KVStore` took in release 0.4.0: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`, `table`, `schema`, and `logger`. Keep each option that the old store had, with its value, also a `KVStore.fromExisting()` table and a `KVStore.fromKmsKey()` key. The block declares the old table from them, and a changed or missing option makes CloudFormation change that table.
 
 ### Step 2. Copy the items
+
+Move the writes of the app to the new store before you start the copy. The copy reads each key of the old store once, so a value that goes to the old store after that does not reach the new store.
 
 Run the copy in a handler or a job. `ifNotExists` keeps a value that the app wrote to the new store since the deploy, and it makes the copy safe to run again.
 
@@ -539,7 +544,7 @@ When the copy is done, remove the `LegacyKVStore` line and the code of step 2, a
 - **A delete or a write can lose a race with the copy.** The copy holds a page of items while it writes them. A key that the app deletes at that moment, or writes with an expiry that passes at that moment, can come back with its old value. If that matters, stop those calls while the copy runs.
 - **A value that this release does not store fails the `put`** with `ValidationFailedException`: an object with a top-level field that starts with `_bkv_`, or with a field named `__proto__`. Change the value in the copy.
 - **Cost.** The copy reads every item of the old table once, and uses one write unit for each item of 1 KB or less.
-- **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.bb-data/`, so the same steps run on the dev server. It does not change that file until a `delete`.
+- **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.bb-data/`, so the same steps run on the dev server. It does not change that file until a `put` or a `delete`.
 
 ## Best practices
 

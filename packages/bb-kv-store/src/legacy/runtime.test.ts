@@ -76,6 +76,19 @@ const releaseItem = (pk: string, value: unknown, ttl?: number) => ({
 	...(ttl === undefined ? {} : { ttl }),
 });
 
+/** A schema that takes a string value only. */
+const stringSchema = {
+	'~standard': {
+		version: 1,
+		vendor: 'test',
+		validate: (value: unknown) =>
+			typeof value === 'string' ? { value } : { issues: [{ message: 'the value must be a string' }] },
+	},
+} as const;
+
+/** An error with the name that DynamoDB gives it. */
+const ddbError = (name: string, message: string) => Object.assign(new Error(message), { name });
+
 /** The key attributes that a cursor holds. */
 const cursorKey = (cursor: string | undefined) =>
 	JSON.parse(Buffer.from(cursor ?? '', 'base64url').toString('utf8')).key;
@@ -240,12 +253,78 @@ describe('mock: reads the data file of a release up to 0.4.0', () => {
 		assert.equal(readFileSync(join(dir, 'store.json'), 'utf8'), 'not json');
 	});
 
-	test('has get, scan, and delete, and no other data method', () => {
+	test('has get, put, scan, and delete, and no other data method', () => {
 		const old: object = new LegacyKVStore(testScope(), 'prefs');
-		for (const method of ['get', 'scan', 'delete']) assert.equal(method in old, true, method);
-		for (const method of ['put', 'putBatch', 'deleteBatch', 'query', 'getBatch']) {
+		for (const method of ['get', 'put', 'scan', 'delete']) assert.equal(method in old, true, method);
+		for (const method of ['putBatch', 'deleteBatch', 'query', 'getBatch']) {
 			assert.equal(method in old, false, method);
 		}
+	});
+});
+
+describe('mock: put writes as a release up to 0.4.0 writes', () => {
+	test('a put is read back by get and by scan in key order, and the data file keeps the format of the release', async () => {
+		const scope = testScope();
+		const path = releaseFile(scope, 'prefs', { b: JSON.stringify('two') });
+		const old = new LegacyKVStore<unknown>(scope, 'prefs');
+		await old.put('c', { n: 3 });
+		await old.put('a', 'one', { expiresAt: FAR });
+		await old.put('b', 'two again');
+		assert.deepEqual(await old.get('c'), { n: 3 });
+		assert.deepEqual(await Array.fromAsync(old.scan()), [
+			{ key: 'a', value: 'one', expiresAt: FAR },
+			{ key: 'b', value: 'two again' },
+			{ key: 'c', value: { n: 3 } },
+		]);
+		assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), {
+			a: { value: JSON.stringify('one'), ttl: FAR },
+			b: JSON.stringify('two again'),
+			c: JSON.stringify({ n: 3 }),
+		});
+		// A second store over the same file reads what the first one wrote.
+		assert.deepEqual(await new LegacyKVStore<unknown>(scope, 'prefs').get('a'), 'one');
+	});
+
+	test('ttlSeconds counts from now, and a put with no expiry clears the expiry', async () => {
+		const old = new LegacyKVStore<string>(testScope(), 'prefs');
+		await old.put('k', 'v', { ttlSeconds: 60 });
+		const [entry] = await Array.fromAsync(old.scan());
+		assert.ok(entry.expiresAt !== undefined);
+		assert.ok(entry.expiresAt >= nowSeconds() + 59 && entry.expiresAt <= nowSeconds() + 61, `${entry.expiresAt}`);
+		await old.put('k', 'v');
+		assert.deepEqual(await Array.fromAsync(old.scan()), [{ key: 'k', value: 'v' }]);
+	});
+
+	test('ifNotExists and ifValueEquals compose with OR, and a failed condition is a 409', async () => {
+		const old = new LegacyKVStore<unknown>(testScope(), 'prefs');
+		await old.put('k', { v: 1 }, { ifNotExists: true });
+		const exists: any = await rejects(
+			() => old.put('k', { v: 2 }, { ifNotExists: true }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([exists.status, exists.retriable], [409, false]);
+		await old.put('k', { v: 2 }, { ifValueEquals: { v: 1 } });
+		const stale: any = await rejects(
+			() => old.put('k', { v: 3 }, { ifValueEquals: { v: 1 } }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([stale.status, stale.retriable], [409, true]);
+		// With both, the write goes ahead if the key is absent, or if its value matches.
+		await old.put('k', { v: 3 }, { ifNotExists: true, ifValueEquals: { v: 2 } });
+		await old.put('new', 'x', { ifNotExists: true, ifValueEquals: 'other' });
+		assert.deepEqual(await old.get('k'), { v: 3 });
+		assert.deepEqual(await old.get('new'), 'x');
+	});
+
+	test('a value is checked against the schema; a value with no JSON text and an item over 400 KB are rejected', async () => {
+		const old: any = new LegacyKVStore(testScope(), 'prefs', { schema: stringSchema } as never);
+		const bad = await rejects(() => old.put('k', 1), KVStoreErrors.ValidationFailed);
+		assert.match(bad.message, /the value must be a string$/);
+		await rejects(() => old.put('k', 'x'.repeat(400 * 1024)), KVStoreErrors.ItemTooLarge);
+		const free: any = new LegacyKVStore(testScope(), 'free');
+		await rejects(() => free.put('k', undefined), KVStoreErrors.ValidationFailed);
+		assert.equal(await old.get('k'), null);
+		assert.equal(await free.get('k'), null);
 	});
 });
 
@@ -305,6 +384,54 @@ describe('aws: reads the table of a release up to 0.4.0', () => {
 		const { store, input } = awsStore();
 		await store.delete('a');
 		assert.deepEqual(input(), { Key: { pk: 'a' } });
+	});
+
+	test('put writes the item of the release: pk, the JSON text, and ttl only with an expiry', async () => {
+		const { store, input } = awsStore();
+		await store.put('a', { n: 1 });
+		await store.put('b', 'two', { expiresAt: FAR });
+		assert.deepEqual(input(0), { Item: { pk: 'a', value: JSON.stringify({ n: 1 }) } });
+		assert.deepEqual(input(1), { Item: { pk: 'b', value: JSON.stringify('two'), ttl: FAR } });
+	});
+
+	test('put sends ifNotExists and ifValueEquals as one condition, joined with OR', async () => {
+		const { store, input } = awsStore();
+		const Item = { pk: 'a', value: JSON.stringify('v') };
+		await store.put('a', 'v', { ifNotExists: true });
+		await store.put('a', 'v', { ifValueEquals: { n: 1 } });
+		await store.put('a', 'v', { ifNotExists: true, ifValueEquals: 'old' });
+		assert.deepEqual(input(0), {
+			Item,
+			ConditionExpression: 'attribute_not_exists(#pk)',
+			ExpressionAttributeNames: { '#pk': 'pk' },
+		});
+		assert.deepEqual(input(1), {
+			Item,
+			ConditionExpression: '#value = :expected',
+			ExpressionAttributeNames: { '#value': 'value' },
+			ExpressionAttributeValues: { ':expected': JSON.stringify({ n: 1 }) },
+		});
+		assert.deepEqual(input(2), {
+			Item,
+			ConditionExpression: 'attribute_not_exists(#pk) OR #value = :expected',
+			ExpressionAttributeNames: { '#pk': 'pk', '#value': 'value' },
+			ExpressionAttributeValues: { ':expected': JSON.stringify('old') },
+		});
+	});
+
+	test('put gives a failed condition as a 409, and an oversize item as ItemTooLarge', async () => {
+		const conflict = awsStore(undefined, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		const failed: any = await rejects(
+			() => conflict.store.put('a', 'v', { ifValueEquals: 'old' }),
+			KVStoreErrors.ConditionalCheckFailed,
+		);
+		assert.deepEqual([failed.status, failed.retriable], [409, true]);
+		const large = awsStore(undefined, () =>
+			ddbError('ValidationException', 'Item size has exceeded the maximum allowed size'),
+		);
+		await rejects(() => large.store.put('a', 'v'), KVStoreErrors.ItemTooLarge);
 	});
 
 	test('a table from KVStore.fromExisting is read by its name', async () => {
@@ -413,5 +540,48 @@ describe('parity: the mock and the AWS runtime agree', () => {
 			assert.match(error.message, /'a' is not an item of a KVStore release/);
 			await rejects(() => Array.fromAsync(store.scan()), KVStoreErrors.ValidationFailed);
 		}
+	});
+
+	test('put: the same named error and message for a bad key, a bad value, a bad expiry, and a failed condition', async () => {
+		const mock: any = new LegacyKVStore(testScope(), 'prefs', { schema: stringSchema } as never);
+		await mock.put('taken', 'v');
+		const aws = awsStore({ schema: stringSchema }, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		const stores: any[] = [mock, aws.store];
+		const cases: [string, (store: any) => Promise<void>, string][] = [
+			['a key that is not a string', (store) => store.put(1, 'v'), KVStoreErrors.InvalidQuery],
+			['an empty key', (store) => store.put('', 'v'), KVStoreErrors.ValidationFailed],
+			['a value that fails the schema', (store) => store.put('k', 1), KVStoreErrors.ValidationFailed],
+			[
+				'both expiry options',
+				(store) => store.put('k', 'v', { ttlSeconds: 60, expiresAt: FAR }),
+				KVStoreErrors.ValidationFailed,
+			],
+		];
+		for (const [label, call, name] of cases) {
+			const messages: string[] = [];
+			for (const store of stores) messages.push((await rejects(() => call(store), name)).message);
+			assert.equal(messages[0], messages[1], label);
+		}
+		assert.equal(aws.sent.length, 0, 'the AWS runtime rejects these before it calls DynamoDB');
+
+		const conflicts: any[] = [];
+		for (const store of stores) {
+			conflicts.push(
+				await rejects(
+					() => store.put('taken', 'v2', { ifNotExists: true }),
+					KVStoreErrors.ConditionalCheckFailed,
+				),
+			);
+		}
+		assert.equal(conflicts[0].message, conflicts[1].message);
+		assert.deepEqual(
+			conflicts.map((error) => [error.status, error.retriable]),
+			[
+				[409, false],
+				[409, false],
+			],
+		);
 	});
 });

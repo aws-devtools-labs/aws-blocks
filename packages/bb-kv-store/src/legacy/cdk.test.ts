@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { AttributeType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import type { Construct } from 'constructs';
 import { KVStore, LegacyKVStore } from '../index.cdk.js';
 
@@ -120,16 +121,19 @@ test('CDK: with no options the stack defaults apply, as in the release', () => {
 	});
 });
 
-test('CDK: the app role gets read and delete access to the table, and no write access', () => {
+test('CDK: the app role gets the grant of release 0.4.0 on the table: read and write', () => {
 	const { stack, parent } = setup();
 	new LegacyKVStore(parent, 'prefs');
 	const actions = dynamoDbActions(Template.fromStack(stack));
-	for (const granted of ['dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:DeleteItem']) {
+	for (const granted of ['dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:PutItem', 'dynamodb:DeleteItem']) {
 		assert.ok(actions.includes(granted), `${granted} is granted`);
 	}
-	for (const refused of ['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:BatchWriteItem']) {
-		assert.ok(!actions.includes(refused), `${refused} is not granted`);
-	}
+	// The release grants with `grantReadWriteData`. The same call on a plain table gives the same actions.
+	const plain = setup();
+	new Table(plain.stack, 'plain', { partitionKey: { name: 'pk', type: AttributeType.STRING } }).grantReadWriteData(
+		plain.stack.executionRole,
+	);
+	assert.deepStrictEqual([...actions].sort(), dynamoDbActions(Template.fromStack(plain.stack)).sort());
 });
 
 test('CDK: a table from KVStore.fromExisting is not declared, and its table options warn', () => {
@@ -144,7 +148,7 @@ test('CDK: a table from KVStore.fromExisting is not declared, and its table opti
 test('CDK: the data methods throw the synth guard', () => {
 	const { parent } = setup();
 	const old = new LegacyKVStore(parent, 'prefs');
-	for (const method of ['get', 'scan', 'delete'] as const) {
+	for (const method of ['get', 'put', 'scan', 'delete'] as const) {
 		assert.throws(
 			() => old[method]('a'),
 			new RegExp(`LegacyKVStore\\.${method}\\(\\) cannot be called during CDK synth`),

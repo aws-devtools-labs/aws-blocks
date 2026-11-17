@@ -294,6 +294,7 @@ export type {
 	KeyOf,
 	KVStoreOptions,
 	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
 	PutBatchEntry,
 	PutOptions as KVPutOptions,
 	QueryOptions,

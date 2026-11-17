@@ -28,9 +28,11 @@ void _sameGet;
 void _samePut;
 void _sameQuery;
 const _sameLegacyGet: Same<LegacyKVStore<string>['get'], AwsLegacyKVStore<string>['get']> = true;
+const _sameLegacyPut: Same<LegacyKVStore<string>['put'], AwsLegacyKVStore<string>['put']> = true;
 const _sameLegacyScan: Same<LegacyKVStore<string>['scan'], AwsLegacyKVStore<string>['scan']> = true;
 const _sameLegacyDelete: Same<LegacyKVStore<string>['delete'], AwsLegacyKVStore<string>['delete']> = true;
 void _sameLegacyGet;
+void _sameLegacyPut;
 void _sameLegacyScan;
 void _sameLegacyDelete;
 
@@ -353,8 +355,11 @@ async function _contract() {
 	}
 	void oldPage.cursor;
 	await oldProfiles.delete('k');
-	// @ts-expect-error LegacyKVStore does not write
-	await oldProfiles.put('k', oldProfile);
+	if (oldProfile) {
+		await oldProfiles.put('k', oldProfile, { ifNotExists: true, ifValueEquals: oldProfile, ttlSeconds: 60 });
+	}
+	// @ts-expect-error the value of LegacyKVStore.put has the value type of the store
+	await oldProfiles.put('k', 'text');
 	// @ts-expect-error the options are those of a release up to 0.4.0, which has no `protection`
 	new LegacyKVStore(scope, 'bad', { protection: 'retained' });
 

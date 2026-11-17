@@ -5,15 +5,35 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from '../errors.js';
 import { compareByBaseKey, decodeCursor, type Item, normalizeLimit, orderedResults, presentOptions } from '../item.js';
 import { loadReleaseFile, saveReleaseFile } from '../mock-file.js';
-import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from '../types.js';
+import type {
+	Entry,
+	GetOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
+	Results,
+	ScanOptions,
+} from '../types.js';
 import { BB_NAME, BB_VERSION } from '../version.js';
-import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './layout.js';
+import {
+	RELEASE_MODEL,
+	RELEASE_PK,
+	RELEASE_VALUE,
+	releaseEntry,
+	releaseKey,
+	releaseLiveValue,
+	releaseWrite,
+} from './layout.js';
+
+/** The largest item that DynamoDB stores. */
+const MAX_ITEM_BYTES = 400 * 1024;
 
 /**
- * The store of a `KVStore` release up to 0.4.0, for an upgrade: it reads the
- * table of that store, and deletes from it. It does not write.
+ * The store of a `KVStore` release up to 0.4.0, for an upgrade: it has the
+ * data methods of that store over its table: `get`, `put`, `delete`, and `scan`.
  *
  * **When to use:** Your app has a `KVStore` from a release up to 0.4.0. This
  * release keeps items in another layout, in a table with another key, so a
@@ -25,7 +45,7 @@ import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue }
  * **When NOT to use:** For new data. Use `KVStore`.
  *
  * **What it does to the table:** Nothing. The deploy keeps the table as it is,
- * with its items. The app's role gets read and delete access to it. Locally,
+ * with its items. The app's role keeps read and write access to it. Locally,
  * it reads the data file of the old store, `.bb-data/{fullId}/store.json`.
  *
  * @example
@@ -48,9 +68,11 @@ export class LegacyKVStore<T = string> extends Scope {
 	private dataDir: string;
 	/** The items of the old store as that release keeps them, in key order. */
 	private data: Map<string, Item>;
+	private schema: StandardSchemaV1<T> | undefined;
 
 	constructor(scope: ScopeParent, id: string, options?: LegacyKVStoreOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		this.schema = options?.schema;
 		const log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		this.dataDir = getMockDataDir(this);
 		const items = loadReleaseFile(this.dataDir, log, { store: this.fullId });
@@ -81,6 +103,56 @@ export class LegacyKVStore<T = string> extends Scope {
 	 */
 	async get(key: string, _options?: GetOptions): Promise<T | null> {
 		return releaseLiveValue<T>(this.data.get(releaseKey(key)));
+	}
+
+	/**
+	 * Store a value in the old store, as the release stores it: the JSON text
+	 * of the value, under the key. Replaces the value of the key unless a
+	 * condition is set.
+	 *
+	 * It is here so that the code that writes the old store runs unchanged
+	 * until you move it. Move the writes to the new store before you start the
+	 * copy: the copy reads each key once, so a value that goes to the old store
+	 * after that does not reach the new one. The local
+	 * mock writes the data file of the old store, in the format of the release.
+	 *
+	 * @param key - The string key.
+	 * @param value - The value. With a `schema`, it is validated before the write.
+	 * @param options - `ttlSeconds` or `expiresAt`, and the conditions `ifNotExists` and `ifValueEquals`.
+	 *   With both conditions the write succeeds if the key is absent or its value matches.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
+	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string, the value fails the schema
+	 *   or has no JSON text, or the expiry options are not valid.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a condition is set and does not hold. Status 409.
+	 *   Retriable when `ifValueEquals` took part.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the item is larger than 400 KB.
+	 *
+	 * @example
+	 * ```typescript
+	 * await oldPrefs.put('alice', { theme: 'dark' }, { ttlSeconds: 3600 });
+	 * ```
+	 */
+	async put(key: string, value: T, options?: LegacyKVStorePutOptions<T>): Promise<void> {
+		const write = await releaseWrite(this.schema, key, value, presentOptions(options));
+		const bytes = Buffer.byteLength(JSON.stringify(write.item), 'utf8');
+		if (bytes > MAX_ITEM_BYTES) {
+			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
+		}
+		const pk = write.item[RELEASE_PK] as string;
+		const existing = this.data.get(pk);
+		// `ifNotExists` and `ifValueEquals` compose with OR, as in the release. A
+		// condition sees an expired item until DynamoDB deletes it, as on AWS.
+		if (write.ifAbsent || write.ifValue !== undefined) {
+			const absentOk = write.ifAbsent && existing === undefined;
+			const valueOk = write.ifValue !== undefined && existing?.[RELEASE_VALUE] === write.ifValue;
+			if (!absentOk && !valueOk) throw conditionalCheckFailed(write.retriable);
+		}
+		this.data.set(pk, write.item);
+		// A new key goes to the end of the map. `scan` reads the map in key order.
+		if (existing === undefined) {
+			this.data = new Map([...this.data].sort(([, a], [, b]) => compareByBaseKey(RELEASE_MODEL, a, b)));
+		}
+		saveReleaseFile(this.dataDir, this.data.values());
 	}
 
 	/**
@@ -121,7 +193,7 @@ export class LegacyKVStore<T = string> extends Scope {
 				indexName: undefined,
 				includeExpired: present?.includeExpired === true,
 			},
-			// The map is in key order from the load, and a delete keeps that order.
+			// The map is in key order from the load, and a put and a delete keep that order.
 			() => [...this.data.values()],
 			(a, b) => compareByBaseKey(RELEASE_MODEL, a, b),
 		);

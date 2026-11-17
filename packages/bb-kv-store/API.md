@@ -149,6 +149,7 @@ export class LegacyKVStore<T = string> extends Scope {
     readonly bbName = "KVStore";
     delete(key: string): Promise<void>;
     get(key: string, options?: GetOptions): Promise<T | null>;
+    put(key: string, value: T, options?: LegacyKVStorePutOptions<T>): Promise<void>;
     scan(options?: ScanOptions): Results<T, undefined>;
 }
 
@@ -165,6 +166,12 @@ export interface LegacyKVStoreOptions<T = string> {
     table?: ExternalTableRef;
     ttl?: boolean;
 }
+
+// @public
+export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
+    ifNotExists?: boolean;
+    ifValueEquals?: T;
+};
 
 // @public
 export type NumberField<In, Out> = IsRecord<Out> extends true ? {

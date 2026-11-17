@@ -13,6 +13,7 @@ import type { api as apiType } from 'aws-blocks';
 // exports a stub and the constants.
 const ValidationFailed = 'ValidationFailedException';
 const InvalidQuery = 'InvalidQueryException';
+const ConditionalCheckFailed = 'ConditionalCheckFailedException';
 
 const LOCAL = (process.env.BLOCKS_TEST_ENV || 'local') === 'local';
 const FAR = 4102444800;
@@ -53,7 +54,7 @@ async function expectError(promise: Promise<unknown>, name: string): Promise<voi
  * The store holds three items of such a release: one with no expiry, one that
  * expires in 2100, and one that expired in 2001. Locally they are in the data
  * file that `seedLegacyStore` writes before the dev server starts. On AWS the
- * app puts them in the table through its test-support store.
+ * suite writes them with `put`.
  */
 export function legacyKvStoreTests(getApi: () => typeof apiType) {
 
@@ -117,6 +118,19 @@ export function legacyKvStoreTests(getApi: () => typeof apiType) {
       assert.strictEqual(await api.legacyGet('grace'), null);
       assert.deepStrictEqual(await api.legacyGet('ada'), ADA);
       assert.deepStrictEqual(await api.legacyDelete(`legacy-${Date.now().toString(36)}`), { success: true });
+    });
+
+    test('a put writes a value that a get reads back; ifNotExists does not replace it', async () => {
+      const api = getApi();
+      const key = `legacy-put-${Date.now().toString(36)}`;
+      await api.legacyPut(key, ADA, { ifNotExists: true, ttlSeconds: 3600 });
+      assert.deepStrictEqual(await api.legacyGet(key), ADA);
+      await expectError(api.legacyPut(key, GRACE, { ifNotExists: true }), ConditionalCheckFailed);
+      assert.deepStrictEqual(await api.legacyGet(key), ADA);
+      await api.legacyPut(key, GRACE);
+      assert.deepStrictEqual(await api.legacyGet(key), GRACE);
+      await api.legacyDelete(key);
+      assert.strictEqual(await api.legacyGet(key), null);
     });
   });
 }

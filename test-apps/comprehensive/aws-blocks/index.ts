@@ -91,19 +91,10 @@ interface Profile { name: string; age: number; tags: string[] }
 const objStore = new KVStore<Profile>(scope, 'obj-store');
 
 // LegacyKVStore - the store of a KVStore release up to 0.4.0, for an upgrade.
-// It reads the table of that store and deletes from it. The table is declared
-// as that release declares it; no item is written here, so the store is empty.
+// It has the data methods of that store. The table is declared as that
+// release declares it.
 const legacyStore = new LegacyKVStore<Profile>(scope, 'legacy-store', { ttl: true });
 
-// A second store over the table of `legacyStore`, with the key and the fields
-// of that release: `{ pk, value: <JSON text>, ttl? }`. It is test support. The
-// e2e suite uses it to put items of the release in the table on AWS, where
-// `LegacyKVStore` has no write access. An app does not have such a store.
-const legacySeedStore = new KVStore(scope, 'legacy-seed', {
-  schema: z.object({ pk: z.string(), value: z.string(), ttl: z.number().optional() }),
-  key: { partitionKey: 'pk' },
-  table: KVStore.fromExisting(legacyStore.fullId),
-});
 
 // KVStore with schema validation and an index (form 2: a schema, still a string key)
 const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.array(z.string()) });
@@ -1312,7 +1303,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // ------------------------------------------------------------------------
-  // LegacyKVStore Tests (read and delete only)
+  // LegacyKVStore Tests
   // ------------------------------------------------------------------------
 
   async legacyGet(key: string) {
@@ -1325,15 +1316,20 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { entries, cursor: page.cursor };
   },
 
+  async legacyPut(key: string, value: Profile, options?: { ifNotExists?: boolean; ttlSeconds?: number }) {
+    await legacyStore.put(key, value, options);
+    return { success: true };
+  },
+
   async legacyDelete(key: string) {
     await legacyStore.delete(key);
     return { success: true };
   },
 
-  // Test support: put items in the table of `legacyStore` as a release up to 0.4.0 keeps them.
+  // Test support: put items in `legacyStore`, each with the expiry that the suite gives (also one in the past).
   async legacySeed(entries: { key: string; value: Profile; ttl?: number }[]) {
     for (const { key, value, ttl } of entries) {
-      await legacySeedStore.put({ pk: key }, { value: JSON.stringify(value), ttl });
+      await legacyStore.put(key, value, ttl === undefined ? undefined : { expiresAt: ttl });
     }
     return { success: true };
   },

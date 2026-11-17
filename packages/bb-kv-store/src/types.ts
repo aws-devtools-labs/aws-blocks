@@ -606,9 +606,9 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
  */
 export interface LegacyKVStoreOptions<T = string> {
 	/**
-	 * The schema of the old store. It gives the value type `T`. `LegacyKVStore`
-	 * does not write, and a read does not validate, so the schema does no work
-	 * at run time.
+	 * The schema of the old store. It gives the value type `T`, and `put`
+	 * validates a value with it before the write, as in the release. A read
+	 * does not validate.
 	 */
 	schema?: StandardSchemaV1<T>;
 	/** The table that the old store wrapped, if it wrapped one. Keep `KVStore.fromExisting(tableName)` as it is. */
@@ -638,3 +638,21 @@ export interface LegacyKVStoreOptions<T = string> {
 	 */
 	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
 }
+
+/**
+ * Options of `LegacyKVStore.put`: the options that `put` took in a release up
+ * to 0.4.0.
+ *
+ * `ttlSeconds` and `expiresAt` exclude each other. When both `ifNotExists` and
+ * `ifValueEquals` are set they compose with OR, as in that release: the write
+ * succeeds if the key is absent or its current value matches.
+ */
+export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
+	/** Only write if the key does not exist. */
+	ifNotExists?: boolean;
+	/**
+	 * Only write if the current value serializes equal to this value. The
+	 * compare is on the JSON text, so the order of the keys of an object matters.
+	 */
+	ifValueEquals?: T;
+};

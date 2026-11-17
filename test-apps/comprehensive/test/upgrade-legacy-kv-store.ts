@@ -516,6 +516,13 @@ async function runUpgrade(ctx: Ctx): Promise<void> {
 	const empty = { strings: [], docs: [], profiles: [], expiring: [] };
 	record('the new stores are empty before the copy', same(empty, await rpc(ctx.apiUrl, 'dump')));
 
+	heading('Write the old store through LegacyKVStore');
+	must('put', (await rpc(ctx.apiUrl, 'putOld', ['written-by-put', { n: 1 }])) === 'written');
+	const written = (await aws.rawScan(oldName('docs'))).find((item) => item.pk?.S === 'written-by-put');
+	record('a put writes an item of the release layout to the old table', written?.value?.S === JSON.stringify({ n: 1 }) && Object.keys(written).sort().join() === 'pk,value', JSON.stringify(written));
+	must('delete the key again', (await rpc(ctx.apiUrl, 'removeOld', ['written-by-put'])) === 'deleted');
+	record('after that delete the old tables hold the items of the release again', same(rawBefore, await eachStore((store) => aws.rawScan(oldName(store)))));
+
 	heading('Copy, in app code');
 	must('the app writes a key to the new store before the copy', (await rpc(ctx.apiUrl, 'putNew', ['greeting', 'written since the deploy'])) === 'written');
 	const counts = await rpc(ctx.apiUrl, 'copyAll');

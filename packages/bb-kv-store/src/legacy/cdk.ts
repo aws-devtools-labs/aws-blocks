@@ -18,8 +18,8 @@ import { RELEASE_PK, RELEASE_TTL } from './layout.js';
  * name, key, billing mode, TTL setting, removal policy, deletion protection,
  * backups, and encryption, at the same construct path. The path gives the
  * logical id, so CloudFormation sees the table that it has and does not
- * change it. The app's role gets read and delete access to the table, and no
- * write access.
+ * change it. The app's role gets the grant of that release on the table, read
+ * and write, so its policy does not change either.
  */
 export class LegacyKVStore extends BuildingBlockScope {
 	private table: ITable;
@@ -72,14 +72,16 @@ export class LegacyKVStore extends BuildingBlockScope {
 			protection.applyKeyRemovalPolicy(this.table, removalPolicy);
 		}
 
-		// Read, and delete by key. No put and no update: the app writes the new store.
-		this.table.grantReadData(this.executionRole);
-		this.table.grant(this.executionRole, 'dynamodb:DeleteItem');
+		// The grant of release 0.4.0, so the policy of the role does not change.
+		this.table.grantReadWriteData(this.executionRole);
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
 	get(..._args: unknown[]): never {
 		return synthGuard('LegacyKVStore', 'get');
+	}
+	put(..._args: unknown[]): never {
+		return synthGuard('LegacyKVStore', 'put');
 	}
 	scan(..._args: unknown[]): never {
 		return synthGuard('LegacyKVStore', 'scan');

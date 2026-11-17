@@ -4,15 +4,32 @@
 import type { ScopeParent } from '@aws-blocks/core';
 import { getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { conditionalCheckFailed, KVStoreErrors, remapItemTooLarge } from '../errors.js';
 import { decodeCursor, type Item, normalizeLimit, presentOptions, requestResults } from '../item.js';
-import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from '../types.js';
+import type {
+	Entry,
+	GetOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
+	Results,
+	ScanOptions,
+} from '../types.js';
 import { BB_NAME, BB_VERSION } from '../version.js';
-import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './layout.js';
+import {
+	RELEASE_MODEL,
+	RELEASE_PK,
+	RELEASE_VALUE,
+	releaseEntry,
+	releaseKey,
+	releaseLiveValue,
+	releaseWrite,
+} from './layout.js';
 
 /**
- * The store of a `KVStore` release up to 0.4.0, for an upgrade: it reads the
- * table of that store, and deletes from it. It does not write.
+ * The store of a `KVStore` release up to 0.4.0, for an upgrade: it has the
+ * data methods of that store over its table: `get`, `put`, `delete`, and `scan`.
  *
  * **When to use:** Your app has a `KVStore` from a release up to 0.4.0. This
  * release keeps items in another layout, in a table with another key, so a
@@ -24,7 +41,7 @@ import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue }
  * **When NOT to use:** For new data. Use `KVStore`.
  *
  * **What it does to the table:** Nothing. The deploy keeps the table as it is,
- * with its items. The app's role gets read and delete access to it.
+ * with its items. The app's role keeps read and write access to it.
  *
  * @example
  * ```typescript
@@ -45,9 +62,11 @@ import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue }
 export class LegacyKVStore<T = string> extends Scope {
 	readonly bbName = BB_NAME;
 	private docClient: DynamoDBDocumentClient;
+	private schema: StandardSchemaV1<T> | undefined;
 
 	constructor(scope: ScopeParent, id: string, options?: LegacyKVStoreOptions<T>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		this.schema = options?.schema;
 		const tableName = options?.table ? options.table.tableName : this.fullId.substring(0, 255);
 		registerSdkIdentifiers(this.fullId, { tableName });
 		const client = new DynamoDBClient({
@@ -86,6 +105,66 @@ export class LegacyKVStore<T = string> extends Scope {
 			}),
 		);
 		return releaseLiveValue<T>(result.Item as Item | undefined);
+	}
+
+	/**
+	 * Store a value in the old store, as the release stores it: the JSON text
+	 * of the value, under the key. Replaces the value of the key unless a
+	 * condition is set.
+	 *
+	 * It is here so that the code that writes the old store runs unchanged
+	 * until you move it. Move the writes to the new store before you start the
+	 * copy: the copy reads each key once, so a value that goes to the old store
+	 * after that does not reach the new one.
+	 *
+	 * @param key - The string key.
+	 * @param value - The value. With a `schema`, it is validated before the write.
+	 * @param options - `ttlSeconds` or `expiresAt`, and the conditions `ifNotExists` and `ifValueEquals`.
+	 *   With both conditions the write succeeds if the key is absent or its value matches.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
+	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string, the value fails the schema
+	 *   or has no JSON text, or the expiry options are not valid.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a condition is set and does not hold. Status 409.
+	 *   Retriable when `ifValueEquals` took part.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the item is larger than 400 KB.
+	 *
+	 * @example
+	 * ```typescript
+	 * await oldPrefs.put('alice', { theme: 'dark' }, { ttlSeconds: 3600 });
+	 * ```
+	 */
+	async put(key: string, value: T, options?: LegacyKVStorePutOptions<T>): Promise<void> {
+		const write = await releaseWrite(this.schema, key, value, presentOptions(options));
+		// `ifNotExists` and `ifValueEquals` compose with OR, as in the release.
+		const conditions: string[] = [];
+		const names: Record<string, string> = {};
+		if (write.ifAbsent) {
+			conditions.push('attribute_not_exists(#pk)');
+			names['#pk'] = RELEASE_PK;
+		}
+		if (write.ifValue !== undefined) {
+			conditions.push('#value = :expected');
+			names['#value'] = RELEASE_VALUE;
+		}
+		try {
+			await this.docClient.send(
+				new PutCommand({
+					TableName: getSdkIdentifiers(this).tableName,
+					Item: write.item,
+					...(conditions.length > 0 && {
+						ConditionExpression: conditions.join(' OR '),
+						ExpressionAttributeNames: names,
+					}),
+					...(write.ifValue !== undefined && { ExpressionAttributeValues: { ':expected': write.ifValue } }),
+				}),
+			);
+		} catch (err: unknown) {
+			// A failed condition is a 409 with the name of the block, and an oversize item is ItemTooLarge, as on a KVStore.
+			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(write.retriable, err);
+			}
+			throw remapItemTooLarge(err);
+		}
 	}
 
 	/**

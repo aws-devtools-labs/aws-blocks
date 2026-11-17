@@ -3,16 +3,18 @@
 
 /**
  * The item layout of the `KVStore` releases up to 0.4.0, which `LegacyKVStore`
- * reads: the key in `pk`, the whole value as JSON text in `value`, and the
+ * reads and writes: the key in `pk`, the whole value as JSON text in `value`, and the
  * expiry in `ttl`.
  *
  * ```json
  * { "pk": "theme", "value": "{\"color\":\"dark\"}", "ttl": 1800000000 }
  * ```
  */
-import { blocksError, KVStoreErrors } from '../errors.js';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { blocksError, KVStoreErrors, validateSchema } from '../errors.js';
 import { type Item, itemExpired, type KeyModel, normalizeKey } from '../item.js';
-import type { Entry } from '../types.js';
+import { resolveTtlEpochSeconds } from '../ttl.js';
+import type { Entry, LegacyKVStorePutOptions } from '../types.js';
 
 /** The key attribute of the layout. */
 export const RELEASE_PK = 'pk';
@@ -74,4 +76,51 @@ export function releaseEntry<T>(item: Item): Entry<T, undefined> {
 	const ttl = item[RELEASE_TTL];
 	if (typeof ttl === 'number' && Number.isFinite(ttl)) entry.expiresAt = ttl;
 	return entry;
+}
+
+/** What a `put` of the old store writes, and the condition that it writes under. */
+export interface ReleaseWrite {
+	/** The item, in the layout of the release. */
+	item: Item;
+	/** `ifNotExists`: the write goes ahead if the key is absent. */
+	ifAbsent: boolean;
+	/** `ifValueEquals` as JSON text: the write goes ahead if the stored `value` equals it. */
+	ifValue: string | undefined;
+	/**
+	 * Whether a failed condition is a conflict that a new read and a new try can
+	 * pass: true when a value check took part, false for `ifNotExists` alone.
+	 */
+	retriable: boolean;
+}
+
+/**
+ * Check a `put` of the old store and lay out its item. Both runtimes call it
+ * first, so the same input fails the same way in both: the key, then the value
+ * against the schema, then the expiry.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
+ * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string, the value fails the schema or
+ *   has no JSON text (`undefined`, a function, a symbol), or the expiry options are not valid.
+ */
+export async function releaseWrite<In, Out>(
+	schema: StandardSchemaV1<In, Out> | undefined,
+	key: unknown,
+	value: unknown,
+	options: LegacyKVStorePutOptions | undefined,
+): Promise<ReleaseWrite> {
+	const pk = releaseKey(key);
+	await validateSchema(schema, value);
+	const text: unknown = JSON.stringify(value);
+	if (typeof text !== 'string') {
+		throw blocksError(
+			KVStoreErrors.ValidationFailed,
+			'a value must have JSON text; undefined, a function, and a symbol have none',
+		);
+	}
+	const expiresAt = resolveTtlEpochSeconds(options);
+	const item: Item = { [RELEASE_PK]: pk, [RELEASE_VALUE]: text };
+	if (expiresAt !== undefined) item[RELEASE_TTL] = expiresAt;
+	const expected: unknown = options?.ifValueEquals === undefined ? undefined : JSON.stringify(options.ifValueEquals);
+	const ifValue = typeof expected === 'string' ? expected : undefined;
+	return { item, ifAbsent: options?.ifNotExists === true, ifValue, retriable: ifValue !== undefined };
 }

@@ -91,6 +91,8 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 	async expiriesOld() { return expiriesOf(oldStrings, oldExpiring); }, // legacy
 	async oldPage(limit: number, cursor?: string) { const page = oldStrings.scan({ limit, cursor }); const keys = (await Array.fromAsync(page)).map((e) => e.key); return { keys, cursor: page.cursor ?? null }; }, // legacy
 	async copyAll() { return { strings: await copy(oldStrings, strings), docs: await copy(oldDocs, docs), profiles: await copy(oldProfiles, profiles), expiring: await copy(oldExpiring, expiring) }; }, // legacy
+	async putOld(key: string, value: unknown) { await oldDocs.put(key, value, { ifNotExists: true }); return 'written'; }, // legacy
+	async removeOld(key: string) { await oldDocs.delete(key); return 'deleted'; }, // legacy
 	async getDoc(key: string) { return (await docs.get(key)) ?? (await oldDocs.get(key)); }, // legacy
 	async deleteDoc(key: string) { await oldDocs.delete(key); await docs.delete(key); return 'deleted'; }, // legacy
 }));
