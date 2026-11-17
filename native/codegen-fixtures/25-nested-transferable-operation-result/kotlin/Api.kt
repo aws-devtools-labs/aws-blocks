@@ -5,6 +5,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.realtime.RealtimeChannel
 import kotlin.Boolean
@@ -16,6 +17,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public class Api(
@@ -24,12 +26,14 @@ public class Api(
   public suspend fun getSession(): GetSession.Result {
     val request = BlocksRequest(method = "api.getSession", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getSession")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getOtherSession(): GetOtherSession.Result {
     val request = BlocksRequest(method = "api.getOtherSession", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getOtherSession")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

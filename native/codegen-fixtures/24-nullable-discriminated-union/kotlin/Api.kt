@@ -5,6 +5,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.OptIn
 import kotlin.String
@@ -21,6 +22,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -35,6 +37,7 @@ public class Api(
   public suspend fun updateAttributes(attributes: Map<String, String>): Map<String, UpdateAttributes.Result?> {
     val request = BlocksRequest(method = "api.updateAttributes", params = listOf(buildJsonObject { attributes.forEach { put(it.key, it.value) } }), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.updateAttributes")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
