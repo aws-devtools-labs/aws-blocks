@@ -316,6 +316,8 @@ An index reads the same items by other fields of the value. `indexes` needs a `s
 
 - An index field holds a string or a number. The schema states which, as for a key field.
 - An index holds an item only when each indexed field is present, is not an empty string, and has the declared type. `put` rejects an empty string in an indexed field.
+- To keep an item out of an index, leave the field out. Don't set it to `null`: on AWS, DynamoDB rejects a `put` whose indexed field holds `null` or a value of the other type with a `ValidationException`. The local mock accepts that write, so the error shows only on AWS.
+- An index query returns whole items: every index the block creates holds all fields of the value. A table from `fromExisting` keeps the indexes you gave it.
 - A read from an index is eventually consistent.
 - A store can have up to 20 indexes.
 - To add or remove an index, change `indexes` and deploy. DynamoDB fills a new index from the items that exist. On a large table that takes minutes to hours.
