@@ -167,10 +167,12 @@ public struct CodegenModelBuilder {
             }
             return names.inlineType(named: candidate).map { $0 == typeRef } ?? true
         }
-        // The schema itself, and an inline type that is a same-named component schema, keep the name.
-        let isOwnSchema = enclosing == nil
-            || componentSchemas[name].map { $0 == typeRef || $0 == .nullable(inner: typeRef) } == true
-        let qualified = isOwnSchema ? name : (enclosing ?? "") + name
+        // The schema itself keeps its spelled name (`JWT`, not `Jwt`), and an inline type that is a same-named
+        // component schema keeps that schema's name.
+        let ownSchema = [enclosing, name].compactMap { $0 }.first { candidate in
+            componentSchemas[candidate].map { $0 == typeRef || $0 == .nullable(inner: typeRef) } == true
+        }
+        let qualified = ownSchema ?? (enclosing ?? "") + name
         var allocated = qualified
         var suffix = 2
         while !fits(allocated) {

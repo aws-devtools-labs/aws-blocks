@@ -220,6 +220,17 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         assertNotContains(output.models, "enum TransportError:")
     }
 
+    /// A schema whose name isn't PascalCase (`JWT`) is declared once under that name, not again as `JWTJwt`.
+    func testASchemaWhoseNameIsNotPascalCaseIsDeclaredOnce() throws {
+        let jwt = object(["kind": strings("a", "b"), "sub": string])
+        let output = try generate(schemas: #"{ "JWT": \#(jwt) }"#, methods: [returning("JWT")])
+
+        assertContains(output.models, "public nonisolated struct JWT: Codable, Sendable {")
+        assertContains(output.models, "public let kind: JWTKind\n")
+        assertNotContains(output.models, "JWTJwt")
+        assertNotContains(output.models, "struct Jwt:")
+    }
+
     /// A map of enums is named after its property, as an array of them is, and as on Dart.
     func testAMapOfEnumsKeepsThePropertysName() throws {
         let feature = object(["flags": map(strings("on", "off")), "rows": array(map(strings("x", "y")))])
