@@ -265,21 +265,27 @@ describe('create-blocks-app template key-value methods require auth', () => {
   }
 });
 
-describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
-  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
-  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+describe('create-blocks-app auth templates define their signed-in methods with auth.protect', () => {
+  const protectedMethods: Record<string, string[]> = {
+    auth: ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo'],
+    'auth-oidc': ['getValue', 'setValue', 'whoAmI'],
+  };
+  for (const [name, methodNames] of Object.entries(protectedMethods)) {
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
+    const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
 
-  it('the template\'s api namespace is auth.protect(...)', () => {
-    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
-  });
-
-  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
-  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
-    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
-      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
-      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
-      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    it(`the ${name} template's api namespace is auth.protect(...)`, () => {
+      assert.ok(protect, `${name} template: export const api = auth.protect(scope, 'api', { ... }) not found`);
     });
+
+    const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+    for (const method of methodNames) {
+      it(`${name} template ${method} is a protected method (in methods, not public)`, () => {
+        assert.strictEqual(parts.length, 2, `${name} template: a single \`methods: (context, user) => ({\` factory`);
+        assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+        assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+      });
+    }
   }
 });
 
@@ -454,6 +460,9 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
   for (const name of templateNames) {
     const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
+    // A template whose only RPC surface is `auth.protect` has no ApiNamespace to
+    // check here; the auth.protect test above checks which of its methods are public.
+    if (apiMethods(backend).length === 0 && /export const api = auth\.protect\(/.test(readFileSync(backend, 'utf-8'))) continue;
 
     it(`template "${name}" gates every API method that is not listed in UNGATED`, () => {
       const methods = apiMethods(backend);
