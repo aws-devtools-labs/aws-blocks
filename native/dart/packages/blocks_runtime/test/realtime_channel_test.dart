@@ -82,30 +82,85 @@ void main() {
       ]);
     });
 
+    test('a payload that fails to decode ends the stream', () async {
+      final url = await _serve([
+        {
+          'data': {'count': 1},
+        },
+        {
+          'data': {'text': 'ok'},
+        },
+      ]);
+      final channel = RealtimeChannel.fromJson(
+        _descriptor(url),
+        (json) => json['text'] as String,
+      );
+      addTearDown(channel.close);
+
+      final events = <Object>[];
+      await channel.subscribe().handleError(events.add).forEach(events.add);
+      expect(events, [isA<TypeError>()]);
+    });
+
     test(
-      'a payload that fails to decode is a stream error, not a crash',
+      'a refused subscribe ends the stream with SubscriptionEnded',
       () async {
-        final url = await _serve([
-          {
-            'data': {'count': 1},
-          },
-          {
-            'data': {'text': 'ok'},
-          },
-        ]);
-        final channel = RealtimeChannel.fromJson(
-          _descriptor(url),
-          (json) => json['text'] as String,
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((req) async {
+          final ws = await WebSocketTransformer.upgrade(req);
+          addTearDown(ws.close);
+          ws.listen((data) {
+            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            ws.add(
+              jsonEncode({
+                'type': 'error',
+                'channel': msg['channel'],
+                'message': 'Unauthorized: invalid or expired token',
+              }),
+            );
+          });
+        });
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
         );
         addTearDown(channel.close);
 
-        final events = <Object>[];
-        await channel
-            .subscribe()
-            .handleError(events.add)
-            .take(1)
-            .forEach(events.add);
-        expect(events, [isA<TypeError>(), 'ok']);
+        final errors = <Object>[];
+        await channel.subscribe().handleError(errors.add).drain<void>();
+        expect(errors, [
+          isA<RealtimeSubscriptionEndedException>()
+              .having((e) => e.channel, 'channel', 'room')
+              .having((e) => e.code, 'code', isNull),
+        ]);
+      },
+    );
+
+    test(
+      'a server close ends the stream with RealtimeConnectionException',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((req) async {
+          final ws = await WebSocketTransformer.upgrade(req);
+          ws.listen((_) => ws.close(1001, 'Going away'));
+        });
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
+        );
+        addTearDown(channel.close);
+
+        final errors = <Object>[];
+        await channel.subscribe().handleError(errors.add).drain<void>();
+        expect(errors, [
+          isA<RealtimeConnectionException>().having(
+            (e) => e.message,
+            'message',
+            contains('1001'),
+          ),
+        ]);
       },
     );
 

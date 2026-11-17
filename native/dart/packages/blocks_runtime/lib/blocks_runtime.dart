@@ -22,4 +22,3 @@ export 'src/transferable_descriptor.dart' show validateTransferableDescriptor;
 export 'src/transferable_exception.dart';
 export 'src/typed_oidc_client.dart';
 export 'src/unknown_transferable.dart';
-export 'src/web_socket_pool.dart';

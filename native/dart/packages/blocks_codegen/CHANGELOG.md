@@ -71,6 +71,8 @@
 
 ### Other changes
 
+- The generated client re-exports `RealtimeSubscriptionEndedException` with
+  the other realtime errors.
 - The generated `Blocks` class has a `close()` that closes its
   `BlocksClient`, as the Kotlin client's `Blocks` does. A call after it
   throws `ClientClosedException`, and so does a call of an `OidcClient` that
