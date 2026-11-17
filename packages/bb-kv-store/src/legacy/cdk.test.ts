@@ -12,7 +12,7 @@ import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from 
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
-import { KVStore, LegacyKVStore } from './index.cdk.js';
+import { KVStore, LegacyKVStore } from '../index.cdk.js';
 
 // Minimal BlocksStack-shaped parent: the shared `executionRole`, a handler, and `defaults`.
 class StubBlocksStack extends cdk.Stack {

@@ -10,9 +10,9 @@
  * { "pk": "theme", "value": "{\"color\":\"dark\"}", "ttl": 1800000000 }
  * ```
  */
-import { blocksError, KVStoreErrors } from './errors.js';
-import { type Item, itemExpired, type KeyModel, normalizeKey } from './item.js';
-import type { Entry } from './types.js';
+import { blocksError, KVStoreErrors } from '../errors.js';
+import { type Item, itemExpired, type KeyModel, normalizeKey } from '../item.js';
+import type { Entry } from '../types.js';
 
 /** The key attribute of the layout. */
 export const RELEASE_PK = 'pk';

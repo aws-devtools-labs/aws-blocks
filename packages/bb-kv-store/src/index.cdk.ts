@@ -23,7 +23,7 @@ import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export { LegacyKVStore } from './legacy.cdk.js';
+export { LegacyKVStore } from './legacy/cdk.js';
 export type * from './types.js';
 
 const PROTECTION_VALUES = ['disposable', 'retained', 'locked'] as const;

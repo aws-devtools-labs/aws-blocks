@@ -5,11 +5,11 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
-import { compareByBaseKey, decodeCursor, type Item, normalizeLimit, orderedResults, presentOptions } from './item.js';
-import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './legacy.js';
-import { loadReleaseFile, saveReleaseFile } from './mock-file.js';
-import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from './types.js';
-import { BB_NAME, BB_VERSION } from './version.js';
+import { compareByBaseKey, decodeCursor, type Item, normalizeLimit, orderedResults, presentOptions } from '../item.js';
+import { loadReleaseFile, saveReleaseFile } from '../mock-file.js';
+import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from '../types.js';
+import { BB_NAME, BB_VERSION } from '../version.js';
+import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './layout.js';
 
 /**
  * The store of a `KVStore` release up to 0.4.0, for an upgrade: it reads the

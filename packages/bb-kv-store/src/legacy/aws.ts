@@ -5,10 +5,10 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { decodeCursor, type Item, normalizeLimit, presentOptions, requestResults } from './item.js';
-import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './legacy.js';
-import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from './types.js';
-import { BB_NAME, BB_VERSION } from './version.js';
+import { decodeCursor, type Item, normalizeLimit, presentOptions, requestResults } from '../item.js';
+import type { Entry, GetOptions, LegacyKVStoreOptions, Results, ScanOptions } from '../types.js';
+import { BB_NAME, BB_VERSION } from '../version.js';
+import { RELEASE_MODEL, RELEASE_PK, releaseEntry, releaseKey, releaseLiveValue } from './layout.js';
 
 /**
  * The store of a `KVStore` release up to 0.4.0, for an upgrade: it reads the

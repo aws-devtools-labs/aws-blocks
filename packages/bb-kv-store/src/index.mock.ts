@@ -57,7 +57,7 @@ assertNotMockInDeployedEnv('bb-kv-store');
 // ── Public types ────────────────────────────────────────────────────────────
 
 export { KVStoreErrors } from './errors.js';
-export { LegacyKVStore } from './legacy.mock.js';
+export { LegacyKVStore } from './legacy/mock.js';
 export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export { LegacyKVStore } from './legacy.aws.js';
+export { LegacyKVStore } from './legacy/aws.js';
 export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

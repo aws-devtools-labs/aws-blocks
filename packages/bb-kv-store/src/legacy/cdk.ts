@@ -7,9 +7,9 @@ import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import { Annotations, RemovalPolicy } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RELEASE_PK, RELEASE_TTL } from './legacy.js';
-import type { LegacyKVStoreOptions } from './types.js';
-import { BB_NAME } from './version.js';
+import type { LegacyKVStoreOptions } from '../types.js';
+import { BB_NAME } from '../version.js';
+import { RELEASE_PK, RELEASE_TTL } from './layout.js';
 
 /**
  * The store of a `KVStore` release up to 0.4.0, for an upgrade.

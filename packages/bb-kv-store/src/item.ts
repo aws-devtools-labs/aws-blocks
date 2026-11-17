@@ -206,7 +206,7 @@ export function normalizeKey(model: KeyModel, key: unknown): Record<string, KeyV
 		if (typeof key !== 'string') {
 			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyMustBeString(describe(key)));
 		}
-		// The key attribute of the table: `_bkv_pk`, or `pk` for the table of a release up to 0.4.0 (`legacy.ts`).
+		// The key attribute of the table: `_bkv_pk`, or `pk` for the table of a release up to 0.4.0 (`legacy/layout.ts`).
 		const field = model.table.partitionKey;
 		return { [field]: checkKeyValue(field, key, 'S') };
 	}

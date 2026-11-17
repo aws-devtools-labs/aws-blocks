@@ -47,7 +47,7 @@ import {
 	keyOfItem,
 	layoutItem,
 } from './item.js';
-import { RELEASE_MODEL, RELEASE_PK, RELEASE_TTL, RELEASE_VALUE } from './legacy.js';
+import { RELEASE_MODEL, RELEASE_PK, RELEASE_TTL, RELEASE_VALUE } from './legacy/layout.js';
 import { nowEpochSeconds } from './ttl.js';
 
 /** The name of the data file in the mock data directory of a store. */
