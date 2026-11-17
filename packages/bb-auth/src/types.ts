@@ -2066,6 +2066,12 @@ export interface OidcClientDescriptor<P extends string = string> {
 	sessionPath: string;
 	/** `<base>/exchange/refresh`: renews bearer tokens from `{ refreshToken }`. Served only with `allowBearerAuth`. */
 	refreshPath: string;
+	/**
+	 * The name of the session cookie `/exchange` sets for this block (`auth_<fullId>`). A native client that
+	 * signs out locally after a failed sign-out removes only this cookie, so another block's session survives.
+	 * Always sent by this block; optional so a client reading an older backend's descriptor still works.
+	 */
+	sessionCookieName?: string;
 }
 
 /**
@@ -2094,6 +2100,8 @@ export interface OidcClientHandle<P extends string = string> {
 	readonly sessionPath: string;
 	/** See {@link OidcClientDescriptor.refreshPath}. */
 	readonly refreshPath: string;
+	/** See {@link OidcClientDescriptor.sessionCookieName}. */
+	readonly sessionCookieName?: string;
 	/** @internal Transferable serialization. */
 	toJSON(): OidcClientDescriptor<P>;
 }

@@ -888,6 +888,7 @@ export interface OidcClientDescriptor<P extends string = string> {
     providerConfigs: Record<string, OidcProviderConfig>;
     providers: P[];
     refreshPath: string;
+    sessionCookieName?: string;
     sessionPath: string;
     signInBasePath: string;
     signOutPath: string;
@@ -901,6 +902,7 @@ export interface OidcClientHandle<P extends string = string> {
     readonly providerConfigs: Record<string, OidcProviderConfig>;
     readonly providers: P[];
     readonly refreshPath: string;
+    readonly sessionCookieName?: string;
     readonly sessionPath: string;
     readonly signInBasePath: string;
     readonly signOutPath: string;
