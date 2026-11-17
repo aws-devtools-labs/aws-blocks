@@ -316,6 +316,40 @@ test('each user reads only their own note', async () => {
 - Run the test from the directory the dev server runs in (the project root), under `tsx -C browser` so `import('aws-blocks')` is the generated client, as the scaffolded `npm run test:e2e` does.
 - `createTestClient(app)` returns the clients typed as passed. One user's clients share a jar, so a session `authApi` starts is sent by `api` too; the shared jar `installCookieJar()` installs is never involved.
 
+### Tell the user what a password needs
+
+Set the policy, and branch on the error the client receives:
+
+```ts
+// aws-blocks/index.ts
+import { Auth, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  emailPassword: { passwordPolicy: { minLength: 12, requireSymbols: false } },
+});
+export const authApi = auth.createApi();
+```
+
+```ts
+// src/main.ts
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
+
+const next = await submitAuthAction(authApi, {
+  action: 'signUp',
+  username: 'alice',
+  email: 'alice@example.com',
+  password: 'short',
+});
+if (hasAuthError(next, 'InvalidPasswordException')) {
+  // next.error says what a password needs; show it next to the password field.
+}
+```
+
+For what the policy covers and what the message says, see [Password policy](#password-policy).
+
 ## Which option and why
 
 ### Where do your users live?
@@ -541,38 +575,14 @@ const auth = new Auth(scope, 'auth', {
 | `requireDigits` | `true` | a digit |
 | `requireSymbols` | `true` | a symbol |
 
-With no `passwordPolicy`, a password needs 8 characters and all four kinds of character. Set a `require*` field to `false` to drop that requirement:
+With no `passwordPolicy`, a password needs 8 characters and all four kinds of character. Set a `require*` field to `false` to drop that requirement. The recipe [Tell the user what a password needs](#tell-the-user-what-a-password-needs) sets `{ minLength: 12, requireSymbols: false }` and shows the error on sign-up.
 
-```typescript
-import { Auth } from '@aws-blocks/bb-auth';
-
-const auth = new Auth(scope, 'auth', {
-  emailPassword: { passwordPolicy: { minLength: 12, requireSymbols: false } },
-});
-```
-
-- **Where it is enforced:** every call that sets a password. That is `signUp`, the new-password answer to `confirmSignIn` (`CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`, which an administrator-created user's first sign-in asks for), `confirmResetPassword`, `updatePassword`, the `temporaryPassword` of `auth.admin.createUser`, and `auth.admin.setUserPassword`. The `setAuthState` actions that call them (`signUp`, `confirmSignIn`, `confirmResetPassword`) are covered too. On AWS the user pool enforces the policy, because the CDK layer writes it into the pool the block creates. Locally (`npm run dev` and tests), the local user pool checks the same rules.
-- **What the client receives:** a password that breaks the policy is rejected with `InvalidPasswordException` (`AuthErrors.InvalidPassword`) and status 400. The message describes the whole policy rather than the rule the password broke, and it is the same locally and on AWS. For the example above it is `Password must be at least 12 characters and include an uppercase letter, a lowercase letter and a number.`
-- **How to branch on it:** a thrown error, from a direct call or from your own API method that makes one, matches `isAuthError(e, AuthErrors.InvalidPassword)`. Through `setAuthState` the error is retriable. The returned state carries `retriable: true`, `errorName: 'InvalidPasswordException'` and the message as `error`, so the form stays on the current step. Branch on that state with `hasAuthError`:
-
-```typescript
-// src/main.ts
-import { hasAuthError } from '@aws-blocks/blocks/client';
-import { submitAuthAction } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
-
-const next = await submitAuthAction(authApi, {
-  action: 'signUp',
-  username: 'alice',
-  email: 'alice@example.com',
-  password: 'short',
-});
-if (hasAuthError(next, 'InvalidPasswordException')) {
-  // next.error says what a password needs; show it next to the password field.
-}
-```
-
-- **An imported pool:** with `userPool: Auth.fromExisting(…)`, the block doesn't create the pool, so the pool's own policy applies on AWS. The message is then the fixed `Password does not meet the password policy`.
+- **The range of `minLength`:** 6 to 99, as Cognito accepts. The block does not check it, and the local user pool enforces any number. So `minLength: 3` works under `npm run dev`, and the synth for a deploy fails with `minLength for password must be between 6 and 99`.
+- **Where it is enforced:** every call that sets a password. That is `signUp`, the new-password answer to `confirmSignIn` (`CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`, which an administrator-created user's first sign-in asks for), `confirmResetPassword`, `updatePassword`, the `temporaryPassword` of `auth.admin.createUser`, and `auth.admin.setUserPassword`. The `setAuthState` actions that call them (`signUp`, `confirmSignIn`, `confirmResetPassword`) are covered too. On AWS, the user pool the block creates enforces the policy. The block passes the fields you set to the CDK `UserPool` construct; with no `passwordPolicy` it passes none, and the pool gets the construct's default policy, which is the defaults in the table. Locally (`npm run dev` and tests), the local user pool checks the same rules, with the two differences below.
+- **A generated temporary password, locally:** `auth.admin.createUser` without `temporaryPassword` gets a generated 16-character password, and the local user pool checks it against the policy too. With `minLength` above 16, that call throws `InvalidPasswordException` locally, while Cognito generates a password that fits. Pass a `temporaryPassword` that fits the policy.
+- **What the client receives:** a password that breaks the policy is rejected with `InvalidPasswordException` (`AuthErrors.InvalidPassword`) and status 400. The message describes the whole policy rather than the rule the password broke, and it is the same locally and on AWS. For the recipe's policy it is `Password must be at least 12 characters and include an uppercase letter, a lowercase letter and a number.`
+- **How to branch on it:** a thrown error, from a direct call or from your own API method that makes one, matches `isAuthError(e, AuthErrors.InvalidPassword)`. Through `setAuthState` the error is retriable. The returned state carries `retriable: true`, `errorName: 'InvalidPasswordException'` and the message as `error`, so the form stays on the current step. Branch on that state with `hasAuthError`, as the recipe does.
+- **An imported pool:** with `userPool: Auth.fromExisting(…)`, the block doesn't create the pool, so the pool's own policy applies on AWS. The local user pool still checks `emailPassword.passwordPolicy` (or the defaults), so a password can pass under `npm run dev` and fail on AWS, or the reverse. Set `passwordPolicy` to the policy of the imported pool to make them agree. The message is the fixed `Password does not meet the password policy`, locally and on AWS.
 
 ## One sign-up and sign-in policy: `validateUser`
 
