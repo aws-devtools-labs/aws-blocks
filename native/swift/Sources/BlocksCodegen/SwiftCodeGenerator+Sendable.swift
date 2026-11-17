@@ -15,88 +15,126 @@ import Foundation
 // native binding (a package's type, whose conformance codegen can't see), directly or through another generated
 // type, isn't. So an actor can keep or return an `AuthState`, and Swift 6 checks the rest as it does any type.
 //
-// Names are looked up across every scope: a name that is not `Sendable` in one scope (`Item` in one operation) is
-// treated as not `Sendable` in all of them. That only ever drops a conformance, never claims a wrong one.
+// Names are looked up the way Swift looks them up: each operation's enum is a scope of its own, and a name the
+// enum declares (`Result`) means that declaration there, while any other name means the top-level one. Two types
+// of one name in one scope (`Item` and `Result.Item`) share an answer, which only ever drops a conformance, never
+// claims a wrong one.
+
+/// The generated types that aren't `Sendable`, by scope: `""` is the top level of the generated files, and an
+/// operation's enum is `"<namespace>.<operation>"`.
+struct SendableAnalysis {
+    var declared: [String: Set<String>] = [:]
+    var nonSendable: [String: Set<String>] = [:]
+
+    /// Whether the type `name` means in `scope` is not `Sendable`.
+    func isNonSendable(_ name: String, in scope: String) -> Bool {
+        let owner = declared[scope]?.contains(name) == true ? scope : ""
+        return nonSendable[owner]?.contains(name) == true
+    }
+
+    /// Whether the generated files declare a type named `Sendable`, which hides the protocol from the types in
+    /// its scope.
+    var declaresSendable: Bool { declared.values.contains { $0.contains("Sendable") } }
+}
+
+/// The scope the generator is emitting declarations in (see `SendableAnalysis`).
+final class EmissionScope {
+    var current = ""
+}
 
 extension SwiftCodeGenerator {
-    /// The names of the generated types that aren't `Sendable`.
-    static func nonSendableTypeNames(in model: CodegenModel) -> Set<String> {
-        var declarations: [(name: String, stored: [ResolvedType])] = []
-        var visited: Set<String> = []
+    /// The scope key of an operation's enum.
+    static func sendableScope(namespace: String, operation: String) -> String { "\(namespace).\(operation)" }
 
-        func collect(_ type: ResolvedType, name: String? = nil) {
+    /// Which generated types aren't `Sendable`, in each scope.
+    static func sendableAnalysis(in model: CodegenModel) -> SendableAnalysis {
+        struct Declaration {
+            let scope: String
+            let name: String
+            let stored: [ResolvedType]
+        }
+        var declarations: [Declaration] = []
+
+        func collect(_ type: ResolvedType, name: String? = nil, scope: String) {
             switch type {
             case .record(let recordName, let fields, let additionalPropertiesType, let embeddedUnion):
-                let declared = name ?? recordName
-                guard visited.insert("record:\(declared)").inserted else { return }
                 let stored = fields.map(\.type) + [additionalPropertiesType, embeddedUnion].compactMap { $0 }
-                declarations.append((declared, stored))
-                stored.forEach { collect($0) }
+                declarations.append(Declaration(scope: scope, name: name ?? recordName, stored: stored))
+                stored.forEach { collect($0, scope: scope) }
             case .union(let unionName, let variants, _):
                 let declared = name ?? unionName
-                guard visited.insert("union:\(declared)").inserted else { return }
-                declarations.append((declared, [.union(name: declared, variants: variants, discriminator: nil)]))
+                declarations.append(Declaration(scope: scope, name: declared, stored: [.union(name: declared, variants: variants, discriminator: nil)]))
                 for variant in variants {
                     let stored = variant.fields.map(\.type)
                         + [variant.additionalPropertiesType, variant.embeddedUnion].compactMap { $0 }
-                    declarations.append((variant.name, stored))
-                    stored.forEach { collect($0) }
-                    variant.valueType.map { collect($0) }
-                    variant.nestedTypes.forEach(collect)
+                    declarations.append(Declaration(scope: scope, name: variant.name, stored: stored))
+                    stored.forEach { collect($0, scope: scope) }
+                    variant.valueType.map { collect($0, scope: scope) }
+                    variant.nestedTypes.forEach { collect($0, scope: scope) }
                 }
-            case .list(let element, _): collect(element)
-            case .nullable(let inner): collect(inner)
-            case .map(let value): collect(value)
-            case .transferable(_, let typeArgs): typeArgs.forEach { collect($0) }
-            case .primitive, .formattedType, .enum, .typeReference: break
+            case .list(let element, _): collect(element, scope: scope)
+            case .nullable(let inner): collect(inner, scope: scope)
+            case .map(let value): collect(value, scope: scope)
+            case .transferable(_, let typeArgs): typeArgs.forEach { collect($0, scope: scope) }
+            case .primitive, .formattedType, .typeReference: break
+            case .enum(let enumName, _): declarations.append(Declaration(scope: scope, name: name ?? enumName, stored: []))
             }
         }
-        func collect(_ node: NestedTypeNode) {
-            collect(node.type, name: node.name)
-            node.children.forEach(collect)
+        func collect(_ node: NestedTypeNode, scope: String) {
+            collect(node.type, name: node.name, scope: scope)
+            node.children.forEach { collect($0, scope: scope) }
         }
 
         for typeDef in model.typeDefinitions {
-            collect(typeDef.type, name: typeDef.name)
-            typeDef.nestedTypes.forEach(collect)
+            collect(typeDef.type, name: typeDef.name, scope: "")
+            typeDef.nestedTypes.forEach { collect($0, scope: "") }
         }
-        model.sharedTypes.forEach(collect)
+        model.sharedTypes.forEach { collect($0, scope: "") }
         for namespace in model.apiNamespaces {
             for operation in namespace.operations {
-                operation.nestedTypes.forEach(collect)
-                operation.parameters.forEach { collect($0.type) }
-                collect(operation.result.type)
+                let scope = sendableScope(namespace: namespace.name, operation: operation.name)
+                operation.nestedTypes.forEach { collect($0, scope: scope) }
+                operation.parameters.forEach { collect($0.type, scope: scope) }
+                collect(operation.result.type, scope: scope)
             }
         }
 
+        var analysis = SendableAnalysis()
+        for declaration in declarations {
+            analysis.declared[declaration.scope, default: []].insert(declaration.name)
+        }
         // To a fixed point: a type is not Sendable once something it stores isn't.
-        var names: Set<String> = []
         var changed = true
         while changed {
             changed = false
-            for declaration in declarations where !names.contains(declaration.name) {
-                if declaration.stored.contains(where: { storesNonSendable($0, names: names, bindings: model.declaredTransferableBindings) }) {
-                    names.insert(declaration.name)
+            for declaration in declarations
+            where analysis.nonSendable[declaration.scope]?.contains(declaration.name) != true {
+                let stores = declaration.stored.contains {
+                    storesNonSendable($0, scope: declaration.scope, analysis: analysis, bindings: model.declaredTransferableBindings)
+                }
+                if stores {
+                    analysis.nonSendable[declaration.scope, default: []].insert(declaration.name)
                     changed = true
                 }
             }
         }
-        return names
+        return analysis
     }
 
     private static func storesNonSendable(
-        _ type: ResolvedType, names: Set<String>, bindings: [String: DeclaredTransferableBinding]
+        _ type: ResolvedType, scope: String, analysis: SendableAnalysis, bindings: [String: DeclaredTransferableBinding]
     ) -> Bool {
+        let names = { (name: String) in analysis.isNonSendable(name, in: scope) }
         func check(_ type: ResolvedType) -> Bool {
             switch type {
             case .primitive, .formattedType, .enum: return false
-            case .typeReference(let name): return names.contains(name)
+            case .typeReference(let name): return names(name)
             case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
-                return names.contains(name) || fields.contains { check($0.type) }
+                return names(name) || fields.contains { check($0.type) }
                     || additionalPropertiesType.map(check) == true || embeddedUnion.map(check) == true
             case .union(let name, let variants, _):
-                return names.contains(name) || variants.contains { variant in
-                    names.contains(variant.name) || variant.payloadTypeName.map(names.contains) == true
+                return names(name) || variants.contains { variant in
+                    names(variant.name) || variant.payloadTypeName.map(names) == true
                         || variant.valueType.map(check) == true
                 }
             case .list(let element, _): return check(element)
@@ -112,9 +150,13 @@ extension SwiftCodeGenerator {
 
     /// The conformances of a generated record or union that stores `stored`.
     func valueConformances(_ stored: [ResolvedType]) -> String {
-        stored.contains { Self.storesNonSendable($0, names: nonSendableNames, bindings: declaredBindings) }
-            ? "Codable" : "Codable, Sendable"
+        stored.contains {
+            Self.storesNonSendable($0, scope: emissionScope.current, analysis: sendable, bindings: declaredBindings)
+        } ? "Codable" : "Codable, \(sendableProtocol)"
     }
+
+    /// `Sendable`, qualified as `Swift.Sendable` when a generated type takes that name.
+    var sendableProtocol: String { sendable.declaresSendable ? "Swift.Sendable" : "Sendable" }
 
     /// What a record stores: its fields, its open-record attributes and its embedded union.
     func recordStored(_ fields: [ResolvedField], _ additionalPropertiesType: ResolvedType?, _ embeddedUnion: ResolvedType?) -> [ResolvedType] {

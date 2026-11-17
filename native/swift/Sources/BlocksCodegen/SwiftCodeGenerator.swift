@@ -31,8 +31,10 @@ public struct SwiftCodeGenerator {
     private(set) var nestedTypesByName: [String: [NestedTypeNode]] = [:]
     /// Component schemas by type name, to follow a `typeReference` when walking a type.
     private(set) var typesByName: [String: ResolvedType] = [:]
-    /// The generated types that can't be `Sendable` (see SwiftCodeGenerator+Sendable.swift).
-    private(set) var nonSendableNames: Set<String> = []
+    /// The generated types that can't be `Sendable`, by scope (see SwiftCodeGenerator+Sendable.swift).
+    private(set) var sendable = SendableAnalysis()
+    /// The scope declarations are being emitted in, for `sendable`.
+    let emissionScope = EmissionScope()
     let declaredBindings: [String: DeclaredTransferableBinding]
     /// Unconditional once a module is declared: the generator cannot know a
     /// customer package's export list.
@@ -73,7 +75,7 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
-        generator.nonSendableNames = Self.nonSendableTypeNames(in: model)
+        generator.sendable = Self.sendableAnalysis(in: model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -246,6 +248,8 @@ public struct SwiftCodeGenerator {
         indent: String, lines: inout [String]
     ) {
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
+        emissionScope.current = Self.sendableScope(namespace: namespace, operation: operation.name)
+        defer { emissionScope.current = "" }
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
@@ -265,7 +269,7 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable, Sendable {", lines: &lines)
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable, \(sendableProtocol) {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: indent + "    "))
             lines.append("\(indent)}")
         case .union(_, let variants, let discriminator):
@@ -773,7 +777,7 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable, Sendable {", lines: &lines)
+            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable, \(sendableProtocol) {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: "    "))
             lines.append("}")
 

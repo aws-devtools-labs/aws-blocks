@@ -98,4 +98,62 @@ final class SendableModelTests: XCTestCase {
         throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
         #endif
     }
+
+    // MARK: - Scopes
+
+    private let channel = #"{ "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [{ "type": "string" }] }"#
+
+    /// Two operations' `Result`s each get their own answer: a channel in one doesn't drop `Sendable` from the other,
+    /// and the other being `Sendable` doesn't make the one that stores a channel claim it.
+    private var sameNamedResults: [String] {
+        func arm(_ status: String, _ field: String, _ schema: String = #"{ "type": "string" }"#) -> String {
+            let props = #""status": { "type": "string", "enum": ["\#(status)"] }, "\#(field)": \#(schema)"#
+            return #"{ "type": "object", "properties": { \#(props) }, "required": ["status", "\#(field)"] }"#
+        }
+        let (signedIn, pending) = (arm("signedIn", "user"), arm("pending", "code"))
+        let (joined, full) = (arm("joined", "channel", channel), arm("full", "reason"))
+        return [
+            #"{ "name": "auth.signIn", "params": [], "result": { "name": "R", "schema": { "oneOf": [\#(signedIn), \#(pending)] } } }"#,
+            #"{ "name": "chat.join", "params": [], "result": { "name": "R", "schema": { "oneOf": [\#(joined), \#(full)] } } }"#
+        ]
+    }
+
+    func testSameNamedTypesInTwoOperationsGetTheirOwnAnswer() throws {
+        let output = try generate(methods: sameNamedResults)
+        let auth = try XCTUnwrap(output.api.components(separatedBy: "public enum SignIn {").last)
+        let chat = try XCTUnwrap(output.api.components(separatedBy: "public enum Join {").last)
+
+        assertContains(auth, "public enum Result: Codable, Sendable {")
+        assertContains(chat, "public enum Result: Codable {")
+        assertContains(chat, "public struct Joined: Codable {")
+        assertContains(chat, "public struct Full: Codable, Sendable {")
+    }
+
+    /// The same spec compiles in Swift 6 language mode with warnings as errors, so no type claims a `Sendable` it
+    /// isn't.
+    func testSameNamedTypesInTwoOperationsCompileInSwift6() throws {
+        #if os(macOS)
+        let output = try generate(methods: sameNamedResults)
+        try typecheckConsumer(
+            models: output.models, api: output.api, consumer: "import Generated\n",
+            moduleFlags: ["-swift-version", "6", "-warnings-as-errors"]
+        )
+        #else
+        throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
+        #endif
+    }
+
+    /// A generated type named `Sendable` hides the protocol in its scope, so the conformance is spelled `Swift.Sendable`.
+    func testATypeNamedSendableQualifiesTheConformance() throws {
+        let inner = #"{ "type": "object", "properties": { "x": { "type": "string" } }, "required": ["x"] }"#
+        let schemas = #"{ "Holder": { "type": "object", "properties": { "sendable": \#(inner) }, "required": ["sendable"] } }"#
+        let method = ##"{ "name": "api.get", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Holder" } } }"##
+        let output = try generate(methods: [method], schemas: schemas)
+
+        assertContains(output.models, "public nonisolated struct Holder: Codable, Swift.Sendable {")
+        assertContains(output.models, "public nonisolated struct Sendable: Codable, Swift.Sendable {")
+        #if os(macOS)
+        try typecheckConsumer(models: output.models, api: output.api, consumer: "import Generated\n", moduleFlags: ["-warnings-as-errors"])
+        #endif
+    }
 }
