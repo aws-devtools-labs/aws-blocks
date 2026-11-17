@@ -9,9 +9,10 @@ import XCTest
 @testable import BlocksCodegen
 
 /// A transferable (a realtime channel, a file handle, an OIDC client) only travels from the server to the client:
-/// the server never re-hydrates one sent back. So generation fails for an operation parameter that holds one,
-/// directly or through a model, naming the method, the parameter and the field path. A model that holds one and
-/// only appears in a result still generates.
+/// the server never re-hydrates one sent back. So generation fails for an operation parameter that is one, directly
+/// or optional, nullable, in an array or a dictionary, or through a `$ref` to one. A model, an inline object or a
+/// union that holds one still generates. Swift refuses exactly what the Kotlin generator refuses, with the same
+/// message (see Kotlin's `TransferableParameterTest`).
 final class TransferableParameterTests: XCTestCase {
 
     private func generate(schemas: String = "{}", methods: [String]) throws -> GeneratedSources {
@@ -27,9 +28,9 @@ final class TransferableParameterTests: XCTestCase {
         return try SwiftCodeGenerator().generate(from: CodegenModelBuilder().build(from: rpcModel))
     }
 
-    /// `api.relay` taking `params` (a JSON array) and returning a string.
-    private func relay(_ params: String) -> String {
-        #"{ "name": "api.relay", "params": \#(params), "result": { "name": "R", "schema": { "type": "string" } } }"#
+    /// `api.relay` taking `params` and returning a string.
+    private func relay(_ params: String...) -> String {
+        #"{ "name": "api.relay", "params": [\#(params.joined(separator: ","))], "result": { "name": "R", "schema": { "type": "string" } } }"#
     }
 
     private func param(_ name: String, _ schema: String, required: Bool = true) -> String {
@@ -37,131 +38,106 @@ final class TransferableParameterTests: XCTestCase {
     }
 
     private func ref(_ name: String) -> String { ##"{ "$ref": "#/components/schemas/\##(name)" }"## }
+    private func array(_ items: String) -> String { #"{ "type": "array", "items": \#(items) }"# }
+    private func map(_ values: String) -> String { #"{ "type": "object", "additionalProperties": \#(values) }"# }
+    private func nullable(_ inner: String) -> String { #"{ "oneOf": [\#(inner), { "type": "null" }] }"# }
+    private func holder(_ field: String, _ schema: String) -> String {
+        #"{ "type": "object", "properties": { "\#(field)": \#(schema) }, "required": ["\#(field)"] }"#
+    }
 
     private let channel = #"{ "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [{ "type": "string" }] }"#
     private let download = #"{ "x-blocks-transferable": "file-bucket/download" }"#
+    private let upload = #"{ "x-blocks-transferable": "file-bucket/upload" }"#
+    private let oidc = #"{ "x-blocks-transferable": "oidc/client" }"#
+    private let unbound = #"{ "x-blocks-transferable": "acme/widget" }"#
 
     private func assertRefused(
-        schemas: String = "{}", _ methods: [String], _ expected: String, file: StaticString = #filePath, line: UInt = #line
+        _ tag: String, schemas: String = "{}", _ method: String, file: StaticString = #filePath, line: UInt = #line
     ) {
-        XCTAssertThrowsError(try generate(schemas: schemas, methods: methods), file: file, line: line) { error in
-            XCTAssertEqual("\(error)", expected, file: file, line: line)
-        }
-    }
-
-    private func message(_ tag: String, parameter: String, field: String? = nil) -> String {
-        "Transferable types (\(tag)) cannot be serialized: they are read-only. Method 'api.relay', "
-            + "parameter '\(parameter)'\(field.map { " (field \($0))" } ?? "")."
-    }
-
-    // MARK: - Direct parameters
-
-    func testDirectParameterIsRefused() {
-        assertRefused([relay("[\(param("feed", channel))]")], message("realtime/channel", parameter: "feed"))
-    }
-
-    func testOptionalParameterIsRefused() {
-        assertRefused(
-            [relay("[\(param("feed", channel, required: false))]")], message("realtime/channel", parameter: "feed")
-        )
-    }
-
-    func testNullableParameterIsRefused() {
-        let nullable = #"{ "oneOf": [\#(channel), { "type": "null" }] }"#
-        assertRefused([relay("[\(param("feed", nullable))]")], message("realtime/channel", parameter: "feed"))
-    }
-
-    func testListAndMapParametersAreRefused() {
-        let list = #"{ "type": "array", "items": \#(download) }"#
-        let map = #"{ "type": "object", "additionalProperties": \#(channel) }"#
-        assertRefused(
-            [relay("[\(param("files", list)), \(param("byRoom", map))]")],
-            message("file-bucket/download", parameter: "files") + "\n" + message("realtime/channel", parameter: "byRoom")
-        )
-    }
-
-    // MARK: - Through a model
-
-    func testModelFieldListAndMapAreRefusedWithTheFieldPath() {
-        let schemas = #"""
-        {
-            "ByField": { "type": "object", "properties": { "feed": \#(channel) }, "required": ["feed"] },
-            "ByList": { "type": "object", "properties": { "files": { "type": "array", "items": \#(download) } }, "required": ["files"] },
-            "ByMap": { "type": "object", "properties": { "rooms": { "type": "object", "additionalProperties": \#(channel) } }, "required": ["rooms"] }
-        }
-        """#
-        assertRefused(
-            schemas: schemas,
-            [relay("[\(param("a", ref("ByField"))), \(param("b", ref("ByList"))), \(param("c", ref("ByMap")))]")],
-            [
-                message("realtime/channel", parameter: "a", field: "ByField.feed"),
-                message("file-bucket/download", parameter: "b", field: "ByList.files"),
-                message("realtime/channel", parameter: "c", field: "ByMap.rooms")
-            ].joined(separator: "\n")
-        )
-    }
-
-    func testNestedModelIsRefusedWithTheWholePath() {
-        let schemas = #"""
-        {
-            "Outer": { "type": "object", "properties": { "inner": \#(ref("Inner")) }, "required": ["inner"] },
-            "Inner": { "type": "object", "properties": { "feed": \#(channel) }, "required": ["feed"] }
-        }
-        """#
-        assertRefused(
-            schemas: schemas, [relay("[\(param("outer", ref("Outer")))]")],
-            message("realtime/channel", parameter: "outer", field: "Outer.inner.feed")
-        )
-    }
-
-    func testInlineObjectParameterIsRefused() {
-        let inline = #"{ "type": "object", "properties": { "feed": \#(channel) }, "required": ["feed"] }"#
-        XCTAssertThrowsError(try generate(methods: [relay("[\(param("bundle", inline))]")])) { error in
-            XCTAssertTrue(
-                "\(error)".hasPrefix("Transferable types (realtime/channel) cannot be serialized: they are read-only. "
-                    + "Method 'api.relay', parameter 'bundle' (field "),
-                "\(error)"
+        XCTAssertThrowsError(try generate(schemas: schemas, methods: [method]), file: file, line: line) { error in
+            XCTAssertEqual(
+                "\(error)", "Transferable types (\(tag)) cannot be serialized — they are read-only",
+                file: file, line: line
             )
-            XCTAssertTrue("\(error)".hasSuffix(".feed)."), "\(error)")
         }
     }
 
-    func testUnionArmIsRefused() {
-        let schemas = #"""
-        {
-            "Event": { "oneOf": [
-                { "type": "object", "properties": {
-                    "kind": { "type": "string", "enum": ["text"] }, "body": { "type": "string" }
-                }, "required": ["kind", "body"] },
-                { "type": "object", "properties": { "kind": { "type": "string", "enum": ["feed"] }, "feed": \#(channel) }, "required": ["kind", "feed"] }
-            ], "discriminator": { "propertyName": "kind" } }
-        }
-        """#
-        assertRefused(
-            schemas: schemas, [relay("[\(param("event", ref("Event")))]")],
-            message("realtime/channel", parameter: "event", field: "Event.feed")
+    private func assertGenerates(
+        schemas: String = "{}", _ method: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertNoThrow(try generate(schemas: schemas, methods: [method]), file: file, line: line)
+    }
+
+    // MARK: - Refused, as in Kotlin
+
+    func testChannelParameterIsRefusedRequiredOptionalOrNullable() {
+        assertRefused("realtime/channel", relay(param("feed", channel)))
+        assertRefused("realtime/channel", relay(param("feed", channel, required: false)))
+        assertRefused("realtime/channel", relay(param("feed", nullable(channel))))
+    }
+
+    func testArraysAndDictionariesOfChannelsAreRefused() {
+        assertRefused("realtime/channel", relay(param("feeds", array(channel))))
+        assertRefused("realtime/channel", relay(param("byRoom", map(channel))))
+        assertRefused("realtime/channel", relay(param("maybe", array(nullable(channel)))))
+    }
+
+    func testFileHandlesOIDCClientsAndUnboundTagsAreRefused() {
+        assertRefused("file-bucket/download", relay(param("download", download)))
+        assertRefused("file-bucket/upload", relay(param("upload", upload)))
+        assertRefused("oidc/client", relay(param("login", oidc)))
+        assertRefused("acme/widget", relay(param("widget", unbound)))
+    }
+
+    func testRefToATransferableSchemaIsRefused() {
+        assertRefused("realtime/channel", schemas: #"{ "Feed": \#(channel) }"#, relay(param("feed", ref("Feed"))))
+    }
+
+    func testTheFirstOffendingParameterIsReported() {
+        assertRefused("file-bucket/download", relay(param("files", array(download)), param("byRoom", map(channel))))
+    }
+
+    // MARK: - Generated, as in Kotlin
+
+    func testModelHoldingATransferableGenerates() {
+        assertGenerates(schemas: #"{ "Bundle": \#(holder("feed", channel)) }"#, relay(param("bundle", ref("Bundle"))))
+        assertGenerates(
+            schemas: #"{ "Outer": \#(holder("inner", ref("Inner"))), "Inner": \#(holder("feed", channel)) }"#,
+            relay(param("outer", ref("Outer")))
         )
+        assertGenerates(relay(param("bundle", holder("feed", channel))))
     }
 
-    func testUnionValueArmIsRefused() {
-        let either = #"{ "oneOf": [{ "type": "string" }, { "type": "array", "items": \#(download) }] }"#
-        assertRefused([relay("[\(param("source", either))]")], message("file-bucket/download", parameter: "source"))
+    func testUnionHoldingATransferableGenerates() {
+        let event = #"""
+        { "Event": { "oneOf": [
+            { "type": "object", "properties": {
+                "kind": { "type": "string", "enum": ["text"] }, "body": { "type": "string" }
+            }, "required": ["kind", "body"] },
+            { "type": "object", "properties": { "kind": { "type": "string", "enum": ["feed"] }, "feed": \#(channel) }, "required": ["kind", "feed"] }
+        ], "discriminator": { "propertyName": "kind" } } }
+        """#
+        assertGenerates(schemas: event, relay(param("event", ref("Event"))))
+        assertGenerates(relay(param("source", #"{ "oneOf": [{ "type": "string" }, \#(array(download))] }"#)))
+        assertGenerates(relay(param("source", #"{ "oneOf": [{ "type": "string" }, \#(channel)] }"#)))
     }
 
-    func testRecursiveModelWithoutATransferableGenerates() throws {
+    func testRecursiveModelGenerates() throws {
         let schemas = #"""
         { "Node": { "type": "object", "properties": {
             "name": { "type": "string" }, "children": { "type": "array", "items": { "$ref": "#/components/schemas/Node" } }
         }, "required": ["name", "children"] } }
         """#
-        let output = try generate(schemas: schemas, methods: [relay("[\(param("tree", ref("Node")))]")])
+        let output = try generate(schemas: schemas, methods: [relay(param("tree", ref("Node")))])
         XCTAssertTrue(output.api.contains("public func relay(tree: Node) async throws -> String {"), output.api)
+
+        // An alias of itself (an array of itself) has no transferable to find, and the search ends.
+        let loop = ##"{ "Loop": { "type": "array", "items": { "$ref": "#/components/schemas/Loop" } } }"##
+        XCTAssertNoThrow(try generate(schemas: loop, methods: [relay(param("loop", ref("Loop")))]))
     }
 
-    // MARK: - Results still generate
-
-    func testModelHoldingATransferableStillGeneratesAsAResult() throws {
-        let schemas = #"{ "Bundle": { "type": "object", "properties": { "feed": \#(channel) }, "required": ["feed"] } }"#
+    func testTransferableResultsGenerate() throws {
+        let schemas = #"{ "Bundle": \#(holder("feed", channel)) }"#
         let getBundle = #"{ "name": "api.getBundle", "params": [], "result": { "name": "R", "schema": \#(ref("Bundle")) } }"#
         let getFeed = #"{ "name": "api.getFeed", "params": [], "result": { "name": "R", "schema": \#(channel) } }"#
         let output = try generate(schemas: schemas, methods: [getBundle, getFeed])

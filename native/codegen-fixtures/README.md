@@ -7,10 +7,8 @@ Shared OpenRPC spec fixtures for verifying codegen output across Kotlin, Swift, 
 Each numbered directory contains:
 - `spec.json` — the OpenRPC 1.3.2 input spec
 - `kotlin/` — golden-file outputs from Kotlin codegen, or `codegen-error.txt` for a spec Kotlin refuses to generate (the error message; for example a transferable parameter, since transferables are read-only)
-- `swift/` — golden-file outputs from Swift codegen
+- `swift/` — golden-file outputs from Swift codegen, or `codegen-error.txt` for a spec Swift refuses. Swift and Kotlin refuse the same specs with the same message, so the two `codegen-error.txt` files are identical (`GoldenFileTests` checks it)
 - `dart/` — golden-file outputs from Dart codegen
-
-`swift/` holds `codegen-error.txt` instead for a spec the Swift codegen refuses to generate: the error message, for example for a transferable parameter, since transferables are read-only.
 
 ## Running Tests
 

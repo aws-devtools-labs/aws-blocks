@@ -96,8 +96,9 @@ struct NativeBindingsCatalog: Decodable {
 enum CodegenError: Error, CustomStringConvertible {
     case unsupportedSchema(String)
     case invalidNativeCatalog(String)
-    /// One message per operation parameter that holds a transferable (see `rejectTransferableParameters`).
-    case transferableParameters([String])
+    /// An operation parameter is a transferable (see `rejectTransferableParameters`). The message is the Kotlin
+    /// generator's, word for word, so both SDKs refuse the same spec alike.
+    case transferableParameter(tag: String)
 
     var description: String {
         switch self {
@@ -105,8 +106,8 @@ enum CodegenError: Error, CustomStringConvertible {
             return "Unsupported schema: \(detail)"
         case .invalidNativeCatalog(let detail):
             return "Invalid native binding metadata: \(detail)"
-        case .transferableParameters(let messages):
-            return messages.joined(separator: "\n")
+        case .transferableParameter(let tag):
+            return "Transferable types (\(escapedForDiagnostic(tag))) cannot be serialized — they are read-only"
         }
     }
 }

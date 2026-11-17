@@ -106,4 +106,19 @@ final class GoldenFileTests: XCTestCase {
             }
         }
     }
+
+    /// Swift and Kotlin refuse the same fixtures, with the same message: a fixture with a Kotlin golden has a
+    /// Swift `codegen-error.txt` exactly when it has a Kotlin one, and the two files are identical.
+    func testSwiftAndKotlinRefuseTheSameFixturesAlike() throws {
+        let fileManager = FileManager.default
+        let fixtures = try fileManager.contentsOfDirectory(at: fixturesURL, includingPropertiesForKeys: nil)
+            .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("kotlin").path) }
+        XCTAssertFalse(fixtures.isEmpty, "no fixture has a Kotlin golden under \(fixturesURL.path)")
+        for fixture in fixtures {
+            let golden = { (language: String) in
+                try? String(contentsOf: fixture.appendingPathComponent("\(language)/\(codegenErrorGolden)"), encoding: .utf8)
+            }
+            XCTAssertEqual(golden("swift"), golden("kotlin"), "Swift and Kotlin codegen errors differ in \(fixture.lastPathComponent)")
+        }
+    }
 }

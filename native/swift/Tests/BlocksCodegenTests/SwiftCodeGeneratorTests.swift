@@ -622,11 +622,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         let model = try build(from: json)
         // A tag no binding declares is still a transferable, and still read-only.
         XCTAssertThrowsError(try generator.generate(from: model)) { error in
-            XCTAssertEqual(
-                "\(error)",
-                "Transferable types (example-iot/device-link) cannot be serialized: they are read-only. "
-                    + "Method 'api.attach', parameter 'link'."
-            )
+            XCTAssertEqual("\(error)", "Transferable types (example-iot/device-link) cannot be serialized — they are read-only")
         }
     }
 
