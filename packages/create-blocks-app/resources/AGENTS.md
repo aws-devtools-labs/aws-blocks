@@ -4,7 +4,7 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
-- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `DistributedTable`, `DistributedTableErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `KVStore`, `KVStoreErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
 - **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-kv-store`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
@@ -36,7 +36,7 @@ When a request names a call such as `orders.create(...)`, export `const orders =
 - Throw `new ApiError(message, status, { name, retriable })` (in `aws-blocks/`, import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
 - A plain `Error` (even with `name` or `status` set on it) or a thrown non-`Error` reaches the client as an unnamed `500` with the message `Internal error`. Clients match the name, not the message: `isBlocksError(e, 'OrderNotFound')`.
 - In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`. `isBlocksError(e, name)` narrows `e` to `Error & { name }`, which has no `status`, so check `e instanceof ApiError` before reading `e.status`: `npm run build` type-checks `test/` too.
-- `get()` on `DistributedTable`, `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
+- `get()` on `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
 - `FileBucket.getUrl()` signs a URL without checking that the file exists, and `delete()` of a missing file succeeds. Call `get()` first when a download or delete must reject a missing file.
 
 ### Auth on the frontend

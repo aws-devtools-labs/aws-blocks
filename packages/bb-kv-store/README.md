@@ -106,6 +106,8 @@ await todos.get({ userId: 'alice', todoId: '001' });
 
 A key field cannot hold an empty string.
 
+The key is the identity of an item. `get`, `put`, `delete`, and the conditions `ifNotExists` and `ifExists` match the whole key: the partition field, and the sort field if the store has one. In a store with a sort field, the sort field is unique only in its partition. Two items can have the same `todoId` if they have different `userId` values. To make one field unique in the whole store, make it the partition field of a key with no sort field, and list the items by another field with an index.
+
 ### Branded key fields
 
 Two string fields have the same type, so the compiler accepts `{ userId: todoId, todoId: userId }`. To make that a compile error, brand the key fields in the schema.
