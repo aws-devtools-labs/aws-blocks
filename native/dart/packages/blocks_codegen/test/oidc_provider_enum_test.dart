@@ -135,7 +135,7 @@ void main() {
     expect(source, isNot(contains('implements OidcProvider')));
   });
 
-  test('a type argument that is not a string enum takes any provider', () {
+  test('a type argument with no enum takes any provider', () {
     final (:source, warnings: _) = _generate([
       _method('auth.getClient', {
         'x-blocks-transferable': 'oidc/client',
@@ -147,6 +147,32 @@ void main() {
     expect(source, contains('Future<OidcClient> getClient()'));
     expect(source, isNot(contains('implements OidcProvider')));
   });
+
+  for (final (name, arg) in [
+    (
+      'a numeric enum',
+      <String, dynamic>{
+        'enum': [1, 2],
+      },
+    ),
+    (
+      'an enum with no type',
+      <String, dynamic>{
+        'enum': ['google'],
+      },
+    ),
+  ]) {
+    test('$name takes any provider', () {
+      final (:source, warnings: _) = _generate([
+        _method('auth.getClient', {
+          'x-blocks-transferable': 'oidc/client',
+          'x-blocks-type-args': [arg],
+        }),
+      ]);
+      expect(source, contains('Future<OidcClient> getClient()'));
+      expect(source, isNot(contains('implements OidcProvider')));
+    });
+  }
 
   test('an optional client keeps its providers', () {
     final (:source, warnings: _) = _generate([

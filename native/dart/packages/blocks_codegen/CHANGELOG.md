@@ -18,7 +18,9 @@
   returns `TypedOidcClient<AuthApiGetClientProvider>` instead of
   `OidcClient`, so its `signIn`, `signInRelay` and `exchange` take only that
   method's own providers and a typo doesn't compile. This matches the Kotlin
-  and Swift clients. Two things that compiled before no longer do:
+  and Swift clients. An `Auth` block's `createOidcApi().getClient()` names
+  its providers, so this reaches every app that calls `createOidcApi()`.
+  Two things that compiled before no longer do:
   - Passing a provider name to the result:
     `final oidc = await blocks.auth.getClient(); oidc.signInRelay('google', …)`.
     Pass the generated value, `oidc.signInRelay(AuthApiGetClientProvider.google, …)`,

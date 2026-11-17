@@ -411,8 +411,8 @@ class DartCodeGenerator {
     buf.writeln('  final String providerName;');
     buf.writeln();
     buf.writeln(
-      '  /// The provider the backend knows as [name], or null if the spec '
-      'named none.',
+      '  /// The provider whose `providerName` is [name], or null if no '
+      'provider has that name.',
     );
     buf.writeln('  static $name? fromProviderName(String name) {');
     buf.writeln('    for (final provider in values) {');

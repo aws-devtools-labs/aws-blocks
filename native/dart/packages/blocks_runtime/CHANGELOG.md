@@ -34,10 +34,16 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `providerName` is the name the backend knows the provider by.
 - `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
   its descriptor doesn't list or has no config for, as `signInRelay` does.
-  It used to fail a null check.
+  It used to fail a null check. A client whose `providerConfigs` has the
+  provider but whose `providers` doesn't, such as
+  `OidcClient(providers: const [], providerConfigs: {'google': …})`, used
+  to sign in and now throws.
 - `OidcClient.exchange` throws `OidcUnknownProviderException` for a
   provider its descriptor doesn't list, before sending anything, as Kotlin's
-  does. It used to post the name to the backend, which rejected it.
+  does. It used to post the name to the backend, which rejected it with an
+  `OidcExchangeException`, so an app that calls `exchange` directly and
+  catches only `on OidcExchangeException` no longer catches it. Both extend
+  `OidcException`.
 
 ## 0.2.0
 

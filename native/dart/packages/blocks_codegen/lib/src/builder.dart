@@ -1642,12 +1642,14 @@ class CodegenModelBuilder {
   }
 
   /// The provider names of an `oidc/client` whose first type argument is a
-  /// string enum, in spec order without duplicates. Null when there is no
-  /// such argument or it lists no names, so the client takes any provider.
+  /// string enum (`"type": "string"` with an `enum`), in spec order without
+  /// duplicates. Null when there is no such argument, it is an enum of other
+  /// values (`{"enum": [1, 2]}`), or it lists no names, so the client takes
+  /// any provider.
   List<String>? _oidcProviders(List<TypeRef> args) {
     if (args.isEmpty) return null;
     final first = args.first;
-    if (first is! UnionLiteralRef) return null;
+    if (first is! UnionLiteralRef || !first.isString) return null;
     final values = first.values.toSet().toList();
     return values.isEmpty ? null : values;
   }

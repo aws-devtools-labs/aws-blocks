@@ -293,12 +293,12 @@ void main() {
 
   group('exchange', () {
     test('throws OidcUnknownProviderException for a provider the client does '
-        'not list, and sends nothing', () {
+        'not list, and sends nothing', () async {
       final backend = _backend();
       final typed = TypedOidcClient<TestProvider>(
         _client(backend.client, providers: const ['google']),
       );
-      expect(
+      await expectLater(
         () => typed.exchange(
           code: 'c',
           verifier: 'v',
@@ -318,10 +318,10 @@ void main() {
       expect(backend.requests, isEmpty);
     });
 
-    test('an untyped client rejects an unlisted name the same way', () {
+    test('an untyped client rejects an unlisted name the same way', () async {
       final backend = _backend();
       final client = _client(backend.client, providers: const ['google']);
-      expect(
+      await expectLater(
         () => client.exchange(
           code: 'c',
           verifier: 'v',
@@ -335,22 +335,25 @@ void main() {
       expect(backend.requests, isEmpty);
     });
 
-    test('a widened client still rejects another enum\'s unlisted value', () {
-      final backend = _backend();
-      final TypedOidcClient<OidcProvider> widened =
-          TypedOidcClient<TestProvider>(
-            _client(backend.client, providers: const ['google']),
-          );
-      expect(
-        () => widened.signInRelay(
-          const _Other('okta'),
-          launcher: _relayLauncher(),
-          relayTo: _relayTo,
-        ),
-        throwsA(isA<OidcUnknownProviderException>()),
-      );
-      expect(backend.requests, isEmpty);
-    });
+    test(
+      'a widened client still rejects another enum\'s unlisted value',
+      () async {
+        final backend = _backend();
+        final TypedOidcClient<OidcProvider> widened =
+            TypedOidcClient<TestProvider>(
+              _client(backend.client, providers: const ['google']),
+            );
+        await expectLater(
+          () => widened.signInRelay(
+            const _Other('okta'),
+            launcher: _relayLauncher(),
+            relayTo: _relayTo,
+          ),
+          throwsA(isA<OidcUnknownProviderException>()),
+        );
+        expect(backend.requests, isEmpty);
+      },
+    );
   });
 
   group('OidcClient.signIn', () {

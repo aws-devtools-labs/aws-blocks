@@ -27,7 +27,7 @@ enum AuthApiGetClientProvider implements OidcProvider {
   @override
   final String providerName;
 
-  /// The provider the backend knows as [name], or null if the spec named none.
+  /// The provider whose `providerName` is [name], or null if no provider has that name.
   static AuthApiGetClientProvider? fromProviderName(String name) {
     for (final provider in values) {
       if (provider.providerName == name) return provider;
