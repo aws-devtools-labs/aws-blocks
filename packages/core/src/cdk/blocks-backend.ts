@@ -38,6 +38,7 @@ import {
 } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
+import { applyAppIdentity } from './app-identity.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports } from '../rpc-dispatch.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
@@ -282,6 +283,9 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
 	addServicePrincipalTrustCheck(scope);
+	// Opt-in app identity on a shared app platform (`defaults.appIdentity`): the `app`
+	// tag on every resource and role; the report lists isolation violations.
+	applyAppIdentity(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,
