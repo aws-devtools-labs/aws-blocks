@@ -437,6 +437,6 @@ Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. I
 
 The dev server enforces what an upload URL signs, as S3 does: an upload whose `Content-Type` (or, when `contentLength` was signed, size) differs from the signed value fails with `403 SignatureDoesNotMatch`. Local downloads are always served with `X-Content-Type-Options: nosniff` and a `Content-Disposition` — the one signed with `attachment`, or plain `attachment` otherwise — so files never display inline in local dev even though they can on AWS (see [Serving user uploads](#serving-user-uploads)).
 
-When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
+When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` select the current file.
 
 

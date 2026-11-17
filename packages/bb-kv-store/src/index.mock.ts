@@ -8,20 +8,18 @@ import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
+	compareByBaseKey,
 	compareKeyValues,
 	createReader,
 	decodeCursor,
 	deleteCondition,
-	encodeCursor,
 	type Item,
 	type KeyModel,
 	type KeyValue,
-	keyFields,
-	liveItems,
 	matchesSort,
 	normalizeKey,
 	normalizeLimit,
-	PagedResults,
+	orderedResults,
 	planQuery,
 	prepareItem,
 	presentOptions,
@@ -59,6 +57,7 @@ assertNotMockInDeployedEnv('bb-kv-store');
 // ── Public types ────────────────────────────────────────────────────────────
 
 export { KVStoreErrors } from './errors.js';
+export { LegacyKVStore } from './legacy/mock.js';
 export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -413,20 +412,17 @@ export class KVStore<
 	private results(
 		ordered: () => Item[],
 		compare: (a: Item, b: Item) => number,
-		startAfter: Item | undefined,
+		startAfter: Record<string, KeyValue> | undefined,
 		limit: number | undefined,
 		indexName: string | undefined,
 		includeExpired: boolean,
 	): Results<Out, K> {
-		const model = this.model;
-		return new PagedResults<Entry<Out, K>>(
-			() => {
-				const items = includeExpired ? ordered() : liveItems(model, ordered());
-				return [startAfter ? items.filter((item) => compare(item, startAfter) > 0) : items];
-			},
+		return orderedResults<Entry<Out, K>>(
+			this.model,
 			this.reader.entry,
-			limit,
-			(item) => encodeCursor(model, indexName, item),
+			{ limit, startKey: startAfter, indexName, includeExpired },
+			ordered,
+			compare,
 		);
 	}
 
@@ -442,17 +438,4 @@ export class KVStore<
 		this.sorted = undefined;
 		saveMockFile(this.dataDir, this.data.values());
 	}
-}
-
-/**
- * Deterministic tie-break for ordering: compare two items by the base-table
- * key (partition key, then sort key). Returns a stable -1/0/1. (String
- * comparisons use JS UTF-16 order — see DESIGN.md.)
- */
-function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
-	for (const field of keyFields(model.table)) {
-		const c = compareKeyValues(a[field] as KeyValue, b[field] as KeyValue);
-		if (c !== 0) return c;
-	}
-	return 0;
 }

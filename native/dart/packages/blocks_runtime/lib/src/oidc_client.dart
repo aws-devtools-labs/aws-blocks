@@ -13,7 +13,6 @@ import 'oidc_types.dart';
 import 'response_url.dart';
 import 'session_store.dart';
 import 'token_store.dart';
-import 'transferable_descriptor.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
 class OidcClient implements AuthProvider {
@@ -55,10 +54,6 @@ class OidcClient implements AuthProvider {
   final SessionStore sessionStore;
 
   final http.Client _httpClient;
-
-  /// The descriptor [fromJson] hydrated this client from, unchanged, as
-  /// [toJson] returns it. Null for a client built with the constructor.
-  Map<String, dynamic>? _wireDescriptor;
 
   final _controller = StreamController<OidcAuthState>.broadcast();
   Completer<void>? _refreshCompleter;
@@ -569,39 +564,8 @@ class OidcClient implements AuthProvider {
       tokenStore: tokenStore,
       sessionStore: sessionStore,
       httpClient: httpClient,
-    ).._wireDescriptor = descriptor;
+    );
   }
-
-  /// This client's `{"__blocks": "oidc/client", …}` descriptor: the one
-  /// [fromJson] hydrated it from, unchanged (keys this runtime doesn't read
-  /// included), or, for a client built with the constructor, its providers
-  /// and paths, in the shape [fromJson] reads. A generated client sends an
-  /// OIDC client parameter, or one inside a model it sends, this way;
-  /// `jsonEncode` calls it too. The base URL and the token and session stores
-  /// are this app's, not the server's, so they aren't part of it.
-  ///
-  /// Returns a copy, so changing it doesn't change this client.
-  Map<String, dynamic> toJson() => transferableDescriptor(
-    'oidc/client',
-    _wireDescriptor ??
-        {
-          'providers': providers,
-          'providerConfigs': {
-            for (final e in providerConfigs.entries)
-              e.key: {
-                'authorizeUrl': e.value.authorizeUrl,
-                'clientId': e.value.clientId,
-                'scopes': e.value.scopes,
-                'kind': e.value.kind,
-              },
-          },
-          'exchangePath': exchangePath,
-          'refreshPath': refreshPath,
-          'signOutPath': signOutPath,
-          'authorizeParamsBasePath': authorizeParamsBasePath,
-          'callbackPath': callbackPath,
-        },
-  );
 
   // --- Private helpers ---
 

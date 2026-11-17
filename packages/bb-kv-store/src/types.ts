@@ -597,3 +597,76 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
 		| { schema?: undefined; key?: undefined; indexes?: undefined; ttl?: undefined; readValidation?: undefined }
 		| SchemaOptions<In, Out, K, I>
 	);
+
+/**
+ * Constructor options of `LegacyKVStore`: the options that `KVStore` took in
+ * the releases up to 0.4.0. Keep the options that the old store had, with
+ * their values. The block declares the table of the old store from them, and
+ * a difference makes CloudFormation change that table.
+ */
+export interface LegacyKVStoreOptions<T = string> {
+	/**
+	 * The schema of the old store. It gives the value type `T`, and `put`
+	 * validates a value with it before the write, as in the release. A read
+	 * does not validate.
+	 */
+	schema?: StandardSchemaV1<T>;
+	/** The table that the old store wrapped, if it wrapped one. Keep `KVStore.fromExisting(tableName)` as it is. */
+	table?: ExternalTableRef;
+	/**
+	 * The logger of the old store. The local mock reports a data file that it
+	 * cannot read with it. The AWS runtime logs nothing.
+	 */
+	logger?: ChildLogger;
+	/**
+	 * The `removalPolicy` of the old store, if it had one. When omitted, the
+	 * stack-wide `defaults` apply, as in the release (`production` retains the
+	 * table, `sandbox` destroys it). It decides what happens to the table when
+	 * you remove the `LegacyKVStore`: a table with `'destroy'` is deleted, and a
+	 * table with `'retain'` stays in the account.
+	 */
+	removalPolicy?: 'destroy' | 'retain';
+	/** The `deletionProtection` of the old store, if it had one. When omitted, the stack-wide `defaults` apply. */
+	deletionProtection?: boolean;
+	/** Set if the old store had `ttl: true`: the table has DynamoDB Time-to-Live on the attribute `ttl`. */
+	ttl?: boolean;
+	/** The `pointInTimeRecovery` of the old store, if it had one. When omitted, the stack-wide `defaults` apply. */
+	pointInTimeRecovery?: boolean | { retentionDays: number };
+	/**
+	 * The `encryption` of the old store, if it had one. Keep a key from
+	 * `KVStore.fromKmsKey()` as it is.
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+}
+
+/**
+ * Options of `LegacyKVStore.put`: the options that `put` took in a release up
+ * to 0.4.0.
+ *
+ * `ttlSeconds` and `expiresAt` exclude each other. When both `ifNotExists` and
+ * `ifValueEquals` are set they compose with OR, as in that release: the write
+ * succeeds if the key is absent or its current value matches.
+ */
+export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
+	/** Only write if the key does not exist. */
+	ifNotExists?: boolean;
+	/**
+	 * Only write if the current value serializes equal to this value. The
+	 * compare is on the JSON text, so the order of the keys of an object matters.
+	 */
+	ifValueEquals?: T;
+};
+
+/**
+ * Conditions of `LegacyKVStore.delete`: the conditions that `delete` took in a
+ * release up to 0.4.0. When both are set, both must hold.
+ */
+export type LegacyKVStoreDeleteOptions<T = unknown> = {
+	/** Only delete if the key exists. */
+	ifExists?: boolean;
+	/**
+	 * Only delete if the current value serializes equal to this value. The
+	 * compare is on the JSON text, so the order of the keys of an object matters.
+	 */
+	ifValueEquals?: T;
+};

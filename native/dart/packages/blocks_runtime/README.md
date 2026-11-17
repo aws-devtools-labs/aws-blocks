@@ -14,9 +14,9 @@ This package is used by generated client code produced by `blocks_codegen`. You 
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
 
-On web the token is dropped on every path. The RPC hop omits `x-blocks-user-agent` because the header is non-safelisted, so a browser can only send it once the server adds `x-blocks-user-agent` to its CORS allowlist.
+RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0.
 
-The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
+On web the token is dropped on the other paths. The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
 
 ## License
 
