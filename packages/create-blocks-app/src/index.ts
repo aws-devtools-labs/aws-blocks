@@ -330,28 +330,37 @@ function mayIgnore(pattern: string, name: string): boolean {
 
 /**
  * How the `.gitignore` lines treat a directory called `name` at the project
- * root: `'ignored'`, `'unignored'` (the last matching line is `!name`, an
- * explicit choice to keep it), or `undefined` when no line matches. Git applies
- * the last matching line.
+ * root: `'ignored'`, `'unignored'` (the last matching line is `!name` or
+ * `!name/`, an explicit choice to keep it), or `undefined` when no line
+ * matches. Git applies the last matching line.
  *
  * Only literal forms count: `name`, `name/`, `/name`, `name/*`, `name/**`,
  * `name` after a leading double-star segment, and a bare `*`. Unlike
  * {@link mayIgnore}, this check is biased towards no match, so the caller adds
  * the line: a wrong match leaves `name` unignored, while a duplicate line is
  * harmless. So globs and character classes (`[!n]ode_modules`, `n*s`) do not
- * count, nor does a line with leading whitespace, which git reads as part of
- * the pattern. Pass the raw lines; a pattern for a path below the root
+ * count, nor does a line with leading whitespace or a trailing tab, which git
+ * reads as part of the pattern. A negated `!name/*` or `!name/**` changes
+ * nothing: git can't re-include a file whose parent directory is excluded.
+ * Pass the raw lines; a pattern for a path below the root
  * (`packages/site/node_modules`) does not count either.
  */
 function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'unignored' | undefined {
   let state: 'ignored' | 'unignored' | undefined;
   for (const raw of lines) {
-    // Git strips trailing spaces (unless escaped) but not leading ones.
-    const line = raw.trimEnd();
+    // Git strips trailing spaces (unless escaped), but not tabs or leading spaces.
+    // A loop rather than / +$/, which backtracks quadratically on a long run of spaces.
+    let end = raw.length;
+    while (end > 0 && raw[end - 1] === ' ') end--;
+    const line = raw.slice(0, end);
     if (!line || line.startsWith('#')) continue;
     const negated = line.startsWith('!');
-    const pattern = (negated ? line.slice(1) : line).replace(/^(\*\*\/|\/)/, '').replace(/\/\**$/, '');
-    if (pattern === name) state = negated ? 'unignored' : 'ignored';
+    const path = (negated ? line.slice(1) : line).replace(/^(\*\*\/|\/)/, '');
+    const pattern = path.replace(/\/\**$/, '');
+    if (pattern === name) {
+      if (!negated) state = 'ignored';
+      else if (path === name || path === `${name}/`) state = 'unignored';
+    }
     // `!*` or `!*/` (an allow-list re-including directories) is no choice about `name`.
     else if (pattern === '*') state = negated ? undefined : 'ignored';
   }

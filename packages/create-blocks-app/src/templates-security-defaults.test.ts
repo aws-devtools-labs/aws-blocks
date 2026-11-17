@@ -267,6 +267,11 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
       '.gitignore': '  node_modules\n',
     },
+    // Git strips trailing spaces only; a trailing tab is part of the pattern.
+    'a project whose .gitignore has node_modules before a trailing tab': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\t\n',
+    },
   };
   for (const [label, files] of Object.entries(withoutNodeModules)) {
     it(`ignores node_modules in ${label}`, () => {
@@ -306,6 +311,21 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       }
     });
   }
+
+  // Git can't re-include a file whose parent directory is excluded, so `!node_modules/*`
+  // after `node_modules` leaves it ignored: no line, and no "un-ignored" note.
+  it('treats node_modules followed by !node_modules/* as ignored', () => {
+    const gitignore = 'node_modules\n!node_modules/*\n';
+    const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+    try {
+      const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+      assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+      assert.doesNotMatch(stdout, /Left node_modules/);
+      assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 
   it('adds no node_modules line to a CRLF .gitignore that has one', () => {
     const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': 'node_modules\r\n' });
