@@ -1,7 +1,10 @@
 package com.aws.blocks.kotlin.e2e
 
+import blocks.e2e.api
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksRequest
 import com.aws.blocks.kotlin.exceptions.ApiException
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
@@ -70,5 +73,21 @@ class RpcWireE2ETest {
         defaultNamespace.name shouldBe "MethodNotFound"
         defaultNamespace.status shouldBe 500
         defaultNamespace.message shouldContain "API '_default' not found"
+    }
+
+    /**
+     * A call through a closed `Blocks` reports the closed state rather than failing inside the
+     * HTTP engine with a cancellation the caller can't tell from its own. Uses its own instance:
+     * the suite's shared one is never closed.
+     */
+    @Test
+    fun callAfterCloseThrowsClientClosedException() = runTest {
+        val blocks = Blocks(e2eServer())
+        val closedApi = blocks.api
+        closedApi.echoArgs("before close").first shouldBe "before close"
+
+        blocks.close()
+
+        shouldThrow<ClientClosedException> { closedApi.echoArgs("after close") }
     }
 }

@@ -2,6 +2,7 @@ package com.aws.blocks.kotlin.filebucket
 
 import com.aws.blocks.kotlin.defaultHttpClient
 import com.aws.blocks.kotlin.exceptions.FileTransferException
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -9,6 +10,7 @@ import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.Buffer
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 
@@ -51,5 +53,38 @@ class FileTransferErrorTest {
         val e = assertFailsWith<FileTransferException> { handle.downloadTo(Buffer()) }
         e.statusCode shouldBe 404
         e.message shouldBe "Download failed: HTTP 404"
+    }
+
+    private fun clientFailing(failure: () -> Nothing) = defaultHttpClient(
+        MockEngine { failure() },
+        cookiesStorage = AcceptAllCookiesStorage(),
+    )
+
+    @Test
+    fun `a file handle connection failure has no status and keeps its cause`() = runTest {
+        val client = clientFailing { throw RuntimeException("Connection refused") }
+        val upload = FileUploadHandle(url = url, httpClient = client)
+        val download = FileDownloadHandle(url = url, httpClient = client)
+        val failures = listOf(
+            assertFailsWith<FileTransferException> { upload.upload(ByteArray(3)) },
+            assertFailsWith<FileTransferException> { upload.uploadFrom(Buffer()) },
+            assertFailsWith<FileTransferException> { download.download() },
+            assertFailsWith<FileTransferException> { download.downloadTo(Buffer()) },
+        )
+        for (e in failures) {
+            e.statusCode shouldBe null
+            e.cause.shouldNotBeNull().message shouldBe "Connection refused"
+        }
+    }
+
+    @Test
+    fun `a cancellation passes through every file handle method`() = runTest {
+        val client = clientFailing { throw CancellationException("cancelled") }
+        val upload = FileUploadHandle(url = url, httpClient = client)
+        val download = FileDownloadHandle(url = url, httpClient = client)
+        assertFailsWith<CancellationException> { upload.upload(ByteArray(3)) }
+        assertFailsWith<CancellationException> { upload.uploadFrom(Buffer()) }
+        assertFailsWith<CancellationException> { download.download() }
+        assertFailsWith<CancellationException> { download.downloadTo(Buffer()) }
     }
 }
