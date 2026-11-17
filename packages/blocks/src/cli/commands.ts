@@ -58,6 +58,7 @@ import {
 	DEV_OPTIONS_ENV,
 	DEV_STATE,
 	DEV_UNDER_WATCH_ENV,
+	devCrashCode,
 	type RunnerLaunch,
 	type RunnerName,
 	resolveTsxCli,
@@ -95,18 +96,27 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	failureFile?: string;
 }
 
+/** What the dev server runner recorded in `failureFile` (see {@link ChildRun.failureFile}); `undefined` before any runner started. */
+function readDevState(failureFile: string): string | undefined {
+	try {
+		const state = readFileSync(failureFile, 'utf-8');
+		return state.trim() === '' ? undefined : state;
+	} catch {
+		return undefined; // No runner started.
+	}
+}
+
 /**
  * The exit code of `cdk-blocks dev`, from what its runner recorded in `failureFile`
  * (see {@link ChildRun.failureFile}); `undefined` to map `result` as for any child.
  */
 function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): number | undefined {
-	let state: string | undefined;
-	try {
-		state = readFileSync(failureFile, 'utf-8');
-	} catch {
-		// No runner started.
+	const state = readDevState(failureFile);
+	// A dev server that crashed after it started: `dev` restarts it, unless the CLI was stopped meanwhile.
+	if (devCrashCode(state) !== undefined) {
+		if (result.interrupted) return undefined;
+		return result.stopped ? ExitCode.Ok : ExitCode.Failure;
 	}
-	if (state?.trim() === '') state = undefined;
 	// The runner printed the reason and its hint; printing it again would only repeat it.
 	if (state !== undefined && state !== DEV_STATE.running && state !== DEV_STATE.stopped) return ExitCode.Failure;
 	if (result.interrupted) return undefined;
@@ -443,7 +453,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	// own listener stops the child. Nothing in between awaits, so the signal is handled once both are in place.
 	const keepAlive = (): void => {};
 	process.on('SIGTERM', keepAlive);
-	const session = claimDevSession(root, port);
+	let session = claimDevSession(root, port);
 	if (!session.acquired) {
 		process.off('SIGTERM', keepAlive);
 		// One dev server per app, whatever its port: stop the one that runs, on its port.
@@ -454,12 +464,32 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 			hint: stop,
 		});
 	}
+	let release: (() => void) | undefined = session.release;
 	try {
 		// The dev server records a fatal startup failure here (see ChildRun.failureFile).
 		const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
-		const failureFile = join(failureDir, 'failure');
 		try {
-			return await runRunner(ctx, {
+			return await superviseDevServer(join(failureDir, 'failure'));
+		} finally {
+			rmSync(failureDir, { recursive: true, force: true });
+		}
+	} finally {
+		process.off('SIGTERM', keepAlive);
+		release?.();
+	}
+
+	/**
+	 * Run the dev server under `tsx watch` until it is stopped, and start it again, after a
+	 * backoff, when it crashes after it started (see {@link decideDevRestart}).
+	 */
+	async function superviseDevServer(failureFile: string): Promise<number> {
+		let restarts: number[] = [];
+		for (;;) {
+			// A record that the last session left (a crash) must not be read as this session's: a runner
+			// that exits before it records anything (tsx's preflight, a failing import) would look like a
+			// new crash, and a restarted runner would not see its start as a first start (runners/fail.ts).
+			rmSync(failureFile, { force: true });
+			const code = await runRunner(ctx, {
 				runner: 'dev-server',
 				operation: 'cdk-blocks dev',
 				watch: true,
@@ -471,13 +501,96 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 				longRunning: true,
 				failureFile,
 			});
-		} finally {
-			rmSync(failureDir, { recursive: true, force: true });
+			const crash = code === ExitCode.Failure ? devCrashCode(readDevState(failureFile)) : undefined;
+			if (crash === undefined) return code;
+			const decision = decideDevRestart(restarts, Date.now());
+			restarts = decision.recent;
+			const { maxRestarts, windowMs } = DEV_RESTART_POLICY;
+			if (!decision.restart) {
+				throw new CliError(
+					`cdk-blocks dev ended: its dev server crashed ${maxRestarts + 1} times within ${windowMs / 1000} s, so it was not restarted again. ` +
+						`Fix the error in its output above, then run ${blocksCommand('dev')} again.`,
+					{ where: [`project: ${root}`], runner: true },
+				);
+			}
+			ctx.out.error(
+				`\n⚠️  The dev server crashed (exit code ${crash}); restarting it in ${decision.delayMs} ms ` +
+					`(restart ${decision.recent.length} of ${maxRestarts} within ${windowMs / 1000} s).\n`,
+			);
+			// The crashed dev server removed its record: claim the session again, so that a `dev stop`
+			// from now on finds this CLI, which stops what it started, as it does during the first start.
+			release?.();
+			release = undefined;
+			session = claimDevSession(root, port);
+			if (!session.acquired) {
+				throw new CliError(`${session.reason}, so the crashed dev server was not restarted.`, {
+					where: [`project: ${root}`],
+				});
+			}
+			release = session.release;
+			const signal = await waitUnlessStopped(decision.delayMs);
+			if (signal === 'SIGINT') {
+				ctx.out.progress('cdk-blocks dev interrupted.');
+				return ExitCode.Interrupted;
+			}
+			if (signal !== undefined) return ExitCode.Ok;
 		}
-	} finally {
-		process.off('SIGTERM', keepAlive);
-		session.release();
 	}
+}
+
+/** How `cdk-blocks dev` restarts a dev server that crashed after it started (see {@link decideDevRestart}). */
+export interface DevRestartPolicy {
+	/** Restarts allowed within `windowMs`; the next crash ends `cdk-blocks dev`. */
+	maxRestarts: number;
+	/** The sliding window (ms) over which restarts are counted. */
+	windowMs: number;
+	/** The first backoff (ms); it doubles for each restart already in the window. */
+	backoffMs: number;
+	/** The longest backoff (ms). */
+	maxBackoffMs: number;
+}
+
+/** The default: 5 restarts within 60 s, after a backoff of 500 ms that doubles up to 5 s. */
+export const DEV_RESTART_POLICY: DevRestartPolicy = {
+	maxRestarts: 5,
+	windowMs: 60_000,
+	backoffMs: 500,
+	maxBackoffMs: 5_000,
+};
+
+/**
+ * Decide whether to restart a dev server that crashed at `now`, given the times of
+ * the restarts so far. Only restarts within the window count, so a backend that
+ * crashes once in a while is always restarted, and one that crashes again at once
+ * after every restart stops after `maxRestarts`, instead of looping. `recent` is
+ * the restarts to pass to the next decision, this one included when it restarts.
+ */
+export function decideDevRestart(
+	restarts: readonly number[],
+	now: number,
+	policy: DevRestartPolicy = DEV_RESTART_POLICY,
+): { restart: boolean; delayMs: number; recent: number[] } {
+	const recent = restarts.filter((t) => now - t < policy.windowMs);
+	if (recent.length >= policy.maxRestarts) return { restart: false, delayMs: 0, recent };
+	const delayMs = Math.min(policy.backoffMs * 2 ** recent.length, policy.maxBackoffMs);
+	return { restart: true, delayMs, recent: [...recent, now] };
+}
+
+/**
+ * Wait `ms`, unless a SIGINT, SIGTERM or SIGHUP arrives first (a Ctrl-C, `cdk-blocks dev stop`,
+ * a closed terminal): resolves that signal, or `undefined` when the wait ran out.
+ */
+function waitUnlessStopped(ms: number): Promise<NodeJS.Signals | undefined> {
+	const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+	return new Promise((resolvePromise) => {
+		const done = (signal?: NodeJS.Signals): void => {
+			clearTimeout(timer);
+			for (const s of signals) process.off(s, done);
+			resolvePromise(signal);
+		};
+		const timer = setTimeout(() => done(), ms);
+		for (const s of signals) process.on(s, done);
+	});
 }
 
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {
