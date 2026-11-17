@@ -448,7 +448,7 @@ describe('no API blocks', () => {
 	it("reports 'unavailable' and says the app declares no API", async () => {
 		const blocks: DiscoveredBlock[] = [
 			{
-				type: 'DistributedTable',
+				type: 'KVStore',
 				id: 'posts',
 				fullId: 'my-app-posts',
 				category: 'data',

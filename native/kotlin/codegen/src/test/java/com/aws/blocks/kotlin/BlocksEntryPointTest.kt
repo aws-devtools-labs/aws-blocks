@@ -12,15 +12,13 @@ import io.kotest.matchers.string.shouldNotContain
 
 /**
  * The specs are inline because `native/codegen-fixtures/` is consumed by the Swift and Dart
- * generators too, and `x-blocks-endpoint` and multi-server specs appear in none of them.
+ * generators too, and multi-server specs appear in none of them.
  */
 private fun spec(
-    endpoint: String? = null,
     servers: String? = null,
     namespaces: List<String> = listOf("todos", "authCognito"),
     withSharedType: Boolean = false,
 ): String {
-    val endpointLine = endpoint?.let { """"x-blocks-endpoint": "$it",""" } ?: ""
     val serversLine = servers?.let { """"servers": $it,""" } ?: ""
     val componentsLine = if (withSharedType) {
         """"components": { "schemas": { "Shared": { "type": "object",""" +
@@ -41,7 +39,6 @@ private fun spec(
         {
           "openrpc": "1.3.2",
           "info": { "title": "test", "version": "1.0.0" },
-          $endpointLine
           $serversLine
           $componentsLine
           "methods": [ $methods ]
@@ -79,28 +76,7 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain "public val Blocks.authCognito: AuthCognito\n  get() = AuthCognito(client())"
     }
 
-    test("an endpoint suffix is baked into the generated server constants") {
-        val source = generate(
-            spec(
-                endpoint = "/aws-blocks/api",
-                servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod" }]""",
-            ),
-        )
-
-        source shouldContain
-            """BlocksServer(name = "sandbox", url = "https://api.example.com/prod/aws-blocks/api")"""
-        // The runtime used to append the suffix; nothing may append it a second time.
-        source shouldNotContain "/aws-blocks/api/aws-blocks/api"
-        source shouldNotContain "server.url.toString()"
-    }
-
-    test("the endpoint suffix reaches the server the builder defaults to") {
-        val source = generate(spec(endpoint = "/aws-blocks/api"))
-
-        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
-    }
-
-    test("the default server carries the rpc path when the spec declares no endpoint") {
+    test("the default server carries the rpc path when the spec declares no server") {
         val source = generate(spec())
 
         source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
@@ -112,6 +88,27 @@ class BlocksEntryPointTest : FunSpec({
         )
 
         source shouldContain """BlocksServer(name = "staging", url = "https://staging.example.com/rpc")"""
+    }
+
+    test("a declared server url already carrying the rpc path is not appended to again") {
+        val source = generate(
+            spec(servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod/aws-blocks/api" }]"""),
+        )
+
+        source shouldContain
+            """BlocksServer(name = "sandbox", url = "https://api.example.com/prod/aws-blocks/api")"""
+        // A spec's server URL is the whole RPC URL. Nothing may append the path a second time,
+        // and the runtime must not either.
+        source shouldNotContain "/aws-blocks/api/aws-blocks/api"
+        source shouldNotContain "server.url.toString()"
+    }
+
+    test("a declared server url keeps its trailing slash") {
+        val source = generate(
+            spec(servers = """[{ "name": "staging", "url": "https://staging.example.com/rpc/" }]"""),
+        )
+
+        source shouldContain """BlocksServer(name = "staging", url = "https://staging.example.com/rpc/")"""
     }
 
     test("a zero-argument accessor is generated for the spec's default server") {
@@ -149,16 +146,16 @@ class BlocksEntryPointTest : FunSpec({
     test("the default server is the first the spec declares, whatever it is named") {
         val twoServers = """
             [
-              { "name": "sandbox", "url": "https://api.example.com/prod" },
-              { "name": "local", "url": "http://localhost:3001" }
+              { "name": "sandbox", "url": "https://api.example.com/prod/aws-blocks/api" },
+              { "name": "local", "url": "http://localhost:3001/aws-blocks/api" }
             ]
         """.trimIndent()
 
-        val source = generate(spec(endpoint = "/aws-blocks/api", servers = twoServers))
+        val source = generate(spec(servers = twoServers))
 
         source shouldContain
             "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.sandbox)"
-        // Every declared server keeps its own suffixed URL, not just the default.
+        // Every declared server keeps its own URL, not just the default.
         source shouldContain """url = "https://api.example.com/prod/aws-blocks/api""""
         source shouldContain """url = "http://localhost:3001/aws-blocks/api""""
     }

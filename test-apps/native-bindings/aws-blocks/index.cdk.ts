@@ -26,7 +26,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Default the `sandboxMode` context to on. `npm run deploy:sandbox` (both uses
 // above) already passes it; the default also covers a direct `cdk` command, so
-// every path builds DistributedTable GSIs the way `npm run sandbox` does. Here
+// every path builds KVStore GSIs the way `npm run sandbox` does. Here
 // that is the `todos` table and the Realtime connections table: the GSI custom resource
 // recreates each table with all its indexes at once (about a minute) instead of
 // adding them one at a time and waiting for each to backfill (about 17 minutes

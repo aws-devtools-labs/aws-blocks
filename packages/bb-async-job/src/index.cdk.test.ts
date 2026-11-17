@@ -22,6 +22,7 @@
  */
 
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -438,5 +439,58 @@ describe('AsyncJob ids that fold to one config key fail synth', () => {
 			() => new AsyncJob(stack, 'orders', { handler: async () => {}, trackStatus: false }),
 			/already registered/,
 		);
+	});
+});
+
+// ── Status table key schema ─────────────────────────────────────────────────
+// The key attribute type is probed from the status schema. Pin it, so a change
+// to the probe or to the schema cannot change the provisioned table.
+
+/**
+ * Synth an AsyncJob with `trackStatus` in a child process started with `--conditions=cdk` and return
+ * its DynamoDB tables and custom resources.
+ *
+ * Needed because this file imports `./index.cdk.js` directly, which leaves the
+ * nested `KVStore` resolving to its mock entry: that emits no CloudFormation.
+ * Only the condition-based resolution shows the table that a customer deploys.
+ */
+function synthUnderCdkConditions(): { type: string; properties: any }[] {
+	const probe = join(tmpDir, 'key-schema-probe.mjs');
+	writeFileSync(
+		probe,
+		`
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { AsyncJob } from '@aws-blocks/bb-async-job';
+
+const stack = await BlocksStack.create(new cdk.App(), 'KeySchemaProbeStack', {
+	backendHandlerPath: ${JSON.stringify(handlerPath)},
+	backendCDKPath: ${JSON.stringify(backendPath)},
+	defaults: BlocksPresets.production,
+	defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute'),
+});
+new AsyncJob(stack, 'jobs', { handler: async () => {}, trackStatus: true });
+const resources = Object.values(Template.fromStack(stack).toJSON().Resources)
+	.filter((r) => r.Type === 'AWS::DynamoDB::Table' || r.Type === 'AWS::CloudFormation::CustomResource')
+	.map((r) => ({ type: r.Type, properties: r.Properties }));
+console.log('__RESOURCES__' + JSON.stringify(resources));
+`,
+	);
+	const result = spawnSync(process.execPath, ['--conditions=cdk', probe], { encoding: 'utf8' });
+	assert.strictEqual(result.status, 0, result.stderr);
+	const line = result.stdout.split('\n').find((l) => l.startsWith('__RESOURCES__'));
+	assert.ok(line, `the probe printed no resources: ${result.stdout}`);
+	return JSON.parse(line.slice('__RESOURCES__'.length));
+}
+
+describe('AsyncJob status table', () => {
+	test('CDK: trackStatus provisions a table keyed by jobId (S), with TTL on expiresAt', () => {
+		const tables = synthUnderCdkConditions().filter((r) => r.type === 'AWS::DynamoDB::Table');
+		assert.strictEqual(tables.length, 1, 'trackStatus provisions one table');
+		assert.deepStrictEqual(tables[0].properties.KeySchema, [{ AttributeName: 'jobId', KeyType: 'HASH' }]);
+		assert.deepStrictEqual(tables[0].properties.AttributeDefinitions, [{ AttributeName: 'jobId', AttributeType: 'S' }]);
+		assert.deepStrictEqual(tables[0].properties.TimeToLiveSpecification, { AttributeName: 'expiresAt', Enabled: true });
 	});
 });

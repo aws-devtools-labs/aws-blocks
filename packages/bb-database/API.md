@@ -131,6 +131,7 @@ export interface Transaction {
 export interface TransactionOptions {
     maxRetries?: number;
     retryOnConflict?: boolean;
+    signal?: AbortSignal;
 }
 
 // (No @packageDocumentation comment for this package)

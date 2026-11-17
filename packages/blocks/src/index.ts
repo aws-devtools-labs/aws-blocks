@@ -7,8 +7,8 @@ export * from '@aws-blocks/core';
 // Override core's untyped getSdkIdentifiers with typed overloads
 export { getSdkIdentifiers } from './sdk-identifiers.js';
 
-import { Scope } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from '@aws-blocks/bb-lambda-compute/version';
+import { Scope } from '@aws-blocks/core';
 
 Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
 
@@ -146,15 +146,6 @@ export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubI
  * Full docs: `docs/bb-compute/README.md` in `@aws-blocks/blocks`.
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
-export type {
-	ComputeOptions,
-	ComputeType,
-	ContainerComputeOptions,
-	ContainerScaling,
-	ContainerSize,
-	ScalingSignal,
-	ServerlessComputeOptions,
-} from '@aws-blocks/core';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
 /**
  * **Scheduled task execution backed by EventBridge Scheduler and Lambda.**
@@ -193,7 +184,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
  *
  * Use only when you specifically need complex multi-table JOINs, SQL
  * transactions, foreign key constraints, or complex aggregations. For most
- * application data, prefer `DistributedTable` (lower cost, simpler ops).
+ * application data, prefer `KVStore` (lower cost, simpler ops).
  * Requires a `migrations/` folder with `.sql` files.
  *
  * Package: `@aws-blocks/bb-data`
@@ -214,31 +205,6 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * Full docs: `docs/bb-distributed-data/README.md` in `@aws-blocks/blocks`.
  */
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-export type {
-	DeleteOptions as DTDeleteOptions,
-	DistributedTableOptions,
-	ExternalKmsKeyRef as DTExternalKmsKeyRef,
-	GetOptions as DTGetOptions,
-	PutOptions as DTPutOptions,
-	QueryOptions as DTQueryOptions,
-	ReadValidationMode,
-	ScanOptions as DTScanOptions,
-	TableKey,
-	TableKeyConfig,
-} from '@aws-blocks/bb-distributed-table';
-/**
- * **Structured data storage with secondary indexes backed by DynamoDB.**
- *
- * Default choice for most application data. Use for entities with composite
- * keys, range queries, secondary access patterns, and batch operations.
- * Supports Zod/Valibot schemas for type-safe validation. Zero cost at rest,
- * scales automatically. Use `KVStore` for simpler key-only access, or
- * `Database` when you need SQL JOINs/transactions.
- *
- * Package: `@aws-blocks/bb-distributed-table`
- * Full docs: `docs/bb-distributed-table/README.md` in `@aws-blocks/blocks`.
- */
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 /**
  * **Transactional email with AWS SES integration.**
@@ -271,8 +237,8 @@ export type {
  * Use for storing, retrieving, and serving binary files — user uploads,
  * generated reports, images, videos, or static assets. Supports presigned
  * URLs for direct browser upload/download, batch deletion, and prefix-scoped
- * listing. For structured key-value data, use `KVStore`. For queryable
- * records with indexes, use `DistributedTable`.
+ * listing. For key-value data and queryable records with indexes, use
+ * `KVStore`.
  *
  * Package: `@aws-blocks/bb-file-bucket`
  * Full docs: `docs/bb-file-bucket/README.md` in `@aws-blocks/blocks`.
@@ -304,25 +270,67 @@ export type {
  * Full docs: `docs/bb-knowledge-base/README.md` in `@aws-blocks/blocks`.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+// A type keeps its own name. It gets the block prefix only when another block
+// in this file exports a type with the same name (`PutOptions` and
+// `ScanOptions` are also names of `FileBucket`).
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	Entry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
+	GetOptions,
+	IndexConfig,
+	KeyConfig,
+	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreDeleteOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
+	PutBatchEntry,
 	PutOptions as KVPutOptions,
+	QueryOptions,
+	ReadValidationMode,
+	Results,
+	ScanOptions as KVScanOptions,
+	SortCondition,
+	ValueOf,
+	Where,
 } from '@aws-blocks/bb-kv-store';
 /**
- * **Simple key-value storage backed by DynamoDB.**
+ * **Key-value and document storage backed by DynamoDB, with optional secondary indexes.**
  *
- * Use for fast single-key get/put/delete: user preferences, feature flags,
- * session data, caches. Supports conditional writes and schema validation.
- * If you need queries, indexes, or structured data, use `DistributedTable`.
+ * Default choice for most application data. With no options it is a
+ * string-keyed store for caches, flags, sessions and user preferences. With a
+ * `schema` and a `key` it holds records you list or query as a collection
+ * (todos, orders, messages) with composite keys, range queries and batch
+ * operations; add `indexes` to read the same records by other fields. Supports
+ * Zod/Valibot schemas for type-safe validation and conditional writes. Zero
+ * cost at rest, scales automatically. Use `Database` when you need SQL
+ * JOINs/transactions.
  *
  * Package: `@aws-blocks/bb-kv-store`
  * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
  */
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+/**
+ * **The store of a `KVStore` release up to 0.4.0, for an upgrade.**
+ *
+ * It has the data methods of that store over its table: `get`, `put`,
+ * `delete`, and `scan`. Use it only to move the data of an app that has a
+ * `KVStore` from such a release: change the class on the line of the old
+ * store, keep its id and its options, add a `KVStore` with a new id, and copy
+ * the items in your own code. For new data, use `KVStore`.
+ *
+ * Package: `@aws-blocks/bb-kv-store`
+ * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
+ *
+ * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
+ *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ *   0.4.0 or earlier":
+ *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
+ */
+export { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
 /**
  * **Structured logging with consistent JSON format, log levels, and contextual metadata.**
@@ -413,6 +421,15 @@ export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tra
  * Full docs: `docs/bb-tracer/README.md` in `@aws-blocks/blocks`.
  */
 export { Tracer } from '@aws-blocks/bb-tracer';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 
 // Blocks generated by `@aws-blocks/create-block` (contributor mode) are re-exported here.
 // <!-- BEGIN:generated-block-exports -->

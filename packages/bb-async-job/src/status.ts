@@ -1,18 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { isBlocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ScopeParent } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type {
-	AsyncJobState,
-	AsyncJobStatus,
-	AsyncJobTransition,
-	WaitUntilCompleteOptions,
-} from './types.js';
 import { AsyncJobErrors, blocksError } from './errors.js';
+import type { AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from './types.js';
 
 /** Child scope id of the status table. Must match between the runtime and CDK entry points. */
 export const STATUS_TABLE_ID = 'status';
@@ -48,9 +43,11 @@ const STRING_FIELDS = ['jobId', 'state', 'submittedAt', 'updatedAt', 'error'] as
  * Runtime validation for status records.
  *
  * This schema is deliberately explicit about field types rather than passing
- * values through: the CDK layer infers a key's DynamoDB attribute type by
- * probing `validate({ jobId: 0 })` and treats "no issue for that field" as
- * numeric. A pass-through schema would therefore provision `jobId` as `N`.
+ * values through: KVStore infers a key's DynamoDB attribute type by
+ * probing `validate({ jobId: 0 })` (and the samples `1` and `-1`) and treats
+ * "no issue for that field" as numeric. The CDK layer provisions the table
+ * with that type and the runtime accepts only that type. A pass-through
+ * schema would therefore provision `jobId` as `N`.
  */
 export const statusSchema: StandardSchemaV1<StatusRecord> = {
 	'~standard': {
@@ -134,7 +131,7 @@ function expiresAt(): number {
 /**
  * Records and reads AsyncJob state transitions.
  *
- * Backed by a nested {@link DistributedTable}, provisioned as a child scope so
+ * Backed by a nested {@link KVStore} with a declared key, provisioned as a child scope so
  * it becomes its own DynamoDB table in AWS and a JSON file locally. The same
  * code path runs in both runtimes.
  *
@@ -146,15 +143,11 @@ function expiresAt(): number {
  * @internal
  */
 export class JobStatusTracker {
-	private table: DistributedTable<StatusRecord, { partitionKey: 'jobId' }>;
+	private table: KVStore<StatusRecord, StatusRecord, { readonly partitionKey: 'jobId' }>;
 	private log?: ChildLogger;
 
 	constructor(scope: ScopeParent, log?: ChildLogger) {
-		this.table = new DistributedTable<StatusRecord, { partitionKey: 'jobId' }>(
-			scope,
-			STATUS_TABLE_ID,
-			statusTableOptions as never,
-		);
+		this.table = new KVStore(scope, STATUS_TABLE_ID, statusTableOptions);
 		this.log = log;
 	}
 
@@ -194,10 +187,10 @@ export class JobStatusTracker {
 	 */
 	async recordQueued(jobId: string, submittedAt: string): Promise<void> {
 		try {
-			await this.table.put(this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
+			await this.table.put({ jobId }, this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
 			return;
 		} catch (err: unknown) {
-			if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+			if (!isBlocksError(err, KVStoreErrors.ConditionalCheckFailed)) throw err;
 		}
 
 		try {
@@ -252,10 +245,10 @@ export class JobStatusTracker {
 			};
 
 			try {
-				await this.table.put(next, { ifFieldEquals: { version: existing.version } });
+				await this.table.put({ jobId }, next, { ifFieldEquals: { version: existing.version } });
 				return;
 			} catch (err: unknown) {
-				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				const lostRace = isBlocksError(err, KVStoreErrors.ConditionalCheckFailed);
 				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
 				await sleep(jitterInterval(CAS_BACKOFF_MS));
 			}
@@ -280,7 +273,7 @@ export class JobStatusTracker {
 		if (jobs.length === 0) return;
 		for (let i = 0; i < jobs.length; i += STATUS_WRITE_GROUP) {
 			const group = jobs.slice(i, i + STATUS_WRITE_GROUP);
-			await Promise.all(group.map(j => this.recordQueued(j.jobId, j.submittedAt)));
+			await Promise.all(group.map((j) => this.recordQueued(j.jobId, j.submittedAt)));
 		}
 	}
 
@@ -301,12 +294,7 @@ export class JobStatusTracker {
 	 * is provisional: the handler only knows when it first saw the job.
 	 * {@link recordQueued} replaces it with the real one when it arrives.
 	 */
-	async recordTransition(
-		jobId: string,
-		state: AsyncJobState,
-		attempt: number,
-		error?: string,
-	): Promise<void> {
+	async recordTransition(jobId: string, state: AsyncJobState, attempt: number, error?: string): Promise<void> {
 		for (let cas = 1; ; cas++) {
 			const existing = await this.table.get({ jobId });
 			const now = new Date().toISOString();
@@ -326,12 +314,13 @@ export class JobStatusTracker {
 
 			try {
 				await this.table.put(
+					{ jobId },
 					next,
 					existing ? { ifFieldEquals: { version: existing.version } } : { ifNotExists: true },
 				);
 				return;
 			} catch (err: unknown) {
-				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				const lostRace = isBlocksError(err, KVStoreErrors.ConditionalCheckFailed);
 				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
 				await sleep(jitterInterval(CAS_BACKOFF_MS));
 			}
@@ -345,12 +334,7 @@ export class JobStatusTracker {
 	 * a job: throwing before the handler would retry work that was fine, and
 	 * throwing after it succeeded would re-run work that already completed.
 	 */
-	async tryRecordTransition(
-		jobId: string,
-		state: AsyncJobState,
-		attempt: number,
-		error?: string,
-	): Promise<void> {
+	async tryRecordTransition(jobId: string, state: AsyncJobState, attempt: number, error?: string): Promise<void> {
 		try {
 			await this.recordTransition(jobId, state, attempt, error);
 		} catch (err: unknown) {
@@ -371,10 +355,7 @@ export class JobStatusTracker {
 	}
 
 	/** Poll until the job reaches `complete` or `failed`, or the budget runs out. */
-	async waitUntilComplete(
-		jobId: string,
-		options?: WaitUntilCompleteOptions,
-	): Promise<AsyncJobStatus> {
+	async waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
 		const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		const pollIntervalMs = Math.max(1, options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
 		const signal = options?.signal;

@@ -104,9 +104,9 @@ class Bundle {
 
   Map<String, dynamic> toJson() {
     return {
-      'feed': feed.toJson(),
-      'files': files.map((e) => e.toJson()).toList(),
-      if (upload != null) 'upload': upload?.toJson(),
+      'feed': feed,
+      'files': files,
+      if (upload != null) 'upload': upload,
     };
   }
 
@@ -132,7 +132,7 @@ class ApiApi {
 
   Future<String> relay({required RealtimeChannel<Note> feed}) async {
     final params = <dynamic>[
-      feed.toJson(),
+      feed,
     ];
     final result = await _client.call('api.relay', params);
     return result as String;
@@ -141,7 +141,7 @@ class ApiApi {
   Future<String> relayIfAny({required String room, RealtimeChannel<Note>? feed}) async {
     final params = <dynamic>[
       room,
-      if (feed != null) feed.toJson(),
+      if (feed != null) feed,
     ];
     final result = await _client.call('api.relayIfAny', params);
     return result as String;
@@ -149,7 +149,7 @@ class ApiApi {
 
   Future<String> relayOrNull({required RealtimeChannel<Note>? feed}) async {
     final params = <dynamic>[
-      feed?.toJson(),
+      feed,
     ];
     final result = await _client.call('api.relayOrNull', params);
     return result as String;
@@ -157,8 +157,8 @@ class ApiApi {
 
   Future<String> relayAll({required List<RealtimeChannel<Note>> feeds, required Map<String, RealtimeChannel<Note>> byRoom}) async {
     final params = <dynamic>[
-      feeds.map((e) => e.toJson()).toList(),
-      byRoom.map((k, v) => MapEntry(k, v.toJson())),
+      feeds,
+      byRoom,
     ];
     final result = await _client.call('api.relayAll', params);
     return result as String;
@@ -166,7 +166,7 @@ class ApiApi {
 
   Future<String> relayInline({required RealtimeChannel<ApiRelayInlineFeedMessage> feed}) async {
     final params = <dynamic>[
-      feed.toJson(),
+      feed,
     ];
     final result = await _client.call('api.relayInline', params);
     return result as String;
@@ -174,8 +174,8 @@ class ApiApi {
 
   Future<String> share({required FileDownloadHandle download, required FileUploadHandle upload}) async {
     final params = <dynamic>[
-      download.toJson(),
-      upload.toJson(),
+      download,
+      upload,
     ];
     final result = await _client.call('api.share', params);
     return result as String;

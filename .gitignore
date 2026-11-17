@@ -82,6 +82,8 @@ test-apps/**/test-results/
 
 # Auto-generated version files (build-time)
 packages/*/src/version.ts
+# README snippets as a compile test (build-time, from packages/bb-kv-store/README.md)
+packages/bb-kv-store/src/readme.generated.test.ts
 
 # RFC drafts (personal working docs)
 docs/tech-design/telemetry-rfc.md

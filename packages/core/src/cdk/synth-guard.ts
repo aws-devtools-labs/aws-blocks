@@ -10,7 +10,7 @@
  * fail with a cryptic `X is not a function` TypeError; this utility turns that into
  * an actionable message directing the user to the correct execution context.
  *
- * @param className - The Building Block class name (e.g. "KVStore", "DistributedTable")
+ * @param className - The Building Block class name (e.g. "KVStore", "FileBucket")
  * @param method - The method that was called (e.g. "get", "put")
  */
 export function synthGuard(className: string, method: string): never {

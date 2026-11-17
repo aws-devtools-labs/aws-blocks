@@ -20,3 +20,12 @@ export const isSandboxDeploy = (scope: Construct): boolean => {
   const value: unknown = scope.node.tryGetContext('sandboxMode');
   return value === 'true' || value === true;
 };
+
+/**
+ * Stable id of the warning a production deploy emits when a front door's
+ * `allowPlainHttp: true` lets it serve (or, for the stacked door, reach its
+ * router) over plain HTTP; also the `acknowledgeWarning` id.
+ *
+ * @internal
+ */
+export const PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';

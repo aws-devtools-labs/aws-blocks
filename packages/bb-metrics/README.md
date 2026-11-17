@@ -4,7 +4,7 @@ Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Form
 
 **When to use:** You need to track numeric measurements over time — request counts, error rates, latency, queue depths, business KPIs. Good for dashboards, alarms, and operational visibility.
 
-**When NOT to use:** If you need structured log output, use `Logging`. If you need distributed request tracing, use `Tracing`. If you need to store time-series data for querying, use `Database` or `DistributedTable`.
+**When NOT to use:** If you need structured log output, use `Logging`. If you need distributed request tracing, use `Tracing`. If you need to store time-series data for querying, use `Database` or `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -177,7 +177,7 @@ This design means you can emit metrics anywhere — in hot loops, synchronous ca
 
 ## Local Development
 
-Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore or DistributedTable which persist to `.bb-data/`).
+Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore which persists to `.bb-data/`).
 
 Delete nothing to reset — there's no local state to clear.
 

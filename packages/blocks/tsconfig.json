@@ -10,7 +10,6 @@
     { "path": "../auth-common" },
     { "path": "../bb-auth" },
     { "path": "../bb-kv-store" },
-    { "path": "../bb-distributed-table" },
     { "path": "../bb-realtime" },
     { "path": "../bb-data" },
     { "path": "../bb-distributed-data" },
