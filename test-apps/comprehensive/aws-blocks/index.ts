@@ -1254,6 +1254,9 @@ export const DbInsertInput = z.object({
 // ============================================================================
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
+
+  /** Returns nothing: the response carries `"result": null` (test/void-result.test.ts). */
+  async voidResult(): Promise<void> {},
   
   // ------------------------------------------------------------------------
   // KVStore Tests
