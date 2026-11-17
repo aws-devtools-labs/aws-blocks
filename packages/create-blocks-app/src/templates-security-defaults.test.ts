@@ -492,6 +492,93 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
 });
 
 /**
+ * Template RawRoutes whose handler does not start with `requireAuth`/`requireRole`,
+ * keyed `<METHOD> <path>`, each with its reason. A RawRoute is a public,
+ * internet-reachable endpoint just like an ApiNamespace method, so listing one
+ * here is the same security decision as listing a method in UNGATED.
+ */
+const PUBLIC_ROUTES: Record<string, Record<string, string>> = {
+  'api-only': { 'GET /healthz': 'public: liveness probe for load balancers, touches no data' },
+};
+
+interface TemplateRoute {
+  /** `<METHOD> <path>` */
+  name: string;
+  body?: ts.Block;
+}
+
+/** Every `new RawRoute(scope, '<id>', { method, path, handler })` in `file`. */
+function rawRoutes(file: string): TemplateRoute[] {
+  const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+  const routes: TemplateRoute[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isNewExpression(node) && node.expression.getText(sourceFile) === 'RawRoute') {
+      const options = node.arguments?.[2];
+      assert.ok(options && ts.isObjectLiteralExpression(options), `${file}: RawRoute options must be an object literal`);
+      const property = (key: string) =>
+        options.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sourceFile) === key);
+      const literal = (key: string) => {
+        const p = property(key);
+        assert.ok(
+          p && ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer),
+          `${file}: RawRoute ${key} must be a string literal`,
+        );
+        return p.initializer.text;
+      };
+      const body = handlerBody(options, sourceFile);
+      routes.push({ name: `${literal('method')} ${literal('path')}`, body });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return routes;
+}
+
+/**
+ * The block body of a RawRoute `handler` written inline as an arrow function,
+ * a function expression or a method shorthand. A concise-arrow or referenced
+ * handler has no inline block to check, so it returns undefined and is
+ * reported as ungated.
+ */
+function handlerBody(options: ts.ObjectLiteralExpression, sourceFile: ts.SourceFile): ts.Block | undefined {
+  const handler = options.properties.find((p) => p.name?.getText(sourceFile) === 'handler');
+  if (handler && ts.isMethodDeclaration(handler)) return handler.body;
+  if (!handler || !ts.isPropertyAssignment(handler)) return undefined;
+  const fn = handler.initializer;
+  if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) return fn.body;
+  return undefined;
+}
+
+/** Every `.ts` file under a template's `aws-blocks/` directory, skipping `node_modules`. */
+function templateBackendFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+    .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
+    .map((f) => join(dir, f));
+}
+
+describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
+  for (const name of templateNames) {
+    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    if (!existsSync(dir)) continue;
+
+    it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
+      const allowed = PUBLIC_ROUTES[name] ?? {};
+      const ungated = templateBackendFiles(dir)
+        .flatMap(rawRoutes)
+        .filter((r) => !r.body || !gatesFirst(r.body))
+        .map((r) => r.name);
+      assert.deepStrictEqual(
+        ungated.filter((r) => !(r in allowed)),
+        [],
+        `${name}: start these handlers with \`await auth.requireAuth(context)\`, or list them in PUBLIC_ROUTES with the reason they are safe to call signed out`,
+      );
+      const stale = Object.keys(allowed).filter((r) => !ungated.includes(r));
+      assert.deepStrictEqual(stale, [], `${name}: remove these from PUBLIC_ROUTES (gated or no longer present)`);
+    });
+  }
+});
+
+/**
  * FileBucket methods that sign a URL. Whoever holds the URL (or the handle
  * built on it) can read or write that key until it expires, with no further
  * auth check, so only a gated method may hand one out.
@@ -552,9 +639,7 @@ describe('create-blocks-app template methods that return a presigned URL require
   for (const name of templateNames) {
     const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
     if (!existsSync(dir)) continue;
-    const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
-      .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
-      .map((f) => join(dir, f));
+    const files = templateBackendFiles(dir);
     callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
 
     it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
@@ -604,6 +689,45 @@ describe('ungatedPresignedUrlCalls', () => {
         'api.publicSigner → files.putUrl (listed in UNGATED)',
         "api.indexed → files['getFileHandle'] (does not start with requireAuth/requireRole)",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('rawRoutes', () => {
+  it('passes gated handlers and flags ungated, concise-arrow and referenced handlers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-rawroutes-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `const probe = async (context) => context.response.send({});
+      new RawRoute(scope, 'gated', { method: 'GET', path: '/gated', handler: async (context) => { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-method', { method: 'GET', path: '/gated-method', async handler(context) { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-function', { method: 'GET', path: '/gated-function', handler: async function (context) { await auth.requireRole(context, 'admin'); context.response.send({}); } });
+      new RawRoute(scope, 'open', { method: 'POST', path: '/open', handler: async (context) => { context.response.send({}); } });
+      new RawRoute(scope, 'open-method', { method: 'POST', path: '/open-method', async handler(context) { context.response.send({}); } });
+      new RawRoute(scope, 'concise', { method: 'GET', path: '/concise', handler: async (context) => context.response.send({}) });
+      new RawRoute(scope, 'referenced', { method: 'GET', path: '/referenced', handler: probe });`,
+    );
+    try {
+      const routes = rawRoutes(file);
+      assert.deepStrictEqual(
+        routes.map((r) => r.name),
+        [
+          'GET /gated',
+          'GET /gated-method',
+          'GET /gated-function',
+          'POST /open',
+          'POST /open-method',
+          'GET /concise',
+          'GET /referenced',
+        ],
+      );
+      assert.deepStrictEqual(
+        routes.filter((r) => !r.body || !gatesFirst(r.body)).map((r) => r.name),
+        ['POST /open', 'POST /open-method', 'GET /concise', 'GET /referenced'],
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
