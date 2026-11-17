@@ -35,6 +35,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct, IDependable } from 'constructs';
 import type { ResolvedAuthOptions } from '../resolve-options.js';
+import { clientLifetimes } from './token-settings.js';
 import type { ProviderSecretRef } from '../types.js';
 import { RPC_PREFIX, resolvedBackendApiUrl } from './api-url.js';
 import { federationConfigKeys, federationRedirectPaths } from './contract.js';
@@ -336,6 +337,8 @@ export function provisionHostedUiFederation(
 			options.users?.attributes,
 			registrations.flatMap((r) => Object.keys(r.attributeMapping)),
 		),
+		// Same lifetimes and rotation as the native client (`session.*`). Updates in place.
+		...clientLifetimes(options),
 	});
 	// Cognito rejects a client that lists a provider the pool does not have yet.
 	for (const idp of idps) hostedUiClient.node.addDependency(idp);

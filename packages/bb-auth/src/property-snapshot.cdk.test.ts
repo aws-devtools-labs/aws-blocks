@@ -274,6 +274,28 @@ function stripAllowlistedClientProperties(
 	) {
 		delete copy.WriteAttributes;
 	}
+	// The client token lifetimes and refresh rotation `Auth` sets (`session.*` defaults; `AuthCognito` set none).
+	// `ALLOW_REFRESH_TOKEN_AUTH` goes with rotation: Cognito refuses that flow on a rotating client.
+	const flows = copy.ExplicitAuthFlows;
+	if (
+		Array.isArray(flows) &&
+		Array.isArray(cognitoProps?.ExplicitAuthFlows) &&
+		JSON.stringify([...flows, 'ALLOW_REFRESH_TOKEN_AUTH']) === JSON.stringify(cognitoProps.ExplicitAuthFlows)
+	) {
+		copy.ExplicitAuthFlows = cognitoProps.ExplicitAuthFlows;
+	}
+	const lifetimes = {
+		AccessTokenValidity: 60,
+		IdTokenValidity: 60,
+		RefreshTokenValidity: 43_200,
+		TokenValidityUnits: { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'minutes' },
+		RefreshTokenRotation: { Feature: 'ENABLED', RetryGracePeriodSeconds: 10 },
+	};
+	for (const [key, expectedValue] of Object.entries(lifetimes)) {
+		if (cognitoProps?.[key] === undefined && JSON.stringify(copy[key]) === JSON.stringify(expectedValue)) {
+			delete copy[key];
+		}
+	}
 	return copy;
 }
 

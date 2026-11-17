@@ -1409,8 +1409,53 @@ export interface UserPoolOptions {
 
 /** Settings for {@link AuthCommonOptions.session}. */
 export interface SessionOptions {
-	/** Session record and cookie lifetime, in seconds. @default 34_560_000 (400 days) */
+	/**
+	 * Session record and cookie lifetime, in seconds. Every refresh re-stamps
+	 * it, so it is how long a session may sit unused. A session also ends when
+	 * its Cognito refresh token does ({@link SessionOptions.refreshTokenValiditySeconds}),
+	 * which is counted from sign-in.
+	 *
+	 * @default 2_592_000 (30 days; it was 400 days before)
+	 */
 	ttlSeconds?: number;
+	/**
+	 * Lifetime of the Cognito access token on the app clients this block
+	 * creates, in seconds: a whole number of minutes from 300 to 86_400. The
+	 * session refreshes it behind the scenes. Not available with `userPool`:
+	 * set it on your pool's own app client.
+	 *
+	 * @default 3600 (1 hour)
+	 */
+	accessTokenValiditySeconds?: number;
+	/** Lifetime of the Cognito ID token; same rules as `accessTokenValiditySeconds`. @default 3600 (1 hour) */
+	idTokenValiditySeconds?: number;
+	/**
+	 * Lifetime of the Cognito refresh token, in seconds: a whole number of
+	 * minutes from 3600 to 315_360_000 (10 years). It is the **absolute** limit
+	 * of a session: counted from sign-in, and neither a refresh nor rotation
+	 * extends it, so the user signs in again once it ends however recently they
+	 * were active. `ttlSeconds` is the idle limit. Must be at least the access
+	 * and ID token lifetimes.
+	 *
+	 * @default `ttlSeconds` (30 days)
+	 */
+	refreshTokenValiditySeconds?: number;
+	/**
+	 * Rotate the refresh token on every refresh: Cognito issues a new one and
+	 * revokes the previous one (after a 10-second grace period for a concurrent
+	 * retry), so a stolen refresh token stops working once the real session
+	 * refreshes. The block stores the new token itself.
+	 *
+	 * Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with
+	 * rotation on, so the clients lose that flow and the block refreshes with
+	 * `GetTokensFromRefreshToken`, which accepts the refresh tokens of existing
+	 * sessions. Another app that refreshes against the same client with
+	 * `REFRESH_TOKEN_AUTH` must switch to `GetTokensFromRefreshToken`, or set
+	 * this to `false`. Turning it off is an in-place update too.
+	 *
+	 * @default true
+	 */
+	refreshTokenRotation?: boolean;
 	/**
 	 * Set `true` only when the frontend and the API are on different registrable
 	 * domains. Switches the cookie to `SameSite=None; Secure; Partitioned`.
