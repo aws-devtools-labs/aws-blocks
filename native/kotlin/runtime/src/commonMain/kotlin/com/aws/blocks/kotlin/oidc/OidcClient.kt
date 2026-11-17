@@ -338,78 +338,6 @@ class OidcClient<P : OidcProvider> internal constructor(
         private const val CANCELLED = "cancelled"
 
         /**
-         * Where an AWS Blocks `Auth` block serves its federation routes, unless the backend moves
-         * them with `redirects.callbackPath` (the routes live in that path's directory).
-         */
-        const val DEFAULT_AUTH_BASE_PATH: String = "/aws-blocks/auth"
-
-        /**
-         * Creates a client for the federation routes of an AWS Blocks `Auth` block.
-         *
-         * `Auth` serves the relay sign-in routes at fixed paths under [basePath]
-         * (`authorize-params/<provider>`, `callback`, `exchange`, `signout`), so the client needs no
-         * server-supplied descriptor:
-         *
-         * ```kotlin
-         * val blocks = Blocks(Servers.local)
-         * val oidc = OidcClient.forAuth(
-         *     blocks.client(),
-         *     providers = listOf("google"),
-         *     relayTo = "com.example.app://auth",
-         * )
-         * val user = oidc.signIn("google")
-         * ```
-         *
-         * The client is an `OidcClient<AnyProvider>`: its providers are the ids passed here, not
-         * names a spec declared, so it signs in by id (outside this package, `signIn` by id is
-         * imported as `com.aws.blocks.kotlin.oidc.signIn`), and rejects an id not in
-         * [providers].
-         *
-         * Signing in stores the backend's session cookie in the cookie storage every generated API
-         * client shares, so `requireAuth`-gated methods are authenticated afterwards.
-         *
-         * @param blocksClient the client whose server and HTTP session to use: the
-         *   [com.aws.blocks.kotlin.Blocks.client] of the app's `Blocks` instance.
-         * @param providers the provider ids configured in the backend's `providers` (the record
-         *   keys). [signIn] rejects any other id.
-         * @param relayTo the custom-scheme URL the backend relays the sign-in result to. It must be
-         *   listed in the backend's `redirects.allowedRelayOrigins` and registered with the platform
-         *   (the Gradle plugin's `oidc { relayTo }`). The desktop (JVM) launcher relays to a loopback
-         *   address of its own instead.
-         * @param basePath the directory of the backend's `redirects.callbackPath`. Leave the default
-         *   unless the backend changes `callbackPath`.
-         */
-        fun forAuth(
-            blocksClient: BlocksClient,
-            providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
-        ): OidcClient<AnyProvider> =
-            forAuth(blocksClient.httpClient, blocksClient.server, providers, relayTo, basePath)
-
-        internal fun forAuth(
-            httpClient: HttpClient,
-            server: BlocksServer,
-            providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
-        ): OidcClient<AnyProvider> {
-            require(basePath.startsWith("/")) { "basePath must start with '/': \"$basePath\"" }
-            val base = basePath.trimEnd('/')
-            val config = OidcClientConfig(
-                providers = providers,
-                providerConfigs = emptyMap(),
-                exchangePath = "$base/exchange",
-                signOutPath = "$base/signout",
-                signInBasePath = "$base/signin",
-                authorizeParamsBasePath = "$base/authorize-params",
-                callbackPath = "$base/callback",
-                relayTo = relayTo,
-            )
-            return OidcClient(config, httpClient, server)
-        }
-
-        /**
          * The client for a `getClient` descriptor. [P] comes from the call site: the enum
          * generated for a spec that named its providers, or [AnyProvider] for one that didn't.
          */
@@ -450,8 +378,8 @@ class OidcClient<P : OidcProvider> internal constructor(
          * [UnsupportedOperationException].
          *
          * @param blocksClient the client whose server and HTTP session each OIDC client uses.
-         * @param relayTo the custom-scheme URL the backend relays the sign-in result to (see
-         *   [forAuth]).
+         * @param relayTo the custom-scheme URL the backend relays the sign-in result to: the Gradle
+         *   plugin's `oidc { relayTo }`, listed in the backend's `redirects.allowedRelayOrigins`.
          */
         fun json(blocksClient: BlocksClient, relayTo: String): Json =
             json(blocksClient.httpClient, blocksClient.server, relayTo)

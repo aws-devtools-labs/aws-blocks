@@ -149,21 +149,11 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client is built from the `Auth` block's fixed routes
-  // (packages/bb-auth DESIGN.md → Routes), with no server-supplied descriptor.
-  // The authorize-params and callback paths are left to OidcClient's defaults,
-  // which name exactly those routes.
-  final oidc = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
-    providers: const [_provider],
-    providerConfigs: const {},
-    baseUrl: oidcBase,
-    tokenStore: tokenStore,
-    sessionStore: session,
-    httpClient: httpClient,
-  );
+  // The client apps get: `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
+  // hydrated by the generated client, which shares its session store, so the
+  // session cookie the exchange sets lands in [session].
+  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
+  final oidc = await discovery.oidcAuthApi.getClient();
 
   final launcher = HttpRelayLauncher(httpClient);
 
