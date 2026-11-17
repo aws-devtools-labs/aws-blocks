@@ -7,7 +7,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
@@ -1055,7 +1055,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const hostingProps = backendStack.split('new Hosting(')[1];
   if (hostingProps !== undefined) {
     const framework = /\bframework:\s*['"]([^'"]+)['"]/.exec(hostingProps)?.[1];
-    printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
+    await printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
   }
 }
 
@@ -1141,22 +1141,6 @@ function resolveProjectHosting(backendDir: string, subpath: string): string {
 }
 
 /**
- * What the process that asks the project's Hosting runs. Its one argument is JSON:
- * the module's URL, the project directory and the `framework`. It writes the
- * `warning`, if any, as JSON to file descriptor 3, a pipe of its own, so nothing the
- * module prints can be read as the answer; then it exits, so a timer or a socket the
- * module left open does not keep it alive.
- */
-const HOSTING_WARNING_SCRIPT = [
-  "import { writeSync } from 'node:fs';",
-  'const { url, projectDir, framework } = JSON.parse(process.argv[1]);',
-  'const { checkNextjsCompatibility } = await import(url);',
-  'const result = checkNextjsCompatibility(projectDir, { framework });',
-  'writeSync(3, JSON.stringify({ warning: result?.warning }));',
-  'process.exit(0);',
-].join('\n');
-
-/**
  * Prints the warning the project's own Hosting has for its installed `next`, so the
  * project hears of it while it is being set up. Everything in it is that Hosting's:
  * `checkNextjsCompatibility` from the `@aws-blocks/hosting/nextjs-compatibility` the
@@ -1165,30 +1149,32 @@ const HOSTING_WARNING_SCRIPT = [
  * wording of its own for it; it adds only where the warning is from and that `next`
  * was left as it is.
  *
- * Hosting is asked in a process of its own, whose output is dropped: the module is the
- * project's code, and whatever it does (throw, print, exit, hang) must neither show
- * nor fail this command. The process is killed with SIGKILL after ten seconds: a
- * process can handle the default SIGTERM and stay, and this command would then wait
- * for it forever. Silent when that Hosting is not installed (`--skip-install`),
- * predates the export, fails in any of those ways, or has no warning.
+ * Silent when that Hosting is not installed (`--skip-install`), predates the export,
+ * throws, or has no warning. `console.error` and `console.warn` are muted during the
+ * check: Hosting's package lookup logs an error and its stack trace for a broken
+ * installed package before it answers that it has no verdict.
  *
  * @param framework - The `framework` the copied backend gives its `Hosting`, if any.
  */
-function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): void {
+async function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): Promise<void> {
   let warning: unknown;
+  const { error, warn } = console;
   try {
-    const url = pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href;
-    const child = spawnSync(
-      process.execPath,
-      ['--input-type=module', '-e', HOSTING_WARNING_SCRIPT, JSON.stringify({ url, projectDir: targetDir, framework })],
-      { encoding: 'utf-8', stdio: ['ignore', 'ignore', 'ignore', 'pipe'], timeout: 10_000, killSignal: 'SIGKILL' },
+    // A runtime path: the module is the project's installed Hosting, not a dependency of this CLI.
+    const compatibility: Record<string, unknown> = await import(
+      pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href
     );
-    // Empty unless the script got as far as its answer.
-    const answer: unknown = JSON.parse(child.output[3] ?? '');
-    if (typeof answer !== 'object' || answer === null) return;
-    warning = Reflect.get(answer, 'warning');
+    const check = compatibility.checkNextjsCompatibility;
+    if (typeof check !== 'function') return;
+    console.error = console.warn = () => {};
+    const result: unknown = check(targetDir, { framework });
+    if (typeof result !== 'object' || result === null) return;
+    warning = Reflect.get(result, 'warning');
   } catch {
     return;
+  } finally {
+    console.error = error;
+    console.warn = warn;
   }
   if (typeof warning !== 'string' || warning === '') return;
   console.log(`⚠️  ${warning}`);

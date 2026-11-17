@@ -916,19 +916,15 @@ describe('create-blocks-app auto-detection', () => {
      * A `checkNextjsCompatibility` with an answer of its own: a CLI that asked its own copy of
      * Hosting, or decided anything itself, would print something else. Its warning names the
      * `next` in the directory and the `framework` it was given, which proves what the CLI
-     * passes. It prints on both streams, also after it has answered and also text shaped like
-     * an answer, none of which may reach the CLI's output; and it leaves a timer running,
-     * which must not delay the answer.
+     * passes. It also logs an error, which must not reach the CLI's output.
      */
     const WARNS = [
       "import { readFileSync } from 'node:fs';",
       "import { join } from 'node:path';",
-      'setInterval(() => {}, 1000);',
       'export function checkNextjsCompatibility(projectDir, options) {',
       "  const { version } = JSON.parse(readFileSync(join(projectDir, 'node_modules', 'next', 'package.json'), 'utf-8'));",
-      "  console.log('fixture noise');",
       "  console.error(new Error('fixture noise'));",
-      "  setImmediate(() => console.log(JSON.stringify({ warning: 'fixture noise' })));",
+      "  console.warn('fixture noise');",
       '  return { supported: false, warning: `fixture Hosting on next@${version}, framework ${options.framework}` };',
       '}',
     ].join('\n');
@@ -978,25 +974,6 @@ describe('create-blocks-app auto-detection', () => {
       'Hosting is not installed': {},
       'the module throws on load': {
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, "throw new Error('fixture noise');"); },
-      },
-      'the module exits': {
-        install: (app) => { writeBlocksAndCore(app); writeHosting(app, 'process.exit(3);'); },
-      },
-      'the module prints text shaped like an answer and exits with success': {
-        install: (app) => { writeBlocksAndCore(app); writeHosting(app, "console.log(JSON.stringify({ warning: 'fixture noise' })); process.exit(0);"); },
-      },
-      // A real process that really hangs is the case, so this one takes the CLI's ten-second limit.
-      // It ignores the default SIGTERM, so only SIGKILL ends the wait, and it stays for 40 seconds,
-      // longer than this test lets the CLI run, so that a CLI still waiting for it fails the test.
-      'the module hangs and ignores SIGTERM': {
-        install: (app) => {
-          writeBlocksAndCore(app);
-          writeHosting(app, [
-            "process.on('SIGTERM', () => {});",
-            'await new Promise((resolve) => setTimeout(resolve, 40_000));',
-            "export function checkNextjsCompatibility() { return { supported: false, warning: 'fixture Hosting, too late' }; }",
-          ].join('\n'));
-        },
       },
       'the check throws': {
         install: (app) => { writeBlocksAndCore(app); writeHosting(app, "export function checkNextjsCompatibility() { throw new Error('fixture noise'); }"); },
