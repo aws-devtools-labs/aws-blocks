@@ -70,6 +70,40 @@ Transferables are read-only: an operation that takes one as a parameter fails co
 encoding a model that holds one throws `UnsupportedOperationException`. A tag with no binding has to
 be a direct result to get the `UnknownTransferable` fallback.
 
+## Realtime subscriptions
+
+`RealtimeChannel.subscribe()` returns a cold `Flow`. Each collection subscribes on the channel's
+shared WebSocket and doesn't wait for the server to confirm, so a message published before the
+server has the subscription can be missed.
+
+The flow completes normally only when you cancel the collection or call `close()`. Every other end
+throws a `RealtimeException`:
+
+| Exception | When | What to do |
+|---|---|---|
+| `RealtimeSubscriptionEndedException` | The server refused the subscribe or ended it. `code` is the server's code: `token_expired`, `access_revoked`, `principal_mismatch`, or `null` for a refused subscribe. | On `token_expired`, call the API method that returned the channel again and subscribe to the new handle. On the others, don't retry as the same user. |
+| `RealtimeConnectionException` | The socket couldn't open, failed, or was closed by the server or the gateway. | Get the channel again and subscribe to the new handle. |
+
+A message the deserializer can't decode ends the flow with the deserializer's error.
+
+The client never repeats the API call that returned the channel, and it doesn't reconnect. A
+channel token lasts about an hour, and the server checks it when the client sends its keep-alive
+ping (every 9 minutes per socket), so a subscriber can go up to 9 minutes without messages before
+the `token_expired` error arrives.
+
+```kotlin
+suspend fun followCursors(blocks: Blocks) {
+    while (true) {
+        try {
+            blocks.api.realtimeGetChannel("room-1").subscribe().collect { cursor -> draw(cursor) }
+            return
+        } catch (e: RealtimeSubscriptionEndedException) {
+            if (e.code != "token_expired") throw e
+        }
+    }
+}
+```
+
 ## HTTP clients
 
 A realtime channel and a file handle each open their own HTTP engine rather than sharing the one
