@@ -36,7 +36,7 @@ public final class FileUploadHandle: Sendable {
     /// Expected shape: `{ "url": "https://s3.../presigned-url", "contentType": "image/jpeg" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileUploadHandle {
         guard let url = json["url"] as? String else {
-            throw FileBucketError.invalidURL("missing 'url' in descriptor")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/upload", missingField: "url")
         }
         let contentType = json["contentType"] as? String
         return FileUploadHandle(url: url, contentType: contentType)
@@ -74,10 +74,11 @@ public final class FileUploadHandle: Sendable {
     /// Uploads data to the presigned URL.
     ///
     /// - Parameter body: The file content to upload.
-    /// - Throws: `FileBucketError.uploadFailed` on HTTP errors or network failures.
+    /// - Throws: `FileTransferError` on HTTP errors or network failures, carrying the HTTP status in
+    ///   `statusCode`; `TransferableError` if the handle's URL cannot be parsed.
     public func upload(data body: Data) async throws {
         guard let requestURL = URL(string: url) else {
-            throw FileBucketError.invalidURL(url)
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/upload", missingField: "url")
         }
 
         var request = URLRequest(url: requestURL)
@@ -92,18 +93,33 @@ public final class FileUploadHandle: Sendable {
             let (_, response) = try await session.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw FileBucketError.uploadFailed("Invalid response", nil)
+                throw FileTransferError(message: "Upload failed: invalid response")
             }
 
             guard (200 ..< 300).contains(httpResponse.statusCode) else {
-                throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
+                throw FileTransferError(
+                    message: "Upload failed: HTTP \(httpResponse.statusCode)",
+                    statusCode: httpResponse.statusCode
+                )
             }
 
-            logger.debug("Uploaded \(body.count) bytes to \(requestURL)")
-        } catch let error as FileBucketError {
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Uploaded \(body.count) bytes to \(requestURL.redactedForLogging)")
+        } catch let error as FileTransferError {
             throw error
+        } catch let error as TransferableError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
-            throw FileBucketError.uploadFailed(error.localizedDescription, error)
+            throw FileTransferError(
+                message: "Upload failed: \(error.localizedDescription)",
+                statusCode: nil,
+                underlyingError: error
+            )
         }
     }
 
@@ -115,10 +131,11 @@ public final class FileUploadHandle: Sendable {
     /// many bytes.
     ///
     /// - Parameter fileURL: The local file URL to upload.
-    /// - Throws: `FileBucketError.uploadFailed` on HTTP errors or network failures.
+    /// - Throws: `FileTransferError` on HTTP errors or network failures, carrying the HTTP status in
+    ///   `statusCode`; `TransferableError` if the handle's URL cannot be parsed.
     public func uploadFrom(fileURL: URL) async throws {
         guard let requestURL = URL(string: url) else {
-            throw FileBucketError.invalidURL(url)
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/upload", missingField: "url")
         }
 
         var request = URLRequest(url: requestURL)
@@ -132,18 +149,32 @@ public final class FileUploadHandle: Sendable {
             let (_, response) = try await session.upload(for: request, fromFile: fileURL)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw FileBucketError.uploadFailed("Invalid response", nil)
+                throw FileTransferError(message: "Upload failed: invalid response")
             }
 
             guard (200 ..< 300).contains(httpResponse.statusCode) else {
-                throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
+                throw FileTransferError(
+                    message: "Upload failed: HTTP \(httpResponse.statusCode)",
+                    statusCode: httpResponse.statusCode
+                )
             }
 
-            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL)")
-        } catch let error as FileBucketError {
+            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL.redactedForLogging)")
+        } catch let error as FileTransferError {
             throw error
+        } catch let error as TransferableError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
-            throw FileBucketError.uploadFailed(error.localizedDescription, error)
+            throw FileTransferError(
+                message: "Upload failed: \(error.localizedDescription)",
+                statusCode: nil,
+                underlyingError: error
+            )
         }
     }
 }

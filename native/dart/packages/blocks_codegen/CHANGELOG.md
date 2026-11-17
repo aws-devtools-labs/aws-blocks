@@ -1,3 +1,15 @@
+## Unreleased
+
+- **Breaking:** generated clients no longer send a realtime channel, a file
+  handle or an OIDC client back to the server, which 0.2.0 added. One passed as
+  a parameter, or inside a model, list, map, tuple or union variant a call
+  sends, fails again when the call is encoded (`JsonUnsupportedObjectError`), as
+  before 0.2.0, because `blocks_runtime`'s transferables no longer have
+  `toJson()`. The server never turns such a value back into a live object, so
+  pass the plain values the method needs instead. Decoding transferables,
+  including inside models, lists, maps and realtime messages, is unchanged.
+  Requires `blocks_runtime` with the matching change.
+
 ## 0.2.0
 
 - Fix two arms of one union whose discriminator values generate the same

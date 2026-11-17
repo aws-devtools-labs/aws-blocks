@@ -11,6 +11,7 @@ Creates one self-mutating CodePipeline V2 per branch. Each pipeline:
 
 ## Usage
 
+<!-- doc-snippet: skip — MyAppStack stands for your app's own stack class -->
 ```ts
 import { Pipeline } from '@aws-blocks/pipeline';
 
@@ -44,6 +45,7 @@ deploys — for example a step that consumes the stage's deploy outputs. It is i
 once per deploy stage and returns steps that are attached as that stage's post-deploy
 actions:
 
+<!-- doc-snippet: skip — MyAppStack stands for your app's own stack class -->
 ```ts
 import { Duration } from 'aws-cdk-lib';
 import { CodeBuildStep } from 'aws-cdk-lib/pipelines';

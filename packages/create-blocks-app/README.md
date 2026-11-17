@@ -71,7 +71,7 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 
 **aws-blocks/index.ts**
 ```typescript
-import { ApiNamespace, Scope, Auth, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, Auth, KVStore, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -95,7 +95,7 @@ const todoSchema = z.object({
   completed: z.boolean(),
 });
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: { partitionKey: 'userSub', sortKey: 'todoId' },
 });
@@ -182,11 +182,11 @@ Apps scaffolded by an older CLI declare `"*"` instead, so their next clean insta
 
 ## Templates
 
-Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `agent`, `cron`, `observability`, `amplify`, `demo`.
+Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `auth-oidc`, `agent`, `cron`, `observability`, `amplify`, `demo`.
 
 The `auth` template was previously named `auth-cognito`; `--template auth-cognito` still works and scaffolds `auth`.
 
-The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) typecheck the browser and the backend as separate [TypeScript projects](https://www.typescriptlang.org/docs/handbook/project-references.html), the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` with `"types": ["vite/client"]`, so a Node global there is an error, and `aws-blocks/tsconfig.json` checks the backend with Node types. `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) explains the layout and how to move an older app to it.
+The Vite templates (`default`, `bare`, `react`, `auth`, `auth-oidc`, `agent`, `demo`) typecheck the browser and the backend as separate [TypeScript projects](https://www.typescriptlang.org/docs/handbook/project-references.html), the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` with `"types": ["vite/client"]`, so a Node global there is an error, and `aws-blocks/tsconfig.json` checks the backend with Node types. `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) explains the layout and how to move an older app to it.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 

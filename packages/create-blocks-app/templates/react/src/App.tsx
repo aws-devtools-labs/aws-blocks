@@ -143,7 +143,7 @@ export function App() {
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,
         {' '}<strong>real-time sync</strong> across browser tabs,
-        and <strong>todos stored in a distributed table</strong> with per-user isolation.
+        and <strong>todos stored in a KVStore</strong> with per-user isolation.
       </p>
       {!user && <p>Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the <code>npm run dev</code> terminal.</p>}
       {user && <TodoApp />}

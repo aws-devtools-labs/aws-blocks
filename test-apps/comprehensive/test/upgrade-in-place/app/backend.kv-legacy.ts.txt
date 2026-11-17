@@ -1,0 +1,98 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Fixture of `upgrade-legacy-kv-store.ts`: the app on this checkout. Each store
+// of the release is a `LegacyKVStore` with the same id and options, beside a
+// `KVStore` with a new id. The third deploy is this file without the lines
+// that end with the `legacy` marker.
+
+import { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { isBlocksError } from '@aws-blocks/core';
+import { z } from 'zod';
+
+const scope = new Scope('upgrade');
+const profileSchema = z.object({ userId: z.string(), name: z.string(), age: z.number() });
+
+const oldStrings = new LegacyKVStore(scope, 'strings'); // legacy
+const oldDocs = new LegacyKVStore<unknown>(scope, 'docs', { removalPolicy: 'retain' }); // legacy
+const oldProfiles = new LegacyKVStore(scope, 'profiles', { schema: profileSchema }); // legacy
+const oldExpiring = new LegacyKVStore<unknown>(scope, 'expiring', { ttl: true }); // legacy
+
+const strings = new KVStore(scope, 'strings-v2');
+const docs = new KVStore<unknown>(scope, 'docs-v2');
+const profiles = new KVStore(scope, 'profiles-v2', {
+	schema: profileSchema,
+	indexes: { byName: { partitionKey: 'name' } },
+});
+const expiring = new KVStore<unknown>(scope, 'expiring-v2');
+
+type Entry = { key: string; value: unknown; expiresAt?: number };
+type Readable = { scan(options?: { includeExpired?: boolean }): AsyncIterable<Entry> };
+const byKey = (a: { key: string }, b: { key: string }) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+async function entries(store: Readable, options?: { includeExpired?: boolean }) {
+	const all = await Array.fromAsync(store.scan(options));
+	return all.map(({ key, value }) => ({ key, value })).sort(byKey);
+}
+/** The expiry of every live entry. `null` for an entry with no expiry. */
+async function expiries(store: Readable) {
+	const all = await Array.fromAsync(store.scan());
+	return all.map(({ key, expiresAt }) => ({ key, expiresAt: expiresAt ?? null })).sort(byKey);
+}
+async function dumpOf(s: Readable, d: Readable, p: Readable, e: Readable) {
+	return {
+		strings: await entries(s),
+		docs: await entries(d),
+		profiles: await entries(p),
+		expiring: await entries(e),
+	};
+}
+async function expiriesOf(s: Readable, e: Readable) {
+	return { strings: await expiries(s), expiring: await expiries(e) };
+}
+
+/**
+ * A copy with the tools that the README names: every entry of the old store, with its expiry, unless the new store has the key.
+ * It also copies the expired entries (`includeExpired`): a read of the new store must hide them too.
+ */
+async function copy<T>(
+	from: LegacyKVStore<T>,
+	to: { put(key: string, value: T, options?: { ifNotExists?: boolean; expiresAt?: number }): Promise<void> },
+) {
+	const counts = { copied: 0, kept: 0 };
+	for await (const { key, value, expiresAt } of from.scan({ includeExpired: true })) {
+		try {
+			await to.put(key, value, { ifNotExists: true, expiresAt });
+			counts.copied++;
+		} catch (e: unknown) {
+			if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+			counts.kept++;
+		}
+	}
+	return counts;
+}
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async dump() {
+		return dumpOf(strings, docs, profiles, expiring);
+	},
+	async expiries() {
+		return expiriesOf(strings, expiring);
+	},
+	async putNew(key: string, value: string) {
+		await strings.put(key, value);
+		return 'written';
+	},
+	async byName(name: string) {
+		const hits = await Array.fromAsync(profiles.query({ index: 'byName', where: { name: { equals: name } } }));
+		return hits.map((hit) => ({ key: hit.key, value: hit.value }));
+	},
+	async dumpOld() { return { ...(await dumpOf(oldStrings, oldDocs, oldProfiles, oldExpiring)), stringsIncludingExpired: await entries(oldStrings, { includeExpired: true }) }; }, // legacy
+	async expiriesOld() { return expiriesOf(oldStrings, oldExpiring); }, // legacy
+	async oldPage(limit: number, cursor?: string) { const page = oldStrings.scan({ limit, cursor }); const keys = (await Array.fromAsync(page)).map((e) => e.key); return { keys, cursor: page.cursor ?? null }; }, // legacy
+	async copyAll() { return { strings: await copy(oldStrings, strings), docs: await copy(oldDocs, docs), profiles: await copy(oldProfiles, profiles), expiring: await copy(oldExpiring, expiring) }; }, // legacy
+	async putOld(key: string, value: unknown) { await oldDocs.put(key, value, { ifNotExists: true }); return 'written'; }, // legacy
+	async removeOld(key: string) { await oldDocs.delete(key); return 'deleted'; }, // legacy
+	async getDoc(key: string) { return (await docs.get(key)) ?? (await oldDocs.get(key)); }, // legacy
+	async deleteDoc(key: string) { await oldDocs.delete(key); await docs.delete(key); return 'deleted'; }, // legacy
+}));

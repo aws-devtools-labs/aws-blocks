@@ -172,6 +172,10 @@ export const AuthErrors = {
 	 * plain-HTTP front door (an ALB without a certificate) outside a sandbox
 	 * deploy, where the cookie could not carry `Secure` (HTTP 500). Give the
 	 * door a certificate and a domain, or use the CloudFront door.
+	 *
+	 * Only when the network path is trusted (a private network, or TLS ended
+	 * upstream), the door's `allowPlainHttp: true` opts out: the cookie is then
+	 * issued without `Secure`.
 	 */
 	InsecureTransport: 'InsecureTransportException',
 } as const;

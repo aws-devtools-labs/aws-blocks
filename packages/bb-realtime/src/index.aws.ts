@@ -5,7 +5,7 @@
  * @aws-blocks/bb-realtime — AWS runtime.
  *
  * Used inside Lambda (resolved via `aws-runtime` condition in package.json).
- * Server-side publish() queries the connections DistributedTable for channel
+ * Server-side publish() queries the connections KVStore for channel
  * subscribers and fans out via API Gateway Management API postToConnection.
  * Server-side subscribe() opens a real WebSocket connection to the API Gateway
  * endpoint for cross-invocation message delivery. getChannel() returns a
@@ -26,7 +26,8 @@ import {
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+import { type ConnectionRecord, connectionsTableOptions } from './connections.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
 	GetChannelOptions,
@@ -55,38 +56,9 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	InferMessage,
 	RealtimeChannelDescriptor,
 } from './types.js';
-
-// ── Connection record type ──────────────────────────────────────────────────
-
-interface ConnectionRecord {
-	connectionId: string;
-	channel: string;
-	expiresAt: number;
-	connectedAt?: number;
-	lastTtlSweep?: number;
-	/** Connection record: the principal its connect token is bound to. Subscription record: the principal its channel token is bound to. */
-	principal?: string;
-	/** Subscription record: expiry (unix seconds) of the channel token it was authorized with. */
-	tokenExp?: number;
-	/** Subscription record: issue time (unix seconds) of that channel token. */
-	tokenIat?: number;
-	/** Subscription record: unique id (`jti`) of that channel token. */
-	tokenId?: string;
-	/** Revocation record: when access for the principal was revoked (unix seconds). */
-	revokedAt?: number;
-}
-
-// ── Connections table schema (runtime validation — accepts anything) ────────
-
-const connectionsSchema: StandardSchemaV1<ConnectionRecord> = {
-	'~standard': {
-		version: 1,
-		vendor: 'blocks',
-		validate: (value: unknown) => ({ value: value as ConnectionRecord }),
-	},
-};
 
 // ── Constants (all values in seconds) ───────────────────────────────────────
 
@@ -94,6 +66,13 @@ const SENTINEL_SK = '__connection__';
 const SENTINEL_TTL = 9000;   // 2.5 hours
 const CHANNEL_TTL = 3600;    // 1 hour
 const SWEEP_INTERVAL = 1800; // 30 minutes
+
+/**
+ * When a subscription record leaves the table (unix seconds). KVStore hides a record from every read once
+ * its `expiresAt` has passed, so the record outlives its channel token by `CHANNEL_TTL`: the ping after the
+ * token expires must still find the record, to delete it and tell the client why the subscription ended.
+ */
+const subscriptionExpiresAt = (now: number, tokenExp: number) => Math.max(now, tokenExp) + CHANNEL_TTL;
 
 // Revocation records live in the same table as connections. Their partition key
 // is `revoked#<principal>`, which no API Gateway connection id can equal, and
@@ -156,12 +135,13 @@ function getApigw(endpoint?: string, customUserAgent?: [string, string][]): ApiG
 	return client;
 }
 
-// ── DistributedTable instance ───────────────────────────────────────────────
+// ── Connections KVStore instance ────────────────────────────────────────────
 
-let _connectionsTable: DistributedTable<
+let _connectionsTable: KVStore<
 	ConnectionRecord,
-	{ partitionKey: 'connectionId'; sortKey: 'channel' },
-	{ 'channel-index': { partitionKey: 'channel'; sortKey: 'connectionId' } }
+	ConnectionRecord,
+	(typeof connectionsTableOptions)['key'],
+	(typeof connectionsTableOptions)['indexes']
 > | null = null;
 
 function connectionsTable() {
@@ -205,15 +185,15 @@ function getTokenSecretOrNull(): Promise<string | null> {
 	return getTokenSecret().catch(() => null);
 }
 
-// ── DistributedTable helpers ────────────────────────────────────────────────
+// ── Connections table helpers ───────────────────────────────────────────────
 
 /** The subscription records for `channel` (the `channel-index` projection carries whole records). */
 async function queryConnectionsByChannel(channel: string): Promise<ConnectionRecord[]> {
 	const table = connectionsTable();
-	return Array.fromAsync(table.query({
-		index: 'channel-index',
-		where: { channel: { equals: channel } },
-	}));
+	return Array.fromAsync(
+		table.query({ index: 'channel-index', where: { channel: { equals: channel } } }),
+		(entry) => entry.value,
+	);
 }
 
 /**
@@ -226,7 +206,7 @@ async function deleteEndedSubscription(record: ConnectionRecord): Promise<void> 
 	try {
 		await connectionsTable().delete(key, record.tokenId === undefined ? undefined : { ifFieldEquals: { tokenId: record.tokenId } });
 	} catch (err: unknown) {
-		if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+		if (!isBlocksError(err, KVStoreErrors.ConditionalCheckFailed)) throw err;
 	}
 }
 
@@ -257,7 +237,7 @@ async function deleteConnectionRecords(connectionId: string): Promise<void> {
 	const records = await Array.fromAsync(table.query({
 		where: { connectionId: { equals: connectionId } },
 	}));
-	const keys = records.map(r => ({ connectionId: r.connectionId, channel: r.channel }));
+	const keys = records.map(r => r.key);
 	if (keys.length > 0) {
 		await table.deleteBatch(keys);
 	}
@@ -303,8 +283,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		// Consistent read: a handle used right after `revokeAccess()` must see the revocation.
 		const revokedAt = await getRevokedAt(valid.sub, { consistentRead: true });
 		if (revokedAt !== undefined && valid.iat <= revokedAt) return { statusCode: 403 };
-		await table.put({
-			connectionId, channel: SENTINEL_SK, connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now,
+		await table.put({ connectionId, channel: SENTINEL_SK }, {
+			connectedAt: now, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now,
 			...(valid.sub === undefined ? {} : { principal: valid.sub }),
 		});
 		return { statusCode: 200 };
@@ -361,8 +341,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			return { statusCode: 200 };
 		}
 		// Keep what a ping needs to re-check this subscription later (see `checkSubscriptionAuth`).
-		await table.put({
-			connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL,
+		await table.put({ connectionId, channel: msg.channel }, {
+			expiresAt: subscriptionExpiresAt(now, valid.exp),
 			tokenExp: valid.exp, tokenIat: valid.iat, tokenId: valid.jti,
 			...(valid.sub === undefined ? {} : { principal: valid.sub }),
 		});
@@ -373,16 +353,19 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 	} else if (msg.action === 'unsubscribe' && isClientChannelPath(msg.channel)) {
 		await table.delete({ connectionId, channel: msg.channel });
 	} else if (msg.action === 'ping') {
-		const sentinel = await table.get({ connectionId, channel: SENTINEL_SK });
+		// Get sentinel to read lastTtlSweep, then update TTL
+		const sentinelKey = { connectionId, channel: SENTINEL_SK };
+		const sentinel = await table.get(sentinelKey);
 		if (sentinel) {
-			await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL });
+			await table.put(sentinelKey, { ...sentinel, expiresAt: now + SENTINEL_TTL });
 			// Re-check every subscription against its token: a subscription ends when
 			// the token expired, the principal no longer matches the connection's, or
 			// access for the principal was revoked.
 			const revokedAt = await getRevokedAt(sentinel.principal);
-			const records = (await Array.fromAsync(table.query({
-				where: { connectionId: { equals: connectionId } },
-			}))).filter(r => r.channel !== SENTINEL_SK);
+			const records = (await Array.fromAsync(
+				table.query({ where: { connectionId: { equals: connectionId } } }),
+				(entry) => entry.value,
+			)).filter(r => r.channel !== SENTINEL_SK);
 			const ended: { record: ConnectionRecord; failure: SubscriptionAuthFailure }[] = [];
 			const live: ConnectionRecord[] = [];
 			for (const record of records) {
@@ -401,9 +384,12 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			if (now - lastSweep > SWEEP_INTERVAL) {
 				// Sweep: refresh TTLs on all channel subscriptions that remain
 				if (live.length > 0) {
-					await table.putBatch(live.map(r => ({ ...r, expiresAt: now + CHANNEL_TTL })));
+					await table.putBatch(live.map(r => ({
+						key: { connectionId: r.connectionId, channel: r.channel },
+						value: { ...r, expiresAt: subscriptionExpiresAt(now, r.tokenExp ?? now) },
+					})));
 				}
-				await table.put({ ...sentinel, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
+				await table.put(sentinelKey, { ...sentinel, expiresAt: now + SENTINEL_TTL, lastTtlSweep: now });
 			}
 		}
 	}
@@ -456,14 +442,9 @@ export const Realtime: {
 		const callbackUrl = process.env.BLOCKS_RT_CALLBACK_URL ?? '';
 		registerSdkIdentifiers(this.fullId, { wsUrl, callbackUrl });
 
-		// Initialize the DistributedTable for connection tracking (shared across instances)
+		// Initialize the connections KVStore for connection tracking (shared across instances)
 		if (!_connectionsTable) {
-			_connectionsTable = new DistributedTable(this, 'connections', {
-				schema: connectionsSchema,
-				key: { partitionKey: 'connectionId', sortKey: 'channel' } as const,
-				indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } } as const,
-				ttl: 'expiresAt',
-			});
+			_connectionsTable = new KVStore(this, 'connections', connectionsTableOptions);
 		}
 
 		// Initialize the token secret via frameworkKey (shared across instances).
@@ -604,7 +585,7 @@ export const Realtime: {
 		// validatePrincipal() allows undefined (valid for getChannel()), so the shared helper rejects it separately.
 		validateRevokePrincipal(principal);
 		const now = Math.floor(Date.now() / 1000);
-		await connectionsTable().put({ ...revocationKey(principal), revokedAt: now, expiresAt: now + REVOCATION_RETENTION_SECONDS });
+		await connectionsTable().put(revocationKey(principal), { revokedAt: now, expiresAt: now + REVOCATION_RETENTION_SECONDS });
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

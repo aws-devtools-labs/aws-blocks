@@ -251,7 +251,7 @@ function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
  *
  * **When NOT to use:** If you need structured key-value lookups, use `KVStore`.
  * If you need relational queries, use `Database`. If you need full-text keyword
- * search with DynamoDB indexes, use `DistributedTable`.
+ * search with DynamoDB indexes, use `KVStore` with a `schema` and `indexes`.
  *
  * **Best practices:**
  * - Organize documents in subfolders to auto-populate `folder` metadata for filtering

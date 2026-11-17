@@ -19,9 +19,9 @@ public final nonisolated class Api: Sendable {
     public func getDeviceHandle(deviceId: String) async throws -> ExampleIotNative.DeviceHandle {
         let request = BlocksRuntime.BlocksRequest(method: "api.getDeviceHandle", params: [deviceId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.getDeviceHandle") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.getDeviceHandle") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.getDeviceHandle")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-iot/device-handle", missingField: "__blocks")
         }
         return try ExampleIotNative.DeviceHandle.fromBlocksDescriptor(
             BlocksRuntime.validateTransferableDescriptor(descriptor, expectedTag: "example-iot/device-handle")
@@ -32,9 +32,9 @@ public final nonisolated class Api: Sendable {
     public func connectDevice(deviceId: String) async throws -> ExampleIotNative.APILink<ConnectDevice.ResultMessage> {
         let request = BlocksRuntime.BlocksRequest(method: "api.connectDevice", params: [deviceId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.connectDevice") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.connectDevice") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.connectDevice")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-iot/device-link", missingField: "__blocks")
         }
         return try ExampleIotNative.APILink<ConnectDevice.ResultMessage>.fromBlocksDescriptor(
             BlocksRuntime.validateTransferableDescriptor(descriptor, expectedTag: "example-iot/device-link")
@@ -47,9 +47,9 @@ public final nonisolated class Api: Sendable {
     public func findDeviceHandle(serialNumber: String) async throws -> ExampleIotNative.DeviceHandle {
         let request = BlocksRuntime.BlocksRequest(method: "api.findDeviceHandle", params: [serialNumber], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.findDeviceHandle") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.findDeviceHandle") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.findDeviceHandle")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-iot/device-handle", missingField: "__blocks")
         }
         return try ExampleIotNative.DeviceHandle.fromBlocksDescriptor(
             BlocksRuntime.validateTransferableDescriptor(descriptor, expectedTag: "example-iot/device-handle")
@@ -60,9 +60,9 @@ public final nonisolated class Api: Sendable {
     public func openSensorStream(sensorId: String) async throws -> ExampleSensorNative.SensorStream {
         let request = BlocksRuntime.BlocksRequest(method: "api.openSensorStream", params: [sensorId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.openSensorStream") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.openSensorStream") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.openSensorStream")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-sensor/stream", missingField: "__blocks")
         }
         return try ExampleSensorNative.SensorStream.fromBlocksDescriptor(
             BlocksRuntime.validateTransferableDescriptor(descriptor, expectedTag: "example-sensor/stream")
@@ -73,9 +73,9 @@ public final nonisolated class Api: Sendable {
     public func openGatewayLink(gatewayId: String) async throws -> BlocksRuntime.UnknownTransferable {
         let request = BlocksRuntime.BlocksRequest(method: "api.openGatewayLink", params: [gatewayId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.openGatewayLink") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.openGatewayLink") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.openGatewayLink")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-gateway/link", missingField: "__blocks")
         }
         return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: "example-gateway/link")
     }
@@ -84,9 +84,9 @@ public final nonisolated class Api: Sendable {
     public func getFirmwareSession(deviceId: String) async throws -> BlocksRuntime.UnknownTransferable {
         let request = BlocksRuntime.BlocksRequest(method: "api.getFirmwareSession", params: [deviceId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.getFirmwareSession") }
+        guard let result else { throw BlocksRuntime.TransportError(message: "Unexpected null result for api.getFirmwareSession") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.getFirmwareSession")
+            throw BlocksRuntime.TransferableError.invalidDescriptor(blocksType: "example-iot/firmware-session", missingField: "__blocks")
         }
         return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: "example-iot/firmware-session")
     }

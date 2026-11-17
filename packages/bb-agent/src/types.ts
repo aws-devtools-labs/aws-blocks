@@ -94,7 +94,7 @@ export type DefaultToolContext = Record<string, any>;
 
 export interface AgentConfig<TContext = DefaultToolContext> {
 	/**
-	 * When true, disables all persistence (no DistributedTable, no SessionManager).
+	 * When true, disables all persistence (no KVStore, no SessionManager).
 	 * The agent does inference + tools only — no conversation history.
 	 */
 	inferenceOnly?: boolean;

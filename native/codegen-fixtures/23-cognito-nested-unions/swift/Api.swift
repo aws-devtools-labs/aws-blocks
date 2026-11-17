@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func cognitoConfirmSignIn(session: String, challengeResponse: String) async throws -> CognitoConfirmSignIn.Result {
         let request = BlocksRequest(method: "api.cognitoConfirmSignIn", params: [session, challengeResponse], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.cognitoConfirmSignIn") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.cognitoConfirmSignIn") }
         return try JSONDecoder().decode(CognitoConfirmSignIn.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func cognitoSignIn(username: String, password: String) async throws -> CognitoSignIn.Result {
         let request = BlocksRequest(method: "api.cognitoSignIn", params: [username, password], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.cognitoSignIn") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.cognitoSignIn") }
         return try JSONDecoder().decode(CognitoSignIn.Result.self, from: result)
     }
 

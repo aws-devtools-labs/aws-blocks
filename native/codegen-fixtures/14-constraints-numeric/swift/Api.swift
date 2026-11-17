@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func setScore(input: SetScore.Input) async throws -> SetScore.Result {
         let request = BlocksRequest(method: "api.setScore", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.setScore") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.setScore") }
         return try JSONDecoder().decode(SetScore.Result.self, from: result)
     }
 

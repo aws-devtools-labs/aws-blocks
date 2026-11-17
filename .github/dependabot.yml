@@ -215,6 +215,24 @@ updates:
         update-types: ["version-update:semver-minor"]
       - dependency-name: "org.jetbrains.kotlinx:atomicfu"
         update-types: ["version-update:semver-minor"]
+      # Capped below their current heads in libs.versions.toml: the next minor of
+      # each is built with Kotlin 2.3+, whose metadata/klib ABI the SDK's Kotlin
+      # 2.2 toolchain can't read (see
+      # native/kotlin/.changeset/kotlin-ktor-serialization-bump.md). Hold the
+      # minors so the weekly run stops re-proposing the heads this PR had to cap;
+      # take them with a Kotlin 2.3+ toolchain migration. Patches still arrive.
+      - dependency-name: "io.ktor:*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "org.jetbrains.kotlinx:kotlinx-serialization-json"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "com.squareup:kotlinpoet"
+        update-types: ["version-update:semver-minor"]
+      # The Gradle wrapper is held at 9.6.x the same way (gradle-wrapper.properties):
+      # 9.7+ bundles a Kotlin 2.4 stdlib the 2.2 toolchain rejects. Dependabot's
+      # Gradle-wrapper updater (dependabot/dependabot-core#2223, shipped behind
+      # the gradle_wrapper_updater flag) exposes no documented dependency-name to
+      # target in an ignore rule, so a wrapper re-bump must be re-capped by hand
+      # in review until that mechanism is documented.
     groups:
       kotlin:
         patterns:

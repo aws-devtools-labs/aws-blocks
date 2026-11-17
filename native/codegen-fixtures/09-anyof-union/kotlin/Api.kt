@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.IllegalArgumentException
@@ -18,6 +19,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -29,6 +31,7 @@ public class Api(
   public suspend fun search(query: Search.Query): Search.Result {
     val request = BlocksRequest(method = "api.search", params = listOf(BlocksJson.encodeToJsonElement(query)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.search")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

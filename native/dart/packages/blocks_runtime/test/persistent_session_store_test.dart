@@ -36,49 +36,57 @@ void main() {
       expect(records.single['path'], '/');
     });
 
-    test('load adopts cookies persisted as a name → value map', () async {
+    test(
+      'load does not adopt cookies persisted as a name → value map',
+      () async {
+        final token = InMemoryTokenStore();
+        await token.set('k', jsonEncode({'blocks_session': 'old'}));
+
+        final store = PersistentSessionStore(store: token, storageKey: 'k');
+        await store.load();
+
+        expect(store.cookies, isEmpty);
+        for (final url in [
+          'http://localhost:3001/aws-blocks/api',
+          'https://localhost:3001/aws-blocks/api',
+          'https://other.example.com/',
+          'wss://other.example.com/realtime',
+        ]) {
+          expect(store.cookieHeaderFor(Uri.parse(url)), isNull, reason: url);
+        }
+        // The legacy map is removed from the backing store on load.
+        expect(await token.get('k'), isNull);
+
+        // A later save writes only the new record, not the legacy cookie.
+        store.setCookies(
+          'other=1',
+          requestUri: Uri.parse('https://localhost:3001/aws-blocks/api'),
+        );
+        await Future<void>.delayed(Duration.zero);
+        final records = (jsonDecode((await token.get('k'))!) as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+        expect(records.map((r) => r['name']), ['other']);
+
+        // A fresh store reading it back finds no legacy cookie either.
+        final reader = PersistentSessionStore(store: token, storageKey: 'k');
+        await reader.load();
+        expect(reader.cookies, {'other': '1'});
+      },
+    );
+
+    test('load reads a record without a secure field as Secure', () async {
       final token = InMemoryTokenStore();
-      await token.set('k', jsonEncode({'blocks_session': 'old'}));
+      await token.set(
+        'k',
+        jsonEncode([
+          {'name': 'a', 'value': '1', 'host': 'example.com', 'path': '/'},
+        ]),
+      );
 
       final store = PersistentSessionStore(store: token, storageKey: 'k');
       await store.load();
-      expect(store.cookies, {'blocks_session': 'old'});
-      expect(
-        store.cookieHeaderFor(
-          Uri.parse('http://localhost:3001/aws-blocks/api'),
-        ),
-        'blocks_session=old',
-      );
-      // The map format recorded no host, so until the server sets the cookie
-      // again it is sent to any host, as earlier versions did.
-      expect(
-        store.cookieHeaderFor(Uri.parse('https://other.example.com/')),
-        'blocks_session=old',
-      );
-
-      // The same cookie set again by a host replaces the adopted one, even
-      // without a `Path`, where it is stored for `/aws-blocks`.
-      store.setCookies(
-        'blocks_session=new',
-        requestUri: Uri.parse('http://localhost:3001/aws-blocks/api'),
-      );
-      expect(
-        store.cookieHeaderFor(
-          Uri.parse('http://localhost:3001/aws-blocks/api'),
-        ),
-        'blocks_session=new',
-      );
-      // The replacement is scoped to the host that set it.
-      expect(
-        store.cookieHeaderFor(Uri.parse('https://other.example.com/')),
-        isNull,
-      );
-
-      store.setCookies(
-        'blocks_session=; Max-Age=0; Path=/',
-        requestUri: Uri.parse('http://localhost:3001/aws-blocks/api'),
-      );
-      expect(store.cookies, isEmpty);
+      expect(store.cookieHeaderFor(Uri.parse('http://example.com/')), isNull);
+      expect(store.cookieHeaderFor(Uri.parse('https://example.com/')), 'a=1');
     });
 
     test('attributes survive persistence', () async {

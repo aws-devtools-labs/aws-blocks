@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getUser(id: String) async throws -> GetUser.Result {
         let request = BlocksRequest(method: "api.getUser", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getUser") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getUser") }
         return try JSONDecoder().decode(GetUser.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func updateUser(input: UpdateUser.Input) async throws -> UpdateUser.Result {
         let request = BlocksRequest(method: "api.updateUser", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.updateUser") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.updateUser") }
         return try JSONDecoder().decode(UpdateUser.Result.self, from: result)
     }
 

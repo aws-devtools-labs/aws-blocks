@@ -222,14 +222,14 @@ describe('groupResources', () => {
 		const groups = groupResources(
 			[raw('UsersTable', 'AWS::DynamoDB::Table'), raw('TodosTable', 'AWS::DynamoDB::Table')],
 			cdkPaths,
-			{ appScope: 'my-app', blocks: [block('AuthNamespace', 'Auth'), block('DistributedTable', 'todos')] },
+			{ appScope: 'my-app', blocks: [block('AuthNamespace', 'Auth'), block('KVStore', 'todos')] },
 		);
 		const auth = groups.find((g) => g.id === 'my-app/auth');
 		const todos = groups.find((g) => g.id === 'my-app/todos');
 		// Match is case-insensitive: 'Auth' in source, 'auth' in the cdk path.
 		assert.strictEqual(auth?.blockFullId, 'my-app-Auth');
 		assert.strictEqual(auth.blockType, 'AuthNamespace');
-		assert.strictEqual(todos?.blockType, 'DistributedTable');
+		assert.strictEqual(todos?.blockType, 'KVStore');
 	});
 
 	it('matches on fullId as well as id', () => {
@@ -243,7 +243,7 @@ describe('groupResources', () => {
 	it('leaves both block fields undefined for a group no block matches', () => {
 		const [group] = groupResources([raw('UsersTable', 'AWS::DynamoDB::Table')], cdkPaths, {
 			appScope: 'my-app',
-			blocks: [block('DistributedTable', 'somethingElse')],
+			blocks: [block('KVStore', 'somethingElse')],
 		});
 		assert.strictEqual(group.blockFullId, undefined);
 		assert.strictEqual(group.blockType, undefined);

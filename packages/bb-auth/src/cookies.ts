@@ -50,7 +50,9 @@ import { sessionCookieName } from './cdk/contract.js';
  * Sign-in checks this with {@link assertSessionCookieTransport} before it
  * stores anything, so a refused sign-in writes no session. A clearing cookie
  * (`clearing: true`, `Max-Age=0`) carries no value and is never refused, so
- * sign-out and account deletion still clear the cookie.
+ * sign-out and account deletion still clear the cookie. A front door with
+ * `allowPlainHttp: true` (config `BLOCKS_ALLOW_PLAIN_HTTP`, registered by
+ * `Hosting`) opts out of the refusal: its cookies drop `Secure` as in a sandbox.
  */
 function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean, clearing = false): string {
 	const security = buildCookieSecurityAttrs({

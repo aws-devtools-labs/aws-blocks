@@ -30,7 +30,7 @@ export const KVStoreErrors = {
 
 Keys drop the `Exception` suffix. Values keep it, and the value is what `error.name` is compared against. Reuse an AWS SDK name when it describes something the customer asked for (a conditional write that failed). Use an AWS Blocks name when the AWS one is a generic bucket (`ValidationException`) or describes infrastructure the block hides.
 
-The local mock and the AWS runtime throw the same names, so code that catches an error works the same in local development and in AWS. The `parity.test.ts` suites in `bb-kv-store`, `bb-distributed-table` and `bb-file-bucket` check this for those blocks.
+The local mock and the AWS runtime throw the same names, so code that catches an error works the same in local development and in AWS. The `parity.test.ts` suites in `bb-kv-store` and `bb-file-bucket` check this for those blocks.
 
 ## Throwing
 

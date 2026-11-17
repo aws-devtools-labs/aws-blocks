@@ -17,7 +17,7 @@ public final nonisolated class Posts: Sendable {
     public func list(authorId: String) async throws -> [List.Result] {
         let request = BlocksRequest(method: "posts.list", params: [authorId], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.list") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.list") }
         return try JSONDecoder().decode([List.Result].self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Posts: Sendable {
     public func create(input: Create.Input) async throws -> Create.Result {
         let request = BlocksRequest(method: "posts.create", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.create") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.create") }
         return try JSONDecoder().decode(Create.Result.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Posts: Sendable {
     public func delete(id: String) async throws -> Delete.Result {
         let request = BlocksRequest(method: "posts.delete", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.delete") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.delete") }
         return try JSONDecoder().decode(Delete.Result.self, from: result)
     }
 
@@ -107,7 +107,7 @@ public final nonisolated class Users: Sendable {
     public func get(id: String) async throws -> User {
         let request = BlocksRequest(method: "users.get", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.get") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.get") }
         return try JSONDecoder().decode(User.self, from: result)
     }
 
@@ -115,7 +115,7 @@ public final nonisolated class Users: Sendable {
     public func list() async throws -> [User] {
         let request = BlocksRequest(method: "users.list", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.list") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.list") }
         return try JSONDecoder().decode([User].self, from: result)
     }
 
@@ -123,7 +123,7 @@ public final nonisolated class Users: Sendable {
     public func create(input: Create.Input) async throws -> User {
         let request = BlocksRequest(method: "users.create", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.create") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.create") }
         return try JSONDecoder().decode(User.self, from: result)
     }
 

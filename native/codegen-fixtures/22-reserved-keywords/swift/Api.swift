@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getClass(id: String) async throws -> GetClass.Result {
         let request = BlocksRequest(method: "api.getClass", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getClass") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getClass") }
         return try JSONDecoder().decode(GetClass.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func `import`(input: Import.Input) async throws -> Import.Result {
         let request = BlocksRequest(method: "api.import", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.import") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.import") }
         return try JSONDecoder().decode(Import.Result.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func export() async throws -> Export.Result {
         let request = BlocksRequest(method: "api.export", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.export") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.export") }
         return try JSONDecoder().decode(Export.Result.self, from: result)
     }
 

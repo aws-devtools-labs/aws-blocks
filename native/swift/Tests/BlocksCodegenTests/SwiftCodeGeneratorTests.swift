@@ -538,7 +538,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "unbound tag should hydrate via fromJSON with the declared tag, got:\n\(output.api)"
         )
         XCTAssertTrue(
-            output.api.contains("guard let result else { throw RPCError(message: \"Unexpected null result for api.connectDevice\") }"),
+            output.api.contains("guard let result else { throw TransportError(message: \"Unexpected null result for api.connectDevice\") }"),
             "a required (non-optional) result must throw on a null body, got:\n\(output.api)"
         )
         // The emitted code must declare the type the diagnostic names (Api.ConnectDevice.ResultMessage),

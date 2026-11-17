@@ -49,7 +49,8 @@ Two blocks can hold an encrypted value, backed by different AWS services:
 - **`Secret`** → **AWS Secrets Manager**. A dedicated per-secret resource with
   resource-level access controls, cross-account resource policies, cross-region
   replication, built-in version staging (`AWSCURRENT`/`AWSPREVIOUS`), and
-  (future) managed rotation. Costs ~$0.40/secret/month + API calls.
+  managed rotation (which `Secret` does not expose; see Non-goals). Costs
+  ~$0.40/secret/month + API calls.
 - **`AppSetting(secret: true)`** → **SSM Parameter Store SecureString**. KMS-
   encrypted at rest, free for standard parameters, but no per-secret resource
   policy, no cross-region replication, and no rotation.
@@ -147,8 +148,7 @@ is absent) never throws.
   instance is constructed once per process and reused for that process's whole
   life. Under request-scoped compute (Lambda) that is a short, self-healing
   window; under long-running compute (a container-backed process alive for
-  hours/days handling many requests, as the multi-compute / long-running
-  async-job work introduces) an *unbounded* cache would let a rotated secret go
+  hours/days handling many requests) an *unbounded* cache would let a rotated secret go
   unnoticed until redeploy — a stale-credential hazard. The 5-minute default
   bounds that staleness everywhere without the caller having to think about it;
   the TTL only governs out-of-band changes, since an in-process `put()` clears
@@ -261,9 +261,9 @@ path, change `fullId`, and rename the SSM parameter. The function creates the
   `Name` (CloudFormation generates a unique one), a `GenerateSecretString` of 64
   characters from `[A-Za-z0-9]` (about 381 bits), `removalPolicy: 'destroy'`,
   and only `secretsmanager:GetSecretValue` for the app role. Its ARN goes into
-  config through `registerConfig()`, as for any `Secret`. The public `Secret`
-  defaults (fixed name, empty value, removal policy from
-  `defaults`, read and list grants) are unchanged.
+  config through `registerConfig()`, as for any `Secret`. A `Secret` declared
+  through the public API keeps its defaults (fixed name, empty value, removal
+  policy from `defaults`, read and list grants).
 - `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
   like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
   or `deletionProtection` on), synth emits the warning
@@ -306,7 +306,7 @@ key as a UTF-8 string (for example an HMAC key), never as decoded bytes, so both
 formats work. `Realtime` passes it straight to `createHmac('sha256', key)`;
 `Auth` uses it as an HMAC key and as HKDF input (`Buffer.from(key, 'utf8')`).
 
-## Non-goals (v1)
+## Non-goals
 
 - **Automatic rotation.** Managed rotation is credential-type-specific (AWS only
   ships hosted rotators for database engines), so a generic `Secret` doesn't

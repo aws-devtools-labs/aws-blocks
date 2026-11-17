@@ -40,7 +40,10 @@ describe("render-release-body", () => {
 		assert.match(output, /## Swift SDK Release 1\.2\.3/);
 		assert.match(output, /- Added a thing\./);
 		assert.match(output, /- Fixed a bug\./);
-		assert.match(output, /swift@1\.2\.3/);
+		assert.match(output, /tagged `swift@1\.2\.3`/);
+		assert.match(output, /Approve the workflow runs/);
+		assert.match(output, /"Sync release from aws-blocks" workflow in aws-blocks-swift with version `1\.2\.3`/);
+		assert.match(output, /aws-blocks-swift\/actions\/workflows\/sync-from-monorepo\.yml/);
 		assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);
 	});
 
@@ -48,7 +51,7 @@ describe("render-release-body", () => {
 		const { status, output } = render("target", "1.2.3", "- Some change.");
 		assert.equal(status, 0, output);
 		assert.match(output, /## Release 1\.2\.3/);
-		assert.match(output, /release\/swift-1\.2\.3/);
+		assert.match(output, /aws-blocks tag `swift@1\.2\.3`/);
 		assert.match(output, /- Some change\./);
 		assert.doesNotMatch(output, /## Swift SDK Release/);
 		assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);
@@ -77,6 +80,28 @@ describe("render-release-body", () => {
 		assert.match(output, /a `id` span/);
 		assert.match(output, /trailing text/);
 		assert.doesNotMatch(output, /__CHANGELOG_ENTRY__/);
+	});
+
+	for (const [template, url] of [
+		["monorepo", "aws-blocks/blob/release/swift-1.2.3/native/swift/CHANGELOG.md"],
+		["target", "aws-blocks/blob/swift@1.2.3/native/swift/CHANGELOG.md"],
+	]) {
+		it(`${template} template links to the CHANGELOG when the entry is too long`, () => {
+			const entry = `- ${"x".repeat(70000)}`;
+			const { status, output } = render(template, "1.2.3", entry);
+			assert.equal(status, 0, output.slice(0, 500));
+			assert.ok(output.length < 60000, `body is ${output.length} characters`);
+			assert.ok(!output.includes("xxxxxxxxxx"), "the long entry should be dropped");
+			assert.ok(output.includes(url), `expected a link to ${url}`);
+			assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);
+		});
+	}
+
+	it("keeps an entry that fits", () => {
+		const entry = `- ${"y".repeat(50000)}`;
+		const { status, output } = render("target", "1.2.3", entry);
+		assert.equal(status, 0);
+		assert.ok(output.includes(entry), "the entry should be kept");
 	});
 
 	it("rejects an unknown template name", () => {

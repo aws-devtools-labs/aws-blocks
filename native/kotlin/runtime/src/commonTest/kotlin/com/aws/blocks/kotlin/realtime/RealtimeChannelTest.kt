@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin.realtime
 
+import com.aws.blocks.kotlin.exceptions.RealtimeChannelClosedException
 import io.kotest.matchers.shouldBe
 import io.ktor.websocket.Frame
 import io.ktor.websocket.WebSocketExtension
@@ -17,6 +18,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.seconds
 
 class RealtimeChannelTest {
@@ -75,5 +77,12 @@ class RealtimeChannelTest {
         )
         val msg = withTimeout(3.seconds) { channel.subscribe().first() }
         msg shouldBe "mock-user"
+    }
+
+    @Test
+    fun `subscribing to a closed channel throws RealtimeChannelClosedException`() = runTest {
+        val channel = channelFedWith()
+        channel.close()
+        assertFailsWith<RealtimeChannelClosedException> { channel.subscribe() }
     }
 }

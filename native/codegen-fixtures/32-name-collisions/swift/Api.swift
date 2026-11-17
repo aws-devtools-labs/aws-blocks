@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getCart() async throws -> Cart {
         let request = BlocksRequest(method: "api.getCart", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getCart") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getCart") }
         return try JSONDecoder().decode(Cart.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getOrder() async throws -> Order {
         let request = BlocksRequest(method: "api.getOrder", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getOrder") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getOrder") }
         return try JSONDecoder().decode(Order.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func getTicket() async throws -> Ticket {
         let request = BlocksRequest(method: "api.getTicket", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getTicket") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getTicket") }
         return try JSONDecoder().decode(Ticket.self, from: result)
     }
 
@@ -41,7 +41,7 @@ public final nonisolated class Api: Sendable {
     public func getKind() async throws -> Kind {
         let request = BlocksRequest(method: "api.getKind", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getKind") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getKind") }
         return try JSONDecoder().decode(Kind.self, from: result)
     }
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
     public func putItems(item: PutItems.Item, items: [PutItems.Items]) async throws -> PutItems.Result {
         let request = BlocksRequest(method: "api.putItems", params: [item, items], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.putItems") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.putItems") }
         return try JSONDecoder().decode(PutItems.Result.self, from: result)
     }
 
@@ -57,7 +57,7 @@ public final nonisolated class Api: Sendable {
     public func getFeeds() async throws -> GetFeeds.Result {
         let request = BlocksRequest(method: "api.getFeeds", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getFeeds") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getFeeds") }
         return try JSONDecoder().decode(GetFeeds.Result.self, from: result)
     }
 
@@ -65,7 +65,7 @@ public final nonisolated class Api: Sendable {
     public func act() async throws -> Act.Result {
         let request = BlocksRequest(method: "api.act", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.act") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.act") }
         return try JSONDecoder().decode(Act.Result.self, from: result)
     }
 
@@ -73,7 +73,7 @@ public final nonisolated class Api: Sendable {
     public func check(result: Check.Result_2) async throws -> Check.Result {
         let request = BlocksRequest(method: "api.check", params: [result], id: BlocksRequest.nextId())
         let result_2 = try await client.execute(request)
-        guard let result_2 else { throw RPCError(message: "Unexpected null result for api.check") }
+        guard let result_2 else { throw TransportError(message: "Unexpected null result for api.check") }
         return try JSONDecoder().decode(Check.Result.self, from: result_2)
     }
 

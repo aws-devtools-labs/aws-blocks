@@ -237,7 +237,7 @@ class KotlinCodeGenerator(
             warnings.add(
                 "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
                     "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
-                    "  awsBlocks {\n" +
+                    "  cdkBlocks {\n" +
                     "      oidc {\n" +
                     "          relayTo = \"com.yourcompany.yourapp://auth/callback\"\n" +
                     "      }\n" +
@@ -267,7 +267,7 @@ class KotlinCodeGenerator(
 
         // Emit Servers.kt
         if (model.servers.isNotEmpty()) {
-            files.add(generateServersFile(model.servers, serverProperties, model.endpoint))
+            files.add(generateServersFile(model.servers, serverProperties))
         }
 
         // Emit per-API-group files (interface + impl)
@@ -1316,11 +1316,12 @@ class KotlinCodeGenerator(
     // ── Servers.kt generation ─────────────────────────────────────────
 
     /**
-     * [endpoint] is the path the spec serves RPC on. It is appended here rather than by the
-     * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
-     * right URL from the constant alone.
+     * A generated constant is the server's full RPC URL, path included, because the runtime never
+     * sees the spec: `Blocks(Servers.local)` has to reach the right URL from the constant alone.
+     * The spec's own server URLs already carry that path; the local fallback adds it in
+     * [com.aws.blocks.kotlin.builder.CodegenModelBuilder].
      */
-    private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>, endpoint: String?): FileSpec {
+    private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
 
         // Servers object using BlocksServer from the runtime
@@ -1334,7 +1335,7 @@ class KotlinCodeGenerator(
                         "%T(name = %S, url = %L)",
                         blocksServerClass,
                         entry.name,
-                        kotlinStringLiteral(entry.url + (endpoint ?: "")),
+                        kotlinStringLiteral(entry.url),
                     )
                     .build(),
             )
@@ -1845,7 +1846,7 @@ class KotlinCodeGenerator(
     }
 
     private fun generateOidcStubMethod(functionName: String): FunSpec {
-        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your cdkBlocks block " +
             "to enable this method."
         return FunSpec.builder(functionName)
             .addModifiers(KModifier.SUSPEND)
@@ -1957,6 +1958,18 @@ class KotlinCodeGenerator(
             }
             val serializer = containerTransferableSerializer(operation.result.type, index, serializerRegistry, opContext)
             funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            // A valid envelope can carry `"result": null`. Decoding it as a non-null type throws
+            // kotlinx's own exception, so say what went wrong in the client's. A nullable type, and
+            // a JsonElement, accept it.
+            if (!returnType.isNullable && returnType != ClassNames.jsonElement) {
+                funBuilder.addStatement(
+                    "if (%N is %T) throw %T(%S)",
+                    names.result,
+                    ClassNames.jsonNull,
+                    ClassNames.transportException,
+                    "Unexpected null result for $dottedMethod",
+                )
+            }
             if (serializer != null) {
                 funBuilder.addStatement("return %L.%M(%L, %N)", json, MemberNames.decode, serializer, names.result)
             } else {
@@ -2047,9 +2060,6 @@ class KotlinCodeGenerator(
     /**
      * Generates a [CodeBlock] that converts an operation parameter to a JsonElement.
      * Wraps primitives in JsonPrimitive; delegates to generateToJsonExpression for complex types.
-     * A transferable is sent as its descriptor (`toJson()`), as Swift does. A parameter holding
-     * an OIDC client inside a model encodes with `OidcClient.json`, whose contextual serializer
-     * writes it (plain [ClassNames.blocksJson] has none).
      */
     private fun paramToJsonExpression(
         param: OperationParameter,
@@ -2061,11 +2071,6 @@ class KotlinCodeGenerator(
         val jsonPrimitiveClass = ClassNames.jsonPrimitive
         val inner = unwrapNullable(param.type)
         val reference = names.reference(position)
-        val json = if (containsOidcTransferable(inner)) {
-            CodeBlock.of("%T.json(%L, %S)", ClassNames.oidcClient, names.client, relayTo ?: "")
-        } else {
-            CodeBlock.of("%T", ClassNames.blocksJson)
-        }
         return when (inner) {
             is ResolvedType.Primitive -> when (inner.kind) {
                 PrimitiveKind.VOID -> CodeBlock.of("%L", reference)
@@ -2078,14 +2083,7 @@ class KotlinCodeGenerator(
                 }
                 else -> CodeBlock.of("%T(%L)", jsonPrimitiveClass, reference)
             }
-            // A required-but-nullable transferable is `T?` here (optional ones are smart-cast inside
-            // their `!= null` guard), so send a JSON null for null.
-            is ResolvedType.Transferable -> if (param.required && param.type is ResolvedType.Nullable) {
-                generateToJsonExpression(param.type, reference, index, json)
-            } else {
-                generateToJsonExpression(inner, reference, index, json)
-            }
-            else -> generateToJsonExpression(inner, reference, index, json)
+            else -> generateToJsonExpression(inner, reference, index)
         }
     }
 
@@ -2621,14 +2619,8 @@ class KotlinCodeGenerator(
      * @param type The resolved type to serialize from
      * @param expr The expression string holding the value to serialize
      * @param index The type index for resolving type references
-     * @param json The [kotlinx.serialization.json.Json] that encodes models, enums and unions
      */
-    private fun generateToJsonExpression(
-        type: ResolvedType,
-        expr: String,
-        index: TypeIndex,
-        json: CodeBlock = CodeBlock.of("%T", ClassNames.blocksJson),
-    ): CodeBlock {
+    private fun generateToJsonExpression(type: ResolvedType, expr: String, index: TypeIndex): CodeBlock {
         return when (type) {
             is ResolvedType.Primitive -> when (type.kind) {
                 PrimitiveKind.STRING -> CodeBlock.of("%L", expr)
@@ -2640,33 +2632,24 @@ class KotlinCodeGenerator(
             }
 
             is ResolvedType.Record, is ResolvedType.Enum, is ResolvedType.Union -> {
-                CodeBlock.of("%L.%M(%L)", json, MemberNames.encode, expr)
+                CodeBlock.of("%T.%M(%L)", ClassNames.blocksJson, MemberNames.encode, expr)
             }
 
             is ResolvedType.ListType -> {
-                val arrayBody = generateJsonArrayBody(type, expr, index, json)
+                val arrayBody = generateJsonArrayBody(type, expr, index)
                 CodeBlock.of("%M { %L }", MemberNames.buildJsonArray, arrayBody)
             }
 
             is ResolvedType.Nullable -> {
-                // A known transferable's `toJson()` needs a non-null receiver; any other value
-                // encodes as before (a model's encode takes a nullable).
-                val transferable = type.inner as? ResolvedType.Transferable
-                if (transferable != null && transferable.transferableName in knownTransferableTags) {
-                    CodeBlock.of("%L?.toJson() ?: %T", expr, ClassNames.jsonNull)
-                } else if (transferable != null) {
-                    CodeBlock.of("%L ?: %T", expr, ClassNames.jsonNull)
-                } else {
-                    generateToJsonExpression(type.inner, expr, index, json)
-                }
+                generateToJsonExpression(type.inner, expr, index)
             }
 
             is ResolvedType.TypeReference -> {
                 val resolvedType = resolveTypeReference(type.name, index)
                 if (resolvedType != null) {
-                    generateToJsonExpression(resolvedType, expr, index, json)
+                    generateToJsonExpression(resolvedType, expr, index)
                 } else {
-                    CodeBlock.of("%L.%M(%L)", json, MemberNames.encode, expr)
+                    CodeBlock.of("%T.%M(%L)", ClassNames.blocksJson, MemberNames.encode, expr)
                 }
             }
 
@@ -2678,18 +2661,16 @@ class KotlinCodeGenerator(
                 val valueToJson = if (type.valueType.isNullableUnknown()) {
                     CodeBlock.of("it.value ?: %T", ClassNames.jsonNull)
                 } else {
-                    generateToJsonExpression(type.valueType, "it.value", index, json)
+                    generateToJsonExpression(type.valueType, "it.value", index)
                 }
                 CodeBlock.of("%M { %L.forEach { %M(it.key, %L) } }", MemberNames.buildJsonObject, expr, MemberNames.put, valueToJson)
             }
             is ResolvedType.TupleType -> TODO("TupleType toJson not yet implemented")
 
-            // Sent as its `{ "__blocks": … }` descriptor, the shape the server's `toJSON()` sends. An
-            // unbound tag is a `JsonElement` (the descriptor itself), sent as is.
-            is ResolvedType.Transferable -> if (type.transferableName in knownTransferableTags) {
-                CodeBlock.of("%L.toJson()", expr)
-            } else {
-                CodeBlock.of("%L", expr)
+            is ResolvedType.Transferable -> {
+                throw CodegenException(
+                    "Transferable types (${type.transferableName}) cannot be serialized — they are read-only"
+                )
             }
         }
     }
@@ -2698,7 +2679,7 @@ class KotlinCodeGenerator(
      * Generates the body of a `putJsonArray` / `buildJsonArray` lambda for a list type.
      * Uses `addAll(expr)` for simple primitive collections, or `expr.forEach { add(...) }` for complex types.
      */
-    private fun generateJsonArrayBody(listType: ResolvedType.ListType, expr: String, index: TypeIndex, json: CodeBlock): CodeBlock {
+    private fun generateJsonArrayBody(listType: ResolvedType.ListType, expr: String, index: TypeIndex): CodeBlock {
         val elementType = listType.elementType
         return when {
             elementType is ResolvedType.Primitive && elementType.kind in listOf(
@@ -2715,7 +2696,7 @@ class KotlinCodeGenerator(
             }
 
             else -> {
-                val elementExpr = generateToJsonElementExpression(elementType, "it", index, json)
+                val elementExpr = generateToJsonElementExpression(elementType, "it", index)
                 CodeBlock.of("%L.forEach { %M(%L) }", expr, MemberNames.add, elementExpr)
             }
         }
@@ -2730,7 +2711,7 @@ class KotlinCodeGenerator(
      * Primitives are wrapped in JsonPrimitive; complex types already return JsonElement.
      * Use this when the expression must be a JsonElement (e.g. inside JsonArray).
      */
-    private fun generateToJsonElementExpression(type: ResolvedType, expr: String, index: TypeIndex, json: CodeBlock): CodeBlock {
+    private fun generateToJsonElementExpression(type: ResolvedType, expr: String, index: TypeIndex): CodeBlock {
         val jsonPrimitiveClass = ClassNames.jsonPrimitive
         return when (type) {
             is ResolvedType.Primitive -> when (type.kind) {
@@ -2739,11 +2720,11 @@ class KotlinCodeGenerator(
                 else -> CodeBlock.of("%L", expr)
             }
             is ResolvedType.Nullable -> {
-                val innerExpr = generateToJsonElementExpression(type.inner, expr, index, json)
+                val innerExpr = generateToJsonElementExpression(type.inner, expr, index)
                 val jsonNull = ClassNames.jsonNull
                 CodeBlock.of("if (%L != null) %L else %T", expr, innerExpr, jsonNull)
             }
-            else -> generateToJsonExpression(type, expr, index, json)
+            else -> generateToJsonExpression(type, expr, index)
         }
     }
 
