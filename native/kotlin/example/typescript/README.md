@@ -66,7 +66,7 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-`Auth` serves the sign-in routes at fixed paths under `/aws-blocks/auth/` (`authorize-params/google`, `callback`, `exchange`, `signout`), and the Kotlin apps build their client from those paths with `OidcClient.forAuth(...)`. They keep the session cookie the exchange sets. `allowBearerAuth: true` additionally lets a native client that holds the provider's access token call the API with `Authorization: Bearer <token>` and renew it at `/aws-blocks/auth/exchange/refresh`, as the Swift and Dart SDKs do.
+The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`: it carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`). They keep the session cookie the exchange sets. `allowBearerAuth: true` additionally lets a native client that holds the provider's access token call the API with `Authorization: Bearer <token>` and renew it at `/aws-blocks/auth/exchange/refresh`, as the Swift and Dart SDKs do.
 
 Sign-in talks to real Google in every environment, including `npm run dev` — there is no fake-user fallback. Until both values are set, Google rejects the sign-in. Setting them is a two-part job: create an OAuth client at Google, then provide its two values.
 
@@ -90,7 +90,7 @@ The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, 
 
 Read the sandbox host out of `.blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
-> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
+> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
 ### 3. Provide the client ID and secret
 

@@ -443,7 +443,7 @@ const sso = new Auth(scope, 'sso', {
 - Directly federated sign-in (a `store: 'builtin'` block) works, locally and deployed: any `type: 'oidc'` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives a block with no password users an offline sign-in.
 - On AWS, the `providers` of a default-store block (social, SAML and `type: 'oidc'`) sign in through Cognito managed login: the sign-in button goes straight to the provider (PKCE, Cognito-issued tokens verified against your user pool), and the user becomes an ordinary user-pool user — `requireRole()` reads their Cognito groups and `auth.admin` manages them like email + password users. Sign-out also ends the managed-login session, so the next sign-in asks the provider again. MFA for these users is the provider's: Cognito never challenges a federated user, so enforce MFA at your IdP. Locally (`npm run dev`) these providers answer sign-in with an actionable `501` — managed login needs a deployed user pool; use a `store: 'builtin'` block (a `type: 'oidc'` provider or `stubIdp()`) for offline sign-in. `getAuthState()` marks their `signIn:<id>` actions `unavailable` there, so the `Authenticator` renders those buttons disabled with that hint, and a browser that reaches the sign-in route gets an explanatory page.
 - Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`, as with `AuthOIDC`: on a `store: 'builtin'` block the guards accept the provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews), and on the default store a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }` (default store only), access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth--bearerts).
-- The CDK layer provisions the same resources as `AuthCognito` (same construct ids, so an `AuthCognito` app that switches keeps its user pool, and its sessions too when `defaults.secretsStore` is `'ssm'`; under `BlocksPresets.production` the session secret moves to Secrets Manager and users sign in once more, see [MIGRATION.md](./MIGRATION.md#the-session-secret-moves-to-secrets-manager)), creates no Cognito resources for a `store: 'builtin'` block, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For `providers` entries of a default-store block (social, SAML, `type: 'oidc'`) it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
+- The CDK layer provisions the same resources as `AuthCognito` (same construct ids for the user pool, the app client and the session secret, so an `AuthCognito` app that switches keeps its user pool and users; the session store is a new table, so each user signs in once, see [MIGRATION.md](./MIGRATION.md#the-session-store); under `BlocksPresets.production` the session secret also moves to Secrets Manager, see [MIGRATION.md](./MIGRATION.md#the-session-secret-moves-to-secrets-manager)), creates no Cognito resources for a `store: 'builtin'` block, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For `providers` entries of a default-store block (social, SAML, `type: 'oidc'`) it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
 - The CDK layer refuses user-pool changes Cognito cannot apply to an existing pool (sign-in attributes, username case sensitivity, required attributes, changing or removing a custom attribute): at synth, against a baseline file it writes to `aws-blocks/baselines/` (commit that file), and again at deploy, before the pool is updated. The synth check also refuses a change that would remove the pool — including renaming or deleting the `Auth` block, which would make CloudFormation delete the pool and every user in it ([details](./DESIGN.md#renaming-or-removing-an-auth-block)) — once a committed baseline records the pool. A block's first synth has nothing to compare against: if it records no pool, synth only warns. Moving from `AuthCognito`? Deploy the codemod's output unchanged first ([MIGRATION.md](./MIGRATION.md#before-every-deploy-the-checklist)). Re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<block fullId>`. The baseline advances when you synthesize, not when you deploy, so reverting a change you synthesized but never deployed is refused too; the error then gives the re-baseline command for that case. See [DESIGN.md](./DESIGN.md#immutability-guard).
 
 ## Usage
@@ -786,6 +786,38 @@ new Auth(scope, 'auth', {
 - **Which providers.** Every `providers` entry, on either store, since each signs in by redirect: `type: 'oidc'`, `github()` / `customOauth2()` and `stubIdp()` (locally) on a `store: 'builtin'` block; social, SAML and `type: 'oidc'` on the default store. Email and password sign-in keeps using `authApi` (`getAuthState` / `setAuthState`), which works across origins with the same CORS and cookie settings.
 - **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
 - **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). Note that `user.userId` is the block's id; Amplify's `getCurrentUser().userId` is the Cognito `sub`, which is `user.userSub` here.
+
+## Native apps (Swift, Kotlin, Dart)
+
+A native app signs in with a federated provider through the SDK's OIDC client, which uses the block's relay routes. Export the client next to `createApi()`:
+
+```typescript
+import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+  redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] }, // the app's return URL
+});
+
+export const authApi = auth.createApi();         // the sign-in state machine
+export const oidcAuthApi = auth.createOidcApi(); // the native SDKs' OIDC client
+```
+
+`oidcAuthApi.getClient()` returns an `oidc/client` transferable: the block's routes and the providers available in this runtime. The generated native client turns it into the SDK's OIDC client, and its `signIn` takes only the block's provider ids:
+
+```swift
+let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
+let user = try await oidc.signIn(provider: .okta, relayTo: "myapp://auth", launcher: launcher)
+```
+
+- **Return URL.** List the app's scheme in `redirects.allowedRelayOrigins`. Desktop loopback (`http://127.0.0.1:<port>`) is always allowed.
+- **Several blocks.** Each block's client carries that block's own paths, so a second federated block with its own `redirects.callbackPath` and `signOutPath` gets a working client too.
+- **Availability.** A provider that can't sign in here (managed login under `npm run dev`), or whose discovery fails, is left out of `providers` at runtime, so the others stay usable.
+- **Restore on launch.** The client also carries the block's `sessionPath` (`GET` answers `{ user }` for a valid session cookie, 401 otherwise).
+- **Web.** A browser receives the plain descriptor. A web frontend uses the `signIn:<id>` actions of `createApi()`, or `createAuthClient()` on another origin ([above](#frontend-on-a-different-origin)).
 
 ## Planning to use Amplify client libraries?
 

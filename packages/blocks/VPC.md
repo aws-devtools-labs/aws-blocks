@@ -36,7 +36,7 @@ start) are always added.
 - You need security group rules to restrict traffic between services
 
 **Don't use a VPC when:**
-- You're building a standard web app with Blocks' built-in data stores (KVStore, DistributedTable, DistributedDatabase)
+- You're building a standard web app with Blocks' built-in data stores (KVStore, DistributedDatabase)
 - Your only AWS interactions are through Blocks (they handle connectivity automatically)
 - You want to minimize cost and operational complexity
 - You're prototyping or building an MVP

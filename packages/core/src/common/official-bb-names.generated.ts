@@ -17,7 +17,6 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'Dashboard',
   'Database',
   'DistributedDatabase',
-  'DistributedTable',
   'EmailClient',
   'FileBucket',
   'KVStore',

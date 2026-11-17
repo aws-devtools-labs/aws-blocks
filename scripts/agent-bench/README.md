@@ -215,7 +215,7 @@ dimensions* below — there is no per-task dimension to author.
 | `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
-| `collab-presence-board` | `default` | Realtime + DistributedTable |
+| `collab-presence-board` | `default` | Realtime + KVStore (schema + key) |
 | `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |

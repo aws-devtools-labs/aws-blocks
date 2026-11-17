@@ -250,7 +250,6 @@ test('discovery sanity check', () => {
 	assert.ok(packages.length >= 8, `Expected ≥8 BB packages, found ${packages.length}: ${packages.join(', ')}`);
 	for (const expected of [
 		'@aws-blocks/bb-kv-store',
-		'@aws-blocks/bb-distributed-table',
 		'@aws-blocks/bb-data',
 		'@aws-blocks/auth-common',
 	]) {
@@ -530,6 +529,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 const SYNTH_SAFE_METHODS = new Set([
 	// Synth-time wiring: `createApi()` builds the RPC namespace the backend module exports.
 	'Auth.prototype.createApi',
+	// Synth-time wiring: `createOidcApi()` builds the native OIDC client's RPC namespace, like `createApi()`.
+	'Auth.prototype.createOidcApi',
 	// Synth-time wiring: `protect()` builds the RPC namespace the backend module exports
 	// (its methods are `synthGuard`ed; see the bb-auth CDK test).
 	'Auth.prototype.protect',

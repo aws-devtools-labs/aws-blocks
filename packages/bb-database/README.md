@@ -8,7 +8,7 @@ npm install @aws-blocks/bb-database
 
 **When to use:** relational data, joins, foreign keys, views, and multi-statement transactions, on a cluster with no VPC to manage.
 
-**When not to use:** data that one key or one table pattern can serve. `KVStore` and `DistributedTable` have no cluster to manage.
+**When not to use:** data that one key or one table pattern can serve. `KVStore` has no cluster to manage.
 
 **Which cluster:** the default `dsql` cluster for most apps. Triggers, PL/pgSQL, extensions, Row Level Security on raw SQL, and transactions over 3,000 rows need full PostgreSQL: put the block on an `aurora` cluster (`new DatabaseCluster(scope, 'main', { type: 'aurora' })`). It is created in seconds, scales to zero, needs no VPC, and runs the PostgreSQL migration files you already have. Its storage is encrypted with an AWS-owned key (the express configuration accepts no customer managed KMS key) and the first request after five idle minutes waits about 20 seconds for the cluster to resume unless `minCapacity` is at least `0.5`.
 

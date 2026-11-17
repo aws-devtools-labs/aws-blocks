@@ -5,7 +5,7 @@
  * @aws-blocks/bb-realtime — CDK construct.
  *
  * Provisions a shared API Gateway WebSocket API with a DynamoDB connections
- * table (via DistributedTable) for channel-based pub/sub. All WebSocket
+ * table (via KVStore) for channel-based pub/sub. All WebSocket
  * routes ($connect, $disconnect, $default) are handled by the existing Blocks
  * handler Lambda — no separate Lambdas are created.
  *
@@ -23,7 +23,7 @@ import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, g
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
@@ -43,26 +43,7 @@ export type {
 	RealtimeChannelDescriptor,
 } from './types.js';
 import { BB_NAME } from './version.js';
-
-// ── Minimal schema for the connections table (CDK synth-time only) ──────────
-
-const connectionsSchema: StandardSchemaV1<any> = {
-	'~standard': {
-		version: 1,
-		vendor: 'blocks',
-		validate: (value: unknown) => {
-			// Return type issues for numeric probes so CDK detects all fields as strings.
-			if (typeof value === 'object' && value !== null) {
-				for (const v of Object.values(value as Record<string, unknown>)) {
-					if (typeof v === 'number') {
-						return { issues: [{ message: 'expected string', path: [Object.keys(value as any).find(k => (value as any)[k] === v)!] }] };
-					}
-				}
-			}
-			return { value };
-		},
-	},
-};
+import { connectionsTableOptions } from './connections.js';
 
 // ── Shared infrastructure (one per backend root) ─────────────────────────────
 
@@ -85,13 +66,9 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 		// Secrets Manager or SSM SecureString, per `defaults.secretsStore`.
 		frameworkKey(parent, 'token-secret');
 
-		// ── DynamoDB connections table via DistributedTable ──────────────────
-		new DistributedTable(parent, 'connections', {
-			schema: connectionsSchema,
-			key: { partitionKey: 'connectionId', sortKey: 'channel' },
-			indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
-			ttl: 'expiresAt',
-		});
+		// ── DynamoDB connections table via KVStore ───────────────────────────
+		// The options are the ones the runtime entry constructs its store with.
+		new KVStore(parent, 'connections', connectionsTableOptions);
 
 		// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
 		const wsApi = new WebSocketApi(root, 'BlocksRtWebSocket', {

@@ -19,6 +19,8 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import java.net.URI
+import java.net.URISyntaxException
 
 /**
  * Gradle task that parses an `blocks.spec.json` file and generates Kotlin source files.
@@ -74,9 +76,12 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
 
         val model = OpenRpcParser.parse(file.readText())
 
+        val overrides = serverOverrides.getOrElse(emptyMap())
+        val specUrls = model.servers.associate { it.name to it.url }
+        overrides.forEach { (name, url) -> validateServerUrl(name, url, specUrls[name]) }
+
         // Merge server overrides from the extension DSL into the parsed model.
         // Overrides replace servers with the same name; new names are appended.
-        val overrides = serverOverrides.getOrElse(emptyMap())
         val mergedModel = if (overrides.isNotEmpty()) {
             val specServerNames = model.servers.map { it.name }.toSet()
             val updatedServers = model.servers.map { server ->
@@ -114,5 +119,60 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         result.files.forEach { it.writeTo(outputDir) }
 
         logger.lifecycle("Generated ${result.files.size} file(s) in ${outputDir.absolutePath}")
+    }
+
+    /**
+     * The generated `Servers` constant is a server URL as given, and the client posts
+     * to it with `/<namespace>` appended. An override the client could not post RPC to
+     * is rejected here, where the spec is known; the rules a user sees are listed on
+     * [AwsBlocksExtension.servers]. The host is read from the raw authority because
+     * `URI.host` is null for a host the RFC rejects but resolvers accept, such as one
+     * with an underscore. [specUrl] is the spec's URL for the same server name, the one
+     * to point the user at: a stage prefix such as `/prod` cannot be derived from the
+     * origin alone.
+     */
+    private fun validateServerUrl(name: String, url: String, specUrl: String?) {
+        val fix = if (specUrl != null) {
+            "the spec declares \"$name\" as \"$specUrl\""
+        } else {
+            "the one for that deployment; the dev server writes it to .blocks-sandbox/config.json, " +
+                "a sandbox or production deploy to .blocks-sandbox/config.<stage>.json"
+        }
+        val uri = try {
+            URI(url)
+        } catch (cause: URISyntaxException) {
+            throw GradleException(
+                "awsBlocks.servers: \"$name\" is \"$url\", which is not a valid URL (${cause.reason}). " +
+                    "Use the full RPC URL ($fix).",
+                cause,
+            )
+        }
+        if (!uri.scheme.equals("http", ignoreCase = true) && !uri.scheme.equals("https", ignoreCase = true)) {
+            throw GradleException(
+                "awsBlocks.servers: \"$name\" is \"$url\", which has no http:// or https:// scheme. " +
+                    "Use the full RPC URL ($fix).",
+            )
+        }
+        val authority = uri.rawAuthority
+        if (authority == null || authority.substringAfterLast('@').substringBefore(':').isEmpty()) {
+            throw GradleException(
+                "awsBlocks.servers: \"$name\" is \"$url\", which has no host. Use the full RPC URL ($fix).",
+            )
+        }
+        if (uri.rawQuery != null || uri.rawFragment != null) {
+            throw GradleException(
+                "awsBlocks.servers: \"$name\" is \"$url\", which carries a query or fragment. " +
+                    "A server URL is the RPC base the client posts to, so give the URL without them ($fix).",
+            )
+        }
+        // `path` decodes `%2F` and `%2E` to `/` and `.`, so an encoded-only path is rejected
+        // like a bare one; tests pin `/%2F` and `/%2E`, so the filter must not be relaxed.
+        val segments = uri.normalize().path.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }
+        if (segments.isNotEmpty()) return
+        throw GradleException(
+            "awsBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
+                "under /aws-blocks/api, not at the origin, so every call through this server fails. " +
+                "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/aws-blocks/api\" ($fix).",
+        )
     }
 }

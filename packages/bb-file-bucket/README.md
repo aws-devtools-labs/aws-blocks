@@ -4,7 +4,7 @@ File storage backed by Amazon S3.
 
 **When to use:** You need to store, retrieve, or serve binary files — user uploads, generated reports, images, videos, or static assets.
 
-**When NOT to use:** If you need structured key-value data with conditional writes, use `KVStore`. If you need queryable records with indexes, use `DistributedTable`.
+**When NOT to use:** If you need structured key-value data with conditional writes, or queryable records with indexes, use `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 

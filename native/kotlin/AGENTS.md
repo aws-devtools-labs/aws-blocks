@@ -89,6 +89,26 @@ bash scripts/compile-fixture-goldens.sh
 ./gradlew clean
 ```
 
+The e2e suite (`e2e/`) is also its own Gradle build, driven by `run-e2e.sh`, which generates the
+spec from `test-apps/native-bindings`, runs codegen, starts the dev server and runs one target's
+tests. One `commonTest` suite runs on all three targets.
+
+```bash
+# E2E on the JVM (default), the iOS simulator, or an Android emulator
+./run-e2e.sh --target jvm
+./run-e2e.sh --target ios
+./run-e2e.sh --target android   # boot an emulator first; the script does not
+
+# Against an already-running endpoint, skipping the local dev server
+./run-e2e.sh --target android --blocks-url https://example.com/aws-blocks/api
+```
+
+The Android target runs as an instrumented test APK (`connectedAndroidDeviceTest`), which is the
+only way to exercise the runtime's Android source set: the Android Keystore-backed credential store,
+the cookie jar built on it, the `androidx.startup` context wiring. `BLOCKS_URL` and `RUN_OIDC` reach
+the device as instrumentation arguments, and `run-e2e.sh` forwards the device's port 3001 to the
+host with `adb reverse` so one `BLOCKS_URL` works on every target.
+
 Each example app is its own Gradle build that composes this one in, so its tasks are not in the
 root build and are run from the app's own directory. Both read a `blocks.spec.json` emitted from
 `example/typescript`, which is gitignored, so a fresh checkout has no spec to generate from until
@@ -155,6 +175,22 @@ If you find yourself needing to break one of these rules, something is wrong wit
 1. Run `./gradlew :runtime:build`
 2. Run `cd example/android && ./gradlew :app:assembleDebug` to verify the Android example app still links correctly
 3. If you changed `BlocksClient` or transferable hydration, verify the example app runs on an emulator
+4. If you changed an Android-only source (storage, cookies, context wiring), run `./run-e2e.sh --target android` against a booted emulator — the host JVM has no equivalent of those paths
+5. If you changed the Android credential store (`KeyValueStore.android.kt`,
+   `EncryptedPreferencesLegacySource.android.kt`), the step above covers its normal reads and
+   writes: the e2e sign-in tests reach the real Keystore through the cookie jar. What they do not
+   reach is the one-time read of an `EncryptedSharedPreferences` file left by an earlier version,
+   since a fresh install has none, and the API 33+ `KeyStoreException` fault classification.
+   Exercise those on an emulator before release, covering the migration, a downgraded file, `clear`
+   against a file not yet migrated, a lost key, a corrupted value, and a legacy file holding one
+   entry that will not decrypt. Two cases a modern image cannot reach at all: on an API 23–32 image,
+   an `EncryptedSharedPreferences.create` fault below 33 cannot be told apart from a lost
+   `MasterKey`, so the store drops the earlier session rather than retry; and on API 24+, `clear`
+   against a legacy file written by an earlier process and never opened in this one, which is where
+   `deleteSharedPreferences` is reported to return false on some builds. Do not drop
+   `androidx.security:security-crypto` until that run has covered this list: once
+   `EncryptedPreferencesLegacySource` is deleted, a fault in the legacy read cannot be caught at
+   all.
 
 ### After changing the plugin DSL
 

@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, rawRouteErrorFromCatch, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
+import { decodeRpcResponse, encodeRpcRequest, errorResponseFromCatch, parseRpcRequest, rawRouteErrorFromCatch, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
 import { ApiError, isBlocksError, blocksError, brandBlocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
@@ -380,6 +380,45 @@ describe('params decoding', () => {
   });
 });
 
+describe('encodeRpcRequest: trailing undefined arguments', () => {
+  const params = (args: unknown[]) => JSON.parse(encodeRpcRequest('api', 'list', args)).params;
+
+  it('leaves trailing undefined arguments out of params', () => {
+    assert.deepStrictEqual(params([2, undefined]), [2]);
+    assert.deepStrictEqual(params([2, undefined, undefined]), [2]);
+    assert.deepStrictEqual(params([undefined]), []);
+    assert.deepStrictEqual(params([]), []);
+  });
+
+  it('keeps the position of a later argument: an undefined before it becomes null', () => {
+    assert.deepStrictEqual(params([undefined, 2]), [null, 2]);
+    assert.deepStrictEqual(params([1, undefined, 3, undefined]), [1, null, 3]);
+  });
+
+  it('sends an explicit null, a false, a zero and an empty string as they are', () => {
+    assert.deepStrictEqual(params([2, null]), [2, null]);
+    assert.deepStrictEqual(params([null]), [null]);
+    assert.deepStrictEqual(params([false, 0, '']), [false, 0, '']);
+  });
+
+  it('does not change the array of the caller', () => {
+    const args = [2, undefined];
+    encodeRpcRequest('api', 'list', args);
+    assert.deepStrictEqual(args, [2, undefined]);
+  });
+
+  it('a default parameter value of the method applies to an argument the caller left out', () => {
+    const list = (limit: number, cursor = 'first-page') => `${limit}:${cursor}`;
+    const result = parseRpcRequest(encodeRpcRequest('api', 'list', [2, undefined]));
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.deepStrictEqual(result.request.args, [2]);
+      const [limit, cursor] = result.request.args as [number, string | undefined];
+      assert.strictEqual(list(limit, cursor), '2:first-page');
+    }
+  });
+});
+
 describe('-32602 Invalid Params validation', () => {
   for (const params of ['abc', 42, true, false, null]) {
     it(`rejects ${JSON.stringify(params)} params`, () => {
@@ -449,7 +488,7 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
 
   it('encodes an ApiError built by a SEPARATELY bundled copy of core with its status, name and retriable intact', () => {
     // Reproduces the real failure: a duplicated `@aws-blocks/core` nests a private
-    // copy under a dependency (e.g. bb-distributed-table), so the ApiError thrown
+    // copy under a dependency (e.g. bb-kv-store), so the ApiError thrown
     // there is NOT `instanceof` the ApiError class this serializer imports. A plain
     // `instanceof` check misses it and collapses the deliberate 409 into a nameless
     // 500 (the api-only OCC e2e symptom). Simulate the foreign-copy ApiError with a
