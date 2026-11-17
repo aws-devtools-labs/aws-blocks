@@ -451,8 +451,9 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertNil(items.items["example.com|auth_session"])
         XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=new; other=1")
 
+        // Deleting `auth_session` leaves the unrelated `other` cookie set above.
         jar.save(setCookie: "auth_session=; Max-Age=0; Path=/", requestURL: apiURL, now: now)
-        XCTAssertNil(jar.cookieHeader(for: apiURL, now: now))
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "other=1")
     }
 
     /// The earlier version's item is read as `Secure`, so it is sent over `https` to the host that set
