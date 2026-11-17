@@ -525,17 +525,28 @@ function rawRoutes(file: string): TemplateRoute[] {
         );
         return p.initializer.text;
       };
-      const handler = property('handler');
-      const body =
-        handler && ts.isPropertyAssignment(handler) && ts.isArrowFunction(handler.initializer) && ts.isBlock(handler.initializer.body)
-          ? handler.initializer.body
-          : undefined;
+      const body = handlerBody(options, sourceFile);
       routes.push({ name: `${literal('method')} ${literal('path')}`, body });
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return routes;
+}
+
+/**
+ * The block body of a RawRoute `handler` written inline as an arrow function,
+ * a function expression or a method shorthand. A concise-arrow or referenced
+ * handler has no inline block to check, so it returns undefined and is
+ * reported as ungated.
+ */
+function handlerBody(options: ts.ObjectLiteralExpression, sourceFile: ts.SourceFile): ts.Block | undefined {
+  const handler = options.properties.find((p) => p.name?.getText(sourceFile) === 'handler');
+  if (handler && ts.isMethodDeclaration(handler)) return handler.body;
+  if (!handler || !ts.isPropertyAssignment(handler)) return undefined;
+  const fn = handler.initializer;
+  if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) return fn.body;
+  return undefined;
 }
 
 /** Every `.ts` file under a template's `aws-blocks/` directory, skipping `node_modules`. */
@@ -685,14 +696,17 @@ describe('ungatedPresignedUrlCalls', () => {
 });
 
 describe('rawRoutes', () => {
-  it('passes a gated handler and flags ungated, concise-arrow and referenced handlers', () => {
+  it('passes gated handlers and flags ungated, concise-arrow and referenced handlers', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cba-rawroutes-'));
     const file = join(dir, 'index.ts');
     writeFileSync(
       file,
       `const probe = async (context) => context.response.send({});
       new RawRoute(scope, 'gated', { method: 'GET', path: '/gated', handler: async (context) => { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-method', { method: 'GET', path: '/gated-method', async handler(context) { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-function', { method: 'GET', path: '/gated-function', handler: async function (context) { await auth.requireRole(context, 'admin'); context.response.send({}); } });
       new RawRoute(scope, 'open', { method: 'POST', path: '/open', handler: async (context) => { context.response.send({}); } });
+      new RawRoute(scope, 'open-method', { method: 'POST', path: '/open-method', async handler(context) { context.response.send({}); } });
       new RawRoute(scope, 'concise', { method: 'GET', path: '/concise', handler: async (context) => context.response.send({}) });
       new RawRoute(scope, 'referenced', { method: 'GET', path: '/referenced', handler: probe });`,
     );
@@ -700,11 +714,19 @@ describe('rawRoutes', () => {
       const routes = rawRoutes(file);
       assert.deepStrictEqual(
         routes.map((r) => r.name),
-        ['GET /gated', 'POST /open', 'GET /concise', 'GET /referenced'],
+        [
+          'GET /gated',
+          'GET /gated-method',
+          'GET /gated-function',
+          'POST /open',
+          'POST /open-method',
+          'GET /concise',
+          'GET /referenced',
+        ],
       );
       assert.deepStrictEqual(
         routes.filter((r) => !r.body || !gatesFirst(r.body)).map((r) => r.name),
-        ['POST /open', 'GET /concise', 'GET /referenced'],
+        ['POST /open', 'POST /open-method', 'GET /concise', 'GET /referenced'],
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -19,9 +19,10 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 ## What ships
 
 - **Public** — `GET /healthz` is a `RawRoute` that answers a plain HTTP `GET`
-  with `{ status, timestamp }` and `Cache-Control: no-store`, the shape load
-  balancers and uptime monitors expect. `api.health()` returns the same over
-  JSON-RPC for RPC clients. Neither needs auth.
+  with `{ status, timestamp }` and a `Cache-Control` header that includes
+  `no-store`, the shape load balancers and uptime monitors expect. Probe it
+  with `GET`: `HEAD` is not routed and returns 404. `api.health()` returns the
+  same over JSON-RPC for RPC clients. Neither needs auth.
 - **Protected** — `createItem` / `listItems` / `getItem` / `updateQuantity` /
   `setQuantity` / `deleteItem`, an auth-gated CRUD resource over a
   `DistributedTable`. Every method calls `auth.requireAuth(context)`, so data is
@@ -94,10 +95,15 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 curl -i http://localhost:3001/healthz
 # HTTP/1.1 200 OK
 # content-type: application/json
-# cache-control: no-store
+# cache-control: no-store, no-cache, must-revalidate, proxy-revalidate
+# pragma: no-cache
+# expires: 0
+# …
 #
 # {"status":"ok","timestamp":...}
 ```
+
+Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ### RPC endpoint (local dev)
 
