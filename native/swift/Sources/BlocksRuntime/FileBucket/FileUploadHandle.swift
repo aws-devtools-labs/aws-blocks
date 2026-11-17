@@ -99,7 +99,8 @@ public final class FileUploadHandle: Sendable {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded \(body.count) bytes to \(requestURL)")
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Uploaded \(body.count) bytes to \(requestURL.redactedForLogging)")
         } catch let error as FileBucketError {
             throw error
         } catch {
@@ -139,7 +140,7 @@ public final class FileUploadHandle: Sendable {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL)")
+            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL.redactedForLogging)")
         } catch let error as FileBucketError {
             throw error
         } catch {

@@ -673,15 +673,23 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertEqual(StoredCookie.decode(account: stored.storageKey, value: record), stored)
     }
 
-    func testValueStoredByEarlierVersionIsReadWithoutAttributes() throws {
-        let legacy = try XCTUnwrap(StoredCookie.decode(account: "example.com|auth_session", value: "token123"))
-        XCTAssertEqual(legacy.host, "example.com")
-        XCTAssertEqual(legacy.name, "auth_session")
-        XCTAssertEqual(legacy.value, "token123")
-        XCTAssertEqual(legacy.path, "/")
-        XCTAssertFalse(legacy.secure)
-        XCTAssertNil(legacy.expiresAt)
-        XCTAssertTrue(legacy.matches(URL(string: "http://example.com/aws-blocks/api")!))
+    /// An earlier version stored only `host|name` → value. The item is read for its host as `Path=/`
+    /// and `Secure`, the attributes the Auth block sets its session cookies with.
+    func testValueStoredByEarlierVersionIsReadAsSecureForRootPath() {
+        XCTAssertEqual(
+            StoredCookie.decode(account: "example.com|auth_session", value: "token123"),
+            StoredCookie(
+                host: "example.com", name: "auth_session", value: "token123", path: "/", secure: true, expiresAt: nil
+            )
+        )
+        XCTAssertTrue(StoredCookie.isEarlierVersionItem(account: "example.com|auth_session", value: "token123"))
+    }
+
+    func testRecordOfThisVersionIsNotAnEarlierVersionItem() throws {
+        let stored = try cookie("a=1; Path=/; Secure")
+        let record = try XCTUnwrap(stored.encodedValue())
+        XCTAssertFalse(StoredCookie.isEarlierVersionItem(account: stored.storageKey, value: record))
+        XCTAssertFalse(StoredCookie.isEarlierVersionItem(account: "example.com|/|a", value: "{not json"))
     }
 
     /// Only touched under the `CookieJar` lock, or after concurrent work has finished.
@@ -720,15 +728,63 @@ final class BlocksClientTests: XCTestCase {
         let items = InMemoryCookieItems()
         items.items["example.com|auth_session"] = "old"
         let jar = CookieJar(items: items)
-        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=old")
 
-        // Set without a `Path`, so it is stored for `/aws-blocks`, and still replaces the old item.
+        // A cookie of another name leaves the earlier version's item in place.
+        jar.save(setCookie: "other=1; Path=/", requestURL: apiURL, now: now)
+        XCTAssertEqual(items.items["example.com|auth_session"], "old")
+
+        // Set without a `Path`, so it is stored for `/aws-blocks`, and the old item is removed by `save`.
         jar.save(setCookie: "auth_session=new", requestURL: apiURL, now: now)
-        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=new")
         XCTAssertNil(items.items["example.com|auth_session"])
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=new; other=1")
 
+        // Deleting `auth_session` leaves the unrelated `other` cookie set above.
         jar.save(setCookie: "auth_session=; Max-Age=0; Path=/", requestURL: apiURL, now: now)
-        XCTAssertNil(jar.cookieHeader(for: apiURL, now: now))
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "other=1")
+    }
+
+    /// The earlier version's item is read as `Secure`, so it is sent over `https` to the host that set
+    /// it and to no other host, subdomains included, and never over plain `http`. Reading it leaves it
+    /// in place.
+    func testJarSendsCookieStoredByEarlierVersionOnlyOverHttpsToItsHost() {
+        let items = InMemoryCookieItems()
+        items.items["example.com|auth_session"] = "old"
+        let jar = CookieJar(items: items)
+
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=old")
+        XCTAssertEqual(jar.cookieHeader(for: URL(string: "wss://example.com/realtime")!, now: now), "auth_session=old")
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "http://example.com/aws-blocks/api")!, now: now))
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://other.com/aws-blocks/api")!, now: now))
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://api.example.com/aws-blocks/api")!, now: now))
+        XCTAssertEqual(items.items["example.com|auth_session"], "old")
+    }
+
+    /// The earlier version's item is not sent over `http`, but a cookie of the same name set over
+    /// `http` by its host still replaces it, so the two are never both stored.
+    func testJarReplacesCookieStoredByEarlierVersionFromHttpResponse() {
+        let items = InMemoryCookieItems()
+        items.items["example.com|auth_session"] = "old"
+        items.items["other.com|auth_session"] = "kept"
+        let jar = CookieJar(items: items)
+        let httpURL = URL(string: "http://example.com/aws-blocks/api")!
+
+        jar.save(setCookie: "auth_session=new; Path=/", requestURL: httpURL, now: now)
+        XCTAssertNil(items.items["example.com|auth_session"])
+        XCTAssertEqual(items.items["other.com|auth_session"], "kept")
+        XCTAssertEqual(jar.cookieHeader(for: httpURL, now: now), "auth_session=new")
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=new")
+    }
+
+    /// A `Secure` cookie stored by this version keeps its flag through the stored record, so it is
+    /// still withheld from plain `http` after being read back from storage.
+    func testJarDoesNotSendStoredSecureCookieOverHttp() {
+        let items = InMemoryCookieItems()
+        let jar = CookieJar(items: items)
+        jar.save(setCookie: "auth_session=token123; Path=/; Secure", requestURL: apiURL, now: now)
+
+        let reloaded = CookieJar(items: items)
+        XCTAssertNil(reloaded.cookieHeader(for: URL(string: "http://example.com/aws-blocks/api")!, now: now))
+        XCTAssertEqual(reloaded.cookieHeader(for: apiURL, now: now), "auth_session=token123")
     }
 
     func testJarListsSameNamedCookiesMostSpecificPathFirst() {
@@ -753,6 +809,15 @@ final class BlocksClientTests: XCTestCase {
 
     func testCorruptRecordIsNotReadAsEarlierVersionItem() {
         XCTAssertNil(StoredCookie.decode(account: "example.com|/|a", value: "{not json"))
+    }
+
+    // MARK: - Log Redaction
+
+    func testRedactedForLoggingDropsCredentialsFromURL() throws {
+        let presigned = try XCTUnwrap(URL(string: "https://user:pw@bucket.s3.amazonaws.com:8443/a%20b/key.txt?X-Amz-Signature=abc&X-Amz-Credential=c#frag"))
+        XCTAssertEqual(presigned.redactedForLogging, "https://bucket.s3.amazonaws.com:8443/a%20b/key.txt")
+        let ws = try XCTUnwrap(URL(string: "wss://abc.execute-api.us-east-1.amazonaws.com/prod?token=secret"))
+        XCTAssertEqual(ws.redactedForLogging, "wss://abc.execute-api.us-east-1.amazonaws.com/prod")
     }
 
     // MARK: - Base Host
