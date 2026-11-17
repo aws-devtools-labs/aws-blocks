@@ -9,6 +9,60 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   Swift. The direct custom-scheme flow that was `signIn` is now
   `signInDirect`. `TypedOidcClient` renames both the same way. Rename
   `signIn` calls to `signInDirect`, then `signInRelay` calls to `signIn`.
+- Errors follow one taxonomy shared with the Kotlin and Swift clients. Every
+  error the runtime throws is a `BlocksException` (new), which carries
+  `message` and `cause`:
+  - `BlocksRpcException` is renamed `ApiException`: the server considered the
+    request and said no. `code` becomes `status`, the HTTP status the server
+    rejected with, and JSON-RPC's reserved codes (`-32700` to `-32603`) are
+    reported as 500, as in the TypeScript client. `data` is removed; read
+    `name`, the server's error name, and `retriable`, which the server sends
+    for a step of a multi-step flow that can be retried. For a reserved code
+    the server sends without a name, `name` is the code's own name, such as
+    `MethodNotFound`. A JSON-RPC error is an `ApiException` at any HTTP
+    status.
+  - Add `isBlocksError(error, name)`, true for an `ApiException` with that
+    `name`, as in the TypeScript client. Match on it rather than on `status`:
+    a named error thrown without a status arrives as a 500.
+  - Add `TransportException`, with a nullable `statusCode`, for a call that got
+    no usable JSON-RPC result. A refused connection, a DNS or TLS failure or a
+    timeout used to throw the HTTP client's own error (such as
+    `http.ClientException`, `SocketException` or `TimeoutException`), which is
+    now its `cause`. A non-2xx response with no JSON-RPC error, such as a
+    gateway's `{"error":"Not Found"}`, used to throw a `TypeError`, and one
+    such as `{"message":"Forbidden"}` returned null as a success. A body that
+    is not JSON threw a `FormatException`. All of these are now a
+    `TransportException`. An envelope with no `result`, which the server sends
+    for a method with no return value, still returns null.
+  - A call through a `BlocksClient` after `close()` throws a
+    `ClientClosedException` and sends nothing. It used to throw the HTTP
+    client's `ClientException`.
+  - A failed `FileUploadHandle.upload` or `FileDownloadHandle.download` throws
+    a `FileTransferException` with the HTTP status as `statusCode`, or a null
+    `statusCode` and the HTTP client's error as `cause` when no response
+    arrived. It threw a plain `Exception` with the status in its message.
+  - A descriptor the client can't hydrate throws a `TransferableException`; a
+    missing or mistyped field throws its subtype `InvalidDescriptorException`,
+    which names the `blocksType` and the `missingField`. They used to throw a
+    `FormatException`, and `RealtimeChannel.fromJson`,
+    `FileUploadHandle.fromJson` and `FileDownloadHandle.fromJson` a
+    `TypeError`.
+  - `RealtimeChannel.subscribe()` on a closed channel throws
+    `RealtimeChannelClosedException` instead of a `StateError`, and a failed
+    WebSocket connection is emitted on the stream as a
+    `RealtimeConnectionException` with the WebSocket error as `cause`. Both
+    are kinds of the new sealed `RealtimeException`.
+  - `OidcException` extends `BlocksException`. An auth route that refuses a
+    request (`restore()`, `refresh()`, `signOut()`) throws an `ApiException`
+    with the status and the server's error name, so
+    `isBlocksError(e, 'SignOutIncompleteException')` works; an unreadable 2xx,
+    or no response, throws a `TransportException`. `signOut()` still signs
+    out locally first, whatever the outcome. A refused exchange still
+    throws `OidcExchangeException`, now with the `ApiException` or
+    `TransportException` as its `cause`. `OidcCancelledException`, and an
+    `http.RequestAbortedException` from a request the caller aborted, pass
+    through unwrapped.
+  - Requires `http` 1.5.0 or later, which added `RequestAbortedException`.
 - An `OidcClient` from a block's `getClient()` (or `OidcClient.fromJson`) stores
   its tokens and sign-in state under keys prefixed with the directory of the
   block's `exchangePath`, such as `/aws-blocks/auth/access_token`, so the
@@ -31,11 +85,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   may hold other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
   block's cookie. On a 503 `SignOutIncompleteException` (the cookie was cleared
   but the server-side session was not removed) it does the same, then throws an
-  `OidcRequestException` with that `errorName`. Any other status, a transport
-  error or a cancelled request does the same: it clears this block's tokens,
-  removes this block's session cookie (the descriptor's `sessionCookieName`,
-  new `OidcClient.sessionCookieName`, or with an older backend the cookie its
-  sign-in set) and emits `OidcSignedOut`, then throws. It used to ignore the response and drop the
+  `ApiException` with that `name`. Any other status (an `ApiException`), no
+  response (a `TransportException`) or a cancelled request does the same: it
+  clears this block's tokens, removes this block's session cookie (the
+  descriptor's `sessionCookieName`, new `OidcClient.sessionCookieName`, or
+  with an older backend the cookie its sign-in set) and emits
+  `OidcSignedOut`, then throws. It used to ignore the response and drop the
   logout URL.
 - `OidcClient.restore()` returns `Future<OidcUser?>` and reads the backend's
   session route (`GET <exchangePath's directory>/session`, new
@@ -44,16 +99,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   a custom block's `getClient()` now needs that route on the block. On 200 it
   emits `OidcSignedIn` with the server's user and returns it; on 401 it clears
   the stored tokens, emits `OidcSignedOut` and returns null; any other status
-  throws an `OidcRequestException` without changing the state (a 404 means the
-  block serves no session route), as does a 200 whose body has no readable
-  `user`. It no longer builds the user from the access token's JWT claims, so
+  throws an `ApiException` without changing the state (a 404 means the block
+  serves no session route), and a 200 whose body has no readable `user` throws
+  a `TransportException`. It no longer builds the user from the access token's JWT claims, so
   the user id is the server's, and it no longer emits `OidcLoading` first. It
   used to report signed out for a valid cookie session, because a cookie session
   stores no tokens.
-- For exhaustive `switch` statements over `OidcException`: add
-  `OidcRequestException`, thrown when an auth route answers with a status the
-  client doesn't accept. It carries the `statusCode` and, as `errorName`, the
-  error name the server sent.
 - `OidcClient.authStateChanges` gives each new listener the current `authState`
   first, then each change, as Kotlin's `authState` flow does. It used to emit
   only the changes after the listener subscribed, so a listener added after
@@ -153,9 +204,9 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   several providers requires, and stores the rotated refresh token only when the
   response carries one.
 - `OidcClient.refresh` and `onAuthFailure` sign out only when the refresh route
-  answers 400 or 401. Any other status throws an `OidcRequestException`, and a
-  transport error is rethrown, keeping the tokens and the state; both used to
-  sign out. A refresh still in flight when a sign-in or sign-out finishes
+  answers 400 or 401. Any other status throws an `ApiException`, and no
+  response or an unreadable 200 throws a `TransportException`, keeping the
+  tokens and the state; both used to sign out. A refresh still in flight when a sign-in or sign-out finishes
   ignores its response, so it no longer stores tokens after a sign-out.
 - `OidcClient` resolves the auth routes against its base URL cut at the first
   path segment that is `aws-blocks`, keeping any API Gateway stage. It used to

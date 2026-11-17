@@ -35,7 +35,7 @@ class DartCodeGenerator {
       buf.writeln(directive);
     }
     buf.writeln(
-      "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
+      "export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;",
     );
 
     // Export transferable types for consumer convenience. A transferable
@@ -45,7 +45,7 @@ class DartCodeGenerator {
     final transferableTags = _collectTransferableTags(model);
     if (transferableTags.isNotEmpty) {
       buf.writeln(
-        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, TransferableException, InvalidDescriptorException;",
       );
     }
 

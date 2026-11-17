@@ -2,6 +2,15 @@
 
 ### Breaking
 
+- A generated client re-exports the runtime's error types, `ApiException`,
+  `BlocksException`, `ClientClosedException`, `TransportException` and
+  `isBlocksError`, instead of `BlocksRpcException`, which `blocks_runtime`
+  renames `ApiException`. A client whose spec uses a transferable also
+  re-exports `FileTransferException`, `RealtimeException`,
+  `RealtimeChannelClosedException`, `RealtimeConnectionException`,
+  `TransferableException` and `InvalidDescriptorException`. Code that catches
+  `BlocksRpcException` through the generated client no longer compiles; catch
+  `ApiException`, and match its `name` with `isBlocksError`.
 - For a spec that names an OIDC client's providers: a method
   whose direct or optional result is an `oidc/client` with a string enum in
   `x-blocks-type-args[0]` now generates an enum of those providers,
