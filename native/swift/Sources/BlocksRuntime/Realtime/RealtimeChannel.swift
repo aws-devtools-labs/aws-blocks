@@ -293,7 +293,8 @@ public final class RealtimeChannel<T> {
     /// subscription, so a message published before the server confirms can be missed. A refused subscribe finishes
     /// the stream with `RealtimeError.subscriptionEnded`.
     ///
-    /// Subscriptions on the same `wsUrl` share one WebSocket, whatever their channel. While it has a subscriber, the SDK sends the
+    /// Subscriptions on the same `wsUrl` share one WebSocket, whatever their channel. When a channel's last
+    /// subscription on that socket ends and other channels keep it open, the SDK sends an unsubscribe for the channel. While it has a subscriber, the SDK sends the
     /// keep-alive `{"action":"ping"}` every 9 minutes, as the web client does. The server re-checks each subscription
     /// on that ping, and that is how an expired or revoked one is reported.
     ///
@@ -379,6 +380,8 @@ extension RealtimeChannel: Decodable where T: Decodable {}
 /// Bridges one pooled socket's events into one subscriber's `AsyncThrowingStream`.
 private final class ChannelListener<T>: RealtimeSocketListener {
     private let channelName: String
+    private let lock = NSLock()
+    private var serverEnded = false
     private let channelToken: String
     private let deserializer: (Data) throws -> T
     private let continuation: AsyncThrowingStream<T, Error>.Continuation
@@ -393,6 +396,14 @@ private final class ChannelListener<T>: RealtimeSocketListener {
         self.channelToken = channelToken
         self.deserializer = deserializer
         self.continuation = continuation
+    }
+
+    var channel: String { channelName }
+
+    var unsubscribesOnLeave: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !serverEnded
     }
 
     /// Ends the stream normally. Used by `RealtimeChannel.close()`.
@@ -431,6 +442,10 @@ private final class ChannelListener<T>: RealtimeSocketListener {
             }
         case .error(let channel?, let code, let message):
             logger.debug("Subscription to \(channel) ended: \(code ?? "no code")")
+            // The server removed the subscription, so leaving the socket sends no unsubscribe.
+            lock.lock()
+            serverEnded = true
+            lock.unlock()
             continuation.finish(throwing: RealtimeError.subscriptionEnded(
                 channel: channel,
                 code: code,

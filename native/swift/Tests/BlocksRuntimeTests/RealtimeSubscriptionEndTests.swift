@@ -399,7 +399,7 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
 
         await waitUntil("the socket closes") { harness.sockets[0].isCancelled }
         XCTAssertEqual(harness.session.connectionCount, 0)
-        XCTAssertFalse(harness.sockets[0].sent.contains { $0.contains("unsubscribe") }, "no unsubscribe frame is sent")
+        XCTAssertFalse(harness.sockets[0].sent.contains { $0.contains("unsubscribe") }, "no unsubscribe when the socket closes with its last subscriber")
     }
 
     // MARK: - Renewal is the app's call
@@ -430,5 +430,122 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
         harness.sockets[1].deliver(message("c", x: 1))
         await waitUntil("the fresh handle receives") { recorder.values == [["x": 1]] }
         fresh.close()
+    }
+
+    // MARK: - Unsubscribe
+
+    private func unsubscribes(_ socket: FakeRealtimeSocket) -> [String] {
+        socket.sent.filter { $0.contains(#""action":"unsubscribe""#) }
+    }
+
+    /// Handles and recorders for channels `a` and `b`, subscribed on one socket.
+    private struct TwoChannels {
+        let first: RealtimeChannel<[String: Int]>
+        let firstRecorder: StreamRecorder<[String: Int]>
+        let second: RealtimeChannel<[String: Int]>
+        let secondRecorder: StreamRecorder<[String: Int]>
+    }
+
+    private func twoChannels(_ harness: FakeRealtimeHarness) async -> TwoChannels {
+        let first = harness.channel("a")
+        let second = harness.channel("b")
+        let firstRecorder = await subscribed(first, on: harness)
+        let secondRecorder = await subscribed(second, on: harness)
+        return TwoChannels(first: first, firstRecorder: firstRecorder, second: second, secondRecorder: secondRecorder)
+    }
+
+    func testCancellingAChannelsLastSubscriberOnASharedSocketSendsUnsubscribe() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        pair.firstRecorder.cancel()
+
+        await waitUntil("the unsubscribe is sent") { self.unsubscribes(harness.sockets[0]).count == 1 }
+        XCTAssertEqual(unsubscribes(harness.sockets[0]), [#"{"action":"unsubscribe","channel":"a"}"#])
+        XCTAssertFalse(harness.sockets[0].isCancelled)
+        pair.second.close()
+    }
+
+    func testCloseOnAHandleWhoseSocketStaysOpenSendsUnsubscribe() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        pair.first.close()
+
+        await waitUntil("the unsubscribe is sent") { self.unsubscribes(harness.sockets[0]).count == 1 }
+        XCTAssertEqual(unsubscribes(harness.sockets[0]), [#"{"action":"unsubscribe","channel":"a"}"#])
+        pair.second.close()
+        await waitUntil("the socket closes") { harness.sockets[0].isCancelled }
+        XCTAssertEqual(unsubscribes(harness.sockets[0]).count, 1, "closing the last subscriber sends no unsubscribe")
+    }
+
+    func testDecodeFailureOnASharedSocketSendsUnsubscribe() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        harness.sockets[0].deliver(#"{"type":"message","channel":"a","data":{"x":"not a number"}}"#)
+
+        _ = await pair.firstRecorder.ended()
+        await waitUntil("the unsubscribe is sent") { self.unsubscribes(harness.sockets[0]).count == 1 }
+        XCTAssertEqual(unsubscribes(harness.sockets[0]), [#"{"action":"unsubscribe","channel":"a"}"#])
+        pair.second.close()
+    }
+
+    func testNoUnsubscribeWhileAnotherSubscriberStillHasTheChannel() async {
+        let harness = FakeRealtimeHarness()
+        let channel = harness.channel("a")
+        let other = harness.channel("b")
+        let first = StreamRecorder(channel.subscribe())
+        let second = StreamRecorder(channel.subscribe())
+        let otherRecorder = StreamRecorder(other.subscribe())
+        await waitUntil("three subscribe frames are sent") {
+            harness.sockets.first.map { $0.sent.filter { $0.contains(#""action":"subscribe""#) }.count == 3 } ?? false
+        }
+
+        first.cancel()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(unsubscribes(harness.sockets[0]).isEmpty)
+
+        second.cancel()
+        await waitUntil("the unsubscribe is sent") { self.unsubscribes(harness.sockets[0]).count == 1 }
+        XCTAssertEqual(unsubscribes(harness.sockets[0]), [#"{"action":"unsubscribe","channel":"a"}"#])
+        otherRecorder.cancel()
+    }
+
+    func testNoUnsubscribeWhenTheServerEndedTheSubscription() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        harness.sockets[0].deliver(#"{"type":"error","channel":"a","code":"token_expired","message":"expired"}"#)
+        _ = await pair.firstRecorder.ended()
+        harness.sockets[0].deliver(message("b", x: 1))
+        await waitUntil("b still receives") { pair.secondRecorder.values == [["x": 1]] }
+
+        XCTAssertTrue(unsubscribes(harness.sockets[0]).isEmpty)
+        pair.second.close()
+    }
+
+    func testNoUnsubscribeAfterTheSocketFailed() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        harness.sockets[0].fail()
+        _ = await pair.firstRecorder.ended()
+        _ = await pair.secondRecorder.ended()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(unsubscribes(harness.sockets[0]).isEmpty)
+    }
+
+    func testNoUnsubscribeAfterAConnectionErrorFrame() async {
+        let harness = FakeRealtimeHarness()
+        let pair = await twoChannels(harness)
+
+        harness.sockets[0].deliver(#"{"type":"error","message":"Invalid channel"}"#)
+        _ = await pair.firstRecorder.ended()
+        _ = await pair.secondRecorder.ended()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(unsubscribes(harness.sockets[0]).isEmpty)
     }
 }

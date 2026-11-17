@@ -53,6 +53,11 @@ struct RealtimeSocketClosed: Error {
 
 /// Receives the events of one pooled socket.
 protocol RealtimeSocketListener: AnyObject {
+    /// The channel this listener subscribes to.
+    var channel: String { get }
+    /// Whether leaving the socket should unsubscribe the channel. False once the server has ended the subscription
+    /// with an error frame, since the server already removed it.
+    var unsubscribesOnLeave: Bool { get }
     /// The socket is open, or was already open when the listener joined. Send the subscribe frame here.
     func onOpen(_ socket: RealtimeSocket)
     /// A text frame arrived. Every listener on the socket gets every frame.
@@ -113,12 +118,25 @@ final class URLSessionRealtimeSocket: RealtimeSocket {
 /// ``keepAliveInterval``. The server re-checks the socket's subscriptions only on that message, and ends an expired
 /// or revoked one with an error frame. A socket that fails or closes is dropped from the pool, so the next
 /// `acquire` opens a new one. So is a socket that gets an error frame naming no channel, which ends every
-/// subscription on it. When the last listener is released, the socket is closed. No `unsubscribe` frame is sent.
+/// subscription on it. When the last listener is released, the socket is closed. When a channel's last listener
+/// leaves a socket that stays open for other channels, the pool sends `{"action":"unsubscribe","channel":…}`, unless
+/// the server already ended that subscription with an error frame.
 class WebSocketSession {
 
     /// The keep-alive interval, 9 minutes, as the web client sends it. API Gateway closes a socket after 10 minutes
     /// with no traffic.
     static let keepAliveInterval: UInt64 = 9 * 60 * 1_000_000_000
+
+    /// The realtime `URLSession`'s `timeoutIntervalForRequest`: 10 minutes, longer than the keep-alive ping. On
+    /// macOS, neither this nor the handshake timeout drops an open socket that is idle, so this is a defensive
+    /// setting: no timeout shorter than the ping should be able to apply to a subscribed socket.
+    static let requestTimeout: TimeInterval = 10 * 60
+
+    /// The handshake `URLRequest`'s `timeoutInterval`, which bounds how long opening a socket can take. A request's
+    /// own timeout overrides the session's, so a server that never completes the handshake fails after this rather
+    /// than after ``requestTimeout``. It is not 60 seconds because `URLRequest` treats exactly 60, its default, as
+    /// unset, and the session's 10 minutes would apply instead.
+    static let handshakeTimeout: TimeInterval = 30
 
     /// The keep-alive frame. The server's subscription re-check runs only on this JSON message, so a protocol-level
     /// WebSocket ping does not replace it.
@@ -191,7 +209,7 @@ class WebSocketSession {
 
     /// - Parameters:
     ///   - session: The `URLSession` that opens sockets.
-    convenience init(session: URLSession = BlocksRuntimeSession.shared) {
+    convenience init(session: URLSession = BlocksRuntimeSession.realtime) {
         self.init(
             makeSocket: { URLSessionRealtimeSocket(task: session.webSocketTask(with: $0)) },
             sleep: { try await Task.sleep(nanoseconds: $0) }
@@ -295,7 +313,7 @@ class WebSocketSession {
         }
 
         // Set User-Agent on the handshake because caller-supplied sessions may omit it.
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, timeoutInterval: Self.handshakeTimeout)
         request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
         let entry = ConnectionEntry(socket: makeSocket(request))
         _ = entry.add(listener)
@@ -319,10 +337,29 @@ class WebSocketSession {
         if close {
             connections.removeValue(forKey: connectionKey)
         }
+        // The socket stays open for other channels: tell the server this channel is gone, unless another listener
+        // still has it or the server already ended it.
+        let unsubscribe = !close && listener.unsubscribesOnLeave
+            && !entry.snapshot.contains { $0.channel == listener.channel }
         lock.unlock()
         if close {
             entry.stop(reason: "All channels released")
+        } else if unsubscribe {
+            let frame = Self.unsubscribeFrame(channel: listener.channel)
+            let socket = entry.socket
+            Task {
+                do {
+                    try await socket.send(frame)
+                } catch {
+                    logger.debug("Unsubscribe failed: \(error.localizedDescription)")
+                }
+            }
         }
+    }
+
+    /// The frame that ends a channel's subscription on a socket, as the web client sends it.
+    static func unsubscribeFrame(channel: String) -> String {
+        #"{"action":"unsubscribe","channel":"\#(channel)"}"#
     }
 
     /// The number of pooled sockets. For tests.

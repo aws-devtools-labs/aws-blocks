@@ -10,6 +10,14 @@ import XCTest
 
 /// Records pool events for one listener.
 private final class RecordingListener: RealtimeSocketListener {
+    let channel: String
+    let unsubscribesOnLeave: Bool
+
+    init(channel: String = "c", unsubscribesOnLeave: Bool = true) {
+        self.channel = channel
+        self.unsubscribesOnLeave = unsubscribesOnLeave
+    }
+
     private let lock = NSLock()
     private var _opens = 0
     private var _messages: [String] = []
@@ -62,6 +70,56 @@ final class WebSocketSessionTests: XCTestCase {
             XCTAssertTrue(msg.contains("Invalid WebSocket URL"))
         }
         XCTAssertTrue(harness.sockets.isEmpty)
+    }
+
+    func testRealtimeSessionTimeoutOutlastsTheKeepAliveAndTheHandshakeStaysBounded() throws {
+        // The session's request timeout defaults to 60 seconds; the realtime session's must outlast the ping.
+        let keepAliveSeconds = TimeInterval(WebSocketSession.keepAliveInterval) / 1_000_000_000
+        XCTAssertGreaterThan(WebSocketSession.requestTimeout, keepAliveSeconds)
+        // The handshake keeps a short bound of its own. Exactly 60 is URLRequest's default and would be ignored.
+        XCTAssertLessThan(WebSocketSession.handshakeTimeout, 60)
+
+        let harness = FakeRealtimeHarness()
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        XCTAssertEqual(harness.sockets[0].request.timeoutInterval, WebSocketSession.handshakeTimeout)
+        harness.session.release(wsUrl: url, listener: listener)
+
+        XCTAssertEqual(
+            BlocksRuntimeSession.realtime.configuration.timeoutIntervalForRequest,
+            WebSocketSession.requestTimeout
+        )
+        XCTAssertEqual(
+            BlocksRuntimeSession.realtime.configuration.httpAdditionalHeaders?["User-Agent"] as? String,
+            blocksUserAgentToken
+        )
+    }
+
+    func testReleaseSendsUnsubscribeOnlyWhenTheChannelLeavesASocketThatStaysOpen() async throws {
+        let harness = FakeRealtimeHarness()
+        let first = RecordingListener(channel: "a")
+        let firstTwin = RecordingListener(channel: "a")
+        let ended = RecordingListener(channel: "b", unsubscribesOnLeave: false)
+        let remaining = RecordingListener(channel: "c")
+        for listener in [first, firstTwin, ended, remaining] {
+            try harness.session.acquire(wsUrl: url, listener: listener)
+        }
+        let socket = harness.sockets[0]
+        let unsubscribes = { socket.sent.filter { $0.contains("unsubscribe") } }
+
+        harness.session.release(wsUrl: url, listener: first)
+        harness.session.release(wsUrl: url, listener: ended)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(unsubscribes(), [], "a still has a listener; the server already ended b")
+
+        harness.session.release(wsUrl: url, listener: firstTwin)
+        await waitUntil("a is unsubscribed") { unsubscribes().count == 1 }
+        XCTAssertEqual(unsubscribes(), [#"{"action":"unsubscribe","channel":"a"}"#])
+
+        harness.session.release(wsUrl: url, listener: remaining)
+        XCTAssertTrue(socket.isCancelled)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(unsubscribes().count, 1, "the last listener closes the socket instead")
     }
 
     func testAcquireOpensSocketAndNotifiesOpen() async throws {
