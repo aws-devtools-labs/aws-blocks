@@ -8,4 +8,6 @@ CREATE TABLE notebooks (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX notebooks_owner_name ON notebooks (owner, name);
+-- Aurora DSQL builds an index with an asynchronous job, so the statement is
+-- CREATE INDEX ASYNC. The block waits for the job before the next statement.
+CREATE UNIQUE INDEX ASYNC notebooks_owner_name ON notebooks (owner, name);

@@ -1,4 +1,4 @@
--- DistributedDatabase (Aurora DSQL) schema: a minimal accounts ledger.
+-- Database (Aurora DSQL) schema: a minimal accounts ledger.
 -- Each account belongs to one user (owner), and names are unique per owner, so
 -- two users can each have a "checking" account. DSQL-compatible DDL: a
 -- composite text primary key (no sequences/serial), a numeric balance. Runs

@@ -5,15 +5,15 @@
  *
  * A relational notebooks → notes model with a foreign key, per-user ownership,
  * parameterized queries (injection-safe), and a multi-statement transaction.
- * Runs on PGlite locally and Aurora Serverless v2 when deployed — no code change.
+ * Runs on PGlite locally and Aurora DSQL when deployed — no code change.
  *
  * ─── IMPORTANT ───────────────────────────────────────────────────────────────
  * Do NOT use local files, in-memory arrays, or ad-hoc databases for persistence.
  * Use Building Blocks for cloud persistence and other common cloud abstractions.
  * They work locally with automatic mocks and deploy to AWS with zero configuration.
  *
- * The schema lives in aws-blocks/migrations/*.sql — numbered files that run once,
- * automatically, on first query locally and on deploy in AWS.
+ * The schema lives in aws-blocks/migrations/main/*.sql — numbered files that run
+ * once, automatically, on first query locally and on deploy in AWS.
  *
  * For the full list of blocks and how to use them, see:
  *   node_modules/@aws-blocks/blocks/README.md
@@ -50,11 +50,15 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 
 // ─── Database ──────────────────────────────────────────────────────────────
-// Schema lives in aws-blocks/migrations/*.sql. migrationsPath is resolved from
-// the project root at synth time (the dir you run `npm run deploy` / cdk in).
-const db = new Database(scope, 'main', {
-  migrationsPath: './aws-blocks/migrations',
-});
+// With no options the block owns an Aurora DSQL cluster: serverless PostgreSQL
+// with no VPC to manage. Locally it is PGlite with the same DSQL rules, so SQL
+// the cluster would reject fails on your machine first.
+//
+// Schema lives in aws-blocks/migrations/main/*.sql: the directory is named after
+// the block id ('main') and is resolved from the project root (the dir you run
+// `npm run dev` / `npm run deploy` in). The files are written for Aurora DSQL;
+// see "Migrations" in node_modules/@aws-blocks/bb-database/README.md.
+const db = new Database(scope, 'main');
 
 // Row shapes returned by the queries below. These mirror the migration DDL;
 // the database is the source of truth, these are just the read types.
@@ -134,8 +138,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   /**
    * Delete a notebook and all its notes in one transaction — either both the
-   * notes and the notebook go, or neither does. (The FK also cascades, but
-   * doing it explicitly shows the transaction API.)
+   * notes and the notebook go, or neither does. The notes go first: the foreign
+   * key does not cascade, so a notebook that still has notes cannot be deleted.
+   *
+   * Aurora DSQL never waits on a lock. When another request changes the same
+   * rows, one commit fails with a conflict, and `retryOnConflict` runs the
+   * callback again. That is safe here: the callback only deletes. One
+   * transaction can change at most 3,000 rows, so delete a larger notebook's
+   * notes in batches first.
    */
   async deleteNotebook(notebookId: string) {
     const user = await auth.requireAuth(context);
@@ -146,7 +156,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       await tx.execute(
         sql`DELETE FROM notebooks WHERE id = ${notebookId} AND owner = ${user.userSub}`,
       );
-    });
+    }, { retryOnConflict: true });
     return { success: true };
   },
 }));
