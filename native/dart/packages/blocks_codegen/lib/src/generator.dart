@@ -1236,11 +1236,9 @@ class DartCodeGenerator {
   // [_encode] mirrors [_decode]: it turns a Dart value back into its JSON
   // shape, descending through the same containers, so `toJson()` returns
   // plain JSON (maps, lists, strings, numbers, booleans, null) and
-  // `X.fromJson(x.toJson())` round-trips. A transferable is a handle the
-  // server issues; it encodes as the `{"__blocks": …}` descriptor it was
-  // hydrated from (the runtime type's `toJson()`), the shape the server sent
-  // it in, as Kotlin and Swift send it. One with no runtime binding is typed
-  // `dynamic`, holds that descriptor as JSON already, and is passed as is.
+  // `X.fromJson(x.toJson())` round-trips. A transferable is read-only: the
+  // server hands it out and nothing sends one back, so it is passed as is,
+  // and `jsonEncode` rejects a live handle (it has no `toJson()`).
 
   /// A model field's JSON value. [optional] means the field may be null.
   String _toJsonExpr(
@@ -1263,8 +1261,8 @@ class DartCodeGenerator {
     switch (_unalias(type, s.allTypes)) {
       case PrimitiveType():
         return v;
-      case TransferableType(blocksType: final tag):
-        return knownTransferableTags.contains(tag) ? '$v.toJson()' : v;
+      case TransferableType():
+        return v;
       case NullableType(inner: final inner):
         return _encodeNullable(v, inner, s);
       case ListType(items: final items):
@@ -1297,11 +1295,7 @@ class DartCodeGenerator {
     final inner = _unalias(type, s.allTypes);
     if (_encode(v, inner, s) == v) return v;
     switch (inner) {
-      case RecordType() ||
-          SealedClassType() ||
-          EnumType() ||
-          SchemaReference() ||
-          TransferableType():
+      case RecordType() || SealedClassType() || EnumType() || SchemaReference():
         return '$v?.toJson()';
       case ListType(items: final items):
         final e = s.name('e');

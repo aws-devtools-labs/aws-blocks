@@ -657,8 +657,8 @@ class GetFeedsResult {
 
   Map<String, dynamic> toJson() {
     return {
-      'feed': feed.toJson(),
-      'feeds': feeds.map((e) => e.toJson()).toList(),
+      'feed': feed,
+      'feeds': feeds,
     };
   }
 
