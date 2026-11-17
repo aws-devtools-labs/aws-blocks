@@ -8,6 +8,9 @@
 import XCTest
 @testable import BlocksCodegen
 
+/// The golden of a fixture whose spec the generator refuses: the `CodegenError` message.
+private let codegenErrorGolden = "codegen-error.txt"
+
 final class GoldenFileTests: XCTestCase {
 
     private var fixturesURL: URL {
@@ -42,9 +45,35 @@ final class GoldenFileTests: XCTestCase {
             let specData = try Data(contentsOf: specURL)
             let rpcModel = try OpenRPCParser().parse(data: specData)
             let codegenModel = CodegenModelBuilder().build(from: rpcModel)
-            let output = try SwiftCodeGenerator().generate(from: codegenModel)
+            let errorGoldenURL = goldenDir.appendingPathComponent(codegenErrorGolden)
+            let output: GeneratedSources
+            do {
+                output = try SwiftCodeGenerator().generate(from: codegenModel)
+            } catch let error as CodegenError {
+                // A spec the generator refuses (a transferable parameter): the golden is the error.
+                if shouldRegenerate {
+                    try fileManager.createDirectory(at: goldenDir, withIntermediateDirectories: true)
+                    for file in try fileManager.contentsOfDirectory(at: goldenDir, includingPropertiesForKeys: nil) {
+                        try fileManager.removeItem(at: file)
+                    }
+                    try "\(error)\n".write(to: errorGoldenURL, atomically: true, encoding: .utf8)
+                    print("  ✓ regenerated \(fixture.lastPathComponent): codegen error")
+                } else {
+                    guard fileManager.fileExists(atPath: errorGoldenURL.path) else {
+                        XCTFail("\(fixture.lastPathComponent) failed to generate: \(error)\n"
+                            + "Run: REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests")
+                        continue
+                    }
+                    let expectedError = try String(contentsOf: errorGoldenURL, encoding: .utf8)
+                    XCTAssertEqual("\(error)\n", expectedError, "codegen error mismatch in \(fixture.lastPathComponent)")
+                }
+                continue
+            }
 
             if shouldRegenerate {
+                if fileManager.fileExists(atPath: errorGoldenURL.path) {
+                    try fileManager.removeItem(at: errorGoldenURL)
+                }
                 try fileManager.createDirectory(at: goldenDir, withIntermediateDirectories: true)
                 try output.models.write(to: goldenDir.appendingPathComponent("Models.swift"), atomically: true, encoding: .utf8)
                 try output.api.write(to: goldenDir.appendingPathComponent("Api.swift"), atomically: true, encoding: .utf8)
@@ -54,6 +83,9 @@ final class GoldenFileTests: XCTestCase {
                     XCTFail("No golden files for \(fixture.lastPathComponent). Run: REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests")
                     continue
                 }
+
+                XCTAssertFalse(fileManager.fileExists(atPath: errorGoldenURL.path),
+                    "\(fixture.lastPathComponent) generates, but its golden is a codegen error")
 
                 let modelsGoldenURL = goldenDir.appendingPathComponent("Models.swift")
                 let apiGoldenURL = goldenDir.appendingPathComponent("Api.swift")

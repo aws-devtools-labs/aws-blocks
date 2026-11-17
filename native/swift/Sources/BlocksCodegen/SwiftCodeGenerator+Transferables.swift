@@ -227,3 +227,115 @@ extension SwiftCodeGenerator {
         }
     }
 }
+
+// MARK: - Transferable parameters
+
+extension SwiftCodeGenerator {
+    /// Throws `CodegenError.transferableParameters`, naming every operation parameter that holds a transferable:
+    /// directly, optional or nullable, in a list or map, or in a field, list, map or union arm of a model it
+    /// references, at any depth. A transferable is read-only (the server hands it out and never re-hydrates one
+    /// sent back), so a method taking one could only fail at call time. A model that only appears in a result
+    /// still generates.
+    func rejectTransferableParameters(_ model: CodegenModel) throws {
+        var errors: [String] = []
+        for namespace in model.apiNamespaces {
+            for operation in namespace.operations {
+                let scopes = [flattenedNestedTypes(operation.nestedTypes)]
+                // The spec's method name: a dotless one is in the `_default` namespace.
+                let method = namespace.name == "_default" ? operation.name : "\(namespace.name).\(operation.name)"
+                for parameter in operation.parameters {
+                    var visited: Set<String> = []
+                    guard let (tag, path) = firstTransferable(
+                        parameter.type, path: [], scopes: scopes, visited: &visited
+                    ) else { continue }
+                    let field = path.isEmpty ? "" : " (field \(path.joined(separator: ".")))"
+                    errors.append(
+                        "Transferable types (\(escapedForDiagnostic(tag))) cannot be serialized: they are read-only. "
+                            + "Method '\(escapedForDiagnostic(method))', "
+                            + "parameter '\(escapedForDiagnostic(parameter.name))'\(escapedForDiagnostic(field))."
+                    )
+                }
+            }
+        }
+        if !errors.isEmpty { throw CodegenError.transferableParameters(errors) }
+    }
+
+    private func flattenedNestedTypes(_ nodes: [NestedTypeNode]) -> [NestedTypeNode] {
+        nodes.flatMap { [$0] + flattenedNestedTypes($0.children) }
+    }
+
+    /// The tag of the first transferable `type` holds, and the model fields leading to it (`["Bundle", "feed"]`),
+    /// or nil when it holds none. A reference resolves as in `needsClientDecoder`: the innermost nested type with
+    /// that name, then a component schema. Only a reference can recur, and each component schema is visited once,
+    /// so recursive schemas terminate.
+    private func firstTransferable(
+        _ type: ResolvedType, path: [String], scopes: [[NestedTypeNode]], visited: inout Set<String>
+    ) -> (String, [String])? {
+        func inFields(_ model: String, _ fields: [ResolvedField], scopes: [[NestedTypeNode]], visited: inout Set<String>)
+            -> (String, [String])? {
+            for field in fields {
+                let fieldPath = (path.isEmpty ? [model] : path) + [field.name]
+                if let hit = firstTransferable(field.type, path: fieldPath, scopes: scopes, visited: &visited) {
+                    return hit
+                }
+            }
+            return nil
+        }
+
+        switch type {
+        case .transferable(let blocksType, _):
+            return (blocksType, path)
+        case .nullable(let inner), .list(let inner, _), .map(let inner):
+            return firstTransferable(inner, path: path, scopes: scopes, visited: &visited)
+        case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
+            if let hit = inFields(name, fields, scopes: scopes, visited: &visited) { return hit }
+            if let additionalPropertiesType,
+               let hit = firstTransferable(
+                   additionalPropertiesType, path: path.isEmpty ? [name] : path, scopes: scopes, visited: &visited
+               ) {
+                return hit
+            }
+            return embeddedUnion.flatMap { firstTransferable($0, path: path, scopes: scopes, visited: &visited) }
+        case .union(let name, let variants, _):
+            for variant in variants {
+                let variantScopes = [variant.nestedTypes] + scopes
+                if let payload = variant.payloadTypeName,
+                   let hit = firstTransferable(
+                       .typeReference(name: payload), path: path, scopes: variantScopes, visited: &visited
+                   ) {
+                    return hit
+                }
+                if let hit = inFields(name, variant.fields, scopes: variantScopes, visited: &visited) { return hit }
+                // An open arm's values sit under the union, like a field; an embedded union or a value arm adds
+                // no field to the path.
+                let extras: [(ResolvedType?, [String])] = [
+                    (variant.additionalPropertiesType, path.isEmpty ? [name] : path),
+                    (variant.embeddedUnion, path),
+                    (variant.valueType, path)
+                ]
+                for case let (extra?, extraPath) in extras {
+                    if let hit = firstTransferable(extra, path: extraPath, scopes: variantScopes, visited: &visited) {
+                        return hit
+                    }
+                }
+            }
+            return nil
+        case .typeReference(let name):
+            for (depth, scope) in scopes.enumerated() {
+                if let node = scope.first(where: { $0.name == name }) {
+                    // A nested type reached again with the same scope chain is a cycle: it adds nothing.
+                    let key = "\(name)@\(scopes.count - depth)"
+                    guard visited.insert(key).inserted else { return nil }
+                    defer { visited.remove(key) }
+                    return firstTransferable(
+                        node.type, path: path, scopes: [node.children] + scopes[depth...], visited: &visited
+                    )
+                }
+            }
+            guard let referenced = typesByName[name], visited.insert(name).inserted else { return nil }
+            return firstTransferable(referenced, path: path, scopes: [nestedTypesByName[name] ?? []], visited: &visited)
+        case .primitive, .formattedType, .enum:
+            return nil
+        }
+    }
+}

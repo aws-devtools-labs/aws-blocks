@@ -10,6 +10,8 @@ Each numbered directory contains:
 - `swift/` — golden-file outputs from Swift codegen
 - `dart/` — golden-file outputs from Dart codegen
 
+`swift/` holds `codegen-error.txt` instead for a spec the Swift codegen refuses to generate: the error message, for example for a transferable parameter, since transferables are read-only.
+
 ## Running Tests
 
 Tests automatically discover all fixtures and assert codegen output matches golden files.
@@ -63,7 +65,7 @@ bash native/dart/scripts/analyze-fixture-goldens.sh
 
 ## Swift Goldens Must Compile
 
-The same goes for Swift. A separate check compiles every fixture's Swift golden (`Models.swift` + `Api.swift`) as its own library module against the in-repo `BlocksRuntime`, for the package's minimum macOS, and fails on any error. A separate module is how an app that keeps its generated client in its own Swift package builds it, so access control applies. It needs macOS (`xcrun swiftc`); CI runs it in the `fixture-goldens` job of `.github/workflows/native-sdk-swift.yml`:
+The same goes for Swift. A separate check compiles every fixture's Swift golden (`Models.swift` + `Api.swift`) as its own library module against the in-repo `BlocksRuntime`, for the package's minimum macOS, and fails on any error. A separate module is how an app that keeps its generated client in its own Swift package builds it, so access control applies. A fixture whose Swift golden is `codegen-error.txt` has nothing to compile and is skipped. It needs macOS (`xcrun swiftc`); CI runs it in the `fixture-goldens` job of `.github/workflows/native-sdk-swift.yml`:
 
 ```bash
 bash native/swift/scripts/compile-fixture-goldens.sh

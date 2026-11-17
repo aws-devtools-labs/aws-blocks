@@ -87,4 +87,20 @@ if bash "$COMPILE" "$WORK/empty" > /dev/null 2>&1; then
   fail "Case 6: an empty fixtures directory should fail"
 fi
 
+# --- Case 7: an expected codegen error is skipped, not compiled or counted ---
+REFUSED="$WORK/refused"
+golden "$REFUSED" 01-ok 'public let answer = 42'
+mkdir -p "$REFUSED/02-refused/swift"
+printf 'not Swift\n' > "$REFUSED/02-refused/swift/codegen-error.txt"
+out="$(bash "$COMPILE" "$REFUSED" 2>&1)" || fail "Case 7: an expected codegen error should pass: $out"
+case "$out" in *"OK: 1 Swift fixture golden(s) compile"*) ;; *) fail "Case 7: unexpected output: $out" ;; esac
+case "$out" in *"Skipped 1 fixture(s) whose Swift golden is an expected codegen-error.txt"*) ;; *) fail "Case 7: the skip should be reported: $out" ;; esac
+
+# --- Case 8: a fixture with both Api.swift and a codegen error fails ---
+golden "$REFUSED" 02-refused 'public let answer = 42'
+if out="$(bash "$COMPILE" "$REFUSED" 2>&1)"; then
+  fail "Case 8: Api.swift beside codegen-error.txt should fail the run: $out"
+fi
+case "$out" in *"has both Api.swift and codegen-error.txt"*) ;; *) fail "Case 8: unexpected output: $out" ;; esac
+
 echo "PASS: compile-fixture-goldens.sh"

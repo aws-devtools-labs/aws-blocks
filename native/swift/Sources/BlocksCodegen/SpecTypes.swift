@@ -96,6 +96,8 @@ struct NativeBindingsCatalog: Decodable {
 enum CodegenError: Error, CustomStringConvertible {
     case unsupportedSchema(String)
     case invalidNativeCatalog(String)
+    /// One message per operation parameter that holds a transferable (see `rejectTransferableParameters`).
+    case transferableParameters([String])
 
     var description: String {
         switch self {
@@ -103,6 +105,8 @@ enum CodegenError: Error, CustomStringConvertible {
             return "Unsupported schema: \(detail)"
         case .invalidNativeCatalog(let detail):
             return "Invalid native binding metadata: \(detail)"
+        case .transferableParameters(let messages):
+            return messages.joined(separator: "\n")
         }
     }
 }

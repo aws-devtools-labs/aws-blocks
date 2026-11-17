@@ -71,6 +71,7 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
+        try generator.rejectTransferableParameters(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
