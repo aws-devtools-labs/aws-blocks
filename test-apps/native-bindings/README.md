@@ -12,7 +12,7 @@ Test backend for native client bindings (Swift, Kotlin, Dart). Exercises the Bui
 | **Realtime** | WebSocket pub/sub (cursor tracking) |
 | **FileBucket** | S3 file storage with presigned upload/download handles |
 | **KVStore** | Key-value storage |
-| **DistributedTable** | Structured data (todos) with indexes |
+| **KVStore** (with a `schema` and a `key`) | Structured data (todos) with indexes |
 
 ## Setup
 
@@ -95,7 +95,7 @@ AWS_REGION=<region> BLOCKS_STACK_NAME=<stack> npm run seed:cognito
 Simple key-value CRUD:
 - `api.kvGet(key)`, `api.kvPut(key, value)`, `api.kvDelete(key)`, `api.kvScan()`
 
-### Todos (DistributedTable)
+### Todos (KVStore with a `schema` and a `key`)
 
 Requires a sign-in on the email + password block (`auth-basic`). Todos are keyed on the caller's `userSub`, so each user lists, reads and changes only their own:
 - `api.createTodo(title, priority)`, `api.listTodos(sortBy?)`, `api.getTodo(todoId)`

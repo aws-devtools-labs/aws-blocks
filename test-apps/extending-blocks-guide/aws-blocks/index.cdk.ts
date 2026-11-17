@@ -17,7 +17,7 @@ const id = getSandboxId(projectRoot);
 const stackName = `bb-extending-guide-${id}`;
 
 // Pattern 2 needs the legacy table names available BOTH at synth
-// (so KVStore.fromExisting / DistributedTable.fromExisting can pass real
+// (so each KVStore.fromExisting can pass real
 // strings into Table.fromTableName) AND at runtime (so the runtime ctor
 // reads it from env). We pin the physical names and surface them below.
 const legacyTableName = `${stackName}-legacy-sessions`;
@@ -40,17 +40,19 @@ externalQueue.grantSendMessages(blocksStack.executionRole);
 registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
 // Pattern 2 fixtures: two DynamoDB tables that pretend to predate Blocks.
-// We pre-pinned the physical names above so KVStore.fromExisting and
-// DistributedTable.fromExisting could pass them through at synth time.
+// We pre-pinned the physical names above so each KVStore.fromExisting could
+// pass them through at synth time.
 //
-// NOTE: both BBs call `grantReadWriteData` on the bound table internally,
+// NOTE: both stores call `grantReadWriteData` on the bound table internally,
 // so we DON'T grant here — doing so would emit a redundant IAM statement.
+// A KVStore with no `key` option (Pattern 2a) keys its table by `_bkv_pk`.
 const legacyTable = new dynamodb.Table(blocksStack, 'legacy-sessions', {
   tableName: legacyTableName,
-  partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+  partitionKey: { name: '_bkv_pk', type: dynamodb.AttributeType.STRING },
   billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
 });
 
+// A KVStore with a declared `key` (Pattern 2b) uses those fields as the key schema.
 const legacyUsersTable = new dynamodb.Table(blocksStack, 'legacy-users', {
   tableName: legacyUsersTableName,
   partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },

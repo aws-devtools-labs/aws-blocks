@@ -697,3 +697,37 @@ describe('create() validates defaults.allowedOrigins', () => {
 		await BlocksStack.create(new cdk.App(), 'EmbeddedTokenOriginStack', propsWithOrigins([entry]));
 	});
 });
+
+describe('a stack name that starts with "aws" is an error at synth', () => {
+	const errorsOf = (stack: cdk.Stack) =>
+		Annotations.fromStack(stack)
+			.findError('*', Match.anyValue())
+			.map((entry) => String(entry.entry.data));
+
+	const assertRefused = (stack: cdk.Stack, name: string, groupPrefix = name) => {
+		const errors = errorsOf(stack);
+		assert.strictEqual(errors.length, 1, errors.join('\n'));
+		assert.ok(errors[0].includes(`Stack name '${name}' starts with 'aws'`), errors[0]);
+		assert.ok(errors[0].includes(`'${groupPrefix}-resources' and '${groupPrefix}-settings'`), errors[0]);
+		assert.match(errors[0], /AWS Resource Groups refuses a group name/);
+		assert.match(errors[0], /"stackId" in \.blocks\/config\.json/);
+	};
+
+	test('BlocksStack: the error names the stack and says what to change, in any letter case', async () => {
+		assertRefused(await makeStack(new cdk.App(), 'AWS-Shop', factoryBackendPath), 'AWS-Shop');
+	});
+
+	test('BlocksBackend inside such a stack gets the same error', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'aws-existing-stack');
+		await makeBackend(parent, 'Blocks', factoryBackendPath);
+		assertRefused(parent, 'aws-existing-stack', 'aws-existing-stack-Blocks');
+	});
+
+	test('a name that has "aws" after its first character has no error, and names the groups', async () => {
+		const stack = await makeStack(new cdk.App(), 'my-aws-app-prod', factoryBackendPath);
+		assert.deepStrictEqual(errorsOf(stack), []);
+		Template.fromStack(stack).hasResourceProperties('AWS::ResourceGroups::Group', {
+			Name: 'my-aws-app-prod-resources',
+		});
+	});
+});

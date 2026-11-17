@@ -15,9 +15,8 @@ that kind needs to reconstitute itself.
 The client reads the tag, builds the matching Kotlin object, and hands you that rather than the
 descriptor. The spec marks the result schema with `x-blocks-transferable` (plus
 `x-blocks-type-args` for generic arguments) so codegen knows to emit `RealtimeChannel<Cursor>`
-where the raw schema would have produced a struct. A transferable is sent back as its
-`{ "__blocks": … }` descriptor (its `toJson()`), so an operation can also take one as a parameter
-(see [Nested transferables](#nested-transferables)).
+where the raw schema would have produced a struct. Transferables travel in the result position
+only — they are what a method hands back, never something you pass in.
 
 ## The built-in bindings
 
@@ -66,11 +65,10 @@ its live object wherever it appears: returned directly, inside a list or map, in
 model, or in the messages of a realtime channel (`RealtimeChannel<List<FileDownloadHandle>>`, or a
 channel whose message model holds one). An OIDC client needs the calling client and the configured
 `oidc { relayTo }`, so a model that holds one decodes through its generated operation; to decode one
-yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`. A
-transferable is sent back as its descriptor, so an operation can take one as a parameter, directly,
-in a list or map, or in a model (a model holding an OIDC client encodes with `OidcClient.json`, as
-the generated operation does). A tag with no binding has to be a direct result to get the
-`UnknownTransferable` fallback.
+yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`.
+Transferables are read-only: an operation that takes one as a parameter fails code generation, and
+encoding a model that holds one throws `UnsupportedOperationException`. A tag with no binding has to
+be a direct result to get the `UnknownTransferable` fallback.
 
 ## HTTP clients
 

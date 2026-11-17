@@ -5,7 +5,7 @@ backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
 > "API-only" describes the interface — no web UI is served, clients talk to it
-> over JSON-RPC. It still owns backend state (here a `DistributedTable`); a real
+> over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
@@ -18,11 +18,16 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 
 ## What ships
 
-- **Public** — `api.health()` returns `{ status, timestamp }` with no auth. A
-  liveness probe for load balancers and uptime monitors.
+- **Public** — `GET /healthz` is a `RawRoute` that answers a plain HTTP `GET`
+  with `{ status, timestamp }` and a `Cache-Control` header that includes
+  `no-store`, the shape load balancers and uptime monitors expect. Probe it
+  with `GET`: `HEAD` is not routed and returns 404. `api.health()` returns the
+  same over JSON-RPC for RPC clients. Neither needs auth.
 - **Protected** — `createItem` / `listItems` / `getItem` / `updateQuantity` /
   `setQuantity` / `deleteItem`, an auth-gated CRUD resource over a
-  `DistributedTable`. Every method calls `auth.requireAuth(context)`, so data is
+  `KVStore`. The store has a `schema` and a `key`, so it holds records you list
+  or query as a collection; a store fixes its key when you create it. Every
+  method calls `auth.requireAuth(context)`, so data is
   isolated per user, and writes use optimistic locking (`ifFieldEquals` on a
   version field). `setQuantity` is the raw compare-and-swap: pass the version you
   read, and a stale write is rejected with `ConditionalCheckFailedException`
@@ -47,7 +52,8 @@ Point any HTTP/JSON-RPC client at the RPC endpoint.
 - **Every `ApiNamespace` method is a public, internet-reachable endpoint.**
   Nothing is gated by default. When you add a method, start it with
   `await auth.requireAuth(context)` unless anyone on the internet may call it
-  signed out (like `health`). Scope what it touches to the caller: derive the
+  signed out (like `health`). The same holds for a `RawRoute` handler: `/healthz`
+  is public on purpose. Scope what it touches to the caller: derive the
   owner or prefix from the signed-in user (as `userPath` and the `owner` key do
   here), never from an id or owner the caller passes in.
 - **A presigned URL is a bearer credential.** Whoever holds the URL that
@@ -84,6 +90,22 @@ Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blo
 `"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
 The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+
+### Health probe (local dev)
+
+```bash
+curl -i http://localhost:3001/healthz
+# HTTP/1.1 200 OK
+# content-type: application/json
+# cache-control: no-store, no-cache, must-revalidate, proxy-revalidate
+# pragma: no-cache
+# expires: 0
+# …
+#
+# {"status":"ok","timestamp":...}
+```
+
+Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ### RPC endpoint (local dev)
 

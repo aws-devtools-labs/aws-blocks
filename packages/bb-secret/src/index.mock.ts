@@ -373,8 +373,7 @@ Object.assign(SecretImpl, { fromExisting });
  * connection strings, webhook signing keys, encryption keys.
  *
  * **When NOT to use:** For non-sensitive configuration (feature flags, display
- * strings, thresholds), use `AppSetting`. For application state, use `KVStore`
- * or `DistributedTable`.
+ * strings, thresholds), use `AppSetting`. For application state, use `KVStore`.
  *
  * **Read-only by default:** a `Secret` has no `put()` method and the deployed
  * execution role gets read-only IAM. Pass `allowRuntimeWrite: true` to add

@@ -22,12 +22,12 @@ cdkBlocks {
     // Visibility of generated types: Public (default) or Internal
     visibility = GeneratedVisibility.Internal
 
-    // Override or add server URLs (optional)
+    // Override or add server URLs (optional). Each is the RPC URL, not the origin.
     servers {
-        local("http://10.0.2.2:3001")
-        sandbox("https://sandbox.example.com")
-        prod("https://api.example.com")
-        custom("staging", "https://staging.example.com")
+        local("http://10.0.2.2:3001/aws-blocks/api")
+        sandbox("https://sandbox.example.com/aws-blocks/api")
+        prod("https://api.example.com/aws-blocks/api")
+        custom("staging", "https://staging.example.com/aws-blocks/api")
     }
 
     // Logical identities from x-blocks-native-packages that keep the
@@ -46,7 +46,23 @@ cdkBlocks {
 
 Servers defined here override entries from the spec file that share the same name. New names are
 added alongside the spec's servers. Each becomes a constant on the generated `Servers` object, so
-`prod("https://api.example.com")` is reachable as `Servers.prod`.
+`prod("https://api.example.com/aws-blocks/api")` is reachable as `Servers.prod`.
+
+A server URL is the RPC URL itself: the `apiUrl` that `npm run dev` writes to
+`.blocks-sandbox/config.json`, or a deploy to `.blocks-sandbox/config.<stage>.json`, whose path ends
+in `/aws-blocks/api`. It is not the origin that serves it. The generated client posts to the URL as
+given, so an override such as `local("http://10.0.2.2:3001")` replaces the
+`http://localhost:3001/aws-blocks/api` the client would otherwise use with the bare origin, and
+every call through it, including `Blocks()` when that is the spec's first server, fails (`HTTP 404`
+from the local dev server, `HTTP 403` from a deployed API Gateway).
+
+Code generation rejects an override that does not parse, has no `http://` or `https://` scheme or
+no host, carries a query or fragment, or has no RPC path (nothing but slashes and dot segments).
+
+The spec carries the dev server's `local` by default (`sandbox` while `npm run sandbox` proxies
+through it), or the deployed `sandbox`/`production` server when the spec is generated with
+`BLOCKS_SPEC_STAGE=sandbox|production`, so `prod(…)` adds a server rather than replacing the
+deployed one.
 
 Server selection is a build-time *default*, not a constraint — the generated `Blocks()` accessor
 follows the spec's first server, and any other can be passed at runtime. See

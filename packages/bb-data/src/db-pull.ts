@@ -15,6 +15,7 @@
  * focused modules under `./db-pull/`:
  *   - `types.ts`      — provider-agnostic schema/option types
  *   - `naming.ts`     — identifier casing + PG→TS mapping + singular resolution
+ *   - `identifiers.ts` — catalog-name checks + quoting for generated TypeScript
  *   - `supabase.ts`   — all Supabase-specific knowledge (the only provider today)
  *   - `introspect.ts` — schema introspection
  *   - `templates.ts`  — fixed generated-file content (template literals)

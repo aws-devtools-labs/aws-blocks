@@ -7,7 +7,7 @@
  * Both dispatchers resolve `backend[apiNamespace][method]` from the request. Without
  * these guards that lookup reaches anything on the backend module:
  *
- * - an exported **Building Block instance** (`export const todos = new DistributedTable(...)`)
+ * - an exported **Building Block instance** (`export const todos = new KVStore(...)`)
  *   — its whole data plane (`put`/`delete`/`query`) becomes an unauthenticated RPC
  *   surface that bypasses every `requireAuth` in the `ApiNamespace` layer;
  * - a member **inherited from `Object.prototype`** (`toString`, `constructor`,

@@ -101,18 +101,21 @@ class BlocksE2ETestCase: XCTestCase {
         return user
     }
 
-    /// Assert that `body` throws an `RPCError` whose server error name is `name`.
+    /// Assert that `body` throws an `RPCError` whose server error name is `name`; `inspect` gets
+    /// the error for further assertions.
     func assertThrowsBlocksError(
         _ name: String,
         file: StaticString = #filePath,
         line: UInt = #line,
-        _ body: () async throws -> Void
+        _ body: () async throws -> Void,
+        inspect: ((RPCError) -> Void)? = nil
     ) async {
         do {
             try await body()
             XCTFail("Expected \(name), but no error was thrown", file: file, line: line)
         } catch let error as RPCError {
             XCTAssertEqual(error.name, name, "error: \(error.message)", file: file, line: line)
+            inspect?(error)
         } catch {
             XCTFail("Expected RPCError \(name), got \(error)", file: file, line: line)
         }

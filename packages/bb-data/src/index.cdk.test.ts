@@ -103,7 +103,7 @@ test('CDK: an explicit clusterSubnets override is honored (placement resolves wi
 // backup.retention Duration) go untested. These exercise them through the real
 // `Database` construct, which also makes the stack-wide `defaults` available.
 //
-// Harness mirrors bb-distributed-table/src/index.cdk.test.ts: a stub stack that
+// Harness mirrors bb-kv-store/src/index.cdk.test.ts: a stub stack that
 // exposes `executionRole` + `defaults` and registers itself as the ambient
 // CURRENT_BLOCKS_STACK, with a plain `Scope` as the block's parent. `Database`
 // resolves `this.defaults` / `this.executionRole` from that ambient stack.

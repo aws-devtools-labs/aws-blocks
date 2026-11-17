@@ -43,9 +43,9 @@ export interface ResolvedDynamoDbProtection {
 
 /**
  * Resolve the shared DynamoDB protection knobs — point-in-time recovery and
- * encryption — that `bb-kv-store` and `bb-distributed-table` both expose. These
- * are the only two Blocks-provisioned DynamoDB tables; sharing one resolver
- * keeps their behaviour (and its warnings) from drifting apart.
+ * encryption — that `bb-kv-store` exposes. It is the only Blocks-provisioned
+ * DynamoDB table (every form of `KVStore` shares it); keeping the resolver here
+ * rather than in the block keeps the behaviour (and its warnings) in one place.
  *
  * Durability (`removalPolicy` / `deletionProtection`) is intentionally NOT
  * resolved here: the two blocks surface it through different options

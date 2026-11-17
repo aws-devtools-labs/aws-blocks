@@ -94,9 +94,9 @@ iOS and desktop.
 
 | Platform | Engine | Cookie Storage                                                                                                          |
 |----------|--------|-------------------------------------------------------------------------------------------------------------------------|
-| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| Android | OkHttp | Android Keystore AES-256-GCM key over SharedPreferences, in the app's sandbox                                            |
 | iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
-| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#identifying-your-application) — in memory if no id is set |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#what-desktop-storage-protects), with the key held by the OS — in memory if no id is set |
 
 ## Support by Target
 

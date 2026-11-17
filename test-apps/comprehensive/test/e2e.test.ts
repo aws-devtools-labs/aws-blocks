@@ -18,8 +18,9 @@ import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
-import { distributedTableTests } from './distributed-table.test.js';
-import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
+import { legacyKvStoreTests, seedLegacyStore } from './legacy-kv-store.test.js';
+import { kvStoreDocumentsTests } from './kv-store-documents.test.js';
+import { kvStoreSecureDefaultsTests } from './kv-store-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
@@ -104,6 +105,8 @@ test.before(async () => {
   }
   
   if (ENV === 'local') {
+    // The data file of a store of a KVStore release up to 0.4.0, for the LegacyKVStore tests.
+    seedLegacyStore();
     console.log('🚀 Starting local dev server...');
     
     server = spawn('npm', ['run', 'dev:server'], {
@@ -336,11 +339,14 @@ test('Background suites - start Agent, AsyncJob, AsyncJob status', () => backgro
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
-// DistributedTable tests (separate file)
-distributedTableTests(() => api);
+// LegacyKVStore tests (separate file)
+legacyKvStoreTests(() => api);
 
-// DistributedTable secure-defaults deploy coverage (separate file)
-distributedTableSecureDefaultsTests(() => api);
+// KVStore with a declared key (documents) tests (separate file)
+kvStoreDocumentsTests(() => api);
+
+// KVStore secure-defaults deploy coverage (separate file)
+kvStoreSecureDefaultsTests(() => api);
 
 // Database tests (separate file)
 databaseTests(() => api);

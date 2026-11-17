@@ -48,6 +48,7 @@ jobs:
             echo "== $test =="
             bash "$test"
           done
+          node --test native/swift/scripts/*.test.mjs
 
   fixture-goldens:
     name: Fixture goldens compile

@@ -90,7 +90,7 @@ The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, 
 
 Read the sandbox host out of `.blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
-> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
+> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
 ### 3. Provide the client ID and secret
 

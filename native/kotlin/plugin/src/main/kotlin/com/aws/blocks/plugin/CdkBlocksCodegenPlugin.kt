@@ -1,6 +1,7 @@
 package com.aws.blocks.plugin
 
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.TestComponent
 import com.aws.blocks.kotlin.generator.RelayToRequirement
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
@@ -143,6 +144,14 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
         project.pluginManager.withPlugin("com.android.library") {
             injectOidcManifestPlaceholder(project, extension)
         }
+        // A multiplatform module declares its Android target through this plugin rather than
+        // `com.android.library`. Its own AAR merges the runtime's manifest with the placeholders
+        // left unresolved, which is fine — a library defers them to whatever consumes it. Its
+        // instrumented test APK does not: that merge is an application merge, and an unresolved
+        // placeholder fails it.
+        project.pluginManager.withPlugin("com.android.kotlin.multiplatform.library") {
+            injectOidcManifestPlaceholder(project, extension)
+        }
     }
 
     private fun configureAndroid(project: Project, extension: CdkBlocksExtension) {
@@ -176,13 +185,35 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
     }
 
     private fun injectOidcManifestPlaceholder(project: Project, extension: CdkBlocksExtension) {
-        val androidComponents = project.extensions.getByType(AndroidComponentsExtension::class.java)
+        // On older AGP (through 8.9 at least) the multiplatform Android plugin's components
+        // extension did not implement AndroidComponentsExtension — it extended AndroidComponents
+        // and offered `onVariant`, not `onVariants` — so there is nothing of this type to find.
+        // AGP is a compileOnly dependency and the consumer's own version is what runs, so resolve
+        // the extension leniently: on those versions the module keeps the behaviour it had before
+        // this plugin set any placeholder, rather than failing to configure.
+        val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
+        if (androidComponents == null) {
+            project.logger.warn(
+                "AWS Blocks: this module's Android plugin does not expose AndroidComponentsExtension, " +
+                    "so the OIDC manifest placeholders were not set. Building an instrumented test APK " +
+                    "here fails its manifest merge on `oidcRedirectScheme`/`oidcActivityExported`. " +
+                    "Android Gradle Plugin 8.11 or newer exposes it.",
+            )
+            return
+        }
         androidComponents.onVariants { variant ->
             val relayTo = extension.relayTo
             val hasRedirectScheme = relayTo != null
             val scheme = relayTo?.substringBefore("://") ?: "disabled"
+            val exported = if (hasRedirectScheme) "true" else "false"
             variant.manifestPlaceholders.put("oidcRedirectScheme", scheme)
-            variant.manifestPlaceholders.put("oidcActivityExported", if (hasRedirectScheme) "true" else "false")
+            variant.manifestPlaceholders.put("oidcActivityExported", exported)
+            // A test component builds its own APK, merging the runtime's manifest into it, and
+            // keeps a placeholder map of its own: values set on the variant do not reach it.
+            variant.nestedComponents.filterIsInstance<TestComponent>().forEach { component ->
+                component.manifestPlaceholders.put("oidcRedirectScheme", scheme)
+                component.manifestPlaceholders.put("oidcActivityExported", exported)
+            }
         }
     }
 }

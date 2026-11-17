@@ -710,6 +710,83 @@ setInterval(() => {}, 1000);
 		}
 	});
 
+	/** A backend that throws, outside any request, once `crash-now` appears in the app root (which it removes first). */
+	function crashOnDemand(root: string): () => void {
+		const flag = join(root, 'crash-now');
+		writeFileSync(
+			join(root, 'aws-blocks', 'index.ts'),
+			[
+				"import { existsSync, rmSync } from 'node:fs';",
+				`const flag = ${JSON.stringify(flag)};`,
+				'setInterval(() => {',
+				'\tif (!existsSync(flag)) return;',
+				'\trmSync(flag);',
+				"\tthrow new Error('the backend crashed on purpose');",
+				'}, 50);',
+				'export {};',
+				'',
+			].join('\n'),
+		);
+		return () => writeFileSync(flag, '');
+	}
+
+	it('restarts its dev server when the backend crashes after it started', { timeout: 90_000 }, async () => {
+		const { root, port } = await devApp();
+		const crash = crashOnDemand(root);
+		const dev = startCli(root);
+		try {
+			await listening(port, dev.output);
+			const [watcher] = childrenOf(dev.cli.pid ?? 0);
+			const [runner] = childrenOf(watcher);
+			assert.ok(watcher && runner, dev.output());
+			crash();
+			for (const deadline = Date.now() + 30_000; !/restarting it in \d+ ms/.test(dev.output()); await sleep(50)) {
+				assert.ok(Date.now() < deadline, `no restart after the crash\n${dev.output()}`);
+			}
+			assert.match(dev.output(), /the backend crashed on purpose/);
+			assert.match(
+				dev.output(),
+				/The dev server crashed \(exit code 1\); restarting it in 500 ms \(restart 1 of 5/,
+			);
+			await listening(port, dev.output);
+			const [nextWatcher] = childrenOf(dev.cli.pid ?? 0);
+			const [nextRunner] = childrenOf(nextWatcher ?? 0);
+			assert.ok(nextRunner && nextRunner !== runner, dev.output());
+			// `cdk-blocks dev stop`, or a supervisor: a SIGTERM to the CLI still stops the restarted session.
+			process.kill(dev.cli.pid ?? 0, 'SIGTERM');
+			const [code] = await within(dev.exited, 20_000, dev.output);
+			assert.strictEqual(code, 0, dev.output());
+			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
+		} finally {
+			dev.kill();
+		}
+	});
+
+	it('does not restart a crashed dev server once a stop arrives while it waits to', { timeout: 90_000 }, async () => {
+		const { root, port } = await devApp();
+		const crash = crashOnDemand(root);
+		const dev = startCli(root);
+		try {
+			await listening(port, dev.output);
+			crash();
+			for (const deadline = Date.now() + 30_000; !/restarting it in \d+ ms/.test(dev.output()); await sleep(10)) {
+				assert.ok(Date.now() < deadline, `no restart after the crash\n${dev.output()}`);
+			}
+			process.kill(dev.cli.pid ?? 0, 'SIGTERM');
+			const [code] = await within(dev.exited, 10_000, dev.output);
+			assert.strictEqual(code, 0, dev.output());
+			assert.strictEqual(await isListening(port), false, dev.output());
+			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
+			assert.strictEqual(
+				existsSync(join(root, '.blocks-sandbox', `dev-server.${port}.pid`)),
+				false,
+				dev.output(),
+			);
+		} finally {
+			dev.kill();
+		}
+	});
+
 	it('records how its dev server runner ended, for cdk-blocks dev', { timeout: 60_000 }, async () => {
 		const { root, port } = await devApp();
 		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-state-')), 'failure');

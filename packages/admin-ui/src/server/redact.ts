@@ -227,7 +227,7 @@ export function redactRecordValue(recordKey: string, value: unknown): RedactionR
  * is one with data in it.
  */
 export function isAncillaryStoreName(name: string): boolean {
-	return /-(?:codes|sessions|tokens|challenges|cache)$/i.test(name);
+	return /-(?:codes|sessions|session-store|tokens|challenges|cache)$/i.test(name);
 }
 
 /**
