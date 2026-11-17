@@ -493,7 +493,7 @@ Migrate the data however is appropriate for your app. The block does not copy th
 Steps that are suitable for some migrations are as follows:
 
 1. Deploy the app with reads that try the new store first and then the old one, and with writes that go to the new store.
-2. Copy the items of the old store to the new store, in a handler or a job.
+2. Copy the items of the old store to the new store, in a handler or a job, for example an `AsyncJob`.
 3. When the copy is done, remove the reads of the old store.
 
 The reads and the writes of step 1:
@@ -519,19 +519,28 @@ for await (const { key, value, expiresAt } of oldPrefs.scan()) {
 }
 ```
 
-For a store that is too large for one run, copy one page in each run of a job (`AsyncJob`), and pass the cursor to the next run. The copy is done when the cursor is `undefined`.
+For a store that is too large for one run, copy one page in each run of a job, and pass the cursor to the next run. The copy is done when the cursor is `undefined`. An `AsyncJob` is one way to do that: each run copies one page, and then submits the next run.
 
 ```typescript
-let copyCursor: string | undefined;
-const oldPage = oldPrefs.scan({ limit: 500, cursor: copyCursor });
-for await (const { key, value, expiresAt } of oldPage) {
-	try {
-		await prefs.put(key, value, { ifNotExists: true, expiresAt });
-	} catch (e: unknown) {
-		if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-	}
-}
-copyCursor = oldPage.cursor;
+import { AsyncJob } from '@aws-blocks/bb-async-job';
+
+const copyPrefs: AsyncJob<{ cursor?: string }> = new AsyncJob(scope, 'copy-prefs', {
+	handler: async ({ cursor }: { cursor?: string }) => {
+		const page = oldPrefs.scan({ limit: 500, cursor });
+		for await (const { key, value, expiresAt } of page) {
+			try {
+				await prefs.put(key, value, { ifNotExists: true, expiresAt });
+			} catch (e: unknown) {
+				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+			}
+		}
+		// The next run starts after the last entry of this page.
+		if (page.cursor) await copyPrefs.submit({ cursor: page.cursor });
+	},
+});
+
+// Start the copy once, for example from an API method.
+await copyPrefs.submit({});
 ```
 
 These steps do not fit every app. While the app reads both stores:

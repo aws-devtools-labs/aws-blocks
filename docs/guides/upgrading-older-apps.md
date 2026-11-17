@@ -98,7 +98,7 @@ Keep the old table with `LegacyKVStore`, and move its items to a `KVStore` with 
 
    Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete` and `scan` of release 0.4.0, so code that still calls the old store keeps working.
 
-2. Migrate the data however is appropriate for your app. `LegacyKVStore` doesn't copy for you. A copy reads each entry with its expiry and writes it to the new store, and `ifNotExists` makes it safe to run again:
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` doesn't copy for you. A copy reads each entry with its expiry and writes it to the new store, and `ifNotExists` makes it safe to run again. Run it in a handler or a job, for example an `AsyncJob`:
 
    ```ts
    for await (const { key, value, expiresAt } of oldPrefs.scan()) {
