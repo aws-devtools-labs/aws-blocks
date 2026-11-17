@@ -35,7 +35,6 @@
     "@aws-blocks/bb-data": "*",
     "@aws-blocks/bb-database": "*",
     "@aws-blocks/bb-distributed-data": "*",
-    "@aws-blocks/bb-distributed-table": "*",
     "@aws-blocks/bb-email-client": "*",
     "@aws-blocks/bb-file-bucket": "*",
     "@aws-blocks/bb-knowledge-base": "*",

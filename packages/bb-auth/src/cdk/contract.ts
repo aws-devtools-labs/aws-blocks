@@ -129,7 +129,7 @@ export function selfSignUpEnabled(options: ResolvedAuthOptions | undefined): boo
  * federates through Cognito (see {@link cognitoFederatedProviderIds}), or when
  * an existing pool is wrapped via `userPool`. `false` only for a configuration
  * whose sign-in methods are all directly federated OIDC providers: the CDK
- * layer then synthesizes **no** Cognito resources — only `sessions` and
+ * layer then synthesizes **no** Cognito resources — only the session store and
  * `session-secret` — and registers no `BLOCKS_AUTH_COGNITO_*` config key.
  *
  * **How the runtime tells that no pool exists:** it calls this function on its

@@ -27,7 +27,7 @@ Open http://localhost:3000 after `npm run dev`. The dev server serves the React 
 ## What's Included
 
 - **Auth** — email + password sign-up / sign-in / sign-out with server-side sessions (Amazon Cognito on AWS)
-- **DistributedTable** — todos stored in DynamoDB with Zod schema validation
+- **KVStore** — todos stored in DynamoDB with Zod schema validation. A `KVStore` with a `schema` and a `key` stores records you list or query as a collection; a store fixes its key when you create it
 - **Optimistic locking** — `version` field + `ifFieldEquals` prevents lost updates
 - **Realtime** — todo changes broadcast to all connected tabs via WebSocket
 

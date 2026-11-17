@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Direct unit tests for the shared DynamoDB protection resolver. bb-kv-store and
- * bb-distributed-table both delegate to it, and their CDK suites exercise it
+ * Direct unit tests for the shared DynamoDB protection resolver. bb-kv-store
+ * delegates to it, and its CDK suite exercises it
  * transitively — but this helper is now the single owner of the logic, so it is
  * tested here at the layer that owns it: a future edit to a branch regresses a
  * test in THIS file rather than depending on a downstream suite still covering it.

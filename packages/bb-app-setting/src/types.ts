@@ -53,7 +53,7 @@ export interface AppSettingOptions<T = string> {
  * Package-internal options. Not exported from the package's public entry points,
  * so `external` is never part of the public API — it is set ONLY by
  * {@link AppSetting.fromExisting} and read by the constructors. (Mirrors how
- * `KVStore`/`DistributedTable` model "existing" via a branded ref rather than a
+ * `KVStore` models "existing" via a branded ref rather than a
  * public boolean.)
  */
 export interface InternalAppSettingOptions<T = string> extends AppSettingOptions<T> {

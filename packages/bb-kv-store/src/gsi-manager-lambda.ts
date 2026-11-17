@@ -1,19 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand } from '@aws-sdk/client-cloudformation';
 import {
-	DynamoDBClient,
-	DescribeTableCommand,
-	UpdateTableCommand,
-	DeleteTableCommand,
-	CreateTableCommand,
-	ScanCommand,
 	BatchWriteItemCommand,
 	BillingMode,
-	ScalarAttributeType,
+	CreateTableCommand,
+	DeleteTableCommand,
+	DescribeTableCommand,
+	DynamoDBClient,
 	KeyType,
+	ScalarAttributeType,
+	ScanCommand,
+	UpdateTableCommand,
 } from '@aws-sdk/client-dynamodb';
-import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand } from '@aws-sdk/client-cloudformation';
 
 const dynamodb = new DynamoDBClient({});
 // Many tables' resources can read the same stack at once during a stack delete.
@@ -220,7 +220,7 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 	while (true) {
 		try {
 			await dynamodb.send(new DescribeTableCommand({ TableName: tableName }));
-			await new Promise(r => setTimeout(r, 3000));
+			await new Promise((r) => setTimeout(r, 3000));
 		} catch (e: any) {
 			if (e.name === 'ResourceNotFoundException') break;
 			throw e;
@@ -242,42 +242,46 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 		existingAttrMap.set(attr.AttributeName!, attr.AttributeType!);
 	}
 
-	const attrDefs = [...usedAttrs].map(name => ({
+	const attrDefs = [...usedAttrs].map((name) => ({
 		AttributeName: name,
 		AttributeType: (existingAttrMap.get(name) ??
-			Object.values(desired).find(c => c.partitionKey === name)?.partitionKeyType ??
-			Object.values(desired).find(c => c.sortKey === name)?.sortKeyType ??
+			Object.values(desired).find((c) => c.partitionKey === name)?.partitionKeyType ??
+			Object.values(desired).find((c) => c.sortKey === name)?.sortKeyType ??
 			ScalarAttributeType.S) as ScalarAttributeType,
 	}));
 
 	// Recreate with all GSIs
-	await dynamodb.send(new CreateTableCommand({
-		TableName: tableName,
-		KeySchema: table.KeySchema,
-		AttributeDefinitions: attrDefs,
-		BillingMode: BillingMode.PAY_PER_REQUEST,
-		GlobalSecondaryIndexes: Object.entries(desired).map(([name, cfg]) => ({
-			IndexName: name,
-			KeySchema: [
-				{ AttributeName: cfg.partitionKey, KeyType: KeyType.HASH },
-				...(cfg.sortKey ? [{ AttributeName: cfg.sortKey, KeyType: KeyType.RANGE }] : []),
-			],
-			Projection: { ProjectionType: 'ALL' as const },
-		})),
-	}));
+	await dynamodb.send(
+		new CreateTableCommand({
+			TableName: tableName,
+			KeySchema: table.KeySchema,
+			AttributeDefinitions: attrDefs,
+			BillingMode: BillingMode.PAY_PER_REQUEST,
+			GlobalSecondaryIndexes: Object.entries(desired).map(([name, cfg]) => ({
+				IndexName: name,
+				KeySchema: [
+					{ AttributeName: cfg.partitionKey, KeyType: KeyType.HASH },
+					...(cfg.sortKey ? [{ AttributeName: cfg.sortKey, KeyType: KeyType.RANGE }] : []),
+				],
+				Projection: { ProjectionType: 'ALL' as const },
+			})),
+		}),
+	);
 
 	// Wait for active
 	while (true) {
 		const t = await describeTable(tableName);
 		if (!isTableBusy(t)) break;
-		await new Promise(r => setTimeout(r, 3000));
+		await new Promise((r) => setTimeout(r, 3000));
 	}
 
 	// Restore data
 	for (let i = 0; i < items.length; i += 25) {
-		await dynamodb.send(new BatchWriteItemCommand({
-			RequestItems: { [tableName]: items.slice(i, i + 25).map(item => ({ PutRequest: { Item: item } })) },
-		}));
+		await dynamodb.send(
+			new BatchWriteItemCommand({
+				RequestItems: { [tableName]: items.slice(i, i + 25).map((item) => ({ PutRequest: { Item: item } })) },
+			}),
+		);
 	}
 	console.log(`✅ Sandbox: table recreated with ${Object.keys(desired).length} GSIs, ${items.length} items restored`);
 }
@@ -371,11 +375,7 @@ export async function isCompleteHandler(event: any) {
 // can be created. We detect this by checking if a current GSI name exists in
 // desired but with a different key schema.
 
-async function initiateNextChange(
-	tableName: string,
-	table: any,
-	desired: Record<string, IndexConfig>,
-) {
+async function initiateNextChange(tableName: string, table: any, desired: Record<string, IndexConfig>) {
 	const current = getCurrentGSIs(table);
 	const existingAttrMap = new Map<string, string>();
 	for (const attr of table.AttributeDefinitions ?? []) {
@@ -389,10 +389,12 @@ async function initiateNextChange(
 		const des = desired[name];
 		if (des && (cur.pk !== des.partitionKey || cur.sk !== des.sortKey)) {
 			console.log(`Deleting GSI '${name}' (schema mismatch — must delete before recreating)`);
-			await dynamodb.send(new UpdateTableCommand({
-				TableName: tableName,
-				GlobalSecondaryIndexUpdates: [{ Delete: { IndexName: name } }],
-			}));
+			await dynamodb.send(
+				new UpdateTableCommand({
+					TableName: tableName,
+					GlobalSecondaryIndexUpdates: [{ Delete: { IndexName: name } }],
+				}),
+			);
 			return;
 		}
 	}
@@ -404,29 +406,37 @@ async function initiateNextChange(
 			const attrDefs: { AttributeName: string; AttributeType: ScalarAttributeType }[] = [];
 			attrDefs.push({
 				AttributeName: cfg.partitionKey,
-				AttributeType: (existingAttrMap.get(cfg.partitionKey) ?? cfg.partitionKeyType ?? ScalarAttributeType.S) as ScalarAttributeType,
+				AttributeType: (existingAttrMap.get(cfg.partitionKey) ??
+					cfg.partitionKeyType ??
+					ScalarAttributeType.S) as ScalarAttributeType,
 			});
 			if (cfg.sortKey) {
 				attrDefs.push({
 					AttributeName: cfg.sortKey,
-					AttributeType: (existingAttrMap.get(cfg.sortKey) ?? cfg.sortKeyType ?? ScalarAttributeType.S) as ScalarAttributeType,
+					AttributeType: (existingAttrMap.get(cfg.sortKey) ??
+						cfg.sortKeyType ??
+						ScalarAttributeType.S) as ScalarAttributeType,
 				});
 			}
 
-			await dynamodb.send(new UpdateTableCommand({
-				TableName: tableName,
-				AttributeDefinitions: attrDefs,
-				GlobalSecondaryIndexUpdates: [{
-					Create: {
-						IndexName: name,
-						KeySchema: [
-							{ AttributeName: cfg.partitionKey, KeyType: KeyType.HASH },
-							...(cfg.sortKey ? [{ AttributeName: cfg.sortKey, KeyType: KeyType.RANGE }] : []),
-						],
-						Projection: { ProjectionType: 'ALL' },
-					},
-				}],
-			}));
+			await dynamodb.send(
+				new UpdateTableCommand({
+					TableName: tableName,
+					AttributeDefinitions: attrDefs,
+					GlobalSecondaryIndexUpdates: [
+						{
+							Create: {
+								IndexName: name,
+								KeySchema: [
+									{ AttributeName: cfg.partitionKey, KeyType: KeyType.HASH },
+									...(cfg.sortKey ? [{ AttributeName: cfg.sortKey, KeyType: KeyType.RANGE }] : []),
+								],
+								Projection: { ProjectionType: 'ALL' },
+							},
+						},
+					],
+				}),
+			);
 			return;
 		}
 	}
@@ -435,10 +445,12 @@ async function initiateNextChange(
 	for (const name of Object.keys(current)) {
 		if (!desired[name]) {
 			console.log(`Deleting GSI '${name}' (no longer desired)`);
-			await dynamodb.send(new UpdateTableCommand({
-				TableName: tableName,
-				GlobalSecondaryIndexUpdates: [{ Delete: { IndexName: name } }],
-			}));
+			await dynamodb.send(
+				new UpdateTableCommand({
+					TableName: tableName,
+					GlobalSecondaryIndexUpdates: [{ Delete: { IndexName: name } }],
+				}),
+			);
 			return;
 		}
 	}

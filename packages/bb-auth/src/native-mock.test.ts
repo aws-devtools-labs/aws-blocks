@@ -486,7 +486,10 @@ describe('mock engine — MFA', () => {
 		assert.ok(enrolled.status === 'continueSignIn' && enrolled.nextStep.name === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 
 		// The same block (same id, same .bb-data), rebuilt without TOTP.
-		const after = new Auth(parent, 'auth', { mfa: { mode: 'optional', types: ['SMS'] }, codeDelivery: sink.deliver });
+		const after = new Auth(parent, 'auth', {
+			mfa: { mode: 'optional', types: ['SMS'] },
+			codeDelivery: sink.deliver,
+		});
 		const b2 = new Browser();
 		const r = await b2.request((ctx) => after.signIn('oli', PASSWORD, ctx));
 		assert.strictEqual(r.status, 'signedIn', 'TOTP is no longer offered, and SMS is not enrolled');
@@ -1042,7 +1045,7 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 		assert.ok(!existsSync(join(dir, 'state.json.tmp')));
 	});
 
-	test('AuthCognito → Auth (same id): local users, groups, MFA and the session survive the switch', async (t) => {
+	test('AuthCognito → Auth (same id): local users, groups and MFA survive the switch; the old session is signed out and a new sign-in works', async (t) => {
 		// The AuthCognito side, frozen at the cutover (`legacy-mock-state.json`): what
 		// `new AuthCognito(r, 'auth', { groups: ['admins'], mfa: 'optional', mfaTypes: ['TOTP'], admin: {} })`
 		// left on disk and in the browser after alice signed up, was confirmed, joined
@@ -1055,19 +1058,27 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 			mfa: { mode: 'optional', types: ['TOTP'] },
 			admin: {},
 		});
+		// The stored session does not survive: the session store is new, so the old
+		// cookie is answered as signed out, and cleared.
+		assert.strictEqual(await b.request((ctx) => auth.getCurrentUser(ctx)), null);
+		assert.strictEqual(b.jar.size, 0, 'the old cookie is cleared');
+		// The user, her group and her MFA setup are in `state.json`, which `Auth`
+		// reads as it is: alice signs in again with her password and a TOTP code.
+		const r2 = await b.request((ctx) => auth.signIn('alice', PASSWORD, ctx));
+		assert.ok(r2.status === 'continueSignIn' && r2.nextStep.name === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
+		const session = 'session' in r2.nextStep ? r2.nextStep.session : '';
+		assert.strictEqual((await b.request((ctx) => auth.confirmSignIn(session, '654321', ctx))).status, 'signedIn');
 		assert.strictEqual((await b.request((ctx) => auth.requireRole(ctx, 'admins'))).userSub, legacyUser.userSub);
 		assert.deepStrictEqual(await b.request((ctx) => auth.getMfaPreference(ctx)), {
 			enabled: ['TOTP'],
 			preferred: 'TOTP',
 		});
-		assert.strictEqual((await b.request((ctx) => Array.fromAsync(auth.scanDevices(ctx)))).length, 1);
-		const fresh = new Browser();
-		const r2 = await fresh.request((ctx) => auth.signIn('alice', PASSWORD, ctx));
-		assert.ok(r2.status === 'continueSignIn' && r2.nextStep.name === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
+		// The device that AuthCognito remembered is still there.
+		assert.ok((await b.request((ctx) => Array.fromAsync(auth.scanDevices(ctx)))).length >= 1);
 		assert.strictEqual((await auth.admin.getUser('alice'))?.userSub, legacyUser.userSub);
 	});
 
-	test('email-only pool: a user AuthCognito keyed by email is kept as-is, still signs in, and is reported', async (t) => {
+	test('email-only pool: a user AuthCognito keyed by email is kept as-is, signs in again, and is reported', async (t) => {
 		// Frozen at the cutover: `new AuthCognito(r, 'auth', { signInWith: 'email' })` after
 		// nora@example.com signed up, was confirmed and signed in (`legacy-mock-state.json`).
 		const { r, b, legacyUser } = restoreLegacy(t, 'cognito-email-only-session');
@@ -1086,12 +1097,15 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 			),
 			'the legacy user is reported once',
 		);
-		// The signed-in session survives, and the user keeps their old username.
-		const kept = await b.request((ctx) => auth.requireAuth(ctx));
+		// The stored session does not survive (the session store is new): the old cookie is signed out.
+		assert.strictEqual(await b.request((ctx) => auth.getCurrentUser(ctx)), null);
+		// A fresh sign-in, the admin view, and the email's uniqueness all still hold,
+		// and the user keeps their old username.
+		const fresh = new Browser();
+		const again = await fresh.request((ctx) => auth.signIn('nora@example.com', PASSWORD, ctx));
+		const kept = await fresh.request((ctx) => auth.requireAuth(ctx));
 		assert.strictEqual(kept.userSub, legacyUser.userSub);
 		assert.strictEqual(kept.username, 'nora@example.com');
-		// A fresh sign-in, the admin view, and the email's uniqueness all still hold.
-		const again = await new Browser().request((ctx) => auth.signIn('nora@example.com', PASSWORD, ctx));
 		assert.ok(again.status === 'signedIn' && again.user.userSub === legacyUser.userSub);
 		assert.strictEqual((await auth.admin.getUser('nora@example.com'))?.username, 'nora@example.com');
 		assert.strictEqual(
