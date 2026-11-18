@@ -5,6 +5,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.OptIn
@@ -22,6 +23,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -33,6 +35,7 @@ public class AlphaApi(
   public suspend fun setState(input: SetState.Input): Boolean {
     val request = BlocksRequest(method = "alphaApi.setState", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for alphaApi.setState")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

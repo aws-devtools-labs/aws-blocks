@@ -1,7 +1,11 @@
 package com.aws.blocks.kotlin.oidc
 
+import com.aws.blocks.kotlin.exceptions.ApiException
+import com.aws.blocks.kotlin.exceptions.TransportException
+import com.aws.blocks.kotlin.exceptions.isBlocksError
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -12,7 +16,6 @@ import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlin.test.Test
 import kotlinx.io.IOException
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -98,10 +101,9 @@ class OidcClientRestoreTest {
     fun `restore reports a session body that holds no user`() = runTest {
         val client = client(HttpStatusCode.OK, """{"session":{}}""")
 
-        val failure = shouldThrow<OidcSessionException> { client.restore() }
+        val failure = shouldThrow<TransportException> { client.restore() }
 
         failure.statusCode shouldBe 200
-        failure.errorName shouldBe null
         client.authState.value shouldBe OidcAuthState.Loading
     }
 
@@ -139,7 +141,7 @@ class OidcClientRestoreTest {
     fun `restore names a backend with no session route`() = runTest {
         val client = client(HttpStatusCode.NotFound)
 
-        val failure = shouldThrow<OidcSessionException> { client.restore() }
+        val failure = shouldThrow<TransportException> { client.restore() }
         failure.statusCode shouldBe 404
         failure.message shouldContain "no session route"
         client.authState.value shouldBe OidcAuthState.Loading
@@ -149,7 +151,16 @@ class OidcClientRestoreTest {
     fun `restore throws on any other failure and leaves the state alone`() = runTest {
         val client = client(HttpStatusCode.InternalServerError)
 
-        shouldThrow<OidcSessionException> { client.restore() }.statusCode shouldBe 500
+        shouldThrow<ApiException> { client.restore() }.status shouldBe 500
+        client.authState.value shouldBe OidcAuthState.Loading
+    }
+
+    @Test
+    fun `restore reports a refusal that is not JSON as a transport failure`() = runTest {
+        // A gateway's own error page, not the backend's `{ error, name }`.
+        val client = client(HttpStatusCode.BadGateway, "<html>Bad Gateway</html>")
+
+        shouldThrow<TransportException> { client.restore() }.statusCode shouldBe 502
         client.authState.value shouldBe OidcAuthState.Loading
     }
 
@@ -157,10 +168,10 @@ class OidcClientRestoreTest {
     fun `restore reports the error name the backend sent`() = runTest {
         val client = client(HttpStatusCode.Forbidden, """{"error":"Forbidden","name":"NotAuthorizedException"}""")
 
-        val failure = shouldThrow<OidcSessionException> { client.restore() }
+        val failure = shouldThrow<ApiException> { client.restore() }
 
-        failure.statusCode shouldBe 403
-        failure.errorName shouldBe "NotAuthorizedException"
+        failure.status shouldBe 403
+        failure.isBlocksError("NotAuthorizedException") shouldBe true
         client.authState.value shouldBe OidcAuthState.Loading
     }
 
@@ -214,11 +225,10 @@ class OidcClientRestoreTest {
 
     @Test
     fun `restore throws on a session body it cannot read and leaves the state alone`() = runTest {
-        // A body with no user is an OidcSessionException; one that is not JSON at all is this.
-        for (body in listOf("not json", "{")) {
+        for (body in listOf("not json", "{", "[]", "null")) {
             val client = client(HttpStatusCode.OK, body)
 
-            shouldThrow<SerializationException> { client.restore() }
+            shouldThrow<TransportException> { client.restore() }.statusCode shouldBe 200
             client.authState.value shouldBe OidcAuthState.Loading
         }
     }
@@ -230,7 +240,9 @@ class OidcClientRestoreTest {
         }
         val client = authBlockClient(unreachable, listOf("google"))
 
-        shouldThrow<IOException> { client.restore() }
+        val failure = shouldThrow<TransportException> { client.restore() }
+        failure.statusCode shouldBe null
+        failure.cause.shouldBeInstanceOf<IOException>()
         client.authState.value shouldBe OidcAuthState.Loading
     }
 }

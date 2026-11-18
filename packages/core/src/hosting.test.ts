@@ -32,7 +32,8 @@ import {
 } from './cdk/api-front-door.js';
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksKmsKey, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, coverHosting, forEachBlocksKmsKey, forEachBlocksRole, snapshotForHosting } from './cdk/blocks-roles.js';
+import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
@@ -2658,6 +2659,58 @@ describe('Hosting', () => {
       );
     });
 
+    it('defaults.appIdentity: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
+      const app = new App();
+      const stack = new Stack(app, 'appa', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+      (backend as unknown as { defaults: Record<string, unknown> }).defaults.appIdentity = { id: 'appa' };
+      applyAppIdentity(backend as unknown as Construct);
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');
+      assert.ok(edgeStack, `edge stack not named appa-edge: ${stacks.map((s) => s.node.id)}`);
+      assert.ok(!stacks.some((c) => c.node.id.startsWith('edge-lambda-stack')), 'no CDK-named edge stack');
+      // Role coverage finds the edge stack through EdgeFunction's private `_edgeFunction`: pin it.
+      // EdgeFunctions (bundlers may suffix the class name, e.g. `EdgeFunction2`).
+      const edgeFns = app.node.findAll().filter((n) => n.constructor.name.startsWith('EdgeFunction'));
+      assert.ok(edgeFns.length > 0, 'an EdgeFunction');
+      for (const fn of edgeFns) {
+        const real = (fn as unknown as { _edgeFunction?: Construct })._edgeFunction;
+        assert.ok(real, 'aws-cdk-lib no longer keeps the cross-region function in EdgeFunction._edgeFunction');
+        assert.strictEqual(Stack.of(real).node.id, 'appa-edge');
+      }
+      const roles = Object.values(Template.fromStack(edgeStack).findResources('AWS::IAM::Role'));
+      assert.ok(roles.length > 0, 'the edge stack should hold the Lambda@Edge role');
+      for (const r of roles) {
+        assert.strictEqual(r.Properties?.PermissionsBoundary, BOUNDARY_ARN);
+        assert.ok(
+          (r.Properties?.Tags as { Key: string; Value: string }[] | undefined)?.some((t) => t.Key === 'app' && t.Value === 'appa'),
+          'edge role tagged app=appa',
+        );
+      }
+    });
+
+    it('without EdgeFunction._edgeFunction, only a CDK- or app-named dependency stack is the edge stack (no appIdentity)', () => {
+      for (const edgeId of ['edge-lambda-stack-c8abc123', 'appa-edge']) {
+        const app = new App();
+        const env = { account: '123456789012' };
+        const stack = new Stack(app, 'appa', { env: { ...env, region: 'eu-west-1' } });
+        const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+        // A real edge stack, and an unrelated dependency that happens to hold a child with the same id.
+        const edge = new Stack(app, edgeId, { env: { ...env, region: 'us-east-1' } });
+        const decoy = new Stack(app, 'unrelated', { env: { ...env, region: 'us-east-1' } });
+        new Construct(edge, 'EdgeFn');
+        new Construct(decoy, 'EdgeFn');
+        stack.addDependency(edge);
+        stack.addDependency(decoy);
+        const hosting = new Construct(stack, 'Hosting');
+        const before = snapshotForHosting(hosting);
+        // Stands in for an EdgeFunction from a CDK version without the private `_edgeFunction`.
+        const fn = new Construct(hosting, 'EdgeFn');
+        const covered = coverHosting(hosting, backend as unknown as Construct, before, [fn]);
+        assert.deepStrictEqual(covered.map((s) => s.node.id), [edgeId], edgeId);
+      }
+    });
+
     it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {
       const app = new App();
       const stack = new Stack(app, 'EdgeVisitorStack', { env: { account: '123456789012', region: 'eu-west-1' } });
@@ -3146,6 +3199,21 @@ describe('Hosting', () => {
       new Hosting(sandbox, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' } });
       const warnings = Annotations.fromStack(sandbox).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
       assert.strictEqual(warnings.length, 1);
+    });
+
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes the plain-HTTP ALB door with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `AlbAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb', allowPlainHttp: true } });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction'));
+      };
+      const found = synthProd(false);
+      assert.strictEqual(found.length, 1);
+      assert.match(JSON.stringify(found[0].entry.data), /session cookie without `Secure`/);
+      assert.strictEqual(synthProd(true).length, 0, 'acknowledged on the stack');
     });
 
     it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
@@ -3763,6 +3831,40 @@ describe('Hosting', () => {
             frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
           }),
         (e: Error) => e.name === 'OriginSecretOverPlainHttpError',
+      );
+    });
+
+    it('`allowPlainHttp: true` lets an internet-facing router without a certificate synthesize outside a sandbox, with one acknowledgeable warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `StackedAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true },
+        });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        const count = (code: string) => Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(code));
+        return { allowed: count('PlainHttpAllowedInProduction'), sandboxOnly: [...count('StackedRouterPlainHttp'), ...count('OriginSecretOverPlainHttp')] };
+      };
+      const { allowed, sandboxOnly } = synthProd(false);
+      assert.strictEqual(allowed.length, 1);
+      assert.match(JSON.stringify(allowed[0].entry.data), /origin secret crosses the edge → router hop in cleartext/);
+      assert.strictEqual(sandboxOnly.length, 0, 'one warning id to acknowledge, not the sandbox ones');
+      assert.strictEqual(synthProd(true).allowed.length, 0, 'acknowledged on the stack');
+      // A non-boolean fails synth.
+      createSpaBuildOutput(tmpDir);
+      const bad = new Stack(new App(), 'StackedAllowPlainHttpBad', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(bad, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: 'true' },
+          }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
       );
     });
 

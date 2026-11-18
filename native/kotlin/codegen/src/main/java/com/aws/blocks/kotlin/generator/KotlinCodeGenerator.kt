@@ -237,7 +237,7 @@ class KotlinCodeGenerator(
             warnings.add(
                 "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
                     "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
-                    "  awsBlocks {\n" +
+                    "  cdkBlocks {\n" +
                     "      oidc {\n" +
                     "          relayTo = \"com.yourcompany.yourapp://auth/callback\"\n" +
                     "      }\n" +
@@ -267,7 +267,7 @@ class KotlinCodeGenerator(
 
         // Emit Servers.kt
         if (model.servers.isNotEmpty()) {
-            files.add(generateServersFile(model.servers, serverProperties, model.endpoint))
+            files.add(generateServersFile(model.servers, serverProperties))
         }
 
         // Emit per-API-group files (interface + impl)
@@ -1316,11 +1316,12 @@ class KotlinCodeGenerator(
     // ── Servers.kt generation ─────────────────────────────────────────
 
     /**
-     * [endpoint] is the path the spec serves RPC on. It is appended here rather than by the
-     * runtime, because the runtime never sees the spec: `Blocks(Servers.local)` has to reach the
-     * right URL from the constant alone.
+     * A generated constant is the server's full RPC URL, path included, because the runtime never
+     * sees the spec: `Blocks(Servers.local)` has to reach the right URL from the constant alone.
+     * The spec's own server URLs already carry that path; the local fallback adds it in
+     * [com.aws.blocks.kotlin.builder.CodegenModelBuilder].
      */
-    private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>, endpoint: String?): FileSpec {
+    private fun generateServersFile(servers: List<ServerDefinition>, propertyNames: List<String>): FileSpec {
         val serverFileBuilder = FileSpec.builder(packageName, "Servers")
 
         // Servers object using BlocksServer from the runtime
@@ -1334,7 +1335,7 @@ class KotlinCodeGenerator(
                         "%T(name = %S, url = %L)",
                         blocksServerClass,
                         entry.name,
-                        kotlinStringLiteral(entry.url + (endpoint ?: "")),
+                        kotlinStringLiteral(entry.url),
                     )
                     .build(),
             )
@@ -1845,7 +1846,7 @@ class KotlinCodeGenerator(
     }
 
     private fun generateOidcStubMethod(functionName: String): FunSpec {
-        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+        val message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your cdkBlocks block " +
             "to enable this method."
         return FunSpec.builder(functionName)
             .addModifiers(KModifier.SUSPEND)
@@ -1957,6 +1958,18 @@ class KotlinCodeGenerator(
             }
             val serializer = containerTransferableSerializer(operation.result.type, index, serializerRegistry, opContext)
             funBuilder.addStatement("val %N = %L.execute(%N)", names.result, names.client, names.request)
+            // A valid envelope can carry `"result": null`. Decoding it as a non-null type throws
+            // kotlinx's own exception, so say what went wrong in the client's. A nullable type, and
+            // a JsonElement, accept it.
+            if (!returnType.isNullable && returnType != ClassNames.jsonElement) {
+                funBuilder.addStatement(
+                    "if (%N is %T) throw %T(%S)",
+                    names.result,
+                    ClassNames.jsonNull,
+                    ClassNames.transportException,
+                    "Unexpected null result for $dottedMethod",
+                )
+            }
             if (serializer != null) {
                 funBuilder.addStatement("return %L.%M(%L, %N)", json, MemberNames.decode, serializer, names.result)
             } else {

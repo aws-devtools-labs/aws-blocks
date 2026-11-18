@@ -5,12 +5,16 @@ import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.CLOSED_MESSAGE
 import com.aws.blocks.kotlin.CookieJarKey
 import com.aws.blocks.kotlin.InternalBlocksApi
+import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.exceptions.BlocksException
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.Cookie
@@ -39,12 +43,12 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.plus
@@ -94,7 +98,7 @@ class OidcClient<P : OidcProvider> internal constructor(
      * cannot tell from its own, so report the closed state instead.
      */
     private fun ensureOpen() {
-        if (!httpClient.isActive) throw BlocksException(CLOSED_MESSAGE)
+        if (!httpClient.isActive) throw ClientClosedException(CLOSED_MESSAGE)
     }
 
     /**
@@ -114,10 +118,14 @@ class OidcClient<P : OidcProvider> internal constructor(
      *   spec names the providers the backend had when it was generated, which can have drifted
      *   from what [providers] reports now.
      * @throws OidcCancelledException if the user abandoned the flow, or it timed out.
-     * @throws OidcCallbackException if the identity provider reported an error, or the
-     *   callback's state or CSRF value did not match what was sent.
-     * @throws OidcExchangeException if the backend rejected the authorization code.
-     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     * @throws OidcCallbackException if the identity provider reported an error, the
+     *   callback's state or CSRF value did not match what was sent, or the backend's
+     *   authorize-params request failed. In that last case the cause is an [ApiException] or a
+     *   [TransportException].
+     * @throws OidcExchangeException if the backend rejected the authorization code, or the
+     *   exchange request failed or its response could not be read. The cause is an
+     *   [ApiException] when the backend said why, or a [TransportException] otherwise.
+     * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
     suspend fun signIn(
         provider: P,
@@ -294,23 +302,75 @@ class OidcClient<P : OidcProvider> internal constructor(
         }
 
         val exchangeUrl = server.rawRoute(config.exchangePath)
-        val response = httpClient.post(exchangeUrl) {
-            contentType(ContentType.Application.Json)
-            setBody(body.toString())
+        // The messages below are fixed: a failure's description reaches the landing page (see
+        // failureOutcome), so what the engine or the parser said stays in the cause.
+        val response = try {
+            httpClient.post(exchangeUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(body.toString())
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw OidcExchangeException(
+                "Exchange failed: the request did not complete",
+                TransportException(e.message ?: "The request failed", null, e),
+            )
         }
 
         if (!response.status.isSuccess()) {
-            throw OidcExchangeException("Exchange failed: HTTP ${response.status.value}")
+            throw OidcExchangeException(
+                "Exchange failed: HTTP ${response.status.value}",
+                refusalCause(response.status.value, readBodyOrNull(response)),
+            )
         }
 
-        val responseBody = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        val userElement = responseBody["user"]
-            ?: throw OidcExchangeException("Exchange response missing 'user' field")
-
-        return BlocksJson.decodeFromJsonElement<OidcUser>(userElement).also {
-            generation.incrementAndGet()
-            _authState.value = OidcAuthState.SignedIn(it)
+        val user = try {
+            val responseBody = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val userElement = responseBody["user"]
+                ?: throw OidcExchangeException("Exchange response missing 'user' field")
+            BlocksJson.decodeFromJsonElement<OidcUser>(userElement)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OidcExchangeException) {
+            throw e
+        } catch (e: Exception) {
+            throw OidcExchangeException(
+                "Exchange failed: the response was not understood",
+                TransportException(e.message ?: "Reading the response failed", response.status.value, e),
+            )
         }
+        generation.incrementAndGet()
+        _authState.value = OidcAuthState.SignedIn(user)
+        return user
+    }
+
+    /** The body of [response], or null when it could not be read. Only a cancellation escapes. */
+    private suspend fun readBodyOrNull(response: HttpResponse): String? = try {
+        response.bodyAsText()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * What a refused OIDC route said, as the cause of the exception that reports the refusal.
+     *
+     * The routes refuse with a non-2xx status and `{ "error": <message>, "name": <name> }`, so a
+     * body of that shape becomes an [ApiException] carrying the status and name. Anything else (a
+     * gateway's own page, an empty or unreadable body) is a [TransportException] carrying the
+     * status. Never throws: [body] is whatever arrived and may not be JSON at all.
+     */
+    private fun refusalCause(status: Int, body: String?): BlocksException {
+        val fallback = "HTTP $status"
+        val obj = try {
+            body?.let { Json.parseToJsonElement(it) } as? JsonObject
+        } catch (_: Exception) {
+            null
+        } ?: return TransportException(fallback, status)
+        fun text(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        return ApiException(text("error")?.takeIf { it.isNotEmpty() } ?: fallback, status, text("name"))
     }
 
     private suspend fun fetchAuthorizeParams(
@@ -328,17 +388,37 @@ class OidcClient<P : OidcProvider> internal constructor(
         val authorizeUrl = URLBuilder(server.rawRoute(config.authorizeParamsBasePath))
             .appendEncodedPathSegments(encodeUriComponent(provider))
             .buildString()
-        val response = httpClient.post(authorizeUrl) {
-            contentType(ContentType.Application.Json)
-            setBody(body.toString())
+        val response = try {
+            httpClient.post(authorizeUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(body.toString())
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw OidcCallbackException(
+                "Failed to fetch authorize params: the request did not complete",
+                TransportException(e.message ?: "The request failed", null, e),
+            )
         }
 
         if (!response.status.isSuccess()) {
-            val errorBody = response.bodyAsText()
-            throw OidcCallbackException("Failed to fetch authorize params: HTTP ${response.status.value} — $errorBody")
+            throw OidcCallbackException(
+                "Failed to fetch authorize params: HTTP ${response.status.value}",
+                refusalCause(response.status.value, readBodyOrNull(response)),
+            )
         }
 
-        return BlocksJson.decodeFromJsonElement(Json.parseToJsonElement(response.bodyAsText()))
+        return try {
+            BlocksJson.decodeFromJsonElement(Json.parseToJsonElement(response.bodyAsText()))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw OidcCallbackException(
+                "Failed to fetch authorize params: the response was not understood",
+                TransportException(e.message ?: "Reading the response failed", response.status.value, e),
+            )
+        }
     }
 
     private fun buildAuthorizeUrl(params: AuthorizeParamsResponse, redirectUri: String, challenge: String): String =
@@ -357,13 +437,12 @@ class OidcClient<P : OidcProvider> internal constructor(
 
     private fun verifyCsrf(state: String, expectedCsrf: String) {
         // State is "state.signature" - get the state part
-        val encodedPayloadJson = state.substringBefore('.')
-        // A state the client cannot read fails closed, as the mismatch it may well be.
         val payload = try {
-            BlocksJson.decodeFromString<StatePayload>(base64.decode(encodedPayloadJson).decodeToString())
-        } catch (e: IllegalArgumentException) {
-            // Both a bad base64url payload and a SerializationException land here.
-            throw OidcCallbackException("Undecodable state envelope")
+            val encodedPayloadJson = state.substringBefore('.')
+            val json = base64.decode(encodedPayloadJson).decodeToString()
+            BlocksJson.decodeFromString<StatePayload>(json)
+        } catch (e: Exception) {
+            throw OidcCallbackException("State envelope could not be read", e)
         }
         if (payload.csrf != expectedCsrf) {
             throw OidcCallbackException("CSRF mismatch in state envelope")
@@ -383,50 +462,54 @@ class OidcClient<P : OidcProvider> internal constructor(
      * A sign-in or sign-out that finishes while the session read is still waiting wins: [restore]
      * then still returns what the backend answered, but leaves [authState] as that call set it.
      *
+     * Every failure leaves [authState] as it was.
+     *
      * @return the signed-in user, which also becomes the value of [authState], or `null` when the
-     *   backend has no session for this client, which sets [authState] to signed out.
-     * @throws OidcSessionException if the backend answers with a failure status other than 401.
-     *   A 404 means it serves no session route, which an `Auth` block with no federated providers
-     *   does not. A 200 whose body holds no user is reported with status 200. [authState] is left
-     *   as it was, as it is for a request that fails to reach the backend.
-     * @throws kotlinx.serialization.SerializationException if the backend answers 200 with a
-     *   body that is not JSON. [authState] is left as it was.
-     * @throws IllegalArgumentException if the backend answers 200 with JSON that is not an object
-     *   (`[]` or `null`, say). [authState] is left as it was.
-     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     *   backend has no session for this client (a 401), which sets [authState] to signed out.
+     * @throws ApiException if the backend refused with any other status and said why: its
+     *   `status` and `name` are the backend's.
+     * @throws TransportException if the request never completed, the backend serves no session
+     *   route (status 404, as for an `Auth` block with no federated providers), it refused
+     *   without saying why (a gateway's own page), or it answered 2xx with a body that holds no
+     *   user.
+     * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
     suspend fun restore(): OidcUser? {
         ensureOpen()
         val started = generation.value
-        val response = httpClient.get(server.rawRoute(sessionPath))
+        val response = try {
+            httpClient.get(server.rawRoute(sessionPath))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw TransportException(e.message ?: "The request failed", null, e)
+        }
+        val status = response.status.value
         if (response.status == HttpStatusCode.Unauthorized) {
             settleIfUnchanged(started, OidcAuthState.SignedOut)
             return null
         }
-        if (!response.status.isSuccess()) {
-            val status = response.status.value
-            if (response.status == HttpStatusCode.NotFound) {
-                throw OidcSessionException(
-                    "The backend serves no session route at $sessionPath. An Auth block serves one only " +
-                        "when it has federated providers; check the block's providers and callbackPath.",
-                    status,
-                    null,
-                )
-            }
-            val name = runCatching {
-                Json.parseToJsonElement(response.bodyAsText()).jsonObject["name"]?.jsonPrimitive?.contentOrNull
-            }.getOrNull()
-            throw OidcSessionException(
-                "Session read failed: HTTP $status" + (name?.let { " ($it)" } ?: ""),
+        if (response.status == HttpStatusCode.NotFound) {
+            throw TransportException(
+                "The backend serves no session route at $sessionPath. An Auth block serves one only " +
+                    "when it has federated providers; check the block's providers and callbackPath.",
                 status,
-                name,
             )
         }
-        val userElement = Json.parseToJsonElement(response.bodyAsText()).jsonObject["user"]
-            ?: throw OidcSessionException("Session response holds no user", response.status.value, null)
-        return BlocksJson.decodeFromJsonElement<OidcUser>(userElement).also {
-            settleIfUnchanged(started, OidcAuthState.SignedIn(it))
+        if (!response.status.isSuccess()) throw refusalCause(status, readBodyOrNull(response))
+        val user = try {
+            val userElement = Json.parseToJsonElement(response.bodyAsText()).jsonObject["user"]
+                ?: throw TransportException("Session response holds no user", status)
+            BlocksJson.decodeFromJsonElement<OidcUser>(userElement)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TransportException) {
+            throw e
+        } catch (e: Exception) {
+            throw TransportException("Session response was not understood", status, e)
         }
+        settleIfUnchanged(started, OidcAuthState.SignedIn(user))
+        return user
     }
 
     /** Sets [authState] to [state] unless a sign-in or sign-out has settled it since [started]. */
@@ -449,19 +532,24 @@ class OidcClient<P : OidcProvider> internal constructor(
      * // Open logoutUrl, if any, to end the identity provider's session too.
      * ```
      *
-     * Only the backend's `Set-Cookie` removes the cookie, so the cookies of any other `Auth` block
-     * sharing the cookie jar are left in place.
+     * [authState] is set to signed out whenever the request is made, even if it fails, so the app
+     * never shows a user who asked to sign out as still signed in; a failure is thrown after that.
+     * A cancelled call that never got a response changes nothing.
+     *
+     * Only this block's session cookie is removed: the backend's `Set-Cookie` clears it, and the
+     * client removes it as well when the descriptor names it (`sessionCookieName`), so a sign-out
+     * whose response never arrived still drops it. The cookies of any other `Auth` block sharing
+     * the cookie jar are left in place.
      *
      * @return the identity provider's logout URL, or `null` when the provider has none. The client
      *   does not open it; an app that wants the provider's own session ended opens it itself, or
      *   the provider can sign the user straight back in.
-     * [authState] is set to signed out whenever the request is made, even if it fails, so the app
-     * never shows a user who asked to sign out as still signed in.
-     *
-     * @throws OidcSignOutException if the backend answers with a failure status. A 503 named
-     *   `SignOutIncompleteException` means the cookie was cleared but the backend could not remove
-     *   its session.
-     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     * @throws ApiException if the backend refused and said why. A 503 named
+     *   `SignOutIncompleteException` (`e.isBlocksError("SignOutIncompleteException")`) means the
+     *   cookie was cleared but the backend could not remove its session.
+     * @throws TransportException if the request never completed, or the backend refused without
+     *   saying why (a gateway's own page).
+     * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
     suspend fun signOut(): String? {
         ensureOpen()
@@ -477,20 +565,17 @@ class OidcClient<P : OidcProvider> internal constructor(
             throw e
         } catch (e: Exception) {
             signOutLocally()
-            throw e
-        }
-        val body = runCatching { Json.parseToJsonElement(response.bodyAsText()).jsonObject }.getOrNull()
-        if (!response.status.isSuccess()) {
-            val name = (body?.get("name") as? JsonPrimitive)?.contentOrNull
-            signOutLocally()
-            throw OidcSignOutException(
-                "Sign-out failed: HTTP ${response.status.value}" + (name?.let { " ($it)" } ?: ""),
-                response.status.value,
-                name,
-            )
+            throw TransportException(e.message ?: "The request failed", null, e)
         }
         signOutLocally()
-        return (body?.get("logoutUrl") as? JsonPrimitive)?.contentOrNull
+        val body = readBodyOrNull(response)
+        if (!response.status.isSuccess()) throw refusalCause(response.status.value, body)
+        val json = try {
+            body?.let { Json.parseToJsonElement(it) } as? JsonObject
+        } catch (_: Exception) {
+            null
+        }
+        return (json?.get("logoutUrl") as? JsonPrimitive)?.takeIf { it.isString }?.content
     }
 
     /**

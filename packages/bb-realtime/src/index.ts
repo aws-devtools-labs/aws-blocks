@@ -48,6 +48,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	InferMessage,
 } from './types.js';
 
 // ── Broadcast bus for WebSocket bridge ──────────────────────────────────────

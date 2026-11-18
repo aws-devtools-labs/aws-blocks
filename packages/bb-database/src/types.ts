@@ -171,12 +171,27 @@ export interface TransactionOptions {
 	/**
 	 * Re-run the callback when the commit hits a serialization conflict
 	 * (SQLSTATE 40001). Off by default because the callback may have side effects.
+	 *
+	 * Before each re-run the block waits a random time between 0 and a ceiling.
+	 * The ceiling is 50 ms for the first retry, doubles with each retry and stops
+	 * at 2,000 ms. The wait is the same in local mode and on AWS.
 	 * @default false
 	 */
 	retryOnConflict?: boolean;
 	/**
 	 * Maximum retry attempts on conflict. Only applies when `retryOnConflict` is true.
-	 * @default 3
+	 * The callback runs at most `maxRetries + 1` times. With the default, the waits
+	 * before the retries add up to 7.15 seconds at most. A value that is not a
+	 * whole number of 0 or more throws `DatabaseConfigurationError`.
+	 * @default 8
 	 */
 	maxRetries?: number;
+	/**
+	 * Stops the retries. When the signal is aborted, the block does not wait or
+	 * re-run the callback again, and the conflict is thrown. It does not cancel a
+	 * run that is in progress. In an API method, pass `context.request.signal`:
+	 * it aborts at the request deadline, so a retry cannot commit after the
+	 * caller received a timeout.
+	 */
+	signal?: AbortSignal;
 }

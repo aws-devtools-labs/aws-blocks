@@ -484,6 +484,50 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
     });
 
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes a plain-HTTP door with an API, with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (frontDoor: HostingConstructProps['frontDoor'], acknowledge = false) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, backendApi: { url: API_URL } });
+        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning(ID);
+        return {
+          allowed: Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')),
+          sandboxOnly: Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')),
+        };
+      };
+      for (const door of [
+        { kind: 'alb', allowPlainHttp: true },
+        { kind: 'custom', door: plainHttpCustom, wiringCheck: false, allowPlainHttp: true },
+      ] as const) {
+        const { allowed, sandboxOnly } = synthProd(door);
+        assert.equal(allowed.length, 1, door.kind);
+        assert.equal(sandboxOnly.length, 0, `${door.kind}: not the sandbox warning`);
+        const text = JSON.stringify(allowed[0].entry.data);
+        assert.match(text, new RegExp(`The '${door.kind}' front door`));
+        assert.match(text, /`allowPlainHttp: true`/);
+        assert.match(text, /sign-in, session cookies and every RPC/);
+        assert.match(text, /session cookie without `Secure`/);
+        assert.match(text, /trusted network/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
+        assert.equal(synthProd(door, true).allowed.length, 0, `${door.kind}: acknowledged on the stack`);
+      }
+      // `allowPlainHttp: false` keeps the refusal.
+      assert.throws(() => synthProd({ kind: 'alb', allowPlainHttp: false }), (e: Error) => e.name === 'PlainHttpFrontDoorError');
+      // A non-boolean fails synth rather than silently opting in or out.
+      assert.throws(
+        // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+        () => synthProd({ kind: 'alb', allowPlainHttp: 'yes' }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
+      );
+    });
+
+    it('in a sandbox, `allowPlainHttp: true` changes nothing: the sandbox warning, not the production one', () => {
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: { kind: 'alb', allowPlainHttp: true }, backendApi: { url: API_URL } });
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor')).length, 1);
+      assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')).length, 0);
+    });
+
     it("the 'none' door warns that the site is served without TLS, with or without an API, and names how to acknowledge it", () => {
       const warn = (extra: Partial<HostingConstructProps> = {}, acknowledge = false) => {
         const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });

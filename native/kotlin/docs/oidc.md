@@ -19,7 +19,7 @@ Android and iOS hand the callback back through a URL scheme the operating system
 so the scheme is build-time configuration:
 
 ```kotlin
-awsBlocks {
+cdkBlocks {
     oidc {
         relayTo = "com.yourcompany.yourapp://auth/callback"
     }
@@ -145,8 +145,9 @@ prints a `kotlin:` warning that names it.
 ## Restoring a session
 
 `authState` starts out `Loading`. `client.restore()` asks the backend for the session its cookie
-holds, returns the user (and sets `authState` to signed in) or `null` (signed out), and throws
-`OidcSessionException` if the backend could not answer, leaving `authState` as it was.
+holds, returns the user (and sets `authState` to signed in) or `null` (signed out). If the backend
+could not answer it throws, leaving `authState` as it was: an `ApiException` when the backend said
+why, otherwise a `TransportException`.
 
 ## Signing out
 
@@ -154,6 +155,7 @@ holds, returns the user (and sets `authState` to signed in) or `null` (signed ou
 response, which is what clears it locally. Only that cookie goes: another `Auth` block sharing the
 jar stays signed in. It returns the identity provider's logout URL, or `null`; open it to end the
 provider's own session too. `authState` is set to signed out even when the request fails, and the
-failure is thrown afterwards. A 503 `SignOutIncompleteException` (`OidcSignOutException.errorName`)
-means the cookie was cleared but the backend kept its session.
+failure is thrown afterwards. A 503 `ApiException` named `SignOutIncompleteException`
+(`e.isBlocksError("SignOutIncompleteException")`) means the cookie was cleared but the backend kept
+its session.
 See [runtime configuration](runtime-configuration.md#signing-out).

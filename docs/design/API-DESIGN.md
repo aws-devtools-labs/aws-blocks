@@ -262,21 +262,21 @@ Beyond method-level JSDoc, the class-level JSDoc on the Building Block itself mu
 
 - **When to use** &mdash; what problem this BB solves and when to reach for it
 - **When NOT to use** &mdash; what alternative BB or approach is better for adjacent use cases
-- **Best practices** &mdash; key patterns for using the BB correctly (e.g., key design for KVStore, index design for DistributedTable)
+- **Best practices** &mdash; key patterns for using the BB correctly (e.g., key and index design for KVStore)
 - **Scaling characteristics** &mdash; what happens as usage grows (throughput limits, cost model, latency profile)
 
 ```typescript
 /**
- * Simple key-value storage backed by DynamoDB.
+ * Key-value and document storage backed by DynamoDB, with optional secondary indexes.
  *
- * **When to use:** You need fast, single-key lookups with simple get/set/delete
- * semantics. Good for caches, session stores, feature flags, and config values.
+ * **When to use:** Any data that you read by key. With no options, a string-keyed
+ * store for caches, sessions, feature flags, and config values. With a `schema`
+ * and a `key`, app records that you list or query as a collection.
  *
- * **When NOT to use:** If you need to query by multiple fields, use
- * `DistributedTable`. If you need full SQL, use `Database`.
+ * **When NOT to use:** If you need full SQL (joins, aggregations), use `Database`.
  *
  * **Best practices:**
- * - Keep keys short and descriptive (e.g., `user:{id}`, `session:{token}`)
+ * - Declare a `key` for anything that you list
  * - Store one logical entity per KVStore instance
  * - Use `{ ifNotExists: true }` for idempotent creates
  *
@@ -545,8 +545,9 @@ Standard Schema is a common interface implemented by Zod (3.24+), Valibot (1.0+)
 ```typescript
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
-interface DistributedTableOptions<T> {
-	schema?: StandardSchemaV1<T>;
+interface KVStoreOptions<S extends StandardSchemaV1> {
+	schema?: S;
+	key?: { partitionKey: string; sortKey?: string };
 	// ...
 }
 ```
@@ -558,13 +559,15 @@ import { z } from 'zod';
 import * as v from 'valibot';
 
 // Zod — works directly
-new DistributedTable(scope, 'users', {
+new KVStore(scope, 'users', {
 	schema: z.object({ id: z.string(), name: z.string() }),
+	key: { partitionKey: 'id' },
 });
 
 // Valibot — works directly
-new DistributedTable(scope, 'users', {
+new KVStore(scope, 'users', {
 	schema: v.object({ id: v.string(), name: v.string() }),
+	key: { partitionKey: 'id' },
 });
 ```
 
@@ -583,7 +586,7 @@ async function validateOrThrow<T>(schema: StandardSchemaV1<T>, value: unknown): 
 
 **When to require a schema vs. make it optional:**
 
-- **Optional** &mdash; data storage BBs (DistributedTable, KVStore) where the customer may not want validation overhead
+- **Optional** &mdash; data storage BBs (KVStore) where the customer may not want validation overhead
 - **Optional** &mdash; messaging BBs (Queue, AsyncJob, Realtime) where the customer may trust the producer
 - **Never required** &mdash; schemas are always opt-in. Compile-time type parameters (`<T>`) provide safety without runtime cost when that's sufficient
 
@@ -605,7 +608,7 @@ import { authApi } from 'aws-blocks';
 const state = await authApi.getAuthState();
 ```
 
-**When to use this pattern:** A BB needs to expose a set of client-callable methods that are intrinsic to the BB's functionality (not custom business logic). The BB owns the method implementations; the customer just decides where to mount them and what to name the export. Examples: `Auth` exposes a sign-in/sign-up state machine; `DistributedTable` exposes a CRUD API with authorization hooks.
+**When to use this pattern:** A BB needs to expose a set of client-callable methods that are intrinsic to the BB's functionality (not custom business logic). The BB owns the method implementations; the customer just decides where to mount them and what to name the export. Examples: `Auth` exposes a sign-in/sign-up state machine; a data BB could expose a CRUD API with authorization hooks.
 
 **When NOT to use:** If the customer is writing the method bodies themselves, they should use `ApiNamespace` directly. `createApi()` is for BB-authored method sets.
 
@@ -619,7 +622,8 @@ Method parameters and options must not imply a performance optimization that the
 scan(options?: { prefix?: string }): AsyncIterable<Item>;
 
 // ✅ Good — scan() communicates full-table cost. Customers filter in their loop
-// or switch to DistributedTable with a sort key for efficient prefix queries.
+// or declare a `key` with a sort field on the KVStore and use query() for
+// efficient prefix reads.
 scan(): AsyncIterable<Item>;
 
 // ✅ Also good — FileBucket.scan({ prefix }) IS efficient because S3 ListObjectsV2
@@ -627,7 +631,7 @@ scan(): AsyncIterable<Item>;
 scan(options?: { prefix?: string }): AsyncIterable<FileInfo>;
 ```
 
-**Why:** Customers (and agents) use parameter availability as a signal for how to use the API. A `prefix` option on a method backed by a full table scan teaches customers to rely on a pattern that will not scale. When the efficient alternative exists (e.g., `DistributedTable.query()` with a sort key), the absence of the option on the simpler BB nudges customers toward the right tool.
+**Why:** Customers (and agents) use parameter availability as a signal for how to use the API. A `prefix` option on a method backed by a full table scan teaches customers to rely on a pattern that will not scale. When the efficient alternative exists (e.g., `KVStore.query()` on a store whose `key` has a sort field), the absence of the option on the simpler form nudges customers toward the right tool.
 
 **The test:** Before adding a filtering or scoping option, ask: "Does the underlying service use this parameter to *reduce the work performed*, or only to *filter the results after the work is done*?" If the latter, omit the option and document why.
 

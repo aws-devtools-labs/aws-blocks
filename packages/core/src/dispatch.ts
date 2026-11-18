@@ -386,7 +386,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
 
         const result = await runHandler(`${apiNamespace}.${method}`, () => apiMethod(...args));
-        const value = responseBody ?? result;
+        // JSON.stringify drops an `undefined` result, and a JSON-RPC 2.0 success
+        // response must carry `result`, so a `Promise<void>` method answers `null`.
+        const value = responseBody ?? result ?? null;
         trace?.result?.(apiNamespace, method, value);
 
         return {

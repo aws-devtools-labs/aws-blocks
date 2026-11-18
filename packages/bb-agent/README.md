@@ -74,7 +74,7 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 - `getConversation(id, { userId })` and `getPendingInterrupts(conversationId, { userId })` return `[]` for a conversation the user doesn't own.
 - `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
 - `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled, and to an `inferenceOnly` agent with `sessionScope: 'user'` (the default); an `inferenceOnly` agent with `sessionScope: 'shared'` has no owner, so its channels are not user-scoped.
-- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call written for the older signatures, such as `getConversation(id)` or `getConversation(id, { limit })`, fails loudly instead of returning data.
+- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call without one, such as `getConversation(id)` or `getConversation(id, { limit })`, fails loudly instead of returning data.
 - A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
 
 **`inferenceOnly` agents have no conversation records**, so none of these record-based checks apply to them. Instead, by default (`sessionScope: 'user'`) they key each session by the `userId` together with the `conversationId`, and scope the Realtime channel to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. `stream()`, `resume()` and `getChannel()` require `options.userId` (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without it.
@@ -889,7 +889,7 @@ const agent = new Agent(scope, 'assistant', {
 });
 ```
 
-Keys match literal phrases in the latest message, case-insensitively with flexible internal whitespace and word boundaries. Punctuation is literal, and the first matching dictionary entry in JavaScript object enumeration order wins: array-index keys such as `"2"` and `"10"` are visited in ascending numeric order before other string keys, which retain insertion order. Values are emitted verbatim, including whitespace and empty strings. Tool-result summaries and tool calls take precedence; unmatched text still receives the generic canned fallback. Omitting `cannedResponses` preserves the existing responses and streaming behavior.
+Keys match literal phrases in the latest message, case-insensitively with flexible internal whitespace and word boundaries. Punctuation is literal, and the first matching dictionary entry in JavaScript object enumeration order wins: array-index keys such as `"2"` and `"10"` are visited in ascending numeric order before other string keys, which retain insertion order. Values are emitted verbatim, including whitespace and empty strings. Tool-result summaries and tool calls take precedence; unmatched text still receives the generic canned fallback. Omitting `cannedResponses` uses the built-in responses, streamed word by word.
 
 Inline dictionaries are validated and copied when the provider is created, so later caller mutations do not affect that provider. `Agent` creates a provider for each turn. Invalid inline dictionaries fail at provider construction, including for turns that would only call tools.
 
@@ -1006,8 +1006,8 @@ export function Chat() {
 
   // Create the instance exactly once. The ref survives every re-render, so the
   // transport subscription and conversation state are never torn down.
-  // Type the ref as `| undefined` and initialize with `undefined` — @types/react 19
-  // tightened the useRef overloads, so a bare useRef<T>() no longer compiles.
+  // Type the ref as `| undefined` and initialize with `undefined` — under
+  // @types/react 19 a bare useRef<T>() does not compile.
   const chatRef = useRef<ReturnType<typeof createChat> | undefined>(undefined);
   if (!chatRef.current) {
     const transport = realtimeTransport({
@@ -1094,7 +1094,7 @@ Key points:
 
 ## Client Hook — `useChat` (deprecated)
 
-> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` remains for backward compatibility and is unchanged. The reconnect-recovery contract below applies to both surfaces — with `createChat`, `realtimeTransport` forwards these reconnect callbacks automatically, so you don't hand-write the `subscribe` adapter.
+> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` is kept for backward compatibility. The reconnect-recovery contract below applies to both surfaces — with `createChat`, `realtimeTransport` forwards these reconnect callbacks automatically, so you don't hand-write the `subscribe` adapter.
 
 Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
 
@@ -1357,17 +1357,17 @@ The Agent BB composes several internal Building Blocks automatically:
 | BB | AWS Resource | Purpose |
 |----|-------------|---------|
 | `FileBucket` | S3 | Session snapshot storage (Strands agent state between turns) |
-| `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
+| `KVStore` × 2 | DynamoDB | Conversations table + messages table |
 | `Realtime` | API Gateway WebSocket | Streaming chunks to connected clients |
 
 The streaming loop itself runs on a **Bedrock AgentCore Runtime** (provisioned by `AgentCoreRuntime` — not a composed BB). It's invoked via `InvokeAgentRuntime`, runs the loop for the length of the session (up to 8h), and publishes chunks over the Realtime BB above.
 
-When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
+When `inferenceOnly: true`, the two `KVStore`s are skipped (no conversation persistence).
 
 ## Scaling & Cost (AWS)
 
 - **Model:** Bedrock pay-per-token pricing. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
-- **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
+- **Persistence:** DynamoDB (KVStore) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
 - **Loop compute:** Bedrock AgentCore Runtime — consumption-based (vCPU + memory while a session is active). See [AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/).
 - **Streaming:** API Gateway WebSocket (Realtime) — per-message + per-connection-minute pricing.

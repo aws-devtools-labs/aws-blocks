@@ -36,7 +36,7 @@ start) are always added.
 - You need security group rules to restrict traffic between services
 
 **Don't use a VPC when:**
-- You're building a standard web app with Blocks' built-in data stores (KVStore, DistributedTable, DistributedDatabase)
+- You're building a standard web app with Blocks' built-in data stores (KVStore, DistributedDatabase)
 - Your only AWS interactions are through Blocks (they handle connectivity automatically)
 - You want to minimize cost and operational complexity
 - You're prototyping or building an MVP
@@ -101,8 +101,8 @@ await BlocksStack.create(app, stackName, {
 ```
 
 Your endpoints' security groups must then admit everything Blocks places in the VPC:
-the Blocks Lambda security group, and any compute a BB provisions itself. Today that
-is the Database rotation Lambda, which reaches the Secrets Manager endpoint from its
+the Blocks Lambda security group, and any compute a BB provisions itself. In the shipped
+blocks, that is the Database rotation Lambda, which reaches the Secrets Manager endpoint from its
 own security group. Synth emits a `blocks:vpc:endpoint-client-unadmitted` warning
 naming that security group by construct path. Blocks cannot tell whether your
 endpoint already admits the group, so it does not fail the synth.

@@ -1,11 +1,16 @@
 package com.aws.blocks.kotlin.oidc
 
 import com.aws.blocks.kotlin.BlocksServer
+import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.exceptions.BlocksException
+import com.aws.blocks.kotlin.exceptions.ClientClosedException
+import com.aws.blocks.kotlin.exceptions.TransportException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -613,7 +618,7 @@ class OidcClientTest {
             callbackUrl = "http://localhost:3001/auth/callback",
         )
 
-        shouldThrow<OidcSignOutException> { client.signOut() }.statusCode shouldBe 500
+        shouldThrow<ApiException> { client.signOut() }.status shouldBe 500
         client.authState.value shouldBe OidcAuthState.SignedOut
     }
 
@@ -664,12 +669,18 @@ class OidcClientTest {
         val launcher = FakeLauncher { "myapp://auth/callback?code=c&state=$issuedState" }
         client.platformLauncher = launcher
 
-        shouldThrow<IllegalStateException> { client.signIn("google") }
+        val failure = shouldThrow<OidcExchangeException> { client.signIn("google") }
 
+        // The engine's own exception stays reachable as the cause of a TransportException.
+        val transport = failure.cause.shouldBeInstanceOf<TransportException>()
+        transport.statusCode shouldBe null
+        transport.cause.shouldBeInstanceOf<IllegalStateException>()
         // An unreachable backend is still an exchange failure, and the transport's own message
-        // is written for a developer: it would otherwise reach the landing page and the query
-        // of a configured redirect.
-        launcher.reportedOutcome shouldBe OidcSignInOutcome.Failed("exchange_failed", null)
+        // is written for a developer: the description is a fixed one, because it would otherwise
+        // reach the landing page and the query of a configured redirect.
+        launcher.reportedOutcome shouldBe
+            OidcSignInOutcome.Failed("exchange_failed", "Exchange failed: the request did not complete")
+        failure.message!! shouldNotContain "10.0.0.1"
     }
 
     @Test
@@ -806,5 +817,135 @@ class OidcClientTest {
         )
 
         capturedProvider shouldBe "my-sso"
+    }
+
+    private fun newClient(httpClient: HttpClient): OidcClient<AnyProvider> =
+        OidcClient.fromJson(Json.parseToJsonElement(testDescriptor), httpClient, localServer, "myapp://auth/callback")
+
+    @Test
+    fun `a refused exchange carries the backend's name and status as the cause`() = runTest {
+        val client = newClient(
+            createMockClient(
+                exchangeStatus = HttpStatusCode.BadRequest,
+                exchangeResponse = """{"error":"Provider google is not configured","name":"ProviderNotConfigured"}""",
+            ),
+        )
+
+        val failure = shouldThrow<OidcExchangeException> {
+            client.exchange("c", "v", "s", "n", "google", "https://app/cb")
+        }
+
+        failure.message shouldBe "Exchange failed: HTTP 400"
+        val cause = failure.cause.shouldBeInstanceOf<ApiException>()
+        cause.name shouldBe "ProviderNotConfigured"
+        cause.status shouldBe 400
+        cause.message shouldBe "Provider google is not configured"
+    }
+
+    @Test
+    fun `a refused exchange with a body that is not a JSON object carries a TransportException`() = runTest {
+        for (body in listOf("<html>bad gateway</html>", "[1]", "", "\"text\"")) {
+            val client = newClient(createMockClient(exchangeStatus = HttpStatusCode.BadGateway, exchangeResponse = body))
+
+            val failure = shouldThrow<OidcExchangeException> {
+                client.exchange("c", "v", "s", "n", "google", "https://app/cb")
+            }
+
+            val cause = failure.cause.shouldBeInstanceOf<TransportException>()
+            cause.statusCode shouldBe 502
+            cause.message shouldBe "HTTP 502"
+        }
+    }
+
+    @Test
+    fun `a refused authorize-params request carries the backend's name and status as the cause`() = runTest {
+        val client = newClient(
+            createMockClient(
+                authorizeParamsStatus = HttpStatusCode.BadRequest,
+                authorizeParamsErrorResponse = """{"error":"Relay origin not allowed","name":"InvalidRelay"}""",
+            ),
+        )
+        client.platformLauncher = FakeLauncher { "" }
+
+        val failure = shouldThrow<OidcCallbackException> { client.signIn("google") }
+
+        // The body is not in the message: it would reach the landing page.
+        failure.message shouldBe "Failed to fetch authorize params: HTTP 400"
+        val cause = failure.cause.shouldBeInstanceOf<ApiException>()
+        cause.name shouldBe "InvalidRelay"
+        cause.status shouldBe 400
+    }
+
+    @Test
+    fun `a malformed 2xx exchange body is an OidcExchangeException`() = runTest {
+        for (body in listOf("<html>captive portal</html>", "[]", """{"user":"nope"}""")) {
+            val client = newClient(createMockClient(exchangeResponse = body))
+
+            val failure = shouldThrow<OidcExchangeException> {
+                client.exchange("c", "v", "s", "n", "google", "https://app/cb")
+            }
+
+            failure.message shouldBe "Exchange failed: the response was not understood"
+            failure.cause.shouldBeInstanceOf<TransportException>().statusCode shouldBe 200
+            client.authState.value shouldBe OidcAuthState.Loading
+        }
+    }
+
+    @Test
+    fun `a malformed 2xx authorize-params body is an OidcCallbackException`() = runTest {
+        val httpClient = HttpClient(MockEngine {
+            respond("<html>captive portal</html>", HttpStatusCode.OK)
+        })
+        val client = newClient(httpClient)
+        client.platformLauncher = FakeLauncher { "" }
+
+        val failure = shouldThrow<OidcCallbackException> { client.signIn("google") }
+
+        failure.cause.shouldBeInstanceOf<TransportException>()
+        failure.message!! shouldNotContain "captive"
+    }
+
+    @Test
+    fun `a connection failure while fetching authorize params is an OidcCallbackException`() = runTest {
+        val client = newClient(HttpClient(MockEngine { throw IllegalStateException("Connection refused") }))
+        client.platformLauncher = FakeLauncher { "" }
+
+        val failure = shouldThrow<OidcCallbackException> { client.signIn("google") }
+
+        failure.message!! shouldNotContain "refused"
+        failure.cause.shouldBeInstanceOf<TransportException>().cause.shouldBeInstanceOf<IllegalStateException>()
+    }
+
+    @Test
+    fun `signOut reports a connection failure as a TransportException`() = runTest {
+        val client = newClient(HttpClient(MockEngine { throw IllegalStateException("Connection refused") }))
+
+        val failure = shouldThrow<TransportException> { client.signOut() }
+
+        failure.statusCode shouldBe null
+    }
+
+    @Test
+    fun `a cancellation passes through the OIDC requests`() = runTest {
+        val client = newClient(HttpClient(MockEngine { throw CancellationException("cancelled") }))
+        client.platformLauncher = FakeLauncher { "" }
+
+        shouldThrow<CancellationException> { client.signOut() }
+        shouldThrow<CancellationException> { client.restore() }
+        shouldThrow<CancellationException> { client.exchange("c", "v", "s", "n", "google", "https://app/cb") }
+        shouldThrow<CancellationException> { client.signIn("google") }
+    }
+
+    @Test
+    fun `a closed client throws ClientClosedException from every OIDC request`() = runTest {
+        val httpClient = createMockClient()
+        val client = newClient(httpClient)
+        client.platformLauncher = FakeLauncher { "" }
+        httpClient.close()
+
+        shouldThrow<ClientClosedException> { client.signIn("google") }
+        shouldThrow<ClientClosedException> { client.exchange("c", "v", "s", "n", "google", "https://app/cb") }
+        shouldThrow<ClientClosedException> { client.signOut() }
+        shouldThrow<ClientClosedException> { client.restore() }
     }
 }

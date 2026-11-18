@@ -174,13 +174,27 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
         let authorizeParamsPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
-        let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        let paramsJSON: [String: Any]
+        do {
+            paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.callbackError(
+                "Failed to fetch authorize params: \((error as? BlocksError)?.message ?? error.localizedDescription)",
+                error
+            )
+        }
 
         guard let authorizeUrl = paramsJSON["authorizeUrl"] as? String,
               let clientId = paramsJSON["clientId"] as? String,
               let scopes = paramsJSON["scopes"] as? [String],
               let signedState = paramsJSON["state"] as? String else {
-            throw OIDCError.callbackError("authorize-params response: \(paramsJSON)")
+            throw OIDCError.callbackError("authorize-params response: \(paramsJSON)", nil)
         }
         let nonce = paramsJSON["nonce"] as? String
 
@@ -225,7 +239,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         if let error = resultParams["error"] {
             let desc = resultParams["error_description"] ?? ""
-            throw OIDCError.callbackError("\(error): \(desc)")
+            throw OIDCError.callbackError("\(error): \(desc)", nil)
         }
 
         guard let code = resultParams["code"] else {
@@ -285,7 +299,18 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         ]
         if let iss { body["iss"] = iss }
 
-        let json = try await client.postRawRoute(path: exchangePath, body: body)
+        let json: [String: Any]
+        do {
+            json = try await client.postRawRoute(path: exchangePath, body: body)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.exchangeFailed((error as? BlocksError)?.message ?? error.localizedDescription, error)
+        }
 
         guard let userJSON = json["user"] as? [String: Any] else {
             throw OIDCError.malformedExchangeResponse
@@ -329,6 +354,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             json = try await client.postRawRoute(path: refreshPath, body: ["refreshToken": refreshToken])
         } catch let error as ClientClosedError {
             // A closed client says nothing about the session, so the tokens stay.
+            throw error
+        } catch let error as CancellationError {
+            // Nor does a cancelled caller.
             throw error
         } catch {
             await clearTokens()
@@ -378,6 +406,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
                 // The tokens stay for a new Blocks to restore.
                 emit(.signedOut)
                 return
+            } catch is CancellationError {
+                // A cancelled caller says nothing about the session either; the tokens stay.
+                emit(.signedOut)
+                return
             } catch {
                 await clearTokens()
                 emit(.signedOut)
@@ -414,7 +446,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             do {
                 try await refresh()
             } catch {
-                // Only a closed client throws here, and its expired token is no use.
+                // Only a closed client or a cancelled caller throws here, and the expired token is no use.
                 return nil
             }
             return await storedToken("access_token")
@@ -426,6 +458,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         do {
             try await refresh()
         } catch is ClientClosedError {
+            return
+        } catch is CancellationError {
             return
         } catch {
             await clearTokens()
@@ -453,10 +487,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         client: BlocksClient
     ) throws -> OIDCClient {
         guard let exchangePath = descriptor["exchangePath"] as? String else {
-            throw OIDCError.malformedDescriptor("exchangePath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "exchangePath")
         }
         guard let signOutPath = descriptor["signOutPath"] as? String else {
-            throw OIDCError.malformedDescriptor("signOutPath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "signOutPath")
         }
         let refreshPath = (descriptor["refreshPath"] as? String) ?? "\(exchangePath)/refresh"
         let providers = (descriptor["providers"] as? [String]) ?? []
@@ -620,18 +654,20 @@ extension OIDCClient: Codable {
 
 // MARK: - Errors
 
-public enum OIDCError: BlocksError, Equatable {
+public enum OIDCError: BlocksError {
     case unknownProvider(String)
     case invalidAuthorizeURL(String)
-    case invalidURL(String)
     case stateMismatch
     case missingAuthorizationCode
-    case missingPKCEState
     case malformedExchangeResponse
-    case malformedRefreshResponse
-    case malformedDescriptor(String)
-    case invalidResponse
-    case callbackError(String)
+    /// The sign-in callback failed: the IdP reported an error, or the authorize parameters could not
+    /// be fetched. When a request failed, its `ApiError` or `TransportError` is the cause, so the
+    /// app can tell a retry-later failure from a misconfigured one.
+    case callbackError(String, Error?)
+    /// The exchange or sign-out call was rejected. The server's error is the cause.
+    case exchangeFailed(String, Error?)
+    /// The user dismissed the sign-in flow. A `BrowserLauncher` throws this.
+    case cancelled
 
     public var message: String {
         switch self {
@@ -639,24 +675,25 @@ public enum OIDCError: BlocksError, Equatable {
             return "Unknown OIDC provider: \(name)"
         case .invalidAuthorizeURL(let url):
             return "Invalid authorize URL: \(url)"
-        case .invalidURL(let url):
-            return "Invalid URL: \(url)"
         case .stateMismatch:
             return "OIDC state mismatch — possible CSRF attack"
         case .missingAuthorizationCode:
             return "Missing authorization code in callback URL"
-        case .missingPKCEState:
-            return "Missing PKCE state in token store"
         case .malformedExchangeResponse:
             return "Malformed exchange response — missing accessToken or refreshToken"
-        case .malformedRefreshResponse:
-            return "Malformed refresh response — missing accessToken"
-        case .malformedDescriptor(let field):
-            return "Malformed OIDC descriptor — missing or invalid field: \(field)"
-        case .invalidResponse:
-            return "Invalid JSON response"
-        case .callbackError(let detail):
+        case .callbackError(let detail, _):
             return "OIDC callback error: \(detail)"
+        case .exchangeFailed(let detail, _):
+            return "OIDC exchange failed: \(detail)"
+        case .cancelled:
+            return "Sign-in cancelled"
+        }
+    }
+
+    public var underlyingError: Error? {
+        switch self {
+        case .callbackError(_, let error), .exchangeFailed(_, let error): return error
+        default: return nil
         }
     }
 }

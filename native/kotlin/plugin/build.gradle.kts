@@ -20,6 +20,14 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
+kotlin {
+    compilerOptions {
+        // Gradle reflects over every declared method of the plugin class, and invokedynamic lambda
+        // bodies would name AGP's Variant there although AGP is compileOnly. Inner classes keep it out.
+        freeCompilerArgs.add("-Xlambdas=class")
+    }
+}
+
 dependencies {
     implementation(projects.codegen)
 
@@ -56,9 +64,9 @@ tasks.withType<Test> {
 
 gradlePlugin {
     plugins {
-        register("aws-blocks") {
+        register("cdk-blocks") {
             id = "com.aws.blocks.kotlin"
-            implementationClass = "com.aws.blocks.plugin.AwsBlocksCodegenPlugin"
+            implementationClass = "com.aws.blocks.plugin.CdkBlocksCodegenPlugin"
         }
     }
 }

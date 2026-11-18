@@ -5,12 +5,10 @@
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, getDeploymentType, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
-import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
-import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { ApiError, isBlocksError, type BlocksContext } from '@aws-blocks/core';
 import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinProvider, type UserCandidate } from '@aws-blocks/bb-auth';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
@@ -92,9 +90,18 @@ const numStore = new KVStore<number>(scope, 'num-store');
 interface Profile { name: string; age: number; tags: string[] }
 const objStore = new KVStore<Profile>(scope, 'obj-store');
 
-// KVStore with schema validation
+// LegacyKVStore - the store of a KVStore release up to 0.4.0, for an upgrade.
+// It has the data methods of that store. The table is declared as that
+// release declares it.
+const legacyStore = new LegacyKVStore<Profile>(scope, 'legacy-store', { ttl: true });
+
+
+// KVStore with schema validation and an index (form 2: a schema, still a string key)
 const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.array(z.string()) });
-const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSchema });
+const validatedStore = new KVStore(scope, 'validated-store', {
+  schema: profileSchema,
+  indexes: { byName: { partitionKey: 'name' } },
+});
 
 // ── Delivered verification codes (e2e read-back) ────────────────────────────
 //
@@ -532,7 +539,7 @@ new Auth(scope, 'oidc-auth-hookfail', {
   },
 });
 
-// DistributedTable - Structured data with indexes
+// KVStore with a declared key (form 3) - Structured data with indexes
 const itemSchema = z.object({
   pk: z.string(),
   sk: z.string(),
@@ -541,7 +548,9 @@ const itemSchema = z.object({
   optional: z.string().optional()
 });
 
-const table = new DistributedTable(scope, 'items', {
+type Item = z.infer<typeof itemSchema>;
+
+const table = new KVStore(scope, 'items', {
   schema: itemSchema,
   key: {
     partitionKey: 'pk',
@@ -563,7 +572,7 @@ const table = new DistributedTable(scope, 'items', {
   // aws-blocks/index.cdk.ts.
 });
 
-// DistributedTable with TTL
+// KVStore with a declared key and a ttl field
 const ttlSchema = z.object({
   pk: z.string(),
   sk: z.string(),
@@ -571,7 +580,7 @@ const ttlSchema = z.object({
   expiresAt: z.number(),
 });
 
-const ttlTable = new DistributedTable(scope, 'ttl-items', {
+const ttlTable = new KVStore(scope, 'ttl-items', {
   schema: ttlSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   ttl: 'expiresAt',
@@ -590,7 +599,7 @@ const ttlTable = new DistributedTable(scope, 'ttl-items', {
 // exercising on the deploy path. (The 'locked'/deletion-protection case is
 // covered by the CDK synth tests — a deletion-protected table would by design
 // block `cdk destroy`, so it can't live in an auto-torn-down E2E stack.)
-const secureTable = new DistributedTable(scope, 'secure-items', {
+const secureTable = new KVStore(scope, 'secure-items', {
   schema: itemSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   indexes: {
@@ -1251,6 +1260,9 @@ export const DbInsertInput = z.object({
 // ============================================================================
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
+
+  /** Returns nothing: the response carries `"result": null` (test/void-result.test.ts). */
+  async voidResult(): Promise<void> {},
   
   // ------------------------------------------------------------------------
   // KVStore Tests
@@ -1271,9 +1283,58 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async kvScan() {
-    const entries: { key: string; value: string }[] = [];
-    for await (const entry of store.scan()) entries.push(entry);
-    return entries;
+    return await Array.fromAsync(store.scan());
+  },
+
+  // A page of the string store, and the cursor a later request passes back.
+  async kvScanPage(limit: number, cursor?: string) {
+    const page = store.scan({ limit, cursor });
+    const entries = await Array.fromAsync(page);
+    return { entries, cursor: page.cursor };
+  },
+
+  // Expiry on a string store lives outside the value; scan reports it as `expiresAt`.
+  async kvPutWithExpiry(key: string, value: string, expiresAt: number) {
+    await store.put(key, value, { expiresAt });
+    return { success: true };
+  },
+
+  // Read-after-write in one request: `get` is strongly consistent by default.
+  async kvPutThenGet(key: string, value: string) {
+    await store.put(key, value);
+    return await store.get(key);
+  },
+
+  // ------------------------------------------------------------------------
+  // LegacyKVStore Tests
+  // ------------------------------------------------------------------------
+
+  async legacyGet(key: string) {
+    return await legacyStore.get(key);
+  },
+
+  async legacyScanPage(limit: number, cursor?: string) {
+    const page = legacyStore.scan({ limit, cursor });
+    const entries = await Array.fromAsync(page);
+    return { entries, cursor: page.cursor };
+  },
+
+  async legacyPut(key: string, value: Profile, options?: { ifNotExists?: boolean; ttlSeconds?: number }) {
+    await legacyStore.put(key, value, options);
+    return { success: true };
+  },
+
+  async legacyDelete(key: string, conditions?: { ifExists?: boolean }) {
+    await legacyStore.delete(key, conditions);
+    return { success: true };
+  },
+
+  // Test support: put items in `legacyStore`, each with the expiry that the suite gives (also one in the past).
+  async legacySeed(entries: { key: string; value: Profile; ttl?: number }[]) {
+    for (const { key, value, ttl } of entries) {
+      await legacyStore.put(key, value, ttl === undefined ? undefined : { expiresAt: ttl });
+    }
+    return { success: true };
   },
 
   // ------------------------------------------------------------------------
@@ -1330,14 +1391,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
+  async kvValidatedQueryByName(name: string) {
+    return await Array.fromAsync(validatedStore.query({ index: 'byName', where: { name: { equals: name } } }));
+  },
+
   // ------------------------------------------------------------------------
-  // DistributedTable Tests
+  // KVStore with a declared key (documents) Tests
   //
   // Query/scan wrappers use Parameters<typeof table.query> so the BB's
   // computed types flow to the e2e call site unchanged. The only
-  // transformation is collecting AsyncIterable into an array for the wire.
-  // This is NOT typical for a real app — it exists so e2e tests exercise
-  // the actual BB type signatures, not hand-written intermediaries.
+  // transformation is collecting the Results AsyncIterable into an array for
+  // the wire. This is NOT typical for a real app — it exists so e2e tests
+  // exercise the actual BB type signatures, not hand-written intermediaries.
   // ------------------------------------------------------------------------
   
   async tablePut(...args: Parameters<typeof table.put>) {
@@ -1355,17 +1420,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async tableQuery(...args: Parameters<typeof table.query>) {
-    const results = [];
-    for await (const item of table.query(...args)) results.push(item);
-    return results;
+    return await Array.fromAsync(table.query(...args));
   },
-  
+
+  // One page and its cursor, so a test can read the next page in a later request.
+  async tableQueryPage(...args: Parameters<typeof table.query>) {
+    const page = table.query(...args);
+    const entries = await Array.fromAsync(page);
+    return { entries, cursor: page.cursor };
+  },
+
   async tableScan() {
-    const results = [];
-    for await (const item of table.scan()) {
-      results.push(item);
-    }
-    return results;
+    return await Array.fromAsync(table.scan());
   },
 
   async tablePutBatch(...args: Parameters<typeof table.putBatch>) {
@@ -1392,6 +1458,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await ttlTable.get(...args);
   },
 
+  async ttlTableQuery(...args: Parameters<typeof ttlTable.query>) {
+    return await Array.fromAsync(ttlTable.query(...args));
+  },
+
   // Secure-defaults table (PITR + GSI on a real deploy) — read/write proves
   // the table is functional; the durability config is asserted AWS-side.
   async secureTablePut(...args: Parameters<typeof secureTable.put>) {
@@ -1404,9 +1474,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async secureTableQuery(...args: Parameters<typeof secureTable.query>) {
-    const results = [];
-    for await (const item of secureTable.query(...args)) results.push(item);
-    return results;
+    return await Array.fromAsync(secureTable.query(...args));
   },
 
   // ------------------------------------------------------------------------
@@ -3824,14 +3892,14 @@ export const testSupport = testSupportSecret
   : undefined;
 
 // ============================================================================
-// Static Type Checks — DistributedTable
+// Static Type Checks — KVStore with a declared key
 //
 // These are compile-time-only checks that verify the BB's type system
 // narrows correctly per-index. None of this code runs — it exists so that
 // `tsc --noEmit` catches regressions in the query input types.
 // ============================================================================
 
-function _distributedTableTypeChecks() {
+function _kvStoreTypeChecks() {
   // ── query: index name must be a defined index ─────────────────────────
 
   table.query({ index: 'byTimestamp', where: { pk: { equals: 'x' } } });
@@ -3893,14 +3961,54 @@ function _distributedTableTypeChecks() {
   // ── key config: field names must exist in schema ──────────────────────
 
   // @ts-expect-error — 'nonExistent' is not a field in the schema
-  new DistributedTable(scope, 'bad', { schema: itemSchema, key: { partitionKey: 'nonExistent' } });
+  new KVStore(scope, 'bad', { schema: itemSchema, key: { partitionKey: 'nonExistent' } });
   // @ts-expect-error — 'badField' is not a field in the schema
-  new DistributedTable(scope, 'bad', { schema: itemSchema, key: { partitionKey: 'pk', sortKey: 'badField' } });
+  new KVStore(scope, 'bad', { schema: itemSchema, key: { partitionKey: 'pk', sortKey: 'badField' } });
+  // @ts-expect-error — an explicit type argument together with `key` does not compile
+  new KVStore<Item>(scope, 'bad', { schema: itemSchema, key: { partitionKey: 'pk' } });
+  // @ts-expect-error — `key` needs a schema
+  new KVStore(scope, 'bad', { key: { partitionKey: 'pk' } });
 
   // ── put: ifFieldEquals only accepts schema fields ─────────────────────
 
   // @ts-expect-error — 'nonField' is not in the schema
-  const _badOpts: Parameters<typeof table.put>[1] = { ifFieldEquals: { nonField: 'x' } };
+  const _badOpts: Parameters<typeof table.put>[2] = { ifFieldEquals: { nonField: 'x' } };
+
+  // ── put: key first, the value may omit the key fields ────────────────
+
+  table.put({ pk: 'x', sk: 'y' }, { data: 'd', timestamp: 1 });
+  table.put({ pk: 'x', sk: 'y' }, { pk: 'x', sk: 'y', data: 'd', timestamp: 1 });
+  // @ts-expect-error — the value must carry every field that is not a key field
+  table.put({ pk: 'x', sk: 'y' }, { data: 'd' });
+  // @ts-expect-error — a declared-key store rejects a string key
+  table.get('x');
+  // @ts-expect-error — a declared-key store rejects a pair
+  table.get(['x', 'y']);
+
+  // ── branded key fields: two strings cannot swap ───────────────────────
+
+  const UserId = z.string().brand<'UserId'>();
+  const NoteId = z.string().brand<'NoteId'>();
+  const notes = new KVStore(scope, 'branded-notes', {
+    schema: z.object({ userId: UserId, noteId: NoteId, text: z.string() }),
+    key: { partitionKey: 'userId', sortKey: 'noteId' },
+  });
+  const userId = UserId.parse('alice');
+  const noteId = NoteId.parse('n1');
+  notes.get({ userId, noteId });
+  // @ts-expect-error — two branded key fields cannot swap
+  notes.get({ userId: noteId, noteId: userId });
+  // @ts-expect-error — plain strings have no brand
+  notes.get({ userId: 'alice', noteId: 'n1' });
+
+  // ── a string store: no object key, no ifFieldEquals on a string value ─
+
+  // @ts-expect-error — a string store takes a string key
+  store.get({ id: 'x' });
+  // @ts-expect-error — a string value has no fields to compare
+  store.put('k', 'v', { ifFieldEquals: { a: 1 } });
+  // @ts-expect-error — an object value has no whole-value compare
+  objStore.put('k', { name: 'A', age: 1, tags: [] }, { ifValueEquals: { name: 'A', age: 1, tags: [] } });
 
   // ── get/delete: key must include all key fields ──────────────────────
 

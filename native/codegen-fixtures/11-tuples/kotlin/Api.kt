@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Double
 import kotlin.Int
@@ -30,12 +31,14 @@ public class Api(
   public suspend fun getCoords(): GetCoords.Result {
     val request = BlocksRequest(method = "api.getCoords", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getCoords")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getPair(): GetPair.Result {
     val request = BlocksRequest(method = "api.getPair", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getPair")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
@@ -43,12 +46,14 @@ public class Api(
     val args: List<JsonElement> = if (cursor != null) listOf(BlocksJson.encodeToJsonElement(range), BlocksJson.encodeToJsonElement(cursor)) else listOf(BlocksJson.encodeToJsonElement(range))
     val request = BlocksRequest(method = "api.queryRange", params = args, id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.queryRange")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getShortTuples(one: GetShortTuples.One): GetShortTuples.Result {
     val request = BlocksRequest(method = "api.getShortTuples", params = listOf(BlocksJson.encodeToJsonElement(one)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getShortTuples")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

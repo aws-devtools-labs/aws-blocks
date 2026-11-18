@@ -57,10 +57,15 @@ struct CookieJar: Sendable {
         defer { lock.unlock() }
 
         // As in the Kotlin runtime, a cookie replaces every stored cookie of the same name that would
-        // be sent on this request, including one stored by an earlier version under `host|name`.
+        // be sent on this request. An item stored by an earlier version under `host|name` is replaced
+        // by a cookie of the same name from the same host, whatever the request's scheme, so the two
+        // are never both kept (see `StoredCookie.decode`).
         for (account, value) in items.loadAll() {
-            guard let stored = StoredCookie.decode(account: account, value: value) else { continue }
-            if stored.name == cookie.name, stored.matches(requestURL) {
+            guard let stored = StoredCookie.decode(account: account, value: value),
+                  stored.name == cookie.name else { continue }
+            let replacesEarlierVersionItem = StoredCookie.isEarlierVersionItem(account: account, value: value)
+                && stored.host.caseInsensitiveCompare(cookie.host) == .orderedSame
+            if replacesEarlierVersionItem || stored.matches(requestURL) {
                 items.remove(name: account)
             }
         }

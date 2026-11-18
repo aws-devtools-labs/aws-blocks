@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiNamespace, Scope, KVStore, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore } from '@aws-blocks/blocks';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Queue } from '@guide/bb-queue';
 import { z } from 'zod';
@@ -12,23 +12,25 @@ const scope = new Scope('extending-guide');
 // In real use, the customer would know the legacy table name at synth time
 // (from another stack's outputs, an env var passed to `cdk synth`, etc.).
 // Here we read it from BLOCKS_LEGACY_SESSIONS_TABLE — exported by index.cdk.ts
-// before BlocksStack.create runs.
+// before BlocksStack.create runs. A KVStore with no `key` option keys its table
+// by the string attribute `_bkv_pk`, so the legacy table declares that key.
 const sessions = new KVStore(scope, 'sessions', {
   table: KVStore.fromExisting(process.env.BLOCKS_LEGACY_SESSIONS_TABLE!),
 });
 
-// ── Pattern 2b: DistributedTable.fromExisting ───────────────────────────────
-// Same shape as KVStore — wraps a pre-deployed DynamoDB table. Schema is
-// declared on the wrapper since the runtime client validates writes.
+// ── Pattern 2b: KVStore.fromExisting with a declared key ────────────────────
+// Same as 2a, but the store declares a `schema` and a `key` that match the
+// pre-deployed table's key schema. The schema is declared on the wrapper since
+// the runtime client validates writes.
 const userSchema = z.object({
   userId: z.string(),
   email: z.string(),
   createdAt: z.number(),
 });
-const users = new DistributedTable(scope, 'users', {
+const users = new KVStore(scope, 'users', {
   schema: userSchema,
   key: { partitionKey: 'userId', sortKey: 'createdAt' },
-  table: DistributedTable.fromExisting(process.env.BLOCKS_LEGACY_USERS_TABLE!),
+  table: KVStore.fromExisting(process.env.BLOCKS_LEGACY_USERS_TABLE!),
 });
 
 // ── Pattern 3: custom BB ─────────────────────────────────────────────────────
@@ -56,9 +58,9 @@ export const api = new ApiNamespace(scope, 'api', () => ({
     return { value: await sessions.get(token) };
   },
 
-  // Pattern 2b: fromExisting DistributedTable
+  // Pattern 2b: fromExisting KVStore with a declared key
   async pattern2bPutUser(user: { userId: string; email: string; createdAt: number }) {
-    await users.put(user);
+    await users.put({ userId: user.userId, createdAt: user.createdAt }, user);
     return { ok: true };
   },
   async pattern2bGetUser(key: { userId: string; createdAt: number }) {

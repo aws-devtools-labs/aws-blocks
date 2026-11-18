@@ -3,10 +3,12 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Int
 import kotlin.String
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 
@@ -16,6 +18,7 @@ public class Api(
   public suspend fun getProfile(userId: String): GetProfile.Result {
     val request = BlocksRequest(method = "api.getProfile", params = listOf(JsonPrimitive(userId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getProfile")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

@@ -342,7 +342,7 @@ class OidcClientAuthDescriptorTest {
                 .also { it.platformLauncher = launcher }
 
             shouldThrow<OidcCallbackException> { client.signIn("google") }.message shouldBe
-                "Undecodable state envelope"
+                "State envelope could not be read"
             client.authState.value shouldBe OidcAuthState.Loading
         }
     }

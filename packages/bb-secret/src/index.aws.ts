@@ -92,8 +92,7 @@ type CachedRead = { raw: string | null; fetchedAt: number };
  * connection strings, webhook signing keys, encryption keys.
  *
  * **When NOT to use:** For non-sensitive configuration (feature flags, display
- * strings, thresholds), use `AppSetting`. For application state, use `KVStore`
- * or `DistributedTable`.
+ * strings, thresholds), use `AppSetting`. For application state, use `KVStore`.
  *
  * **Best practices:**
  * - One `Secret` per logical credential.

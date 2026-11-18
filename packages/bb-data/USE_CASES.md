@@ -300,20 +300,25 @@ CREATE TABLE products (
 );
 ```
 
-**2. Generate internal types:**
+**2. Apply the migration locally and generate internal types** (next to the API code, which imports them as `../types/database.js`):
 ```bash
-npx bb-data generate-types ./types/database.ts
+npx bb-data migrate ./migrations
+npx bb-data generate-types ./backend/types/database.ts
 ```
 
 **3. Create API layer with explicit contracts:**
+<!-- doc-snippet: skip — imports ../types/database.js, the file step 2 generates -->
 ```typescript
 // backend/api/products.ts
 import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { Database } from '@aws-blocks/bb-data';
+import { Database, createKyselyAdapter, sql } from '@aws-blocks/bb-data';
 import type { Database as DB } from '../types/database.js';
 
 const scope = new Scope('products');
-const db = new Database<DB>(scope, 'products');
+// migrationsPath is relative to the project root, where you run the dev server and deploy.
+const database = new Database(scope, 'products', { migrationsPath: './migrations' });
+// Typed reads through Kysely, using the generated table types.
+const db = createKyselyAdapter<DB>(database);
 
 // Define API response types (what frontend sees)
 export interface Product {
@@ -346,15 +351,14 @@ export const productsApi = new ApiNamespace(scope, 'products', () => ({
   },
 
   async create(input: CreateProductInput): Promise<Product> {
-    const row = await db
-      .insertInto('products')
-      .values({
-        name: input.name,
-        price_cents: input.priceCents,
-        inventory: input.inventory ?? 0,
-      })
-      .returning(['id', 'name', 'price_cents', 'inventory'])
-      .executeTakeFirstOrThrow();
+    // The generated types list `id` as a required column (it has no `Generated<>`
+    // wrapper), so insert with SQL and let the SERIAL default fill it in.
+    const row = await database.queryOne<Pick<DB['products'], 'id' | 'name' | 'price_cents' | 'inventory'>>(
+      sql`INSERT INTO products (name, price_cents, inventory)
+          VALUES (${input.name}, ${input.priceCents}, ${input.inventory ?? 0})
+          RETURNING id, name, price_cents, inventory`,
+    );
+    if (!row) throw new Error('INSERT … RETURNING returned no row');
 
     return {
       id: row.id,
@@ -414,6 +418,7 @@ npm install @mycompany/api-types
 ```
 
 **2. Use typed API client:**
+<!-- doc-snippet: fragment — imports productsApi from the backend file above, which is not aws-blocks/index.ts -->
 ```typescript
 // frontend/src/products.ts
 // The typed client proxy is auto-generated from your backend's ApiNamespace

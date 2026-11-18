@@ -1,12 +1,17 @@
 package com.aws.blocks.kotlin.oidc
 
+import com.aws.blocks.kotlin.CookieJarKey
+import com.aws.blocks.kotlin.InMemoryKeyValueStore
+import com.aws.blocks.kotlin.PersistentCookiesStorage
+import com.aws.blocks.kotlin.exceptions.ApiException
+import com.aws.blocks.kotlin.exceptions.TransportException
+import com.aws.blocks.kotlin.exceptions.isBlocksError
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
-import com.aws.blocks.kotlin.InMemoryKeyValueStore
-import com.aws.blocks.kotlin.PersistentCookiesStorage
 import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.http.Headers
@@ -16,10 +21,10 @@ import io.ktor.http.Url
 import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.http.parseServerSetCookieHeader
-import kotlinx.io.IOException
 import io.ktor.utils.io.ByteReadChannel
-import com.aws.blocks.kotlin.CookieJarKey
 import kotlin.test.Test
+import kotlinx.coroutines.CancellationException
+import kotlinx.io.IOException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -125,6 +130,16 @@ class OidcClientSignOutTest {
     }
 
     @Test
+    fun `signOut returns null for a 2xx body that is not JSON`() = runTest {
+        // A backend that ignores `?format=json` answers 204 with no body.
+        val client = authBlockClient(backend(HttpStatusCode.NoContent, ""), listOf("google"))
+
+        client.signOut() shouldBe null
+
+        client.authState.value shouldBe OidcAuthState.SignedOut
+    }
+
+    @Test
     fun `an incomplete sign-out signs out locally and names the failure`() = runTest {
         val client = signedIn(
             signedInBackend(
@@ -133,10 +148,10 @@ class OidcClientSignOutTest {
             ),
         )
 
-        val failure = shouldThrow<OidcSignOutException> { client.signOut() }
+        val failure = shouldThrow<ApiException> { client.signOut() }
 
-        failure.statusCode shouldBe 503
-        failure.errorName shouldBe "SignOutIncompleteException"
+        failure.status shouldBe 503
+        failure.isBlocksError("SignOutIncompleteException") shouldBe true
         client.authState.value shouldBe OidcAuthState.SignedOut
     }
 
@@ -144,7 +159,16 @@ class OidcClientSignOutTest {
     fun `any other failure signs out locally and throws`() = runTest {
         val client = signedIn(signedInBackend(HttpStatusCode.Forbidden, """{"error":"Forbidden"}"""))
 
-        shouldThrow<OidcSignOutException> { client.signOut() }.statusCode shouldBe 403
+        shouldThrow<ApiException> { client.signOut() }.status shouldBe 403
+
+        client.authState.value shouldBe OidcAuthState.SignedOut
+    }
+
+    @Test
+    fun `a refusal that is not JSON signs out locally and is a transport failure`() = runTest {
+        val client = signedIn(signedInBackend(HttpStatusCode.BadGateway, "<html>Bad Gateway</html>"))
+
+        shouldThrow<TransportException> { client.signOut() }.statusCode shouldBe 502
 
         client.authState.value shouldBe OidcAuthState.SignedOut
     }
@@ -180,10 +204,7 @@ class OidcClientSignOutTest {
 
     @Test
     fun `a failed sign-out removes only the cookie the descriptor names`() = runTest {
-        val jar = com.aws.blocks.kotlin.PersistentCookiesStorage(com.aws.blocks.kotlin.InMemoryKeyValueStore()).also {
-            it.addCookie(origin, io.ktor.http.parseServerSetCookieHeader("blocks-session-auth=a; Path=/; HttpOnly"))
-            it.addCookie(origin, io.ktor.http.parseServerSetCookieHeader("blocks-session-sso=b; Path=/; HttpOnly"))
-        }
+        val jar = twoBlockJar()
         val http = backend(HttpStatusCode.InternalServerError, cookies = jar)
             .also { it.attributes.put(CookieJarKey, jar) }
         val descriptor = buildJsonObject {
@@ -212,7 +233,7 @@ class OidcClientSignOutTest {
     fun `a 503 that names no incomplete sign-out still signs out locally`() = runTest {
         val client = signedIn(signedInBackend(HttpStatusCode.ServiceUnavailable, """{"error":"Unavailable"}"""))
 
-        shouldThrow<OidcSignOutException> { client.signOut() }.errorName shouldBe null
+        shouldThrow<ApiException> { client.signOut() }.name shouldBe null
 
         client.authState.value shouldBe OidcAuthState.SignedOut
     }
@@ -235,8 +256,33 @@ class OidcClientSignOutTest {
         }
         val client = signedIn(unreachable)
 
-        shouldThrow<IOException> { client.signOut() }
+        val failure = shouldThrow<TransportException> { client.signOut() }
+        failure.statusCode shouldBe null
+        failure.cause.shouldBeInstanceOf<IOException>()
 
         client.authState.value shouldBe OidcAuthState.SignedOut
+    }
+
+    @Test
+    fun `a sign-out cancelled before any response leaves the state alone`() = runTest {
+        var signedInYet = false
+        val cancelled = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    if (signedInYet) throw CancellationException("cancelled")
+                    signedInYet = request.url.encodedPath.endsWith("/exchange")
+                    respond(
+                        ByteReadChannel("""{"user":{"userId":"google:1","username":"alice"}}"""),
+                        HttpStatusCode.OK,
+                        headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+        }
+        val client = signedIn(cancelled)
+
+        shouldThrow<CancellationException> { client.signOut() }
+
+        client.authState.value shouldBe OidcAuthState.SignedIn(OidcUser("google:1", "alice"))
     }
 }

@@ -204,7 +204,7 @@ final class GeneratedEntryPointTests: XCTestCase {
             _ = try await users.list()
             XCTFail("expected a connection error")
         } catch {
-            XCTAssertTrue(error is URLError, "\(error)")
+            XCTAssertTrue((error as? TransportError)?.underlyingError is URLError, "\(error)")
         }
     }
 

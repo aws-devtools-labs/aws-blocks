@@ -55,7 +55,7 @@ final class RealtimeChannelTests: XCTestCase {
 
         let channel = RealtimeChannel<[String: Any]>.fromJSON(json) { data in
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw RPCError(message: "Invalid JSON")
+                throw TransportError(message: "Invalid JSON")
             }
             return obj
         }
