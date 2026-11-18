@@ -10,6 +10,8 @@ Each numbered directory contains:
 - `swift/` — golden-file outputs from Swift codegen, or `codegen-error.txt` for a spec Swift refuses. Swift and Kotlin refuse the same specs with the same message, so the two `codegen-error.txt` files are identical (`GoldenFileTests` checks it)
 - `dart/` — golden-file outputs from Dart codegen
 
+Like `kotlin/`, `dart/` holds `codegen-error.txt` instead for a spec the Dart codegen refuses to generate.
+
 ## Running Tests
 
 Tests automatically discover all fixtures and assert codegen output matches golden files.
