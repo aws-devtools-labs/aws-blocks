@@ -4,7 +4,9 @@
 
 /**
  * Checks that the auth-derived codegen fixtures still describe what the live
- * `Auth` block emits.
+ * `Auth` block emits: fixtures 18 and 23 method for method (`--write` can
+ * rewrite them), and fixture 37's typed `oidc/client` shape, which is compared
+ * as a shape only and is edited by hand.
  *
  * `regenerate-all.sh` regenerates the golden files from each fixture's
  * committed `spec.json`, so a clean regeneration proves only that the
@@ -221,7 +223,9 @@ for (const fixture of FIXTURES) {
 	} else if (!same(shape(liveClient), shape(typed))) {
 		drifted++;
 		console.error(
-			`✗ oidcAuthApi.getClient no longer has fixture 37's typed oidc/client shape:\n    live:    ${JSON.stringify(liveClient)}\n    fixture: ${JSON.stringify(typed)}`,
+			`✗ oidcAuthApi.getClient no longer has fixture 37's typed oidc/client shape:\n    live:    ${JSON.stringify(liveClient)}\n    fixture: ${JSON.stringify(typed)}\n` +
+				'  `--write` does not rewrite fixture 37 (its provider ids are its own): if the new shape is intended, edit\n' +
+				'  native/codegen-fixtures/37-oidc-provider-enum/spec.json by hand, then run native/codegen-fixtures/regenerate-all.sh.',
 		);
 	} else {
 		console.log(`✓ oidcAuthApi.getClient is fixture 37's typed oidc/client (${JSON.stringify(liveClient['x-blocks-type-args'][0].enum)})`);

@@ -51,7 +51,7 @@ const APP_FACING: Record<string, { readonly runs: string; readonly purpose: stri
 		purpose: 'Test helpers: a cookie jar for `fetch`, per-user test clients, local auth codes, TOTP codes.',
 	},
 	'./cdk': {
-		runs: 'CDK synth (`cdk-blocks deploy` / `sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`.',
+		runs: 'CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`.',
 		purpose:
 			'The synth-time build: what the generated `aws-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct.',
 	},
@@ -60,15 +60,16 @@ const APP_FACING: Record<string, { readonly runs: string; readonly purpose: stri
 		purpose: '`createLambdaHandler`, which the generated `aws-blocks/index.handler.ts` imports.',
 	},
 	'./scripts': {
-		runs: 'Node: the `cdk-blocks` CLI, and your CDK entry file.',
+		runs: 'Node: the package task runner, and your CDK entry file.',
 		purpose:
-			'CLI plumbing (dev server, deploy, sandbox). The generated `aws-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `aws-blocks/scripts/generate-client.ts` imports `generateClientCode`.',
+			'Task plumbing (dev server, deploy, sandbox). The generated `aws-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `aws-blocks/scripts/generate-client.ts` imports `generateClientCode`.',
 	},
 };
 
 /** Export-map entries an app does not import from. */
 const NOT_APP_FACING: Record<string, string> = {
-	'./vendorize': 'the `cdk-blocks vendorize` implementation',
+	'./run': 'the side-effect entry point invoked by app package scripts',
+	'./vendorize': 'the `npm run vendorize` implementation',
 	'./docs/*': 'these docs',
 };
 
@@ -221,7 +222,7 @@ export function renderImportsReference(): string {
 	}
 
 	out.push('## Not for app code', '', '| Entry | What it is |', '|---|---|');
-	for (const k of keys.filter((key) => key in NOT_APP_FACING)) {
+	for (const k of Object.keys(NOT_APP_FACING).filter((key) => keys.includes(key))) {
 		out.push(`| \`${specifierOf(k)}\` | ${NOT_APP_FACING[k]} |`);
 	}
 	out.push('');

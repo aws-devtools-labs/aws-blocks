@@ -3,9 +3,9 @@
 
 /**
  * Every Building Block re-export in src/index.ts names its package and points at
- * that block's docs bundled in this package. The pointer is plain JSDoc text, so a
- * renamed or newly EXCLUDED package (scripts/block-packages.mjs) would otherwise
- * leave a dead `Full docs:` path without any build failing.
+ * that block's bundled docs through `npm run docs <package>`. The pointer is plain
+ * JSDoc text, so a renamed or newly EXCLUDED package (scripts/block-packages.mjs) would
+ * otherwise leave a dead `Full docs:` name without any build failing.
  *
  * Run: node --test dist/docs-pointers.test.js
  */
@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const pkgRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = join(pkgRoot, '..', '..');
 
-test('each Package: entry in src/index.ts points at its own bundled docs folder', async () => {
+test('each Package: entry in src/index.ts points at its own bundled docs', async () => {
 	const source = readFileSync(join(pkgRoot, 'src', 'index.ts'), 'utf-8');
 	const { getBlockPackages } = await import(pathToFileURL(join(repoRoot, 'scripts', 'block-packages.mjs')).href);
 	const bundled = new Set<string>(getBlockPackages());
@@ -35,8 +35,8 @@ test('each Package: entry in src/index.ts points at its own bundled docs folder'
 		assert.ok((docs.index ?? 0) > (pkg.index ?? 0), `Full docs: for ${name} must follow its Package: line`);
 		assert.strictEqual(
 			docs[1],
-			`\`docs/${name}/README.md\` in \`@aws-blocks/blocks\`.`,
-			`Full docs: for @aws-blocks/${name} must point at its bundled docs folder`,
+			`\`npm run docs ${name}\`.`,
+			`Full docs: for @aws-blocks/${name} must name its bundled docs`,
 		);
 		assert.ok(bundled.has(name), `@aws-blocks/${name} is not bundled by gen-block-docs (see getBlockPackages)`);
 	}

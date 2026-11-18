@@ -45,6 +45,15 @@ public extension BlocksClient {
 
 /// Shared checks for a transferable's `{ "__blocks": "<type>", … }` descriptor.
 enum TransferableDescriptor {
+    /// The error `encode(to:)` throws: transferables only travel from the server to the client, so the
+    /// runtime never writes one back.
+    static func readOnly(_ value: Any, tag: String, encoder: Encoder) -> EncodingError {
+        EncodingError.invalidValue(value, .init(
+            codingPath: encoder.codingPath,
+            debugDescription: "Transferables are read-only: a '\(tag)' can't be encoded"
+        ))
+    }
+
     /// Throws when the descriptor names a different transferable type. A descriptor without the tag is accepted.
     static func check<Key: CodingKey>(_ container: KeyedDecodingContainer<Key>, key: Key, expected: String) throws {
         guard let actual = try container.decodeIfPresent(String.self, forKey: key), actual != expected else { return }

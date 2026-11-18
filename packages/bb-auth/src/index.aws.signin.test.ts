@@ -32,7 +32,7 @@ import {
 /** The options a pool that issues every MFA challenge was created from (the block rejects steps its options do not enable). */
 const MFA_ALL = { mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } } as const;
 
-const DEFAULT_TTL = 400 * 86400;
+const DEFAULT_TTL = 30 * 86400;
 
 /** The signed challenge envelope a next step carries (every challenge step has one). */
 function stepSession(step: SignInNextStep): string {
@@ -68,7 +68,7 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 		assert.deepStrictEqual(h.sent[0].input.ClientMetadata, { tenant: 't1' });
 	});
 
-	test('writes exactly the three Cognito tokens as the session record, with the default 400-day TTL', async () => {
+	test('writes exactly the three Cognito tokens as the session record, with the default 30-day TTL', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
 		const tokens = h.idp.authResult('alice');

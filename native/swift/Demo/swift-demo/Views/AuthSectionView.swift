@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import BlocksRuntime
 import SwiftUI
 
 struct AuthSectionView: View {
@@ -32,8 +33,22 @@ struct AuthSectionView: View {
                 }
             }
 
-            // Dynamic action forms
-            if let actions = appState.authState?.actions {
+            // Federated sign-in: one button per provider the OIDC client signs in with.
+            if !appState.isSignedIn, !appState.federatedProviders.isEmpty {
+                Section("Sign in with") {
+                    ForEach(appState.federatedProviders, id: \.self) { provider in
+                        Button(provider) {
+                            Task { await appState.federatedSignIn(provider: provider) }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+
+            // Dynamic action forms. The buttons above cover the `signIn:<id>` actions, whose `url`
+            // would sign the system browser in, not the app. Passkey actions (`capability` set) need
+            // platform WebAuthn APIs, so they are hidden too.
+            if let actions = appState.authState?.actions.filter({ $0.capability == nil && !$0.name.hasPrefix("signIn:") }) {
                 ForEach(actions, id: \.name) { action in
                     Section(action.label) {
                         AuthActionFormView(action: action)
@@ -80,7 +95,8 @@ struct AuthActionFormView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isLoading)
+        // An action that carries `unavailable` can't run in this state.
+        .disabled(isLoading || action.unavailable != nil)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .onAppear {
             for field in action.fields {
@@ -88,6 +104,12 @@ struct AuthActionFormView: View {
                     fieldValues[field.name] = defaultValue
                 }
             }
+        }
+
+        if let reason = action.unavailable {
+            Text(reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -111,6 +133,12 @@ struct AuthActionFormView: View {
         isLoading = true
         defer { isLoading = false }
 
+        // A federated user's sign-out carries a `url` that would sign the system browser out, not
+        // the app: it goes through the OIDC client instead of `setAuthState`.
+        if action.name == "signOut", action.url != nil {
+            await appState.federatedSignOut()
+            return
+        }
         let input = buildInput()
         guard let input else { return }
         await appState.performAuthAction(input)

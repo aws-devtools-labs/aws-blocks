@@ -229,6 +229,18 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O ? A
 }> & MfaPreferenceInput<O>) : never);
 
 // @public
+export interface AuthAuditRecord {
+    block: string;
+    error?: string;
+    event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+    outcome: 'success' | 'failure' | 'incomplete';
+    provider?: string;
+    reason?: string;
+    sub?: string;
+    username?: string;
+}
+
+// @public
 export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope implements AuthShape<O> {
     constructor(scope: ScopeParent, id: string, options?: O);
     get admin(): AdminGetterOf<O>;
@@ -313,6 +325,7 @@ export interface AuthClientOptions {
 
 // @public
 export interface AuthCommonOptions {
+    audit?: boolean | ChildLogger;
     deletionProtection?: boolean;
     logger?: ChildLogger;
     // @deprecated (undocumented)
@@ -888,6 +901,7 @@ export interface OidcClientDescriptor<P extends string = string> {
     providerConfigs: Record<string, OidcProviderConfig>;
     providers: P[];
     refreshPath: string;
+    sessionCookieName?: string;
     sessionPath: string;
     signInBasePath: string;
     signOutPath: string;
@@ -901,6 +915,7 @@ export interface OidcClientHandle<P extends string = string> {
     readonly providerConfigs: Record<string, OidcProviderConfig>;
     readonly providers: P[];
     readonly refreshPath: string;
+    readonly sessionCookieName?: string;
     readonly sessionPath: string;
     readonly signInBasePath: string;
     readonly signOutPath: string;
@@ -1070,8 +1085,12 @@ export interface SecretRef {
 
 // @public
 export interface SessionOptions {
+    accessTokenValiditySeconds?: number;
     crossDomain?: boolean;
     freshAgeSeconds?: number;
+    idTokenValiditySeconds?: number;
+    refreshTokenRotation?: boolean;
+    refreshTokenValiditySeconds?: number;
     ttlSeconds?: number;
 }
 

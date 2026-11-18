@@ -18,7 +18,7 @@ describe('normalizeDescription', () => {
   const cases = [
     {
       name: 'strips the inline code markers a real blurb contains',
-      // bb-data's actual blurb ends this way.
+      // The shape of a real blurb.
       input: 'Full PostgreSQL database — connects via `fromExisting()`.',
       expected: 'Full PostgreSQL database — connects via fromExisting().',
     },

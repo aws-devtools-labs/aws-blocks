@@ -224,18 +224,21 @@ function withoutSessionStore(cognito: CfnTemplateJson, auth: CfnTemplateJson): C
 }
 
 /**
- * THE ADMIN UPDATE GRANT ALLOWLIST — `cognito-idp:AdminUpdateUserAttributes`
- * in the `admin` lifecycle statement, for `auth.admin.updateUserAttributes`,
- * which `AuthCognito` did not have. Only that one action is removed from
- * `Auth`'s side; the rest of the statement must still match.
+ * THE POLICY GRANT ALLOWLIST — two actions `AuthCognito` did not have, each
+ * removed from `Auth`'s side only; the rest of the statement must still match:
+ * - `cognito-idp:AdminUpdateUserAttributes` in the `admin` lifecycle statement,
+ *   for `auth.admin.updateUserAttributes`.
+ * - `cognito-idp:GetTokensFromRefreshToken` in the base client statement, for the
+ *   session refresh (a client with refresh-token rotation refuses `InitiateAuth`'s
+ *   `REFRESH_TOKEN_AUTH`).
  */
 function withoutAdminUpdateGrant(template: CfnTemplateJson): void {
-	const action = 'cognito-idp:AdminUpdateUserAttributes';
+	const actions = new Set(['cognito-idp:AdminUpdateUserAttributes', 'cognito-idp:GetTokensFromRefreshToken']);
 	for (const resource of Object.values(template.Resources)) {
 		if (resource.Type !== 'AWS::IAM::Policy') continue;
 		const doc = resource.Properties?.PolicyDocument as { Statement: { Action: unknown }[] } | undefined;
 		for (const s of doc?.Statement ?? []) {
-			if (Array.isArray(s.Action)) s.Action = s.Action.filter((a) => a !== action);
+			if (Array.isArray(s.Action)) s.Action = s.Action.filter((a) => !actions.has(String(a)));
 		}
 	}
 }
@@ -273,6 +276,28 @@ function stripAllowlistedClientProperties(
 		JSON.stringify(copy.WriteAttributes) === JSON.stringify(expected)
 	) {
 		delete copy.WriteAttributes;
+	}
+	// The client token lifetimes and refresh rotation `Auth` sets (`session.*` defaults; `AuthCognito` set none).
+	// `ALLOW_REFRESH_TOKEN_AUTH` goes with rotation: Cognito refuses that flow on a rotating client.
+	const flows = copy.ExplicitAuthFlows;
+	if (
+		Array.isArray(flows) &&
+		Array.isArray(cognitoProps?.ExplicitAuthFlows) &&
+		JSON.stringify([...flows, 'ALLOW_REFRESH_TOKEN_AUTH']) === JSON.stringify(cognitoProps.ExplicitAuthFlows)
+	) {
+		copy.ExplicitAuthFlows = cognitoProps.ExplicitAuthFlows;
+	}
+	const lifetimes = {
+		AccessTokenValidity: 60,
+		IdTokenValidity: 60,
+		RefreshTokenValidity: 43_200,
+		TokenValidityUnits: { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'minutes' },
+		RefreshTokenRotation: { Feature: 'ENABLED', RetryGracePeriodSeconds: 10 },
+	};
+	for (const [key, expectedValue] of Object.entries(lifetimes)) {
+		if (cognitoProps?.[key] === undefined && JSON.stringify(copy[key]) === JSON.stringify(expectedValue)) {
+			delete copy[key];
+		}
 	}
 	return copy;
 }

@@ -4,7 +4,8 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
-import { sql, type TransactionHandle } from '@aws-blocks/data-common/core';
+import type { TransactionHandle } from '../common/engine.js';
+import { sql } from '../common/sql.js';
 import { DatabaseErrors, serializationConflict } from '../errors.js';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { conflictRetryDelayMs, DatabaseCore } from './index.js';
