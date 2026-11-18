@@ -47,10 +47,10 @@ channel.subscribe().listen((cursor) {
 ```yaml
 # pubspec.yaml
 dependencies:
-  blocks_runtime: ^1.0.0
+  blocks_runtime: ^0.1.0
 
 dev_dependencies:
-  blocks_codegen: ^1.0.0
+  blocks_codegen: ^0.1.0
   build_runner: ^2.4.0
 ```
 
