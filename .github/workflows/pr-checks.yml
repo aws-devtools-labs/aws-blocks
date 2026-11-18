@@ -1212,13 +1212,14 @@ jobs:
       # API Gateway allows one REST API delete every 30 seconds per account,
       # and CloudFormation fails a REST API delete it can't make in about 4.5
       # minutes (DELETE_FAILED, 429 Too Many Requests). The legs' stacks hold
-      # 14 REST APIs (DefaultCompute/API, plus Cdn/SsrRestApi on the nextjs,
-      # nuxt and sveltekit legs), and other PRs' runs delete theirs in the
-      # same accounts. So each leg uses the account `account-offset` after
-      # the PR's own (see .github/actions/e2e-slot), spreading every run's
-      # deletes over three accounts. The offsets keep the 2-API legs apart and
-      # put the fewest REST APIs (4, against 5 and 5) on offset 0, which also
-      # takes the PR's Sandbox, Production, Telemetry and Compute Smoke stacks.
+      # 16 REST APIs (DefaultCompute/API, plus Cdn/SsrRestApi on the nextjs,
+      # nuxt, nuxt-buffered and sveltekit legs), and other PRs' runs delete
+      # theirs in the same accounts. So each leg uses the account
+      # `account-offset` after the PR's own (see .github/actions/e2e-slot),
+      # spreading every run's deletes over three accounts. The offsets put at
+      # most two 2-API legs on one account, and the fewest REST APIs (4,
+      # against 7 and 5) on offset 0, which also takes the PR's Sandbox,
+      # Production, Telemetry and Compute Smoke stacks.
       # A leg's offset must stay fixed: changing it moves the leg's stack to
       # another account, and the old account's cleanup-stacks.yml leg then
       # has to remove anything left there.
@@ -1284,10 +1285,19 @@ jobs:
             script: test:e2e:hosting-ssr-nuxt
             compute-type: web-function
             account-offset: 1
+          # The nuxt suite with `awsLambda.streaming` left unset (Nitro's
+          # default; the app reads HOSTING_NITRO_STREAMING), so the server is
+          # a buffered handler behind the CloudFront door.
+          - framework: nuxt-buffered
+            app-dir: test-apps/hosting-ssr-nuxt
+            script: test:e2e:hosting-ssr-nuxt
+            nitro-streaming: 'off'
+            account-offset: 1
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
       HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
+      HOSTING_NITRO_STREAMING: ${{ matrix.nitro-streaming || '' }}
       # The suite keeps its sandbox; Destroy sandbox below deletes it (after the
       # Web Function and front-door redeploy checks, which need it).
       BLOCKS_SANDBOX_KEEP: '1'
