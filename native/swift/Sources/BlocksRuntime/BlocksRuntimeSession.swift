@@ -20,8 +20,9 @@ enum BlocksRuntimeSession {
     }()
 
     /// Session for realtime WebSockets: `shared`'s settings, with a request timeout longer than the 9-minute
-    /// keep-alive ping, so the 60-second default can't apply to a subscribed socket. The handshake request sets its
-    /// own, shorter timeout (`WebSocketSession.handshakeTimeout`), which overrides this one while the socket opens.
+    /// keep-alive ping, so the 60-second default can't apply to a subscribed socket. The handshake request doesn't
+    /// set a timeout of its own, since that would replace this one for the socket's whole life. The pool bounds the
+    /// handshake with its own deadline (`WebSocketSession.handshakeTimeout`).
     static let realtime: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieAcceptPolicy = .never

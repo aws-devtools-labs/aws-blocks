@@ -128,15 +128,13 @@ class WebSocketSession {
     /// with no traffic.
     static let keepAliveInterval: UInt64 = 9 * 60 * 1_000_000_000
 
-    /// The realtime `URLSession`'s `timeoutIntervalForRequest`: 10 minutes, longer than the keep-alive ping. On
-    /// macOS, neither this nor the handshake timeout drops an open socket that is idle, so this is a defensive
-    /// setting: no timeout shorter than the ping should be able to apply to a subscribed socket.
+    /// The realtime `URLSession`'s `timeoutIntervalForRequest`: 10 minutes, longer than the keep-alive ping.
+    /// `URLSession` applies a request timeout to the task for its whole life, so the handshake request leaves its own
+    /// timeout unset and inherits this one, and no timeout shorter than the ping applies to a subscribed socket.
     static let requestTimeout: TimeInterval = 10 * 60
 
-    /// The handshake `URLRequest`'s `timeoutInterval`, which bounds how long opening a socket can take. A request's
-    /// own timeout overrides the session's, so a server that never completes the handshake fails after this rather
-    /// than after ``requestTimeout``. It is not 60 seconds because `URLRequest` treats exactly 60, its default, as
-    /// unset, and the session's 10 minutes would apply instead.
+    /// How long opening a socket can take. The pool enforces it with its own deadline rather than a request timeout,
+    /// which would also apply to the open socket. The socket counts as open once its first frame is sent or received.
     static let handshakeTimeout: TimeInterval = 30
 
     /// The keep-alive frame. The server's subscription re-check runs only on this JSON message, so a protocol-level
@@ -149,25 +147,33 @@ class WebSocketSession {
         let socket: RealtimeSocket
         private var listeners: [RealtimeSocketListener] = []
         private var isOpen = false
+        /// The handshake completed: a frame was sent or received.
+        private var handshakeDone = false
         /// `stopSending` ran. A task handle set after this is cancelled at once.
         private var stopped = false
+        /// A failure was reported to the listeners, so a later one is not.
+        private var failureReported = false
         private var receiveLoop: Task<Void, Never>?
         private var keepAlive: Task<Void, Never>?
+        private var handshakeDeadline: Task<Void, Never>?
         private let lock = NSLock()
         /// Every outgoing frame for the socket, in the order it must reach the server. One writer drains it, so an
         /// unsubscribe queued before a subscribe for the same channel is always sent first.
         private let outbox: AsyncStream<String>.Continuation
-        private let writer: Task<Void, Never>
+        private var writer: Task<Void, Never>?
 
         init(socket: RealtimeSocket) {
             self.socket = socket
             var continuation: AsyncStream<String>.Continuation!
             let frames = AsyncStream<String> { continuation = $0 }
             self.outbox = continuation
-            self.writer = Task {
+            // Set once here, before the entry is shared, so reading it later needs no lock.
+            self.writer = Task { [weak self] in
                 for await frame in frames {
                     do {
                         try await socket.send(frame)
+                        // A send completes only on an open socket.
+                        self?.markHandshakeDone()
                     } catch {
                         // A failed send means the socket is going away; the receive loop reports it.
                         logger.debug("Realtime send failed: \(error.localizedDescription)")
@@ -219,6 +225,35 @@ class WebSocketSession {
             }
         }
 
+        /// Records that the handshake completed, and cancels the handshake deadline.
+        func markHandshakeDone() {
+            lock.lock()
+            handshakeDone = true
+            let deadline = handshakeDeadline
+            handshakeDeadline = nil
+            lock.unlock()
+            deadline?.cancel()
+        }
+
+        /// Returns true, at most once, if the handshake has not completed and the socket was not stopped. The caller
+        /// then drops the socket and reports the timeout.
+        func claimHandshakeTimeout() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !handshakeDone, !stopped, !failureReported else { return false }
+            failureReported = true
+            return true
+        }
+
+        /// Returns true the first time a failure is to be reported to the listeners.
+        func claimFailureReport() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !failureReported else { return false }
+            failureReported = true
+            return true
+        }
+
         var snapshot: [RealtimeSocketListener] {
             lock.lock()
             defer { lock.unlock() }
@@ -231,6 +266,14 @@ class WebSocketSession {
 
         func setKeepAlive(_ task: Task<Void, Never>) {
             if !store(task, in: \.keepAlive) { task.cancel() }
+        }
+
+        func setHandshakeDeadline(_ task: Task<Void, Never>) {
+            lock.lock()
+            let keep = !stopped && !handshakeDone
+            if keep { handshakeDeadline = task }
+            lock.unlock()
+            if !keep { task.cancel() }
         }
 
         /// Stores `task` unless the entry has stopped. Returns whether it was stored.
@@ -259,17 +302,18 @@ class WebSocketSession {
             socket.cancel(reason: reason)
         }
 
-        /// Stops the keep-alive and the writer. Frames still queued are dropped. A keep-alive handle set after this
-        /// is cancelled at once.
+        /// Stops the keep-alive, the handshake deadline and the writer. Frames still queued are dropped. A task
+        /// handle set after this is cancelled at once.
         func stopSending() {
             lock.lock()
             stopped = true
-            let task = keepAlive
+            let tasks = [keepAlive, handshakeDeadline]
             keepAlive = nil
+            handshakeDeadline = nil
             lock.unlock()
-            task?.cancel()
+            tasks.forEach { $0?.cancel() }
             outbox.finish()
-            writer.cancel()
+            writer?.cancel()
         }
     }
 
@@ -279,33 +323,52 @@ class WebSocketSession {
     private let lock = NSLock()
     private let makeSocket: (URLRequest) -> RealtimeSocket
     private let sleep: @Sendable (UInt64) async throws -> Void
+    private let handshakeSleep: @Sendable (UInt64) async throws -> Void
 
     /// - Parameters:
     ///   - session: The `URLSession` that opens sockets.
     convenience init(session: URLSession = BlocksRuntimeSession.realtime) {
         self.init(
             makeSocket: { URLSessionRealtimeSocket(task: session.webSocketTask(with: $0)) },
-            sleep: { try await Task.sleep(nanoseconds: $0) }
+            sleep: { try await Task.sleep(nanoseconds: $0) },
+            handshakeSleep: { try await Task.sleep(nanoseconds: $0) }
         )
     }
 
     /// - Parameters:
     ///   - makeSocket: Opens a socket for a handshake request. Tests pass a fake.
-    ///   - sleep: Waits for a number of nanoseconds and throws when cancelled. Tests pass a manual clock.
+    ///   - sleep: Waits for a number of nanoseconds and throws when cancelled, for the keep-alive. Tests pass a
+    ///     manual clock.
+    ///   - handshakeSleep: The same, for the handshake deadline.
     init(
         makeSocket: @escaping (URLRequest) -> RealtimeSocket,
-        sleep: @escaping @Sendable (UInt64) async throws -> Void
+        sleep: @escaping @Sendable (UInt64) async throws -> Void,
+        handshakeSleep: @escaping @Sendable (UInt64) async throws -> Void
     ) {
         self.makeSocket = makeSocket
         self.sleep = sleep
+        self.handshakeSleep = handshakeSleep
     }
 
     // MARK: - Receive loop and keep-alive
 
     private func start(_ entry: ConnectionEntry, key: String) {
         let sleep = sleep
-        // The keep-alive is held by the entry before the receive loop starts, so a receive loop that drops the
-        // socket at once cancels it.
+        let handshakeSleep = handshakeSleep
+        // The deadline and the keep-alive are held by the entry before the receive loop starts, so a receive loop
+        // that drops the socket at once cancels them.
+        entry.setHandshakeDeadline(Task { [weak self] in
+            do {
+                try await handshakeSleep(UInt64(Self.handshakeTimeout * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard entry.claimHandshakeTimeout() else { return }
+            self?.drop(entry, key: key, reason: "Handshake timed out", stopReceiving: true)
+            for listener in entry.snapshot {
+                listener.onFailure(URLError(.timedOut))
+            }
+        })
         entry.setKeepAlive(Task {
             while true {
                 do {
@@ -324,6 +387,7 @@ class WebSocketSession {
             while !Task.isCancelled {
                 do {
                     guard let text = try await socket.receive() else { continue }
+                    entry.markHandshakeDone()
                     let endsSocket = RealtimeFrame.isConnectionError(text)
                     if endsSocket {
                         // Drop it before telling listeners, so a subscribe made in response opens a new socket.
@@ -335,6 +399,8 @@ class WebSocketSession {
                     if endsSocket { return }
                 } catch {
                     if Task.isCancelled { return }
+                    // The handshake deadline may already have reported this socket.
+                    guard entry.claimFailureReport() else { return }
                     // Drop the dead socket before telling listeners, so a subscribe made in response opens a new one.
                     self?.drop(entry, key: key, reason: "Connection failed")
                     for listener in entry.snapshot {
@@ -347,14 +413,19 @@ class WebSocketSession {
     }
 
     /// Removes `entry` from the pool if it is still the pooled socket for `key`, and stops it.
-    private func drop(_ entry: ConnectionEntry, key: String, reason: String) {
+    /// `stopReceiving` also cancels the receive loop; the receive loop itself passes false.
+    private func drop(_ entry: ConnectionEntry, key: String, reason: String, stopReceiving: Bool = false) {
         lock.lock()
         if connections[key] === entry {
             connections.removeValue(forKey: key)
         }
         lock.unlock()
-        entry.stopSending()
-        entry.socket.cancel(reason: reason)
+        if stopReceiving {
+            entry.stop(reason: reason)
+        } else {
+            entry.stopSending()
+            entry.socket.cancel(reason: reason)
+        }
     }
 
     // MARK: - API
@@ -376,8 +447,9 @@ class WebSocketSession {
             return
         }
 
-        // Set User-Agent on the handshake because caller-supplied sessions may omit it.
-        var request = URLRequest(url: url, timeoutInterval: Self.handshakeTimeout)
+        // Set User-Agent on the handshake because caller-supplied sessions may omit it. The request keeps the
+        // session's timeout; the handshake deadline in `start` bounds the open.
+        var request = URLRequest(url: url)
         request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
         let entry = ConnectionEntry(socket: makeSocket(request))
         entry.add(listener)

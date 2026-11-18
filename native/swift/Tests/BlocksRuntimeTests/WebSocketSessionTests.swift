@@ -63,17 +63,18 @@ final class WebSocketSessionTests: XCTestCase {
         XCTAssertTrue(harness.sockets.isEmpty)
     }
 
-    func testRealtimeSessionTimeoutOutlastsTheKeepAliveAndTheHandshakeStaysBounded() throws {
+    func testRealtimeSessionTimeoutOutlastsTheKeepAliveAndTheHandshakeRequestKeepsIt() throws {
         // The session's request timeout defaults to 60 seconds; the realtime session's must outlast the ping.
         let keepAliveSeconds = TimeInterval(WebSocketSession.keepAliveInterval) / 1_000_000_000
         XCTAssertGreaterThan(WebSocketSession.requestTimeout, keepAliveSeconds)
-        // The handshake keeps a short bound of its own. Exactly 60 is URLRequest's default and would be ignored.
-        XCTAssertLessThan(WebSocketSession.handshakeTimeout, 60)
+        XCTAssertLessThan(WebSocketSession.handshakeTimeout, keepAliveSeconds)
 
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
         try harness.session.acquire(wsUrl: url, listener: listener)
-        XCTAssertEqual(harness.sockets[0].request.timeoutInterval, WebSocketSession.handshakeTimeout)
+        // A request timeout applies to the task for its whole life, so the handshake request must not set one.
+        // URLRequest's default, 60, means unset, and the session's timeout applies.
+        XCTAssertEqual(harness.sockets[0].request.timeoutInterval, URLRequest(url: URL(string: url)!).timeoutInterval)
         harness.session.release(wsUrl: url, listener: listener)
 
         XCTAssertEqual(
@@ -349,19 +350,88 @@ final class WebSocketSessionTests: XCTestCase {
         harness.session.release(wsUrl: url, listener: listener)
     }
 
+    // MARK: - Handshake deadline
+
+    private var handshakeNanoseconds: UInt64 { UInt64(WebSocketSession.handshakeTimeout * 1_000_000_000) }
+
+    func testAHandshakeThatNeverCompletesFailsAfterTheHandshakeTimeout() async throws {
+        let harness = FakeRealtimeHarness(completesHandshake: false)
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        let deadline = handshakeNanoseconds
+        await waitUntil("the handshake deadline waits") { harness.handshakeClock.pendingDurations == [deadline] }
+
+        harness.handshakeClock.advance(by: handshakeNanoseconds - 1)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(listener.errors.isEmpty, "no failure before the handshake timeout")
+        XCTAssertEqual(harness.session.connectionCount, 1)
+
+        harness.handshakeClock.advance(by: 1)
+        await waitUntil("the listener hears the timeout") { !listener.errors.isEmpty }
+        XCTAssertEqual((listener.errors.first as? URLError)?.code, .timedOut)
+        XCTAssertEqual(harness.session.connectionCount, 0)
+        XCTAssertTrue(harness.sockets[0].isCancelled)
+        await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(listener.errors.count, 1, "the timeout is reported once")
+    }
+
+    func testACompletedHandshakeCancelsTheDeadline() async throws {
+        let harness = FakeRealtimeHarness(completesHandshake: false)
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        await waitUntil("the handshake deadline waits") { harness.handshakeClock.pendingDurations.count == 1 }
+
+        harness.sockets[0].completeHandshake()
+
+        await waitUntil("the deadline is cancelled") { harness.handshakeClock.pendingDurations.isEmpty }
+        harness.handshakeClock.advance(by: handshakeNanoseconds)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertTrue(listener.errors.isEmpty)
+        XCTAssertEqual(harness.session.connectionCount, 1)
+        harness.session.release(wsUrl: url, listener: listener)
+    }
+
+    func testAFrameFromTheServerCompletesTheHandshake() async throws {
+        let harness = FakeRealtimeHarness(completesHandshake: false)
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        await waitUntil("the handshake deadline waits") { harness.handshakeClock.pendingDurations.count == 1 }
+
+        harness.sockets[0].deliver(#"{"type":"subscribe_success","channel":"c"}"#)
+
+        await waitUntil("the deadline is cancelled") { harness.handshakeClock.pendingDurations.isEmpty }
+        XCTAssertEqual(harness.session.connectionCount, 1)
+        harness.session.release(wsUrl: url, listener: listener)
+    }
+
+    func testReleasingBeforeTheHandshakeCompletesStopsTheDeadline() async throws {
+        let harness = FakeRealtimeHarness(completesHandshake: false)
+        let listener = RecordingListener()
+        try harness.session.acquire(wsUrl: url, listener: listener)
+        await waitUntil("the handshake deadline waits") { harness.handshakeClock.pendingDurations.count == 1 }
+
+        harness.session.release(wsUrl: url, listener: listener)
+
+        await waitUntil("the deadline is cancelled") { harness.handshakeClock.pendingDurations.isEmpty }
+        XCTAssertTrue(listener.errors.isEmpty)
+    }
+
     // MARK: - Task handles
 
     func testASocketThatFailsAtOnceLeavesNoKeepAliveRunning() async throws {
         // The receive loop can drop the socket before `acquire` returns. The keep-alive must still stop.
         for _ in 0 ..< 200 {
             let clock = ManualClock()
+            let handshakeClock = ManualClock()
             let session = WebSocketSession(
                 makeSocket: { request in
                     let socket = FakeRealtimeSocket(request: request)
                     socket.fail()
                     return socket
                 },
-                sleep: { try await clock.sleep($0) }
+                sleep: { try await clock.sleep($0) },
+                handshakeSleep: { try await handshakeClock.sleep($0) }
             )
             let listener = RecordingListener()
             try session.acquire(wsUrl: url, listener: listener)
@@ -369,6 +439,7 @@ final class WebSocketSessionTests: XCTestCase {
             XCTAssertEqual(session.connectionCount, 0)
             // A sleep that starts after the drop is cancelled at once, so none stays waiting.
             await waitUntil("the keep-alive stops") { clock.pendingDurations.isEmpty }
+            await waitUntil("the handshake deadline stops") { handshakeClock.pendingDurations.isEmpty }
         }
     }
 }

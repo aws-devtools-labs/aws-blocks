@@ -20,10 +20,17 @@ final class FakeRealtimeSocket: RealtimeSocket {
     private let inboundContinuation: AsyncThrowingStream<String, Error>.Continuation
     private var iterator: AsyncThrowingStream<String, Error>.AsyncIterator
 
+    /// Sends waiting for the handshake to complete. Only used when `completesHandshake` is false.
+    private var pendingSends: [CheckedContinuation<Void, Error>] = []
+    private var _handshakeCompleted: Bool
+
     struct Closed: Error {}
 
-    init(request: URLRequest) {
+    /// - Parameter completesHandshake: False for a server that accepts the connection but never completes the
+    ///   handshake: sends wait until `completeHandshake()` or `cancel`.
+    init(request: URLRequest, completesHandshake: Bool = true) {
         self.request = request
+        self._handshakeCompleted = completesHandshake
         var continuation: AsyncThrowingStream<String, Error>.Continuation!
         self.inbound = AsyncThrowingStream { continuation = $0 }
         self.inboundContinuation = continuation
@@ -68,7 +75,30 @@ final class FakeRealtimeSocket: RealtimeSocket {
         lock.unlock()
     }
 
+    /// Completes the handshake, letting waiting sends through.
+    func completeHandshake() {
+        let waiting = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
+            _handshakeCompleted = true
+            defer { pendingSends = [] }
+            return pendingSends
+        }
+        waiting.forEach { $0.resume() }
+    }
+
     func send(_ text: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let state = lock.withLock { () -> Bool? in
+                if _cancelled { return false }
+                if _handshakeCompleted { return true }
+                pendingSends.append(continuation)
+                return nil
+            }
+            switch state {
+            case true?: continuation.resume()
+            case false?: continuation.resume(throwing: Closed())
+            case nil: break
+            }
+        }
         let sent = lock.withLock { () -> Bool in
             if _cancelled { return false }
             _sent.append(text)
@@ -86,7 +116,10 @@ final class FakeRealtimeSocket: RealtimeSocket {
     func cancel(reason: String) {
         lock.lock()
         _cancelled = true
+        let waiting = pendingSends
+        pendingSends = []
         lock.unlock()
+        waiting.forEach { $0.resume(throwing: Closed()) }
         inboundContinuation.finish(throwing: CancellationError())
     }
 }
@@ -152,19 +185,29 @@ final class ManualClock: @unchecked Sendable {
 
 /// A pool on fake sockets and a manual clock.
 final class FakeRealtimeHarness {
+    /// Drives the keep-alive.
     let clock = ManualClock()
+    /// Drives the handshake deadline.
+    let handshakeClock = ManualClock()
+    private let completesHandshake: Bool
     private let lock = NSLock()
     private var _sockets: [FakeRealtimeSocket] = []
     private(set) lazy var session = WebSocketSession(
         makeSocket: { [unowned self] request in
-            let socket = FakeRealtimeSocket(request: request)
+            let socket = FakeRealtimeSocket(request: request, completesHandshake: completesHandshake)
             lock.lock()
             _sockets.append(socket)
             lock.unlock()
             return socket
         },
-        sleep: { [clock] in try await clock.sleep($0) }
+        sleep: { [clock] in try await clock.sleep($0) },
+        handshakeSleep: { [handshakeClock] in try await handshakeClock.sleep($0) }
     )
+
+    /// - Parameter completesHandshake: False for sockets whose handshake waits for `completeHandshake()`.
+    init(completesHandshake: Bool = true) {
+        self.completesHandshake = completesHandshake
+    }
 
     var sockets: [FakeRealtimeSocket] {
         lock.lock()
