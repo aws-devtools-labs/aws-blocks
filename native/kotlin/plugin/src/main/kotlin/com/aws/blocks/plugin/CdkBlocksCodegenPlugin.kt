@@ -27,7 +27,8 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
  * Usage in `build.gradle.kts`:
  * ```
  * plugins {
- *     id("com.aws.blocks.kotlin")
+ *     id("org.jetbrains.kotlin.plugin.serialization") version "<kotlin version>"
+ *     id("com.aws.blocks.kotlin") version "<version>"
  * }
  *
  * cdkBlocks {
