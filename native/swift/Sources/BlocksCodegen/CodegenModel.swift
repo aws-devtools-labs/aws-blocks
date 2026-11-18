@@ -623,14 +623,19 @@ public struct CodegenModel {
     let sharedTypes: [NestedTypeNode]
     /// One `swift:` line per named union parameter that keeps its operation's nested type instead.
     let namingWarnings: [String]
+    /// Each namespace's name, in the order the spec first names it (`apiNamespaces` is sorted by name), so a
+    /// diagnostic picks the first case in the order the Kotlin generator walks.
+    let namespaceSpecOrder: [String]
 
     init(
         apiNamespaces: [APINamespace], typeDefinitions: [TypeDefinition], servers: [ServerDefinition],
         declaredTransferableBindings: [String: DeclaredTransferableBinding], unboundTransferableCauses: [String: String],
-        nativeCatalogWarnings: [String], sharedTypes: [NestedTypeNode] = [], namingWarnings: [String] = []
+        nativeCatalogWarnings: [String], sharedTypes: [NestedTypeNode] = [], namingWarnings: [String] = [],
+        namespaceSpecOrder: [String] = []
     ) {
         self.sharedTypes = sharedTypes
         self.namingWarnings = namingWarnings
+        self.namespaceSpecOrder = namespaceSpecOrder
         self.apiNamespaces = apiNamespaces
         self.typeDefinitions = typeDefinitions
         self.servers = servers

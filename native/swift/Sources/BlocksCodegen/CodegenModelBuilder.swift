@@ -218,6 +218,7 @@ public struct CodegenModelBuilder {
         // Step 2: Walk each method, resolving params and result.
         // Inline types use short names and are tracked for nesting.
         var namespaceMap: [String: [Operation]] = [:]
+        var namespaceSpecOrder: [String] = []
 
         // A union parameter the spec names (`x-blocks-type-name`) is declared once at the top level under that
         // name, if no other type there has it, and shared by every operation whose parameter has that shape.
@@ -361,6 +362,7 @@ public struct CodegenModelBuilder {
 
             let nestedTypes = buildNestedTypeNodes(from: inlineTypes.filter { !aliasEntryIds.contains($0.id) })
 
+            if namespaceMap[namespaceName] == nil { namespaceSpecOrder.append(namespaceName) }
             namespaceMap[namespaceName, default: []].append(Operation(
                 name: opName,
                 parameters: parameters,
@@ -385,7 +387,8 @@ public struct CodegenModelBuilder {
             unboundTransferableCauses: rpcModel.unboundTransferableCauses,
             nativeCatalogWarnings: rpcModel.nativeCatalogWarnings,
             sharedTypes: sharedTypes,
-            namingWarnings: namingWarnings
+            namingWarnings: namingWarnings,
+            namespaceSpecOrder: namespaceSpecOrder
         )
     }
 
