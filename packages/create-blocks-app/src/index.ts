@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -1119,6 +1120,14 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  import { api } from \'aws-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
+  // Only a backend that hosts the app can build its Next.js. Whether it does, and with what, is
+  // Hosting's answer: pass it the `framework` the copied backend gives its `Hosting`, if any.
+  const backendStack = await readFile(join(awsBlocksDest, 'index.cdk.ts'), 'utf-8').catch(() => '');
+  const hostingProps = backendStack.split('new Hosting(')[1];
+  if (hostingProps !== undefined) {
+    const framework = /\bframework:\s*['"]([^'"]+)['"]/.exec(hostingProps)?.[1];
+    await printHostingNextjsWarning(targetDir, awsBlocksDest, framework);
+  }
 }
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
@@ -1172,6 +1181,75 @@ function printTypeScriptSteps(pkg: PackageDeps): void {
     console.log('(if the script used --noEmit, set "noEmit": true in that tsconfig instead).');
   }
   console.log(`Details: ${TYPESCRIPT_STEPS_URL}`);
+  console.log('');
+}
+
+/** The root directory of the installed package `name` that `file`, one of its files, belongs to. */
+function packageRootOf(file: string, name: string): string {
+  for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
+    try {
+      if (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).name === name) return dir;
+    } catch {
+      // No readable package.json here: keep walking up.
+    }
+  }
+  throw new Error(`Cannot find the package root of ${name} from ${file}`);
+}
+
+/**
+ * The file of `@aws-blocks/hosting/<subpath>` that the project's backend builds with,
+ * resolved as Node resolves the backend's own imports: from `aws-blocks/` to
+ * `@aws-blocks/blocks`, then the `@aws-blocks/core` that it imports `Hosting` from,
+ * then that core's `@aws-blocks/hosting`. Never this CLI's own copy, which can be
+ * another release. Throws when any of them is not installed or `subpath` is not exported.
+ */
+function resolveProjectHosting(backendDir: string, subpath: string): string {
+  let from = join(backendDir, 'index.cdk.ts');
+  for (const name of ['@aws-blocks/blocks', '@aws-blocks/core']) {
+    from = join(packageRootOf(createRequire(from).resolve(name), name), 'package.json');
+  }
+  return createRequire(from).resolve(`@aws-blocks/hosting/${subpath}`);
+}
+
+/**
+ * Prints the warning the project's own Hosting has for its installed `next`, so the
+ * project hears of it while it is being set up. Everything in it is that Hosting's:
+ * `checkNextjsCompatibility` from the `@aws-blocks/hosting/nextjs-compatibility` the
+ * backend resolves (see resolveProjectHosting) decides whether there is anything to
+ * say and what. This CLI carries no version range, no framework detection and no
+ * wording of its own for it; it adds only where the warning is from and that `next`
+ * was left as it is.
+ *
+ * Silent when that Hosting is not installed (`--skip-install`), predates the export,
+ * throws, or has no warning. `console.error` and `console.warn` are muted during the
+ * check: Hosting's package lookup logs an error and its stack trace for a broken
+ * installed package before it answers that it has no verdict.
+ *
+ * @param framework - The `framework` the copied backend gives its `Hosting`, if any.
+ */
+async function printHostingNextjsWarning(targetDir: string, backendDir: string, framework: string | undefined): Promise<void> {
+  let warning: unknown;
+  const { error, warn } = console;
+  try {
+    // A runtime path: the module is the project's installed Hosting, not a dependency of this CLI.
+    const compatibility: Record<string, unknown> = await import(
+      pathToFileURL(resolveProjectHosting(backendDir, 'nextjs-compatibility')).href
+    );
+    const check = compatibility.checkNextjsCompatibility;
+    if (typeof check !== 'function') return;
+    console.error = console.warn = () => {};
+    const result: unknown = check(targetDir, { framework });
+    if (typeof result !== 'object' || result === null) return;
+    warning = Reflect.get(result, 'warning');
+  } catch {
+    return;
+  } finally {
+    console.error = error;
+    console.warn = warn;
+  }
+  if (typeof warning !== 'string' || warning === '') return;
+  console.log(`⚠️  ${warning}`);
+  console.log('   This is from the @aws-blocks/hosting this project installs. Your `next` was not changed.');
   console.log('');
 }
 

@@ -21,6 +21,10 @@ void describe('sub-path exports', () => {
     assert.ok(require.resolve('@aws-blocks/hosting/scripts'));
   });
 
+  void it('resolves ./nextjs-compatibility', () => {
+    assert.ok(require.resolve('@aws-blocks/hosting/nextjs-compatibility'));
+  });
+
   void it('resolves main entry (the CDK-free value API)', () => {
     assert.ok(require.resolve('@aws-blocks/hosting'));
   });

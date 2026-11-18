@@ -18,6 +18,12 @@ import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
 import { getProjectPackageInfo } from './shared/package_info.js';
+import {
+  OPENNEXT_FALLBACK_VERSION,
+  detectNextVersion,
+  findInstalledOpenNext,
+} from './shared/opennext_version.js';
+import { type NextjsCompatibility, checkNextjsCompatibility } from '../nextjs_compatibility.js';
 import { HostingError } from '../hosting_error.js';
 import { type BuildProfile, buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
@@ -1535,40 +1541,15 @@ const warnIfOpenNextOutOfRange = (projectDir: string): void => {
   );
 };
 
-/**
- * The `@opennextjs/aws` version the adapter builds with when the project
- * doesn't declare one. It sits inside {@link VERIFIED_OPENNEXT_RANGE}, so an
- * undeclared OpenNext never resolves to whatever `npx` would fetch as the
- * newest (unverified) release. It is the newest verified release.
- *
- * Bump together with {@link OPENNEXT_FALLBACK_NEXT_PEER_RANGE} and the
- * `@opennextjs/aws` pin in the `create-blocks-app` `nextjs` template
- * (`version_pins.test.ts` checks the template pin).
- * @internal
- */
-export const OPENNEXT_FALLBACK_VERSION = '4.1.14';
-
-/**
- * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares in its
- * `package.json`. Used to check the app's Next.js version when OpenNext isn't
- * installed (so there's no installed `package.json` to read it from). Must be
- * copied from the fallback version's published `peerDependencies.next`.
- * @internal
- */
-export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.28 <16 || >=16.4.1';
-
-/** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
-type InstalledOpenNext = { version: string; nextPeerRange?: string };
-
-const findInstalledOpenNext = (
-  projectDir: string,
-): InstalledOpenNext | undefined => {
-  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
-  if (!info?.version) return undefined;
-  const peers = (info.packageJson as { peerDependencies?: Record<string, string> })
-    .peerDependencies;
-  return { version: info.version, nextPeerRange: peers?.next };
-};
+// The fallback OpenNext, its `next` peer range and the installed-version
+// lookups live in `shared/opennext_version.ts`, which the
+// `@aws-blocks/hosting/nextjs-compatibility` subpath shares without loading
+// this adapter. Re-exported here for this file's importers and tests.
+export {
+  OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
+  OPENNEXT_FALLBACK_VERSION,
+  detectNextVersion,
+} from './shared/opennext_version.js';
 
 /**
  * Warn when the app's Next.js version is outside the `next` peer range of the
@@ -1576,22 +1557,14 @@ const findInstalledOpenNext = (
  * `--legacy-peer-deps`) let such a pair install, and OpenNext then builds a
  * combination it was never released against. Warn rather than fail: the pair
  * may still work, and the fix (upgrade `next` within its major, or pick a
- * different OpenNext) is the user's call.
+ * different OpenNext) is the user's call. The verdict and the warning's words
+ * are {@link checkNextjsCompatibility}'s, which the
+ * `@aws-blocks/hosting/nextjs-compatibility` subpath exports.
  */
 const warnIfNextOutsideOpenNextPeerRange = (
-  projectDir: string,
-  openNextVersion: string,
-  nextPeerRange: string | undefined,
+  compatibility: NextjsCompatibility | undefined,
 ): void => {
-  const nextVersion = detectNextVersion(projectDir);
-  if (!nextVersion || !nextPeerRange || !semver.validRange(nextPeerRange)) return;
-  // `includePrerelease`: a `next` canary/rc inside the range (e.g.
-  // `16.3.0-canary.5`) is not a mismatch.
-  if (semver.satisfies(nextVersion, nextPeerRange, { includePrerelease: true })) return;
-  process.stderr.write(
-    `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextPeerRange}). ` +
-      'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
-  );
+  if (compatibility?.warning) process.stderr.write(`⚠️  ${compatibility.warning}\n`);
 };
 
 /**
@@ -1758,19 +1731,6 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
   process.stderr.write(
     `\u{1F527} Patched ${total} edge bundle(s) for Lambda@Edge compatibility.\n`,
   );
-};
-
-/**
- * Read the installed Next.js version from the project's node_modules.
- * Best-effort: returns `undefined` when the package isn't resolvable or the
- * version can't be parsed (e.g. an L3 path running against a pre-built
- * `.open-next/` with no `next` in scope).
- * @internal
- */
-export const detectNextVersion = (projectDir: string): string | undefined => {
-  const info = getProjectPackageInfo('next', projectDir);
-  const version = info?.version;
-  return version && semver.valid(version) ? version : undefined;
 };
 
 /**
@@ -2231,19 +2191,21 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   // `npx @opennextjs/aws` fetches the newest release — outside the verified
   // range more often than not. Build with the verified fallback version
   // instead, and say so.
-  const installed = findInstalledOpenNext(projectDir);
-  const openNextVersion = installed?.version ?? OPENNEXT_FALLBACK_VERSION;
+  // The compatibility verdict names the OpenNext it found; without a verdict
+  // (no `next`, or an installed OpenNext with no usable `next` peer range),
+  // look it up here.
+  // This adapter builds whatever framework detection would say, so name it.
+  const compatibility = checkNextjsCompatibility(projectDir, { framework: 'nextjs' });
+  const installed = compatibility
+    ? compatibility.openNextSource === 'installed'
+    : findInstalledOpenNext(projectDir) !== undefined;
   if (!installed) {
     process.stderr.write(
       `⚠️  @opennextjs/aws is not installed in this project; building with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}, the version this adapter falls back to. ` +
         `Declare it to control the version and build without downloading it: npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n`,
     );
   }
-  warnIfNextOutsideOpenNextPeerRange(
-    projectDir,
-    openNextVersion,
-    installed ? installed.nextPeerRange : OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
-  );
+  warnIfNextOutsideOpenNextPeerRange(compatibility);
 
   const args = installed
     ? ['@opennextjs/aws', 'build']

@@ -7,14 +7,20 @@
  * In a workspace or monorepo whose app pins a different version than the one
  * hoisted to the root (e.g. the app's `next@15.5.7` under a root
  * `next@16.4.2`), the adapters then read the root's version and pick the wrong
- * patches or skip a warning. Resolving from `<projectDir>/package.json` starts
- * the lookup in the app's directory, as Node does for the app itself.
+ * patches or skip a warning. Resolving from `<projectDir>/` (with the trailing
+ * separator) starts the lookup in the app's directory, as Node does for the
+ * app itself.
+ *
+ * Not `<projectDir>/package.json`: for a package that isn't installed, the
+ * resolver also tries `<base>/_index.js`, which under a file base is
+ * `package.json/_index.js`, fails with ENOTDIR instead of not-found, and
+ * `local-pkg` prints that error and its stack trace to stderr.
  */
 import * as path from 'path';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 
 const fromProjectDir = (projectDir: string): { paths: string[] } => ({
-  paths: [path.join(projectDir, 'package.json')],
+  paths: [path.join(projectDir, path.sep)],
 });
 
 /** `getPackageInfoSync`, resolved from the app's directory. */
