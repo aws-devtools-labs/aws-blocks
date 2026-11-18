@@ -1289,9 +1289,9 @@ typedef AlphaAuthApiSetAuthStateInput = AuthActionInput;
 
 // --- API Namespaces ---
 
-class AlphaAuthApiApi {
+class AlphaAuthApi {
   final BlocksClient _client;
-  AlphaAuthApiApi(this._client);
+  AlphaAuthApi(this._client);
 
   Future<AuthState> getAuthState() async {
     final result = await _client.call('alphaAuthApi.getAuthState', const <dynamic>[]);
@@ -1308,9 +1308,9 @@ class AlphaAuthApiApi {
 }
 
 
-class ZetaAuthApiApi {
+class ZetaAuthApi {
   final BlocksClient _client;
-  ZetaAuthApiApi(this._client);
+  ZetaAuthApi(this._client);
 
   Future<AuthState> getAuthState() async {
     final result = await _client.call('zetaAuthApi.getAuthState', const <dynamic>[]);
@@ -1330,13 +1330,13 @@ class ZetaAuthApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final AlphaAuthApiApi alphaAuthApi;
-  late final ZetaAuthApiApi zetaAuthApi;
+  late final AlphaAuthApi alphaAuthApi;
+  late final ZetaAuthApi zetaAuthApi;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    alphaAuthApi = AlphaAuthApiApi(client);
-    zetaAuthApi = ZetaAuthApiApi(client);
+    alphaAuthApi = AlphaAuthApi(client);
+    zetaAuthApi = ZetaAuthApi(client);
   }
 }
 

@@ -409,8 +409,7 @@
                 "nextStep"
               ]
             }
-          ],
-          "x-blocks-type-name": "SignInResult"
+          ]
         }
       }
     },
@@ -818,8 +817,7 @@
                 "nextStep"
               ]
             }
-          ],
-          "x-blocks-type-name": "SignInResult"
+          ]
         }
       }
     }
