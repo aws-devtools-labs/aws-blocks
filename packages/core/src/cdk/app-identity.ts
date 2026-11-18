@@ -10,6 +10,7 @@
  * @internal
  */
 
+import { createHash } from 'node:crypto';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
@@ -17,7 +18,9 @@ import {
 	type AppViolation,
 	appIdProblem,
 	checkApiChild,
+	checkPhysicalName,
 	checkResourcePolicy,
+	checkResourcePolicyPrincipals,
 	checkRole,
 	isResourcePolicyType,
 	checkScopeFullId,
@@ -132,6 +135,18 @@ function nameCloudFrontForApp(stack: cdk.Stack, id: string): void {
 const LAYER_NAME_MAX = 140;
 
 /**
+ * `<id>-<logical id>`, cut to the layer-name limit. When it has to be cut, the
+ * end becomes a hash of the whole logical id, so two long logical ids that
+ * share a prefix past the limit still get distinct names.
+ */
+function layerName(id: string, logicalId: string): string {
+	const full = `${id}-${logicalId}`;
+	if (full.length <= LAYER_NAME_MAX) return full;
+	const hash = createHash('sha256').update(logicalId).digest('hex').slice(0, 8);
+	return `${full.slice(0, LAYER_NAME_MAX - hash.length - 1)}-${hash}`;
+}
+
+/**
  * Name every Lambda layer in the app's stack `<id>-<logical id>` when it has no
  * name of its own. CDK's layers (e.g. the AWS CLI layer `BucketDeployment`
  * uses) otherwise get CloudFormation-generated names that don't carry the app's
@@ -150,7 +165,7 @@ function nameLayersForApp(stack: cdk.Stack, id: string): void {
 			node.addPropertyOverride(
 				'LayerName',
 				cdk.Lazy.string({
-					produce: () => `${id}-${layerStack.resolve(node.logicalId)}`.slice(0, LAYER_NAME_MAX),
+					produce: () => layerName(id, layerStack.resolve(node.logicalId) as string),
 				}),
 			);
 		},
@@ -186,6 +201,25 @@ function blocksUnder(root: Construct): { node: IConstruct; fullId: string }[] {
 		if (typeof fullId === 'string') out.push({ node, fullId });
 	}
 	return out;
+}
+
+/**
+ * The stacks of the app that owns `root`: its own stack, and every other stack in
+ * the same stage named `<id>` or `<id>-…` (Hosting's helper stacks, the
+ * `<id>-edge` stack). A stack outside the prefix is reported on its own.
+ */
+function appStacks(root: Construct, id: string): cdk.Stack[] {
+	const rootStack = cdk.Stack.of(root);
+	const stage = cdk.Stage.of(root);
+	const others = (stage?.node.findAll() ?? []).filter(
+		(n): n is cdk.Stack =>
+			cdk.Stack.isStack(n) &&
+			n !== rootStack &&
+			cdk.Stage.of(n) === stage &&
+			!cdk.Token.isUnresolved(n.stackName) &&
+			(n.stackName === id || n.stackName.startsWith(`${id}-`)),
+	);
+	return [rootStack, ...others];
 }
 
 /**
@@ -256,6 +290,22 @@ export function collectAppViolations(
 		} else if (type.startsWith('AWS::ApiGateway')) {
 			// A stage, route or deployment on an API outside the app's own template.
 			violations.push(...checkApiChild(type, render(node), app.id, node.node.path, parametersOf(cdk.Stack.of(node))));
+		}
+	}
+
+	// Who each resource policy lets in, and the names the app gives its own
+	// resources, in every stack of the app: the root's, and
+	// the helper stacks beside it (Hosting's support and `<id>-edge` stacks), which
+	// carry the app's name.
+	for (const stack of appStacks(root, app.id)) {
+		const account = cdk.Token.isUnresolved(stack.account) ? undefined : stack.account;
+		for (const node of stack.node.findAll()) {
+			if (!cdk.CfnResource.isCfnResource(node) || cdk.Stack.of(node) !== stack) continue;
+			const props = render(node);
+			violations.push(
+				...checkResourcePolicyPrincipals(node.cfnResourceType, props, app.id, node.node.path, parametersOf(stack), account),
+				...checkPhysicalName(node.cfnResourceType, props, app.id, node.node.path),
+			);
 		}
 	}
 

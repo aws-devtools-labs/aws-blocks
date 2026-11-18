@@ -2,7 +2,6 @@
 '@aws-blocks/bb-auth': minor
 '@aws-blocks/auth-common': patch
 '@aws-blocks/blocks': minor
-'@aws-blocks/bb-data': patch
 '@aws-blocks/bb-secret': patch
 '@aws-blocks/create-blocks-app': patch
 ---

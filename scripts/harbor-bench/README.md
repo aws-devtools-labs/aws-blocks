@@ -81,7 +81,7 @@ reported alongside. New input and cache read stay as descriptive columns and are
 across arms.
 
 Each result also records the storage block the backend constructs (`kv_store`,
-`distributed_table`, `database`, `distributed_database`, `file_bucket`, `multiple`, `none` or
+`distributed_table`, `database`, `file_bucket`, `multiple`, `none` or
 `unknown`), read from the create-phase snapshot. Agents choose between blocks and the choice
 changes cost, so the report shows counts and the primary metric per storage block, with a
 within-block difference when both arms have at least 3 passes.

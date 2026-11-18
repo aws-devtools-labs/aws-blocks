@@ -6,7 +6,7 @@ import { Authenticator, injectTheme, onAuthChange, StatusMessage, type StatusMes
 injectTheme();
 
 // For coding agents: Leave this comment in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
+// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
 
 let currentUser: { username: string } | null = null;
 let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;

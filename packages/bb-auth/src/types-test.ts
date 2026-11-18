@@ -207,7 +207,7 @@ async function providerIdNarrowing() {
 	// @ts-expect-error — 'github' is not a configured provider.
 	await auth.getSignInUrl(context, 'github');
 	// createOidcApi(): the native client's providers are the same ids, so the
-	// generated Swift/Kotlin/Dart `signIn` takes only these.
+	// generated Swift, Kotlin and Dart `signIn` takes only these.
 	type OidcProviders = Awaited<ReturnType<ReturnType<typeof auth.createOidcApi>['getClient']>>['providers'];
 	type _oidcProviders = Expect<Equal<OidcProviders, ('google' | 'okta' | 'entra' | 'partner')[]>>;
 

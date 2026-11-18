@@ -311,7 +311,6 @@ The spec is a build input with the same trust as the backend source it is genera
 
 ```mermaid
 flowchart LR
-  DB[(Postgres<br/>information_schema)] -. "npx bb-data pull" .-> TS
   App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
   TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
   Sandbox[.blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
@@ -325,19 +324,9 @@ flowchart LR
 - **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
 - **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `cdkBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
 
-### `db pull`: spec values from database schema
-
-`npx bb-data pull` (`packages/bb-data/src/db-pull/`) connects to a Postgres database, reads the `public` schema from `information_schema` and `pg_catalog`, and writes TypeScript into `aws-blocks/`:
-
-- `database.types.ts` — one interface per table; column names become property keys.
-- `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
-- `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
-
-When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator. That generator accepts only table and column names that are TypeScript identifiers (`^[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*$`, no Unicode escapes), stops with an error naming any other, and quotes every name it writes into string literals and property keys.
-
 ### Sharing a spec
 
-The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), or when the spec is derived from `db pull` against a database that others can change, treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
+The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
 
 ---
 

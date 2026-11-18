@@ -18,16 +18,12 @@ describe('BlocksPresets', () => {
 		assert.strictEqual(BlocksPresets.sandbox.removalPolicy, RemovalPolicy.DESTROY);
 		assert.strictEqual(BlocksPresets.sandbox.deletionProtection, false);
 		assert.strictEqual(BlocksPresets.sandbox.pointInTimeRecovery, false);
-		// Rotation's VPC-attached Lambda would hold a teardown on its network
-		// interfaces and add an endpoint a throwaway stack never benefits from.
-		assert.strictEqual(BlocksPresets.sandbox.secretRotation, false);
 	});
 
-	test('production is durable: RETAIN + deletion protection on + PITR and rotation on', () => {
+	test('production is durable: RETAIN + deletion protection on + PITR on', () => {
 		assert.strictEqual(BlocksPresets.production.removalPolicy, RemovalPolicy.RETAIN);
 		assert.strictEqual(BlocksPresets.production.deletionProtection, true);
 		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
-		assert.strictEqual(BlocksPresets.production.secretRotation, true);
 	});
 
 	test('sandbox keeps logs briefly', () => {

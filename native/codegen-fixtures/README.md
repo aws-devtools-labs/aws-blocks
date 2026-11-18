@@ -7,7 +7,7 @@ Shared OpenRPC spec fixtures for verifying codegen output across Kotlin, Swift, 
 Each numbered directory contains:
 - `spec.json` — the OpenRPC 1.3.2 input spec
 - `kotlin/` — golden-file outputs from Kotlin codegen, or `codegen-error.txt` for a spec Kotlin refuses to generate (the error message; for example a transferable parameter, since transferables are read-only)
-- `swift/` — golden-file outputs from Swift codegen
+- `swift/` — golden-file outputs from Swift codegen, or `codegen-error.txt` for a spec Swift refuses. Swift and Kotlin refuse the same specs with the same message, so the two `codegen-error.txt` files are identical (`GoldenFileTests` checks it)
 - `dart/` — golden-file outputs from Dart codegen
 
 ## Running Tests
@@ -63,7 +63,7 @@ bash native/dart/scripts/analyze-fixture-goldens.sh
 
 ## Swift Goldens Must Compile
 
-The same goes for Swift. A separate check compiles every fixture's Swift golden (`Models.swift` + `Api.swift`) as its own library module against the in-repo `BlocksRuntime`, for the package's minimum macOS, and fails on any error. A separate module is how an app that keeps its generated client in its own Swift package builds it, so access control applies. It needs macOS (`xcrun swiftc`); CI runs it in the `fixture-goldens` job of `.github/workflows/native-sdk-swift.yml`:
+The same goes for Swift. A separate check compiles every fixture's Swift golden (`Models.swift` + `Api.swift`) as its own library module against the in-repo `BlocksRuntime`, for the package's minimum macOS, and fails on any error. A separate module is how an app that keeps its generated client in its own Swift package builds it, so access control applies. A fixture whose Swift golden is `codegen-error.txt` has nothing to compile and is skipped. It needs macOS (`xcrun swiftc`); CI runs it in the `fixture-goldens` job of `.github/workflows/native-sdk-swift.yml`:
 
 ```bash
 bash native/swift/scripts/compile-fixture-goldens.sh
@@ -87,14 +87,14 @@ To add round trips for a fixture, create `native/kotlin/fixture-goldens/round-tr
 
 ## Auth Fixtures Must Match the Live Block
 
-`18-hybrid-arm` is the `Auth` block's sign-in state machine (`createApi()`'s `setAuthState`) and `23-cognito-nested-unions` is `Auth.signIn` / `confirmSignIn`'s result unions. Regenerating golden files only proves the generators are stable against the committed `spec.json`, so a separate check compares those two specs with the spec `test-apps/native-bindings` emits from the live block (CI: the `setup` job of `.github/workflows/native-sdk-e2e.yml`):
+`18-hybrid-arm` is the `Auth` block's sign-in state machine (`createApi()`'s `setAuthState`) and `23-cognito-nested-unions` is `Auth.signIn` / `confirmSignIn`'s result unions. Regenerating golden files only proves the generators are stable against the committed `spec.json`, so a separate check compares those two specs with the spec `test-apps/native-bindings` emits from the live block (CI: the `setup` job of `.github/workflows/native-sdk-e2e.yml`). It also checks that the live `oidcAuthApi.getClient` (`Auth.createOidcApi()`) still has `37-oidc-provider-enum`'s typed `oidc/client` shape, comparing the shape only, since fixture 37 carries its own provider ids:
 
 ```bash
 npm run build   # from the repo root
 node native/codegen-fixtures/check-live-auth-fixtures.mjs --generate
 ```
 
-When the block's surface changes on purpose, rewrite the two specs from the live block and regenerate:
+When the block's surface changes on purpose, rewrite the two specs from the live block and regenerate (`--write` doesn't touch fixture 37; edit its `spec.json` by hand):
 
 ```bash
 node native/codegen-fixtures/check-live-auth-fixtures.mjs --write

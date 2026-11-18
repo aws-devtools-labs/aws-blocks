@@ -65,8 +65,8 @@ export function buildSettingEntry(row: SettingRow, stored: StoredParameter | und
  *
  * The mock stores decoded values keyed by `fullId`, so there is no encoding to
  * read back: the file itself is the JSON. A declared secret is masked here too.
- * Its local value is usually a random placeholder, but `db pull` seeds that
- * same file from a real environment, so the one that matters is exactly the one
+ * Its local value is usually a random placeholder, but that same file can hold
+ * a real value written into it, so the one that matters is exactly the one
  * that would leak.
  */
 export function buildLocalSettingEntry(row: SettingRow, held: boolean, value: unknown): SettingEntry {

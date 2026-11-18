@@ -53,8 +53,9 @@ confirmed user instead. Seed it into the stack's user pools first:
 ## OIDC suite
 
 `oidc_test.dart` validates the server-relay sign-in + cookie-persistence flow
-headlessly against `Auth`'s stub IdP. It builds the `OidcClient` from the auth
-block's fixed `/aws-blocks/auth/*` routes, with no server-supplied descriptor.
+headlessly against `Auth`'s stub IdP. It signs in with the `OidcClient` the
+backend's `oidcAuthApi.getClient()` returns (`Auth.createOidcApi()`), which carries
+the block's `/aws-blocks/auth/*` routes.
 
 The stub IdP runs only locally and on sandbox deployments. The native-bindings
 test app always deploys as a sandbox, so its deployed backend serves the stub

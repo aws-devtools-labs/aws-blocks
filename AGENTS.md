@@ -99,7 +99,7 @@ await api.addNote('hello');
 | Your BB is… | Reference | Note |
 |---|---|---|
 | key/value, documents, or single-table | `bb-kv-store` | the typical file skeleton below |
-| relational / SQL | `bb-data` (`Database`) / `bb-distributed-data` (`DistributedDatabase`) | `migrationsPath` + ordered `.sql` |
+| relational / SQL | `bb-database` (`Database`, `DatabaseCluster`) | `migrationsPath` + ordered `.sql` |
 | auth, or composed from other BBs | `bb-auth` | composes `KVStore` (`sessions`) + `AppSetting` (`session-secret`) in every layer (see `index.cdk.ts`, `sessions.ts`); a base class + injected engines (`auth-base.ts`, `engines/`); exposes `createApi()`. A new sign-in method is an `Auth` option, not a new auth BB |
 | background work (SQS + event source) | `bb-async-job` | `submit()` + a job handler |
 | WebSocket / returns a live client object | `bb-realtime` | client hydration (Transferable) + server APIs; `index.ts`/middleware; `Symbol.for` shared per-stack infra |
@@ -200,7 +200,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 3. Root `README.md` — how conditional exports work
 
 ### Discovering Building Block Documentation
-When working in an AWS Blocks application (not this monorepo), Building Block documentation lives in `node_modules`. Start from `node_modules/@aws-blocks/blocks/README.md` — it lists all Building Blocks with their package names and has instructions for locating each package's full README.
+When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `@aws-blocks/blocks`, and `cdk-blocks docs` prints it for the installed version: `npx --no -- cdk-blocks docs` lists all Building Blocks with their package names, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).
 
 ---
 
@@ -331,6 +331,6 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - Each BB's `README.md` — the authoritative API doc for that block.
 - `docs/` — architecture and design background
 - `packages/hosting/README.md` — SPA/SSR frontend hosting
-- `bb-data` / `bb-distributed-data` READMEs — DB migrations
+- `packages/bb-database/README.md` — DB migrations
 - `native/*` — Kotlin/Swift/Dart client codegen
 - per-template `AGENTS.md` (via `npm create @aws-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.

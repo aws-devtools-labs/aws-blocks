@@ -365,7 +365,7 @@ Match an error by name with `isBlocksError`.
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
 | `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, and a sort condition that does not exist), an unknown index, an `order` that is not `'asc'` or `'desc'`, a bad `limit`, a bad cursor, an `indexes` option that is not an object, or `ifValueEquals` with an object. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
@@ -592,3 +592,5 @@ The mock handles a data file of an earlier release as follows:
 - It converts a `store.json` of an earlier `KVStore`, or a `data.json` of `DistributedTable`, when it first loads the file.
 - It keeps a copy of the `store.json` from before the conversion as `store.json.bak`.
 - It renames a file that it cannot read to a `.bak` file and logs a warning. It does not write over that file.
+
+The mock keeps the store in the memory of the dev server, and reads `store.json` only when it constructs the store. Two processes on the same `.bb-data` folder (two dev servers, or a script beside the dev server) do not see the writes of the other process, and can write over them.
