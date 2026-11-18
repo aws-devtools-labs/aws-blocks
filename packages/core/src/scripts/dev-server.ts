@@ -663,7 +663,10 @@ export interface ReclaimPortDeps {
  * signalled. If anything else holds the port — an unrelated process, another
  * app's dev server or frontend — nothing is signalled and the holders come
  * back in `foreign`, for the caller to report. A port held by a listener whose
- * pid can't be found is left alone too.
+ * pid can't be found is left alone too. When no listener pid is found, reclaim
+ * first waits briefly ({@link waitForPortFree}) and probes again, since the
+ * holder may have released the port between the probe and the lookup; a port
+ * free by then counts as reclaimed with nothing signalled (`pids: []`).
  *
  * Owned listeners get a SIGTERM ({@link killListenerTree}, the frontend
  * process-group kill), a bounded wait for release ({@link waitForPortFree}),
@@ -686,7 +689,21 @@ export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> =
 
   const foreignOf = (pids: number[]): PortHolder[] =>
     pids.filter((pid) => !owned(pid)).map((pid) => ({ pid, command: commandOf(pid) }));
-  const pids = listPids(port);
+  let pids = listPids(port);
+  if (pids.length === 0) {
+    // The probe and the listener lookup are two separate looks at the port, and
+    // its holder can release it in between: a second dev server started at the
+    // same moment bows out and closes its socket, or a crashed predecessor's
+    // socket finishes tearing down. `lsof` then finds no listener although the
+    // port is (or is about to be) free, and reporting "its owner could not be
+    // found" would fail a start that can go ahead. A lookup that comes back empty
+    // while the holder is still running (a slow or timed-out `lsof` under load)
+    // gets the same short wait. So wait briefly for the port to be released and
+    // look again before giving up. Nothing is signalled on this path.
+    await waitFree(port, 1000);
+    if (!(await probe(port))) return { wasOpen: true, reclaimed: true, pids: [], foreign: [] };
+    pids = listPids(port);
+  }
   const foreign = foreignOf(pids);
   if (pids.length === 0 || foreign.length > 0) return { wasOpen: true, reclaimed: false, pids: [], foreign };
 
@@ -1542,7 +1559,9 @@ export async function startDevServer(options: DevServerOptions) {
     const result = await reclaimPort(p, reclaimDeps);
     if (!result.wasOpen) continue;
     if (result.reclaimed) {
-      log.progress(reclaimMessage(p, result, "this app's previous dev server"));
+      // `pids` is empty when the holder released the port on its own during
+      // reclaim (see reclaimPort): nothing of ours was stopped, so say nothing.
+      if (result.pids.length > 0) log.progress(reclaimMessage(p, result, "this app's previous dev server"));
       continue;
     }
     removeOwnPidfile();

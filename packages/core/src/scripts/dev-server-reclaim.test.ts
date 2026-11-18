@@ -163,6 +163,38 @@ describe('reclaimPort — frees a port only from listeners this app owns', () =>
     assert.deepStrictEqual(result, { wasOpen: true, reclaimed: false, pids: [], foreign: [] });
   });
 
+  it('counts the port reclaimed when its holder releases it between the probe and the lookup', async () => {
+    // A concurrent dev server bows out after the probe saw it: the lookup finds
+    // no listener and the port is free on the second look, so the start goes ahead.
+    const kills: Array<[number, NodeJS.Signals]> = [];
+    const waits: number[] = [];
+    const result = await reclaimPort(3000, {
+      ...ours,
+      probe: scriptedProbe([true, false]),
+      listPids: () => [],
+      killTree: (pid, sig) => kills.push([pid, sig]),
+      waitFree: async (_port, timeoutMs) => { waits.push(timeoutMs ?? 0); },
+    });
+    assert.deepStrictEqual(kills, []);
+    assert.deepStrictEqual(waits, [1000]);
+    assert.deepStrictEqual(result, { wasOpen: true, reclaimed: true, pids: [], foreign: [] });
+  });
+
+  it('looks up the listener again when the first lookup comes back empty while the port stays bound', async () => {
+    // A slow or timed-out lsof misses the holder once; the second lookup names it.
+    let call = 0;
+    const result = await reclaimPort(3000, {
+      probe: scriptedProbe([true, true]),
+      listPids: () => (call++ === 0 ? [] : [555]),
+      owned: () => false,
+      commandOf: () => 'other',
+      killTree: () => assert.fail('a foreign holder is never signalled'),
+      waitFree: async () => {},
+    });
+    assert.strictEqual(call, 2);
+    assert.deepStrictEqual(result, { wasOpen: true, reclaimed: false, pids: [], foreign: [{ pid: 555, command: 'other' }] });
+  });
+
   it('does not SIGKILL a new, foreign owner that grabbed the port during the wait', async () => {
     // The owned listener (111) exits on SIGTERM, and an unrelated process (222)
     // binds the port before the SIGKILL pass: it must be judged afresh, not killed.
