@@ -156,6 +156,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// Sign in using the server-relay flow.
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
+    ///
+    /// `launcher` opens the IdP and returns that redirect. On iOS and macOS,
+    /// ``WebAuthenticationSessionLauncher`` opens it in `ASWebAuthenticationSession`, and
+    /// ``signIn(provider:relayTo:)`` signs in with one at its defaults.
     public func signIn(
         provider: Provider,
         relayTo: String,
@@ -660,9 +664,11 @@ public enum OIDCError: BlocksError {
     case stateMismatch
     case missingAuthorizationCode
     case malformedExchangeResponse
-    /// The sign-in callback failed: the IdP reported an error, or the authorize parameters could not
-    /// be fetched. When a request failed, its `ApiError` or `TransportError` is the cause, so the
-    /// app can tell a retry-later failure from a misconfigured one.
+    /// The sign-in callback failed: the IdP reported an error, the authorize parameters could not
+    /// be fetched, or the browser launcher could not open or finish the sign-in. When a request failed,
+    /// its `ApiError` or `TransportError` is the cause, so the app can tell a retry-later failure from
+    /// a misconfigured one. When `ASWebAuthenticationSession` reported an error, that error is the
+    /// cause; a launcher's own refusal, such as a relayTo without a custom scheme, has none.
     case callbackError(String, Error?)
     /// The exchange or sign-out call was rejected. The server's error is the cause.
     case exchangeFailed(String, Error?)
