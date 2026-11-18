@@ -9,8 +9,7 @@ npm create @aws-cdk-blocks/block@latest SearchIndex
 npm run new:bb -- SearchIndex
 ```
 
-Run `create-block --help` for the full, authoritative reference (options, modes,
-what gets generated, and next steps). A summary:
+`create-block --help` prints every option and the next steps.
 
 ## Modes (auto-detected)
 
@@ -35,7 +34,7 @@ what gets generated, and next steps). A summary:
 
 ## What it generates
 
-A **primitive** Building Block: a `Scope` subclass with one strongly-typed API,
+A Building Block: a `Scope` subclass with one strongly-typed API,
 backed by the four conditional-export entries — `index.mock.ts` (local dev +
 tests), `index.aws.ts` (deployed Lambda runtime), `index.cdk.ts` (CDK synth), and
 `index.browser.ts` (browser stub) — plus `types.ts`, `errors.ts`, `README.md`,
