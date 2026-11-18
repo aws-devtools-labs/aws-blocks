@@ -157,10 +157,10 @@ FileBucket has no per-object permissions of its own. Every API method reads and 
 - Accept only a file *name* from the client and wrap it in `encodeURIComponent()`, so it stays a single path segment and can't add `/` to reach another prefix. FileBucket rejects `.`/`..` segments and other unsafe keys with `ValidationFailed`; see [Object keys](#object-keys).
 - For a resource shared between users (a document, a team folder), check that the caller may access it — for example by looking up an ownership record — before building its key.
 
-The examples below assume an auth block such as `AuthBasic` and a helper that builds the caller's keys:
+The examples below assume an auth block (`Auth` from `@aws-blocks/bb-auth`) and a helper that builds the caller's keys:
 
 ```typescript
-const auth = new AuthBasic(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 const bucket = new FileBucket(scope, 'uploads');
 
 /** The caller's key for `name`, under a prefix only they can reach. */

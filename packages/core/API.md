@@ -29,10 +29,14 @@ export class ApiError extends Error {
 // @public (undocumented)
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = (context: BlocksContext) => T;
 
-// Warning: (ae-forgotten-export) The symbol "ApiNamespaceConstructor" needs to be exported by the entry point index.d.ts
-//
 // @public (undocumented)
 export const ApiNamespace: ApiNamespaceConstructor;
+
+// @public
+export interface ApiNamespaceConstructor {
+    // (undocumented)
+    new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, label: string, handler: ApiHandler<T>, options?: ApiNamespaceOptions): AsyncAPI<T>;
+}
 
 // @public
 export interface ApiNamespaceOptions {
@@ -43,6 +47,11 @@ export interface ApiNamespaceOptions {
     };
     httpErrorStatus?: boolean;
 }
+
+// @public
+export type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
+    [K in keyof T]: T[K] extends (...args: infer Args) => infer R ? (...args: Args) => Promise<Awaited<R>> : never;
+};
 
 // @public
 export const BLOCKS_AUTH_PREFIX = "/aws-blocks/auth";
@@ -170,10 +179,8 @@ export type DeploymentType = 'local' | 'sandbox' | 'production';
 // @public
 export function dispatchJobToWorker(req: JobWorkerRequest, timeoutMs?: number): Promise<JobDispatchResult>;
 
-// Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
-//
 // @public
-export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry>;
+export function getAllSdkIdentifiers(): ReadonlyMap<string, Record<string, string>>;
 
 // @public
 export function getCachedConfigValue(key: string): string | undefined;
@@ -325,7 +332,7 @@ export function registerRoute(options: RawRouteOptions & {
 }): void;
 
 // @public
-export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntry): void;
+export function registerSdkIdentifiers(fullId: string, identifiers: Record<string, string>): void;
 
 // @public
 export function _resetConfigCache(): void;

@@ -19,6 +19,7 @@ export type {
 	RealtimeOptions,
 	SubscribeOptions,
 	DisconnectReason,
+	InferMessage,
 } from './types.js';
 
 export class Realtime {

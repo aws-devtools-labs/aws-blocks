@@ -76,7 +76,7 @@ The mock sorts a query by the sort key and breaks ties on the base-table key, so
 
 ## Indexes
 
-`indexes` needs a `schema`. An index names one or two fields of the value, each a string or a number. The GSI manager custom resource (`src/gsi-manager-lambda.ts`) creates, changes, and removes indexes as the former block did. DynamoDB holds an item in an index only when each indexed field is present, is not an empty string, and has the declared type; `put` rejects an empty string in an indexed field before it calls DynamoDB, because an empty-string index key is the one case DynamoDB reports as an error instead of a silent omission.
+`indexes` needs a `schema`. An index names one or two fields of the value, each a string or a number. The GSI manager custom resource (`src/gsi-manager-lambda.ts`) creates, changes, and removes indexes as the former block did. DynamoDB holds an item in an index only when each indexed field is present. A present indexed field must be a non-empty value of the declared type: DynamoDB rejects an empty string, `null`, or a value of the other type with a `ValidationException`. `put` rejects an empty string in an indexed field before it calls DynamoDB; it does not check the type, so that error comes from DynamoDB (see the parity table). Every index the custom resource creates uses `ProjectionType: 'ALL'`, so an index query returns whole items; a `fromExisting` table keeps the projections of its own indexes.
 
 ### GSI Management Custom Resource
 
@@ -203,6 +203,7 @@ If the app ran once on this release with the old line unchanged, the mock of `KV
 | Scan order | The mock scans in base-key order; DynamoDB scans in internal hash order | Neither order is a contract. A cursor resumes correctly on both |
 | Cursor after the last item | Both return a cursor whenever `limit` was reached, even when no item follows; the next page is then empty with no cursor | Aligned by design, so a paging loop written against the mock terminates the same way on AWS |
 | String ordering of sort and base keys | The mock compares with JavaScript `<`/`>` (UTF-16 code-unit order), DynamoDB with UTF-8 byte order; the two differ for some non-ASCII strings | Document the gap; ASCII keys order identically |
+| A `null` or other-typed value in an indexed field | The mock stores the item. An index query never returns it through such a partition field (the query value must have the declared type), but returns it with a `null` or other-typed sort field when `where` has no sort condition (`matchesSort` accepts any present value then). DynamoDB rejects the `put` with a `ValidationException` for the type mismatch, which the runtime does not re-map, so an API client sees an unnamed 500 | Documented in the README ("Indexes"): omit an indexed field to keep an item out of the index |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | Durability/encryption options (`pointInTimeRecovery`, `protection`, `encryption`) are CDK-only | These provisioning-time settings have no observable effect on mock reads/writes | No mitigation needed — they're infrastructure config, not data behavior; verify the synthesized template in sandbox/prod |
 

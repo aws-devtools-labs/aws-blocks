@@ -56,6 +56,7 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { voidResultTests } from './void-result.test.js';
 import { apiUrlStageTests } from './api-url-stage.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
 import { testApiUrl } from './api-url.js';
@@ -271,6 +272,8 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 
 // Before any suite signs into `auth`: the signed-out call must stay signed out.
 httpErrorStatusTests(() => ({ api, strictStatusApi }));
+
+voidResultTests(() => api);
 
 // Local only: the `auth-social` block exists only in `npm run dev`.
 if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
