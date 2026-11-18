@@ -94,11 +94,24 @@ void describe('getSecret() / getConfig() runtime resolvers', () => {
 		assert.strictEqual(calls, 1);
 	});
 
-	void it('throws an actionable error naming the function + getter when unwired', async () => {
+	void it('throws an error that names the getter, the locator and where the value can be read', async () => {
 		delete process.env.MISSING;
 		delete process.env[secretEnvVarName('MISSING')];
-		await assert.rejects(getSecret('MISSING'), /getSecret\("MISSING"\): no secret reference found/);
-		await assert.rejects(getConfig('MISSING'), /getConfig\("MISSING"\): no config reference found/);
+		delete process.env[configEnvVarName('MISSING')];
+		await assert.rejects(getSecret('MISSING'), (err: Error) => {
+			assert.match(err.message, /^\[hosting\] getSecret\("MISSING"\): no value found\./);
+			assert.ok(err.message.includes(secretEnvVarName('MISSING')));
+			assert.match(err.message, /not into the Blocks API backend or a sandbox/);
+			assert.match(err.message, /set MISSING in \.env\.local/);
+			assert.match(err.message, /use the Secret block instead\.$/);
+			return true;
+		});
+		await assert.rejects(getConfig('MISSING'), (err: Error) => {
+			assert.match(err.message, /^\[hosting\] getConfig\("MISSING"\): no value found\./);
+			assert.ok(err.message.includes(configEnvVarName('MISSING')));
+			assert.match(err.message, /use the AppSetting block instead\.$/);
+			return true;
+		});
 	});
 
 	void it('falls back to the shared locator on a stage not-found', async () => {

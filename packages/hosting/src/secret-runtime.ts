@@ -3,7 +3,8 @@
 
 /**
  * Runtime resolvers for values referenced via {@link secret} / {@link config}.
- * Inside the running compute (Lambda):
+ * Inside Hosting's deployed SSR/server compute (the only functions the locators
+ * are wired into; the Blocks API backend uses the `Secret` / `AppSetting` blocks):
  *
  * - `getSecret('STRIPE_KEY')` fetches + decrypts from **AWS Secrets Manager**.
  * - `getConfig('FEATURE_FLAGS')` fetches from **SSM Parameter Store**.
@@ -135,12 +136,14 @@ async function resolveValue(kind: ValueKind, key: string): Promise<unknown> {
 	const envName = envVarNameForKind(kind, key);
 	const locator = process.env[envName];
 	if (!locator) {
-		const fn = kind === 'secret' ? 'secret' : 'config';
 		const getter = kind === 'secret' ? 'getSecret' : 'getConfig';
+		const block = kind === 'secret' ? 'Secret' : 'AppSetting';
 		throw new Error(
-			`[hosting] ${getter}(${JSON.stringify(key)}): no ${kind} reference found. ` +
-				`Reference it in Hosting props with ${fn}(${JSON.stringify(key)}) so the store locator ` +
-				`is wired, and set its value with your CLI (e.g. \`${fn} set ${key} …\`).`,
+			`[hosting] ${getter}(${JSON.stringify(key)}): no value found. ` +
+				`process.env.${key} is not set, and this function has no ${kind} store locator (${envName}). ` +
+				`${kind}(${JSON.stringify(key)}) in Hosting props wires the locator into Hosting's deployed ` +
+				`SSR/server functions only, not into the Blocks API backend or a sandbox. ` +
+				`For local dev, set ${key} in .env.local. In Blocks API code, use the ${block} block instead.`,
 		);
 	}
 	const store = storeForKind(kind);
