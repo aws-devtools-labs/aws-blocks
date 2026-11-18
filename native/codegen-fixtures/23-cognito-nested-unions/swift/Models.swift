@@ -22,6 +22,25 @@ public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hash
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.admins, .admins): return true
+        case (.users, .users): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .admins: hasher.combine(0)
+        case .users: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum AuthenticatedUserSignInProvider: RawRepresentable, Codable, Hashable, Sendable {
@@ -39,6 +58,23 @@ public nonisolated enum AuthenticatedUserSignInProvider: RawRepresentable, Codab
         switch self {
         case .password: return "password"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.password, .password): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .password: hasher.combine(0)
+        case .unknown(let value):
+            hasher.combine(1)
+            hasher.combine(value)
         }
     }
 }
@@ -109,6 +145,27 @@ public nonisolated enum CodeDeliveryDetailsDeliveryMedium: RawRepresentable, Cod
         case .email: return "EMAIL"
         case .phoneNumber: return "PHONE_NUMBER"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.sms, .sms): return true
+        case (.email, .email): return true
+        case (.phoneNumber, .phoneNumber): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .sms: hasher.combine(0)
+        case .email: hasher.combine(1)
+        case .phoneNumber: hasher.combine(2)
+        case .unknown(let value):
+            hasher.combine(3)
+            hasher.combine(value)
         }
     }
 }

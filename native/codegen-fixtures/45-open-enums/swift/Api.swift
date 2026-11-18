@@ -164,6 +164,25 @@ public final nonisolated class Api: Sendable {
                     case .unknown(let value): return value
                     }
                 }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.low, .low): return true
+                    case (.high, .high): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .low: hasher.combine(0)
+                    case .high: hasher.combine(1)
+                    case .unknown(let value):
+                        hasher.combine(2)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
 
@@ -255,6 +274,25 @@ public final nonisolated class Api: Sendable {
                     case .unknown(let value): return value
                     }
                 }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.created, .created): return true
+                    case (.deleted, .deleted): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .created: hasher.combine(0)
+                    case .deleted: hasher.combine(1)
+                    case .unknown(let value):
+                        hasher.combine(2)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
     }
@@ -319,6 +357,25 @@ public final nonisolated class Api: Sendable {
                     case .unknown(let value): return value
                     }
                 }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.light, .light): return true
+                    case (.dark, .dark): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .light: hasher.combine(0)
+                    case .dark: hasher.combine(1)
+                    case .unknown(let value):
+                        hasher.combine(2)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
     }
@@ -364,6 +421,25 @@ public final nonisolated class Api: Sendable {
                     case .up: return "up"
                     case .down: return "down"
                     case .unknown(let value): return value
+                    }
+                }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.up, .up): return true
+                    case (.down, .down): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .up: hasher.combine(0)
+                    case .down: hasher.combine(1)
+                    case .unknown(let value):
+                        hasher.combine(2)
+                        hasher.combine(value)
                     }
                 }
             }

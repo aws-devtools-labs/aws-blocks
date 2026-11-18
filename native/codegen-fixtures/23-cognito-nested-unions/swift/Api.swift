@@ -98,6 +98,27 @@ public final nonisolated class Api: Sendable {
                         case .unknown(let value): return value
                         }
                     }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.sms, .sms): return true
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .sms: hasher.combine(0)
+                        case .totp: hasher.combine(1)
+                        case .email: hasher.combine(2)
+                        case .unknown(let value):
+                            hasher.combine(3)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -128,6 +149,25 @@ public final nonisolated class Api: Sendable {
                         case .totp: return "TOTP"
                         case .email: return "EMAIL"
                         case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .totp: hasher.combine(0)
+                        case .email: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
                         }
                     }
                 }
@@ -205,6 +245,29 @@ public final nonisolated class Api: Sendable {
                         case .smsOtp: return "SMS_OTP"
                         case .webAuthn: return "WEB_AUTHN"
                         case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.password, .password): return true
+                        case (.emailOtp, .emailOtp): return true
+                        case (.smsOtp, .smsOtp): return true
+                        case (.webAuthn, .webAuthn): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .password: hasher.combine(0)
+                        case .emailOtp: hasher.combine(1)
+                        case .smsOtp: hasher.combine(2)
+                        case .webAuthn: hasher.combine(3)
+                        case .unknown(let value):
+                            hasher.combine(4)
+                            hasher.combine(value)
                         }
                     }
                 }
@@ -505,6 +568,27 @@ public final nonisolated class Api: Sendable {
                         case .unknown(let value): return value
                         }
                     }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.sms, .sms): return true
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .sms: hasher.combine(0)
+                        case .totp: hasher.combine(1)
+                        case .email: hasher.combine(2)
+                        case .unknown(let value):
+                            hasher.combine(3)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -535,6 +619,25 @@ public final nonisolated class Api: Sendable {
                         case .totp: return "TOTP"
                         case .email: return "EMAIL"
                         case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .totp: hasher.combine(0)
+                        case .email: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
                         }
                     }
                 }
@@ -612,6 +715,29 @@ public final nonisolated class Api: Sendable {
                         case .smsOtp: return "SMS_OTP"
                         case .webAuthn: return "WEB_AUTHN"
                         case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.password, .password): return true
+                        case (.emailOtp, .emailOtp): return true
+                        case (.smsOtp, .smsOtp): return true
+                        case (.webAuthn, .webAuthn): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .password: hasher.combine(0)
+                        case .emailOtp: hasher.combine(1)
+                        case .smsOtp: hasher.combine(2)
+                        case .webAuthn: hasher.combine(3)
+                        case .unknown(let value):
+                            hasher.combine(4)
+                            hasher.combine(value)
                         }
                     }
                 }

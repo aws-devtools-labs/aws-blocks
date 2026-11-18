@@ -21,6 +21,25 @@ public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.red, .red): return true
+        case (.blue, .blue): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .red: hasher.combine(0)
+        case .blue: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum FailedState: String, Codable, Sendable {
@@ -57,6 +76,25 @@ public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.kind, .kind): return true
+        case (.other, .other): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .kind: hasher.combine(0)
+        case .other: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum LabelsCase: RawRepresentable, Codable, Hashable, Sendable {
@@ -88,6 +126,31 @@ public nonisolated enum LabelsCase: RawRepresentable, Codable, Hashable, Sendabl
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.fooBar_2, .fooBar_2): return true
+        case (.foo_Bar, .foo_Bar): return true
+        case (.fooBar, .fooBar): return true
+        case (.fooBar_3, .fooBar_3): return true
+        case (.foo_bar, .foo_bar): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .fooBar_2: hasher.combine(0)
+        case .foo_Bar: hasher.combine(1)
+        case .fooBar: hasher.combine(2)
+        case .fooBar_3: hasher.combine(3)
+        case .foo_bar: hasher.combine(4)
+        case .unknown(let value):
+            hasher.combine(5)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum LabelsFallback: RawRepresentable, Codable, Hashable, Sendable {
@@ -113,6 +176,27 @@ public nonisolated enum LabelsFallback: RawRepresentable, Codable, Hashable, Sen
         case .unknownValue2(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.unknown, .unknown): return true
+        case (.unknownValue, .unknownValue): return true
+        case (.unknownValue_2, .unknownValue_2): return true
+        case let (.unknownValue2(lhs), .unknownValue2(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .unknown: hasher.combine(0)
+        case .unknownValue: hasher.combine(1)
+        case .unknownValue_2: hasher.combine(2)
+        case .unknownValue2(let value):
+            hasher.combine(3)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum LabelsMaybe: RawRepresentable, Codable, Hashable, Sendable {
@@ -135,6 +219,25 @@ public nonisolated enum LabelsMaybe: RawRepresentable, Codable, Hashable, Sendab
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.yes, .yes): return true
+        case (.no, .no): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .yes: hasher.combine(0)
+        case .no: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum LabelsSpelling: RawRepresentable, Codable, Hashable, Sendable {
@@ -155,6 +258,25 @@ public nonisolated enum LabelsSpelling: RawRepresentable, Codable, Hashable, Sen
         case .unknown: return "unknown"
         case .unKnown: return "un-known"
         case .unknownValue(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.unknown, .unknown): return true
+        case (.unKnown, .unKnown): return true
+        case let (.unknownValue(lhs), .unknownValue(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .unknown: hasher.combine(0)
+        case .unKnown: hasher.combine(1)
+        case .unknownValue(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -215,6 +337,25 @@ public nonisolated enum NodeKind: RawRepresentable, Codable, Hashable, Sendable 
         case .leaf: return "leaf"
         case .branch: return "branch"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.leaf, .leaf): return true
+        case (.branch, .branch): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .leaf: hasher.combine(0)
+        case .branch: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -280,6 +421,25 @@ public nonisolated enum Size: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.small, .small): return true
+        case (.large, .large): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .small: hasher.combine(0)
+        case .large: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {
@@ -305,6 +465,27 @@ public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.todo, .todo): return true
+        case (.inProgress, .inProgress): return true
+        case (.done, .done): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .todo: hasher.combine(0)
+        case .inProgress: hasher.combine(1)
+        case .done: hasher.combine(2)
+        case .unknown(let value):
+            hasher.combine(3)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum TaskLabels: RawRepresentable, Codable, Hashable, Sendable {
@@ -325,6 +506,25 @@ public nonisolated enum TaskLabels: RawRepresentable, Codable, Hashable, Sendabl
         case .red: return "red"
         case .green: return "green"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.red, .red): return true
+        case (.green, .green): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .red: hasher.combine(0)
+        case .green: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -349,6 +549,25 @@ public nonisolated enum TaskPhase: RawRepresentable, Codable, Hashable, Sendable
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.companion, .companion): return true
+        case (.other, .other): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .companion: hasher.combine(0)
+        case .other: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum TaskPriority: RawRepresentable, Codable, Hashable, Sendable {
@@ -371,6 +590,25 @@ public nonisolated enum TaskPriority: RawRepresentable, Codable, Hashable, Senda
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.low, .low): return true
+        case (.high, .high): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .low: hasher.combine(0)
+        case .high: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum TaskSource: RawRepresentable, Codable, Hashable, Sendable {
@@ -391,6 +629,25 @@ public nonisolated enum TaskSource: RawRepresentable, Codable, Hashable, Sendabl
         case .web: return "web"
         case .unknown: return "unknown"
         case .unknownValue(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.web, .web): return true
+        case (.unknown, .unknown): return true
+        case let (.unknownValue(lhs), .unknownValue(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .web: hasher.combine(0)
+        case .unknown: hasher.combine(1)
+        case .unknownValue(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }

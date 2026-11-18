@@ -60,6 +60,25 @@ public nonisolated enum ProfileState: RawRepresentable, Codable, Hashable, Senda
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.inProgress, .inProgress): return true
+        case (.in_Progress, .in_Progress): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .inProgress: hasher.combine(0)
+        case .in_Progress: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct Profile: Codable, Sendable {

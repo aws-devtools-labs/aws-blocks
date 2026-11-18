@@ -72,6 +72,25 @@ public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.x, .x): return true
+        case (.y, .y): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .x: hasher.combine(0)
+        case .y: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum OrderStatus: RawRepresentable, Codable, Hashable, Sendable {
@@ -92,6 +111,25 @@ public nonisolated enum OrderStatus: RawRepresentable, Codable, Hashable, Sendab
         case .pending: return "pending"
         case .shipped: return "shipped"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.pending, .pending): return true
+        case (.shipped, .shipped): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .pending: hasher.combine(0)
+        case .shipped: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -124,6 +162,25 @@ public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable, Sendabl
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.bug, .bug): return true
+        case (.task, .task): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .bug: hasher.combine(0)
+        case .task: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum TicketKinds: RawRepresentable, Codable, Hashable, Sendable {
@@ -144,6 +201,25 @@ public nonisolated enum TicketKinds: RawRepresentable, Codable, Hashable, Sendab
         case .urgent: return "urgent"
         case .later: return "later"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.urgent, .urgent): return true
+        case (.later, .later): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .urgent: hasher.combine(0)
+        case .later: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -282,6 +358,25 @@ public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable, Senda
         case .open: return "open"
         case .closed: return "closed"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.open, .open): return true
+        case (.closed, .closed): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .open: hasher.combine(0)
+        case .closed: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }

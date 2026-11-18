@@ -123,4 +123,29 @@ public nonisolated enum Level: RawRepresentable, Codable, Hashable, Sendable {
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.values, .values): return true
+        case (.index, .index): return true
+        case (.name, .name): return true
+        case (._Hidden, ._Hidden): return true
+        case (.ok, .ok): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .values: hasher.combine(0)
+        case .index: hasher.combine(1)
+        case .name: hasher.combine(2)
+        case ._Hidden: hasher.combine(3)
+        case .ok: hasher.combine(4)
+        case .unknown(let value):
+            hasher.combine(5)
+            hasher.combine(value)
+        }
+    }
 }

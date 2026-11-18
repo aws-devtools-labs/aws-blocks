@@ -120,6 +120,17 @@ final class OpenEnumTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys]
         check(String(decoding: try encoder.encode(task), as: UTF8.self) == wire, "round trip")
         check(Status(rawValue: "done") == .done, "known raw value")
+        // Equality and hashing follow the cases, as `switch` does, not the raw value.
+        let handBuilt = Status.unknown("done")
+        check(handBuilt != .done, "a hand-built unknown isn't the known case")
+        check(Set([handBuilt, Status.done]).count == 2, "set keeps both")
+        check(Set([Status.unknown("x"), Status.unknown("x")]).count == 1, "equal unknowns hash alike")
+        check(Status.unknown("x") == Status(rawValue: "x"), "decoded and hand-built unknowns are equal")
+        switch handBuilt {
+        case .done: check(false, "switch took the known case")
+        case .unknown(let value): check(value == "done", "switch value")
+        default: check(false, "switch fell through")
+        }
         // `GetJob.Result` is `Pending | Failed` with no discriminator: an object for `Failed` decodes to it.
         func job(_ text: String) throws -> Api.GetJob.Result {
             try JSONDecoder().decode(Api.GetJob.Result.self, from: Data(text.utf8))

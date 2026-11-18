@@ -54,7 +54,7 @@ let nestedShadowingTypeNames: Set<String> = [
     "DynamicKey", "OuterCodingKeys", "EmptyKey", "CodegenError",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient",
     // An open enum's conformances (`SwiftCodeGenerator+OpenEnums.swift`).
-    "RawRepresentable", "Hashable"
+    "RawRepresentable", "Hashable", "Hasher"
 ]
 
 /// PascalCase string transformer. Splits on `-`, `.`, and `:` (always); preserves
@@ -314,7 +314,7 @@ let reservedNamespaceClassNames: Set<String> = [
     "Blocks", "Servers", "BlocksRuntime", "Foundation",
     "BlocksClient", "BlocksServer", "BlocksRequest", "ApiError", "TransferableError", "TransportError", "CodegenError", "JSONValue",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient", "OIDCProviderName",
-    "Sendable", "CaseIterable", "URLSession", "RawRepresentable", "Hashable",
+    "Sendable", "CaseIterable", "URLSession", "RawRepresentable", "Hashable", "Hasher",
     "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",
     "Codable", "Encodable", "Decoder", "Encoder", "CodingKey", "DecodingError", "JSONDecoder", "JSONSerialization",
     "Self", "Any"

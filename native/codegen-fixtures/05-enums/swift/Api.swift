@@ -61,6 +61,27 @@ public final nonisolated class Api: Sendable {
                     case .unknown(let value): return value
                     }
                 }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.active, .active): return true
+                    case (.inactive, .inactive): return true
+                    case (.pending, .pending): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .active: hasher.combine(0)
+                    case .inactive: hasher.combine(1)
+                    case .pending: hasher.combine(2)
+                    case .unknown(let value):
+                        hasher.combine(3)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
     }

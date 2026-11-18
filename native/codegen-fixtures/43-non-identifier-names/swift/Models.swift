@@ -43,6 +43,39 @@ public nonisolated enum Sample_Type__X___Kind: RawRepresentable, Codable, Hashab
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.a_b, .a_b): return true
+        case (.c_d, .c_d): return true
+        case (.x_y, .x_y): return true
+        case (.new_line, .new_line): return true
+        case (.__x_, .__x_): return true
+        case (.__z_, .__z_): return true
+        case (.__unnamed, .__unnamed): return true
+        case (._1st, ._1st): return true
+        case (._sp_ace, ._sp_ace): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .a_b: hasher.combine(0)
+        case .c_d: hasher.combine(1)
+        case .x_y: hasher.combine(2)
+        case .new_line: hasher.combine(3)
+        case .__x_: hasher.combine(4)
+        case .__z_: hasher.combine(5)
+        case .__unnamed: hasher.combine(6)
+        case ._1st: hasher.combine(7)
+        case ._sp_ace: hasher.combine(8)
+        case .unknown(let value):
+            hasher.combine(9)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct Sample_Type__X___: Codable, Sendable {

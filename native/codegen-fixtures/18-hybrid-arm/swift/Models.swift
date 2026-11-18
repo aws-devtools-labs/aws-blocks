@@ -21,6 +21,25 @@ public nonisolated enum AuthActionCapability: RawRepresentable, Codable, Hashabl
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.webauthnGet, .webauthnGet): return true
+        case (.webauthnCreate, .webauthnCreate): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .webauthnGet: hasher.combine(0)
+        case .webauthnCreate: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated enum AuthActionMethod: RawRepresentable, Codable, Hashable, Sendable {
@@ -41,6 +60,25 @@ public nonisolated enum AuthActionMethod: RawRepresentable, Codable, Hashable, S
         case .get: return "GET"
         case .post: return "POST"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.get, .get): return true
+        case (.post, .post): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .get: hasher.combine(0)
+        case .post: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
         }
     }
 }
@@ -118,6 +156,33 @@ public nonisolated enum AuthFieldType: RawRepresentable, Codable, Hashable, Send
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.number, .number): return true
+        case (.password, .password): return true
+        case (.email, .email): return true
+        case (.text, .text): return true
+        case (.tel, .tel): return true
+        case (.hidden, .hidden): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .number: hasher.combine(0)
+        case .password: hasher.combine(1)
+        case .email: hasher.combine(2)
+        case .text: hasher.combine(3)
+        case .tel: hasher.combine(4)
+        case .hidden: hasher.combine(5)
+        case .unknown(let value):
+            hasher.combine(6)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct AuthField: Codable, Sendable {
@@ -183,6 +248,33 @@ public nonisolated enum AuthStateState: RawRepresentable, Codable, Hashable, Sen
         case .confirmingMfa: return "confirmingMfa"
         case .confirmingPasswordReset: return "confirmingPasswordReset"
         case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.signedOut, .signedOut): return true
+        case (.signedIn, .signedIn): return true
+        case (.confirmingSignUp, .confirmingSignUp): return true
+        case (.confirmingSignIn, .confirmingSignIn): return true
+        case (.confirmingMfa, .confirmingMfa): return true
+        case (.confirmingPasswordReset, .confirmingPasswordReset): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .signedOut: hasher.combine(0)
+        case .signedIn: hasher.combine(1)
+        case .confirmingSignUp: hasher.combine(2)
+        case .confirmingSignIn: hasher.combine(3)
+        case .confirmingMfa: hasher.combine(4)
+        case .confirmingPasswordReset: hasher.combine(5)
+        case .unknown(let value):
+            hasher.combine(6)
+            hasher.combine(value)
         }
     }
 }

@@ -206,6 +206,29 @@ extension SwiftCodeGenerator {
         lines.append("\(body)    case .\(unknown)(let value): return value")
         lines.append("\(body)    }")
         lines.append("\(body)}")
+        // Over the cases, not the raw value (the standard library's `RawRepresentable` default), so a hand-built
+        // `.unknown("a")` differs from `.a`, as `switch` and the Dart and Kotlin clients see it.
+        lines.append("")
+        lines.append("\(body)public static func == (lhs: Self, rhs: Self) -> Bool {")
+        lines.append("\(body)    switch (lhs, rhs) {")
+        for caseName in names {
+            lines.append("\(body)    case (.\(caseName), .\(caseName)): return true")
+        }
+        lines.append("\(body)    case let (.\(unknown)(lhs), .\(unknown)(rhs)): return lhs == rhs")
+        lines.append("\(body)    default: return false")
+        lines.append("\(body)    }")
+        lines.append("\(body)}")
+        lines.append("")
+        lines.append("\(body)public func hash(into hasher: inout Hasher) {")
+        lines.append("\(body)    switch self {")
+        for (index, caseName) in names.enumerated() {
+            lines.append("\(body)    case .\(caseName): hasher.combine(\(index))")
+        }
+        lines.append("\(body)    case .\(unknown)(let value):")
+        lines.append("\(body)        hasher.combine(\(names.count))")
+        lines.append("\(body)        hasher.combine(value)")
+        lines.append("\(body)    }")
+        lines.append("\(body)}")
         lines.append("\(indent)}")
         return lines
     }

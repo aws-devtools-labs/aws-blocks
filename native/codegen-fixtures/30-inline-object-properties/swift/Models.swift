@@ -145,6 +145,25 @@ public nonisolated struct Shipment: Codable, Sendable {
                         case .unknown(let value): return value
                         }
                     }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.gps, .gps): return true
+                        case (.cell, .cell): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .gps: hasher.combine(0)
+                        case .cell: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
         }

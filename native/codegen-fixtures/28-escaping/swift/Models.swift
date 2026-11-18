@@ -31,6 +31,31 @@ public nonisolated enum WidgetKind: RawRepresentable, Codable, Hashable, Sendabl
         case .unknown(let value): return value
         }
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.cost_, .cost_): return true
+        case (.a_b, .a_b): return true
+        case (.x__y, .x__y): return true
+        case (.b_c, .b_c): return true
+        case (.d__e, .d__e): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .cost_: hasher.combine(0)
+        case .a_b: hasher.combine(1)
+        case .x__y: hasher.combine(2)
+        case .b_c: hasher.combine(3)
+        case .d__e: hasher.combine(4)
+        case .unknown(let value):
+            hasher.combine(5)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct Widget: Codable, Sendable {
