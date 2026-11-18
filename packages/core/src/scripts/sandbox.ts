@@ -16,7 +16,7 @@ import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/fra
 import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
 import { BACKEND_OUTPUT_KEY, outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
-import { spawnCommand } from './run-command.js';
+import { spawnCommand, spawnShellCommand } from './run-command.js';
 import { liveDevSession, liveSandboxSession, SANDBOX_SESSION_ENV } from './dev-pidfile.js';
 import { terminateProcessTree, type AwaitableChild } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
@@ -838,9 +838,9 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
 
   const devServerSpawn = buildDevServerSpawn(devCommand);
 
-  const devServer = spawnCommand(devServerSpawn.command, devServerSpawn.args, {
+  // buildDevServerSpawn always returns no args: the whole command line goes to the shell.
+  const devServer = spawnShellCommand(devServerSpawn.command, {
     stdio: "inherit",
-    shell: true,
     // Own process group on POSIX so cleanup can signal the whole dev-server
     // tree (shell → tsx → node). The node dev server then runs its own SIGTERM
     // handler — the ~2s terminateFrontend drain that reaps the *detached* Vite

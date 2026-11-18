@@ -316,7 +316,7 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 		for (const url of ['file:///etc/passwd', 'ftp://files.example.com/x', 'data:text/plain,x']) {
 			const message = assertNoEndpoint(await resolveWithApiUrl(root, url));
 			assert.match(message, /only http and https/);
-			assert.match(message, new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+			assert.ok(message.includes(url), `expected ${JSON.stringify(message)} to name ${url}`);
 		}
 	});
 
