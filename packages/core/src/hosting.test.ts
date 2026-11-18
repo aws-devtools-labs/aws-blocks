@@ -4335,6 +4335,41 @@ describe('Hosting — skipping the frontend build', () => {
   });
 });
 
+// A deploy synthesizes with `NODE_OPTIONS=--conditions=cdk`. `buildCommand`
+// must run without that condition, so a build that loads `@aws-blocks/*`
+// doesn't get their CDK constructs, but with the user's other NODE_OPTIONS.
+describe('Hosting — buildCommand environment', () => {
+  let tmpDir: string;
+  const savedNodeOptions = process.env.NODE_OPTIONS;
+  // Records the NODE_OPTIONS it sees, then writes the SPA output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('node-options.json',JSON.stringify(process.env.NODE_OPTIONS??null));f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<html></html>')"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-buildenv-'));
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'buildenv', dependencies: { react: '^18' } }));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = savedNodeOptions;
+  });
+
+  const buildNodeOptions = (parentNodeOptions: string): string | null => {
+    process.env.NODE_OPTIONS = parentNodeOptions;
+    new Hosting(new Stack(new App(), 'BuildEnvStack'), 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD });
+    return JSON.parse(fs.readFileSync(path.join(tmpDir, 'node-options.json'), 'utf-8'));
+  };
+
+  for (const condition of ['--conditions=cdk', '--conditions cdk', '-C cdk', '--conditions="cdk"']) {
+    it(`removes \`${condition}\` and keeps the other NODE_OPTIONS entries`, () => {
+      assert.strictEqual(
+        buildNodeOptions(`--max-old-space-size=4096 ${condition} --conditions=development`),
+        '--max-old-space-size=4096 --conditions=development',
+      );
+    });
+  }
+});
+
 // A destroy reuses a build only when the adapter will too: `Hosting` must check
 // the same marker the framework adapter checks, or it skips `buildCommand` while
 // the adapter still runs its full build.
