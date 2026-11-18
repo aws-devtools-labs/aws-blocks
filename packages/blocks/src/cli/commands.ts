@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Command handlers of the AWS Blocks task runner. Each lifecycle command runs the same
+ * Command handlers of the CDK Blocks task runner. Each lifecycle command runs the same
  * core function, under the same runtime, as the generated npm-script wrapper
  * it replaces; see `runners/launch.ts`.
  */
@@ -1010,7 +1010,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Identity:    ${result.arn ?? 'unknown'}`,
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
-		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in an AWS Blocks app)')}`,
+		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in a CDK Blocks app)')}`,
 		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Exit codes and the error format of AWS Blocks tasks.
+ * Exit codes and the error format of CDK Blocks tasks.
  *
  * Every failure prints on stderr in one shape:
  *

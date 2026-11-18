@@ -394,7 +394,7 @@ function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'u
  * - Adding "aws-blocks" to workspaces (array or Yarn Classic object format)
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
- * - Adding AWS Blocks task settings (`package.json#blocks`) when the project has none
+ * - Adding CDK Blocks task settings (`package.json#blocks`) when the project has none
  * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES},
  *   and `node_modules` when no existing line ignores or un-ignores it (these steps add dependencies)
  * - Monorepo detection and file: path rewriting
@@ -407,7 +407,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   devDeps: Record<string, string>;
   deps: Record<string, string>;
   scripts: Record<string, string>;
-  /** `package.json#blocks`, read by AWS Blocks tasks (for example `{ dev: { port: 3001 } }`). */
+  /** `package.json#blocks`, read by CDK Blocks tasks (for example `{ dev: { port: 3001 } }`). */
   blocksConfig?: Record<string, unknown>;
   gitignoreEntries: string[];
   skipInstall?: boolean;
@@ -481,7 +481,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     installedScripts[name] = actual;
   }
 
-  // Add AWS Blocks task settings without overriding any the project already has.
+  // Add CDK Blocks task settings without overriding any the project already has.
   if (blocksConfig) {
     if (!pkg.blocks || typeof pkg.blocks !== 'object') pkg.blocks = {};
     for (const [key, value] of Object.entries(blocksConfig)) {
@@ -544,7 +544,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   return installedScripts;
 }
 
-/** Reuse the selected template's AWS Blocks tasks, not its frontend or lifecycle scripts. */
+/** Reuse the selected template's CDK Blocks tasks, not its frontend or lifecycle scripts. */
 function templateTasks(scripts: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(scripts).filter(([name, command]) =>
     name !== 'prebuild' && command.startsWith(`node --input-type=module -e "import '@aws-blocks/blocks/run'" -- `),
@@ -554,7 +554,7 @@ function templateTasks(scripts: Record<string, string>): Record<string, string> 
 function printTaskNames(scripts: Record<string, string>): void {
   const renamed = Object.entries(scripts).filter(([name, actual]) => name !== actual);
   if (renamed.length === 0) return;
-  console.log('\nAWS Blocks tasks renamed to preserve your existing scripts:');
+  console.log('\nCDK Blocks tasks renamed to preserve your existing scripts:');
   for (const [name, actual] of renamed) console.log(`  ${name} → ${actual}`);
 }
 
@@ -802,7 +802,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   } else {
     console.log(`\nThen open http://localhost:${devPort}`);
   }
-  console.log('\nRun `npm run help` to see available AWS Blocks tasks.');
+  console.log('\nRun `npm run help` to see available CDK Blocks tasks.');
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 
@@ -963,7 +963,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log(`  npm run ${scripts.sandbox}  # Deploy Amplify + Blocks to sandbox`);
   console.log(`  npm run ${scripts['blocks:dev']}  # Run Blocks local dev server`);
   console.log(`  npm run ${scripts['generate-client']}  # Regenerate the Amplify-aware client`);
-  console.log(`  npm run ${scripts.help}  # List AWS Blocks tasks`);
+  console.log(`  npm run ${scripts.help}  # List CDK Blocks tasks`);
   printTaskNames(scripts);
   console.log('Your Blocks API is available at the /api endpoint alongside your Amplify backend.');
   console.log('');
@@ -1157,7 +1157,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('Next steps:');
   console.log(`  npm run ${scripts.sandbox}  # Deploy backend to your AWS sandbox`);
   console.log(`  npm run ${scripts['dev:server']}  # Run local dev server`);
-  console.log(`  npm run ${scripts.help}  # List AWS Blocks tasks`);
+  console.log(`  npm run ${scripts.help}  # List CDK Blocks tasks`);
   console.log(`  npm run ${scripts.docs}  # Browse Building Block documentation`);
   printTaskNames(scripts);
   console.log('');

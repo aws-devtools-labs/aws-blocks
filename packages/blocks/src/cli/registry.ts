@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The declarative command tree of the AWS Blocks task runner: groups, canonical names,
+ * The declarative command tree of the CDK Blocks task runner: groups, canonical names,
  * hidden aliases, descriptions, flags, examples and handlers.
  *
  * Command names are data. Renaming a command, or making an alias canonical,

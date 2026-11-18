@@ -37,7 +37,7 @@ function usageLine(command: CommandSpec): string {
 /** The root help: every canonical command, grouped. */
 export function rootHelp(version: string): string {
 	const lines = [
-		`AWS Blocks tasks ${version}`,
+		`CDK Blocks tasks ${version}`,
 		'',
 		'Usage: npm run <task> [arguments] [-- <options>]',
 	];
@@ -48,7 +48,7 @@ export function rootHelp(version: string): string {
 		if (group === 'Develop') {
 			lines.push(...table([
 				['docs:api', 'Read exact API signatures'],
-				['docs:search', 'Search the AWS Blocks docs'],
+				['docs:search', 'Search the CDK Blocks docs'],
 			]));
 		}
 	}
