@@ -59,7 +59,7 @@ public struct SwiftCodeGenerator {
         "BrowserLauncher", "ClientClosedError", "CodegenError", "FileDownloadHandle", "FileTransferError", "FileUploadHandle",
         "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
         "RealtimeChannel", "RealtimeError", "TokenStore", "TransferableError", "TransportError", "UnknownTransferable",
-        "WebSocketConnection", "WebSocketDelegate"
+        "WebAuthenticationSessionLauncher", "WebSocketConnection", "WebSocketDelegate"
     ]
 
     public func generate(from model: CodegenModel) throws -> GeneratedSources {

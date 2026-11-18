@@ -41,6 +41,7 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Realtime connection pool | `Sources/BlocksRuntime/Realtime/WebSocketSession.swift` |
 | File download handle | `Sources/BlocksRuntime/FileBucket/FileDownloadHandle.swift` |
 | File upload handle | `Sources/BlocksRuntime/FileBucket/FileUploadHandle.swift` |
+| OIDC sign-in sheet (`WebAuthenticationSessionLauncher`, an `ASWebAuthenticationSession` `BrowserLauncher`) | `Sources/BlocksRuntime/OIDC/WebAuthenticationSessionLauncher.swift` |
 | Transferables nested in a result: descriptor decoding, read-only encoding | `Sources/BlocksRuntime/TransferableCoding.swift` |
 | Error types | `Sources/BlocksRuntime/BlocksError.swift`, `Realtime/RealtimeError.swift`, `FileBucket/FileBucketError.swift` |
 

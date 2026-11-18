@@ -102,6 +102,12 @@ const referencedNames = {
   'num',
 };
 
+/// The runtime types a library with a typed OIDC result (one whose spec names
+/// its providers) refers to: it re-exports them and that result names them.
+/// Only such a library reserves them, so any other spec keeps a model or
+/// member of one of these names as is.
+const oidcRuntimeTypeNames = {'OidcProvider', 'TypedOidcClient'};
+
 /// The top-level functions and constants the generated code calls, and the
 /// two classes it always declares. A generated type with one of these names
 /// would shadow or duplicate it (`class override` breaks every `@override`).
