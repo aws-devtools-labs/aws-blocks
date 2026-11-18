@@ -1,0 +1,135 @@
+name: Publish Dart packages
+
+# Publishes native/dart/packages/<package> to pub.dev with pub.dev automated
+# publishing (GitHub OIDC, no stored credential). Push a tag
+# `<package>-v<version>` from a commit on main.
+#
+# Each package's pub.dev Admin page must have:
+#   - Automated publishing from GitHub Actions enabled for aws-devtools-labs/aws-blocks
+#   - Tag pattern `<package>-v{{version}}` (e.g. blocks_runtime-v{{version}})
+#   - Required environment `pub.dev`
+# See https://dart.dev/tools/pub/automated-publishing.
+
+on:
+  push:
+    tags:
+      - 'blocks_runtime-v*'
+      - 'blocks_codegen-v*'
+      - 'blocks_runtime_flutter-v*'
+
+# Not cancellable: a run must not stop between the upload and its completion.
+concurrency:
+  group: publish-dart-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write # pub.dev automated publishing (OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so origin/main is available for the ancestry check.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Accept exactly <known package>-v<SemVer>.
+      - name: Resolve package and version from tag
+        id: resolve
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SEMVER='[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?'
+          if [[ ! "$TAG" =~ ^(blocks_runtime|blocks_codegen|blocks_runtime_flutter)-v(${SEMVER})$ ]]; then
+            echo "::error::Tag '$TAG' is not <package>-v<version> for a known Dart package."
+            exit 1
+          fi
+          PACKAGE="${BASH_REMATCH[1]}"
+          VERSION="${BASH_REMATCH[2]}"
+          TOOL=dart
+          if [ "$PACKAGE" = blocks_runtime_flutter ]; then TOOL=flutter; fi
+          {
+            echo "package=$PACKAGE"
+            echo "version=$VERSION"
+            echo "directory=native/dart/packages/$PACKAGE"
+            echo "tool=$TOOL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check the tagged commit is on main
+        run: |
+          set -euo pipefail
+          COMMIT=$(git rev-parse "${GITHUB_SHA}^{commit}")
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "::error::Tagged commit $COMMIT is not reachable from origin/main."
+            exit 1
+          fi
+
+      - name: Check pubspec name and version
+        working-directory: ${{ steps.resolve.outputs.directory }}
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME=$(sed -n -E 's/^name:[[:space:]]*([^[:space:]#]+).*/\1/p' pubspec.yaml)
+          PUBSPEC_VERSION=$(sed -n -E "s/^version:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*/\1/p" pubspec.yaml)
+          if [ "$NAME" != "$PACKAGE" ]; then
+            echo "::error::pubspec.yaml name '$NAME' does not match '$PACKAGE'."
+            exit 1
+          fi
+          if [ "$PUBSPEC_VERSION" != "$VERSION" ]; then
+            echo "::error::Tag version $VERSION does not match pubspec.yaml version $PUBSPEC_VERSION."
+            exit 1
+          fi
+
+      # setup-dart mints the pub.dev OIDC token when the job has id-token: write.
+      - name: Setup Dart (with pub.dev token)
+        if: steps.resolve.outputs.tool == 'dart'
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+        with:
+          sdk: stable
+
+      - name: Setup Flutter
+        if: steps.resolve.outputs.tool == 'flutter'
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          # No cache: this job holds id-token, and the cache is shared with jobs that run repo code.
+          cache: false
+
+      - name: Get dependencies
+        working-directory: ${{ steps.resolve.outputs.directory }}
+        env:
+          TOOL: ${{ steps.resolve.outputs.tool }}
+        run: '"$TOOL" pub get'
+
+      - name: Publish dry run
+        working-directory: ${{ steps.resolve.outputs.directory }}
+        env:
+          TOOL: ${{ steps.resolve.outputs.tool }}
+        run: '"$TOOL" pub publish --dry-run'
+
+      # flutter-action does not set up pub.dev authentication, so run
+      # setup-dart only for its OIDC token, right before the upload so the
+      # short-lived token is fresh. The token is written to the user-level pub
+      # config, which the Flutter SDK's `pub` reads too. `flutter` stays the
+      # tool invoked below, so the Dart SDK this adds to PATH is not used.
+      - name: Setup pub.dev token (Flutter)
+        if: steps.resolve.outputs.tool == 'flutter'
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+        with:
+          sdk: stable
+
+      - name: Publish to pub.dev
+        working-directory: ${{ steps.resolve.outputs.directory }}
+        env:
+          TOOL: ${{ steps.resolve.outputs.tool }}
+        run: '"$TOOL" pub publish --force'
