@@ -13,7 +13,7 @@ final class UserAgentHeaderTests: XCTestCase {
     private final class NoopWebSocketDelegate: RealtimeSocketListener {
         let channel = "c"
         let unsubscribesOnLeave = true
-        func onOpen(_ socket: RealtimeSocket) {}
+        let subscribeFrame = "subscribe"
         func onMessage(_ text: String) {}
         func onFailure(_ error: Error) {}
     }

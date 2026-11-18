@@ -18,15 +18,12 @@ private final class RecordingListener: RealtimeSocketListener {
         self.unsubscribesOnLeave = unsubscribesOnLeave
     }
 
+    var subscribeFrame: String { "subscribe:\(channel)" }
+
     private let lock = NSLock()
-    private var _opens = 0
     private var _messages: [String] = []
     private var _errors: [Error] = []
 
-    var opens: Int { lock.lock()
-    defer { lock.unlock() }
-    return _opens
-    }
     var messages: [String] { lock.lock()
     defer { lock.unlock() }
     return _messages
@@ -34,12 +31,6 @@ private final class RecordingListener: RealtimeSocketListener {
     var errors: [Error] { lock.lock()
     defer { lock.unlock() }
     return _errors
-    }
-
-    func onOpen(_ socket: RealtimeSocket) {
-        lock.lock()
-        _opens += 1
-        lock.unlock()
     }
 
     func onMessage(_ text: String) {
@@ -122,7 +113,28 @@ final class WebSocketSessionTests: XCTestCase {
         XCTAssertEqual(unsubscribes().count, 1, "the last listener closes the socket instead")
     }
 
-    func testAcquireOpensSocketAndNotifiesOpen() async throws {
+    func testReleaseThenAcquireOfOneChannelQueuesUnsubscribeBeforeSubscribe() async throws {
+        let harness = FakeRealtimeHarness()
+        let keeper = RecordingListener(channel: "b")
+        let leaving = RecordingListener(channel: "a")
+        try harness.session.acquire(wsUrl: url, listener: keeper)
+        try harness.session.acquire(wsUrl: url, listener: leaving)
+        await waitUntil("both subscribes are sent") { harness.sockets[0].sent.count == 2 }
+
+        harness.session.release(wsUrl: url, listener: leaving)
+        let returning = RecordingListener(channel: "a")
+        try harness.session.acquire(wsUrl: url, listener: returning)
+
+        await waitUntil("both frames are sent") { harness.sockets[0].sent.count == 4 }
+        XCTAssertEqual(
+            Array(harness.sockets[0].sent.suffix(2)),
+            [#"{"action":"unsubscribe","channel":"a"}"#, "subscribe:a"]
+        )
+        harness.session.release(wsUrl: url, listener: keeper)
+        harness.session.release(wsUrl: url, listener: returning)
+    }
+
+    func testAcquireOpensSocketAndSendsTheSubscribe() async throws {
         let harness = FakeRealtimeHarness()
         let listener = RecordingListener()
 
@@ -132,7 +144,7 @@ final class WebSocketSessionTests: XCTestCase {
         XCTAssertTrue(harness.sockets[0].isResumed)
         XCTAssertEqual(harness.sockets[0].request.url?.absoluteString, url)
         XCTAssertEqual(harness.sockets[0].request.value(forHTTPHeaderField: "User-Agent"), blocksUserAgentToken)
-        await waitUntil("the listener sees the socket open") { listener.opens == 1 }
+        await waitUntil("the subscribe is sent") { harness.sockets[0].sent == ["subscribe:c"] }
         harness.session.release(wsUrl: url, listener: listener)
     }
 
@@ -147,8 +159,8 @@ final class WebSocketSessionTests: XCTestCase {
 
         harness.sockets[0].deliver("frame")
         await waitUntil("both listeners get the frame") { first.messages == ["frame"] && second.messages == ["frame"] }
-        // A listener that joins an open socket is told it's open, so it can send its subscribe.
-        await waitUntil("both listeners see the socket open") { first.opens == 1 && second.opens == 1 }
+        // A listener that joins an open socket has its subscribe sent too.
+        await waitUntil("both subscribes are sent") { harness.sockets[0].sent == ["subscribe:c", "subscribe:c"] }
 
         harness.session.release(wsUrl: url, listener: first)
         harness.session.release(wsUrl: url, listener: second)

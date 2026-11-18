@@ -58,8 +58,9 @@ protocol RealtimeSocketListener: AnyObject {
     /// Whether leaving the socket should unsubscribe the channel. False once the server has ended the subscription
     /// with an error frame, since the server already removed it.
     var unsubscribesOnLeave: Bool { get }
-    /// The socket is open, or was already open when the listener joined. Send the subscribe frame here.
-    func onOpen(_ socket: RealtimeSocket)
+    /// The frame that subscribes this listener's channel. The pool queues it when the socket opens, or when the
+    /// listener joins a socket that is already open.
+    var subscribeFrame: String { get }
     /// A text frame arrived. Every listener on the socket gets every frame.
     func onMessage(_ text: String)
     /// The socket failed (the platform error) or was closed by the other side (`RealtimeSocketClosed`). The pool has
@@ -149,42 +150,71 @@ class WebSocketSession {
         private var listeners: [RealtimeSocketListener] = []
         private var isOpen = false
         private let lock = NSLock()
+        /// Every outgoing frame for the socket, in the order it must reach the server. One writer drains it, so an
+        /// unsubscribe queued before a subscribe for the same channel is always sent first.
+        private let outbox: AsyncStream<String>.Continuation
+        private let writer: Task<Void, Never>
         var receiveLoop: Task<Void, Never>?
         var keepAlive: Task<Void, Never>?
 
         init(socket: RealtimeSocket) {
             self.socket = socket
+            var continuation: AsyncStream<String>.Continuation!
+            let frames = AsyncStream<String> { continuation = $0 }
+            self.outbox = continuation
+            self.writer = Task {
+                for await frame in frames {
+                    do {
+                        try await socket.send(frame)
+                    } catch {
+                        // A failed send means the socket is going away; the receive loop reports it.
+                        logger.debug("Realtime send failed: \(error.localizedDescription)")
+                    }
+                }
+            }
         }
 
-        /// Adds `listener` and returns whether the socket is already open, in which case the caller calls `onOpen`.
-        func add(_ listener: RealtimeSocketListener) -> Bool {
+        /// Queues a frame. Frames queued after `stop` are dropped.
+        func enqueue(_ frame: String) {
+            outbox.yield(frame)
+        }
+
+        /// Adds `listener`, and queues its subscribe if the socket is already open.
+        func add(_ listener: RealtimeSocketListener) {
             lock.lock()
             defer { lock.unlock() }
             listeners.append(listener)
-            return isOpen
+            if isOpen {
+                enqueue(listener.subscribeFrame)
+            }
         }
 
-        /// Removes `listener` and returns whether it was present.
-        func remove(_ listener: RealtimeSocketListener) -> Bool {
+        /// Removes `listener`. Returns nil if it wasn't present, otherwise whether no listeners remain. When others
+        /// remain, queues an unsubscribe for its channel if the socket is open, no remaining listener has the
+        /// channel, and the server hasn't already ended the subscription.
+        ///
+        /// Queuing under the entry lock orders the unsubscribe against every subscribe queued by `add` and `markOpen`.
+        func remove(_ listener: RealtimeSocketListener) -> Bool? {
             lock.lock()
             defer { lock.unlock() }
             let before = listeners.count
             listeners.removeAll { $0 === listener }
-            return listeners.count != before
+            guard listeners.count != before else { return nil }
+            if listeners.isEmpty { return true }
+            if isOpen, listener.unsubscribesOnLeave, !listeners.contains(where: { $0.channel == listener.channel }) {
+                enqueue(WebSocketSession.unsubscribeFrame(channel: listener.channel))
+            }
+            return false
         }
 
-        var isEmpty: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return listeners.isEmpty
-        }
-
-        /// Marks the socket open and returns the listeners to notify.
-        func markOpen() -> [RealtimeSocketListener] {
+        /// Marks the socket open and queues a subscribe for every listener.
+        func markOpen() {
             lock.lock()
             defer { lock.unlock() }
             isOpen = true
-            return listeners
+            for listener in listeners {
+                enqueue(listener.subscribeFrame)
+            }
         }
 
         var snapshot: [RealtimeSocketListener] {
@@ -193,10 +223,18 @@ class WebSocketSession {
             return listeners
         }
 
+        /// Stops the keep-alive and the writer and closes the socket. Called once the socket has left the pool.
         func stop(reason: String) {
             receiveLoop?.cancel()
-            keepAlive?.cancel()
+            stopSending()
             socket.cancel(reason: reason)
+        }
+
+        /// Stops the keep-alive and the writer. Frames still queued are dropped.
+        func stopSending() {
+            keepAlive?.cancel()
+            outbox.finish()
+            writer.cancel()
         }
     }
 
@@ -233,9 +271,7 @@ class WebSocketSession {
         let sleep = sleep
         entry.receiveLoop = Task { [weak self] in
             let socket = entry.socket
-            for listener in entry.markOpen() {
-                listener.onOpen(socket)
-            }
+            entry.markOpen()
 
             while !Task.isCancelled {
                 do {
@@ -261,7 +297,6 @@ class WebSocketSession {
             }
         }
         entry.keepAlive = Task {
-            let socket = entry.socket
             while true {
                 do {
                     try await sleep(Self.keepAliveInterval)
@@ -269,12 +304,7 @@ class WebSocketSession {
                     return
                 }
                 if Task.isCancelled { return }
-                do {
-                    try await socket.send(Self.pingFrame)
-                } catch {
-                    // A failed send means the socket is going away; the receive loop reports it.
-                    logger.debug("Keep-alive ping failed: \(error.localizedDescription)")
-                }
+                entry.enqueue(Self.pingFrame)
             }
         }
     }
@@ -286,7 +316,7 @@ class WebSocketSession {
             connections.removeValue(forKey: key)
         }
         lock.unlock()
-        entry.keepAlive?.cancel()
+        entry.stopSending()
         entry.socket.cancel(reason: reason)
     }
 
@@ -304,11 +334,8 @@ class WebSocketSession {
         lock.lock()
         if let existing = connections[connectionKey] {
             // Join under the pool lock, so a concurrent release can't close the socket between lookup and join.
-            let open = existing.add(listener)
+            existing.add(listener)
             lock.unlock()
-            if open {
-                listener.onOpen(existing.socket)
-            }
             return
         }
 
@@ -316,7 +343,7 @@ class WebSocketSession {
         var request = URLRequest(url: url, timeoutInterval: Self.handshakeTimeout)
         request.setValue(blocksUserAgentToken, forHTTPHeaderField: "User-Agent")
         let entry = ConnectionEntry(socket: makeSocket(request))
-        _ = entry.add(listener)
+        entry.add(listener)
         connections[connectionKey] = entry
         lock.unlock()
 
@@ -329,37 +356,40 @@ class WebSocketSession {
     func release(wsUrl: String, listener: RealtimeSocketListener) {
         let connectionKey = wsUrl
         lock.lock()
-        guard let entry = connections[connectionKey], entry.remove(listener) else {
+        // `remove` queues the unsubscribe, if one is due, while the pool lock is held, so a subscribe that a later
+        // `acquire` queues for the same channel always follows it on the socket.
+        guard let entry = connections[connectionKey], let close = entry.remove(listener) else {
             lock.unlock()
             return
         }
-        let close = entry.isEmpty
         if close {
             connections.removeValue(forKey: connectionKey)
         }
-        // The socket stays open for other channels: tell the server this channel is gone, unless another listener
-        // still has it or the server already ended it.
-        let unsubscribe = !close && listener.unsubscribesOnLeave
-            && !entry.snapshot.contains { $0.channel == listener.channel }
         lock.unlock()
         if close {
             entry.stop(reason: "All channels released")
-        } else if unsubscribe {
-            let frame = Self.unsubscribeFrame(channel: listener.channel)
-            let socket = entry.socket
-            Task {
-                do {
-                    try await socket.send(frame)
-                } catch {
-                    logger.debug("Unsubscribe failed: \(error.localizedDescription)")
-                }
-            }
         }
     }
 
     /// The frame that ends a channel's subscription on a socket, as the web client sends it.
     static func unsubscribeFrame(channel: String) -> String {
-        #"{"action":"unsubscribe","channel":"\#(channel)"}"#
+        frame(["action": "unsubscribe", "channel": channel])
+    }
+
+    /// The frame that subscribes `channel` with its channel token, as the web client sends it.
+    static func subscribeFrame(channel: String, token: String) -> String {
+        frame(["action": "subscribe", "channel": channel, "token": token])
+    }
+
+    /// Encodes a client frame as JSON, so a `"` or `\` in a channel name or token is escaped. Keys are sorted, which
+    /// matches the web client's order (`action`, `channel`, `token`).
+    private static func frame(_ fields: [String: String]) -> String {
+        // A dictionary of strings always serializes to UTF-8.
+        guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys, .withoutEscapingSlashes]),
+              let text = String(bytes: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
     }
 
     /// The number of pooled sockets. For tests.

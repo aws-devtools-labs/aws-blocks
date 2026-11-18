@@ -13,6 +13,7 @@ A channel token now expires after about an hour, and the backend can revoke a us
 - `subscribe()` doesn't wait for the server to confirm the subscription. A refused subscribe ends the stream with `subscriptionEnded`.
 - While a socket has a subscriber, the SDK sends `{"action":"ping"}` every 9 minutes, as the web client does. This also keeps API Gateway from closing an idle socket after 10 minutes.
 - When a channel's last subscriber on a socket leaves (cancel, `close()`, or a message that fails to decode) and the socket stays open for other channels, the SDK sends `{"action":"unsubscribe","channel":…}`, so the server stops delivering to it. It sends none when the server already ended that subscription, or when the socket closes or has failed.
+- Every frame the SDK sends on a socket (subscribe, unsubscribe, keep-alive) goes out in order through one queue, so leaving a channel and subscribing to it again can't reach the server as subscribe-then-unsubscribe. Frames are encoded as JSON, so a channel name or token with `"` or `\` stays valid.
 - Realtime sockets use their own `URLSession` whose request timeout is 10 minutes rather than the 60-second default, longer than the keep-alive ping. Opening a socket still fails after 30 seconds if the server never completes the handshake.
 - `close()` now finishes every active stream normally. Before, it closed the socket and left the streams waiting.
 - A message that fails to decode still ends the stream with the decoder's error.

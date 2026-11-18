@@ -411,23 +411,8 @@ private final class ChannelListener<T>: RealtimeSocketListener {
         continuation.finish()
     }
 
-    func onOpen(_ socket: RealtimeSocket) {
-        let subscribeMsg = """
-        {"action":"subscribe","channel":"\(channelName)","token":"\(channelToken)"}
-        """
-        // The subscribe message carries the channel token, so the log names the channel only.
-        // Bound locally: os.Logger interpolation is an escaping autoclosure, and SwiftFormat
-        // (`--self init-only`) removes an explicit `self.` outside initializers.
-        let channel = channelName
-        logger.debug("WS opened, subscribing to channel \(channel)")
-        Task {
-            do {
-                try await socket.send(subscribeMsg)
-            } catch {
-                // The receive loop reports the socket failure that caused this.
-                logger.error("Failed to send subscribe: \(error.localizedDescription)")
-            }
-        }
+    var subscribeFrame: String {
+        WebSocketSession.subscribeFrame(channel: channelName, token: channelToken)
     }
 
     func onMessage(_ text: String) {

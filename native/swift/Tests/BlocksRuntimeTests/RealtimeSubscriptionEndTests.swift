@@ -548,4 +548,104 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
 
         XCTAssertTrue(unsubscribes(harness.sockets[0]).isEmpty)
     }
+
+    // MARK: - Frame order and encoding
+
+    /// Leaving a channel and subscribing to it again on a socket that stays open must reach the server as
+    /// unsubscribe, then subscribe. The other way round, the server drops the new subscription and the new stream
+    /// never receives. Repeated, because the order used to depend on which of two tasks ran first.
+    func testUnsubscribeThenResubscribeReachesTheSocketInOrder() async {
+        for run in 0 ..< 200 {
+            let harness = FakeRealtimeHarness()
+            let keeper = harness.channel("b")
+            let keeperRecorder = StreamRecorder(keeper.subscribe())
+            let leaving = harness.channel("a")
+            _ = StreamRecorder(leaving.subscribe())
+            await waitUntil("run \(run): the socket is open") { harness.sockets.first?.sent.count == 2 }
+
+            leaving.close()
+            let again = harness.channel("a")
+            let againRecorder = StreamRecorder(again.subscribe())
+
+            let unsubscribe = #"{"action":"unsubscribe","channel":"a"}"#
+            let subscribe = #"{"action":"subscribe","channel":"a","token":"tok"}"#
+            await waitUntil("run \(run): the frames are sent") {
+                harness.sockets.first.map { $0.sent.filter { $0 == subscribe }.count == 2 } ?? false
+            }
+            let sent = harness.sockets[0].sent
+            guard let unsubscribeIndex = sent.firstIndex(of: unsubscribe),
+                  let resubscribeIndex = sent.lastIndex(of: subscribe) else {
+                XCTFail("run \(run): expected an unsubscribe and a resubscribe, sent \(sent)")
+                return
+            }
+            XCTAssertLessThan(unsubscribeIndex, resubscribeIndex, "run \(run): sent \(sent)")
+
+            harness.sockets[0].deliver(message("a", x: run))
+            await waitUntil("run \(run): the new stream receives") { againRecorder.values == [["x": run]] }
+            keeper.close()
+            again.close()
+            _ = await keeperRecorder.ended()
+        }
+    }
+
+    /// The keep-alive goes through the same queue as subscribes.
+    func testPingIsQueuedAfterAPendingSubscribe() async {
+        let harness = FakeRealtimeHarness()
+        let channel = harness.channel("c")
+        _ = await subscribed(channel, on: harness)
+        await waitUntil("the keep-alive waits") { harness.clock.pendingDurations.count == 1 }
+
+        harness.clock.advance(by: WebSocketSession.keepAliveInterval)
+
+        await waitUntil("the ping is sent") { harness.sockets[0].pingCount == 1 }
+        XCTAssertEqual(harness.sockets[0].sent.first, #"{"action":"subscribe","channel":"c","token":"tok"}"#)
+        channel.close()
+    }
+
+    func testFramesEscapeQuotesAndBackslashesInChannelNamesAndTokens() async throws {
+        let name = #"we"ird\name"#
+        let token = #"t"o\k"#
+        let harness = FakeRealtimeHarness()
+        let keeper = harness.channel("b")
+        let keeperRecorder = StreamRecorder(keeper.subscribe())
+        let channel = harness.channel(name, token: token)
+        let recorder = StreamRecorder(channel.subscribe())
+        await waitUntil("both subscribes are sent") { harness.sockets.first?.sent.count == 2 }
+
+        let subscribe = try XCTUnwrap(harness.sockets[0].sent.last)
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(subscribe.utf8)) as? [String: String],
+            "not valid JSON: \(subscribe)"
+        )
+        XCTAssertEqual(decoded, ["action": "subscribe", "channel": name, "token": token])
+
+        // The server's frames for that channel route to it.
+        let frame = try XCTUnwrap(String(
+            bytes: JSONSerialization.data(withJSONObject: ["type": "message", "channel": name, "data": ["x": 3]]),
+            encoding: .utf8
+        ))
+        harness.sockets[0].deliver(frame)
+        await waitUntil("the message arrives") { recorder.values == [["x": 3]] }
+
+        channel.close()
+        await waitUntil("the unsubscribe is sent") { harness.sockets[0].sent.count == 3 }
+        let unsubscribe = try XCTUnwrap(harness.sockets[0].sent.last)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: Data(unsubscribe.utf8)) as? [String: String],
+            ["action": "unsubscribe", "channel": name]
+        )
+        keeper.close()
+        _ = await keeperRecorder.ended()
+    }
+
+    func testFramesMatchTheWebClientShapeForPlainNames() {
+        XCTAssertEqual(
+            WebSocketSession.subscribeFrame(channel: "room/1", token: "abc.def"),
+            #"{"action":"subscribe","channel":"room/1","token":"abc.def"}"#
+        )
+        XCTAssertEqual(
+            WebSocketSession.unsubscribeFrame(channel: "room/1"),
+            #"{"action":"unsubscribe","channel":"room/1"}"#
+        )
+    }
 }
