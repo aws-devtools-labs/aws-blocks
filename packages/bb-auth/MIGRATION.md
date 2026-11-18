@@ -227,7 +227,7 @@ export const authApi = auth.createApi(); // the sign-in state machine: getAuthSt
 export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs' OIDC client for federated sign-in
 ```
 
-- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's Blocks client, so it shares that client's HTTP client and cookie store. On Swift and Kotlin it types `signIn` by the block's provider ids (Dart's client takes a provider id string for now):
+- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's Blocks client, so it shares that client's HTTP client and cookie store, and types `signIn` by the block's provider ids (a generated enum on Swift, Kotlin and Dart):
 
   ```kotlin
   val oidc = blocks.oidcAuthApi.getClient()
@@ -235,8 +235,8 @@ export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs
   ```
 
   ```dart
-  final oidc = await blocks.oidcAuthApi.getClient();
-  final user = await oidc.signInRelay('google', launcher: launcher, relayTo: 'myapp://auth');
+  final oidc = await blocks.oidcAuthApi.getClient(); // TypedOidcClient<OidcAuthApiApiGetClientProvider>
+  final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.google, launcher: launcher, relayTo: 'myapp://auth');
   ```
 
   ```swift
@@ -244,7 +244,7 @@ export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs
   let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)
   ```
 
-- **Federated sign-in buttons come from the client, everything else from the state machine.** Render one button per entry in the `providers` of the client `getClient()` returns (typed on Swift and Kotlin), and call `signIn(provider)` on it (the calls above), then `getAuthState()` again. Don't route `getAuthState()`'s `signIn:<id>` actions: their `url` starts a browser-cookie sign-in, which would leave the session cookie in the system browser, not in the app. Every other action (email + password, MFA, reset) goes through `setAuthState`, whose result is the next state: render it as it is. `getAuthState()` only ever reports signed in or signed out, never a step in progress (`confirmingSignUp`, `confirmingSignIn`, `confirmingPasswordReset`), so call it on launch and after a federated sign-in or sign-out, not to continue a flow. A failure the user can retry (`retriable: true`) comes back with `actions: []`: keep the current form and show `error`.
+- **Federated sign-in buttons come from the client, everything else from the state machine.** Render one button per entry in the `providers` of the client `getClient()` returns, and call `signIn` on it with that provider's generated enum value (the calls above), then `getAuthState()` again. Don't route `getAuthState()`'s `signIn:<id>` actions: their `url` starts a browser-cookie sign-in, which would leave the session cookie in the system browser, not in the app. Every other action (email + password, MFA, reset) goes through `setAuthState`, whose result is the next state: render it as it is. `getAuthState()` only ever reports signed in or signed out, never a step in progress (`confirmingSignUp`, `confirmingSignIn`, `confirmingPasswordReset`), so call it on launch and after a federated sign-in or sign-out, not to continue a flow. A failure the user can retry (`retriable: true`) comes back with `actions: []`: keep the current form and show `error`.
 - **Keep `relayTo` allowed.** The app's `relayTo` (its custom scheme, for example `myapp://auth`) must stay in `redirects.allowedRelayOrigins`, as `relayOrigin('myapp://auth')`. A desktop app's loopback `http://127.0.0.1:<port>` is always allowed.
 - **Users sign in once more** after the upgrade, as on the web: the old session cookie is ignored.
 - **On launch, call `getAuthState()`.** It reports the signed-in user from the session cookie, for every sign-in method. To restore a federated session, a block with providers also serves `GET <base>/session` (default `/aws-blocks/auth/session`): `200 { user }` means signed in, `401` means signed out. A block without providers has no session route. Don't derive the user from a stored token.

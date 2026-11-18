@@ -782,11 +782,16 @@ export const authApi = auth.createApi();         // the sign-in state machine
 export const oidcAuthApi = auth.createOidcApi(); // the native SDKs' OIDC client
 ```
 
-`oidcAuthApi.getClient()` returns an `oidc/client` transferable: the block's routes and the providers available in this runtime. The generated native client turns it into the SDK's OIDC client. On Swift and Kotlin its `signIn` takes only the block's provider ids (Dart's client takes a provider id string for now):
+`oidcAuthApi.getClient()` returns an `oidc/client` transferable: the block's routes and the providers available in this runtime. The generated native client (Swift, Kotlin and Dart) turns it into the SDK's OIDC client, and its `signIn` takes only the block's provider ids:
 
 ```swift
 let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
 let user = try await oidc.signIn(provider: .okta, relayTo: "myapp://auth", launcher: launcher)
+```
+
+```dart
+final oidc = await blocks.oidcAuthApi.getClient(); // TypedOidcClient<OidcAuthApiApiGetClientProvider>
+final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launcher: launcher, relayTo: 'myapp://auth');
 ```
 
 - **Return URL.** List the app's scheme in `redirects.allowedRelayOrigins`. Desktop loopback (`http://127.0.0.1:<port>`) is always allowed.

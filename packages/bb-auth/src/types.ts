@@ -2052,8 +2052,8 @@ export interface OidcProviderConfig {
 /**
  * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
  * routes and the providers a native client can sign in with. The Swift,
- * Kotlin and Dart SDKs hydrate it into their `OidcClient`; the generated
- * Swift and Kotlin clients type it by `P` (Dart's is untyped for now).
+ * Kotlin and Dart SDKs hydrate it into their OIDC client, which the
+ * generated clients type by `P`.
  */
 export interface OidcClientDescriptor<P extends string = string> {
 	/** The transferable tag the native SDKs hydrate. */
@@ -2087,7 +2087,7 @@ export interface OidcClientDescriptor<P extends string = string> {
 /**
  * What `getClient()` returns. On the server it serializes to its
  * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
- * client, whose `signIn` takes only `P` on Swift and Kotlin. A browser receives the plain
+ * client whose `signIn` takes only `P`. A browser receives the plain
  * descriptor: for a web frontend use `createAuthClient()` from
  * `@aws-blocks/bb-auth/browser-client` instead.
  */
@@ -3318,8 +3318,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	/**
 	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
 	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
-	 * into an `OidcClient`, typed by this block's provider ids on Swift and
-	 * Kotlin (Dart's is untyped for now).
+	 * into an OIDC client typed by this block's provider ids.
 	 */
 	createOidcApi(): OidcClientApiOf<O>;
 

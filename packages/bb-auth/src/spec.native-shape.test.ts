@@ -174,7 +174,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 	});
 
 	test("createOidcApi().getClient() is the oidc/client transferable, typed by each block's own provider ids", () => {
-		// What the native generators read: Swift/Kotlin turn the enum into `<Namespace>.GetClient.Provider`.
+		// What the native generators read: Swift/Kotlin turn the enum into `<Namespace>.GetClient.Provider`, Dart into `<Api class>GetClientProvider`.
 		const typed = (id: string) => ({
 			'x-blocks-transferable': 'oidc/client',
 			'x-blocks-type-args': [{ type: 'string', enum: [id] }],
@@ -182,7 +182,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		// The two blocks configure different provider ids, so each namespace's enum is its own block's.
 		assert.deepStrictEqual(method('federatedOidcApi.getClient').result.schema, typed('okta'));
 		assert.deepStrictEqual(method('mixedOidcApi.getClient').result.schema, typed('entra'));
-		// No provider: no enum, so the native client is the untyped one (`OidcClient<AnyProvider>`, `OIDCClient<String>`).
+		// No provider: no enum, so the native client is the untyped one (`OidcClient<AnyProvider>`, `OIDCClient<String>`, Dart's `OidcClient`).
 		assert.deepStrictEqual(method('passwordOidcApi.getClient').result.schema, {
 			'x-blocks-transferable': 'oidc/client',
 		});
