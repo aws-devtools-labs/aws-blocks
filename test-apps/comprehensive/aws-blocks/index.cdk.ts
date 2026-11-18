@@ -29,7 +29,7 @@ const appId: string | undefined = app.node.tryGetContext('blocksAppId');
 const appStrict = app.node.tryGetContext('blocksAppStrict') === 'true';
 
 // Reuse the sandbox-id helper for the production stack salt too.
-// `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
+// `.cdk-blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
 // DELETE_FAILED stack from a prior run can't block a fresh deploy.
 // (The scheduled cleanup workflow can't unstick stacks blocked on

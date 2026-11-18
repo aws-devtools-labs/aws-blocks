@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { BLOCKS_SANDBOX_PREFIX } from '../constants.js';
 import { contextFetch } from './fetch-store.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
 import { legacyDeployedStage } from './legacy-config.js';
@@ -122,7 +123,7 @@ async function resolveApiUrl(): Promise<string> {
     if (typeof process.getBuiltinModule === 'function') {
       try {
         const fs = process.getBuiltinModule('node:fs');
-        config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+        config = JSON.parse(fs.readFileSync('.cdk-blocks-sandbox/config.json', 'utf-8'));
       } catch {
         // Config doesn't exist or not in Node.js
       }
@@ -133,7 +134,7 @@ async function resolveApiUrl(): Promise<string> {
       const stage = legacyDeployedStage(config);
       if (stage) {
         throw new Error(
-          `.blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
+          `.cdk-blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
             'Start the dev server (`npm run dev`), which rewrites it, ' +
             'or set BLOCKS_API_URL to target that stack on purpose.',
         );
@@ -150,7 +151,7 @@ async function resolveApiUrl(): Promise<string> {
   
   // 4. Browser: fetch config.json from hosting origin
   try {
-    const response = await fetch('/.blocks-sandbox/config.json');
+    const response = await fetch(`${BLOCKS_SANDBOX_PREFIX}/config.json`);
     if (response.ok) {
       const config = await response.json();
       const validated = validateAndCache(config.apiUrl, 'config.json fetch');
@@ -164,11 +165,11 @@ async function resolveApiUrl(): Promise<string> {
   // Fallback — no config found
   throw new Error(
     'Blocks API URL not configured. Ensure:\n' +
-    '1. A dev server is running (`npm run dev` writes .blocks-sandbox/config.json), OR\n' +
+    '1. A dev server is running (`npm run dev` writes .cdk-blocks-sandbox/config.json), OR\n' +
     '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
-    '3. config.json is served at /.blocks-sandbox/config.json (the dev server and Hosting serve it)' +
+    '3. config.json is served at /.cdk-blocks-sandbox/config.json (the dev server and Hosting serve it)' +
     (configFileNeedsNewerNode
-      ? `\nNode.js ${process.versions.node} cannot read .blocks-sandbox/config.json from the working directory; ` +
+      ? `\nNode.js ${process.versions.node} cannot read .cdk-blocks-sandbox/config.json from the working directory; ` +
         'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'
       : '')
   );

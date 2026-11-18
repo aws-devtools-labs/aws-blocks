@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The deployed stage a `.blocks-sandbox/config.json` points at, when a deploy
+ * The deployed stage a `.cdk-blocks-sandbox/config.json` points at, when a deploy
  * from core 0.8.0 or earlier wrote it, else `null`.
  *
  * Only a dev server writes `config.json` now, always with an `http:` URL of its

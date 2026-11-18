@@ -1,6 +1,6 @@
 dist
 node_modules
-.blocks-sandbox
+.cdk-blocks-sandbox
 cdk.out/
 aws-blocks/client.js
 aws-blocks/blocks.spec.json

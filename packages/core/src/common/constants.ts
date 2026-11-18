@@ -9,7 +9,16 @@
  */
 
 /** Directory where sandbox/deploy config is written (relative to project root). */
-export const BLOCKS_SANDBOX_DIR = '.blocks-sandbox';
+export const BLOCKS_SANDBOX_DIR = '.cdk-blocks-sandbox';
+
+/**
+ * The name {@link BLOCKS_SANDBOX_DIR} had before the `cdk-blocks` rename (D-030).
+ * An app upgrading from an earlier version still has its state under this name, so
+ * the copy-forward step reads it; nothing else may. Losing `sandbox-id.txt` in
+ * particular sends the next deploy to a different stack and leaves the customer's
+ * old one standing in their account.
+ */
+export const LEGACY_SANDBOX_DIR = '.blocks-sandbox';
 
 /** Default backend entry point directory name. */
 export const BLOCKS_BACKEND_DIR = 'aws-blocks';

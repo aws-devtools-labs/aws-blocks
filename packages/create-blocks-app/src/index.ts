@@ -466,7 +466,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 
   const installedScripts: Record<string, string> = {};
-  const hostScripts = pkg.scripts ??= {};
+  pkg.scripts ??= {};
+  const hostScripts = pkg.scripts;
   for (const [name, cmd] of Object.entries(scripts)) {
     const fallback = name.startsWith('blocks:') ? name : `blocks:${name}`;
     let actual = name;
@@ -949,7 +950,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     // `"generateClient": false` keeps the overlay's own aws-blocks/client.js (the Cognito token
     // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
     blocksConfig: { dev: { port: 3001, frontend: false, generateClient: false } },
-    gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
+    gitignoreEntries: ['.cdk-blocks-sandbox', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });
@@ -1147,7 +1148,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     },
     scripts: { ...tasks, 'dev:server': tasks.dev },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.cdk-blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });

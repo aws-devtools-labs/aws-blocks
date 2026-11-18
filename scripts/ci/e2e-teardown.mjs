@@ -10,7 +10,7 @@
 // Usage: node scripts/ci/e2e-teardown.mjs <app-dir>
 //
 // The app's CDK entry puts a random id, written once per checkout to
-// <app-dir>/.blocks-sandbox/sandbox-id.txt, into every stack name. Another run
+// <app-dir>/.cdk-blocks-sandbox/sandbox-id.txt, into every stack name. Another run
 // of the same PR (same BLOCKS_STACK_SUFFIX) has another id, so this deletes
 // only what this job deployed. When BLOCKS_STACK_SUFFIX is set, a stack must
 // carry it as a token too, so a bad id file can't reach another PR's or another
@@ -134,7 +134,7 @@ function statusOf(name) {
 }
 
 async function main() {
-	const idFile = join(appDir, '.blocks-sandbox', 'sandbox-id.txt');
+	const idFile = join(appDir, '.cdk-blocks-sandbox', 'sandbox-id.txt');
 	if (!existsSync(idFile)) {
 		console.log(`No ${idFile}: nothing was deployed.`);
 		return 0;

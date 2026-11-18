@@ -4,7 +4,7 @@
 
 fix(client): `@aws-blocks/core/client` now bundles for React Native (Hermes)
 
-The client's Node-only `.blocks-sandbox/config.json` fallback loaded `fs` with
+The client's Node-only `.cdk-blocks-sandbox/config.json` fallback loaded `fs` with
 `await import(/* webpackIgnore: true */ 'node:fs')`. Expo's Metro honors the
 `webpackIgnore` comment and leaves a native dynamic `import()` in the bundle,
 which Hermes cannot compile, so every Expo / React Native build that imported a

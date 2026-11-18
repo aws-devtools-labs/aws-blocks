@@ -344,7 +344,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     };
   }
   const self: DevServerPidRecord = { pid: 2000, ppid: 900, port: 3000, command: 'b', parentCommand: 'p' };
-  const path = '/app/.blocks-sandbox/dev-server.3000.pid';
+  const path = '/app/.cdk-blocks-sandbox/dev-server.3000.pid';
 
   it('creates the pidfile when there is none', () => {
     const fs = memoryFs();
@@ -364,9 +364,9 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
 
   it("refuses while the app's dev server on another port is alive, names that port, and removes its own record", () => {
     // Two dev servers of one app share its .bb-data: the second one, on another port, must not start either.
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a', parentCommand: 'q' });
-    const foreign = '/elsewhere/.blocks-sandbox/dev-server.4200.pid';
+    const foreign = '/elsewhere/.cdk-blocks-sandbox/dev-server.4200.pid';
     const fs = memoryFs({ [other]: owner, [foreign]: JSON.stringify({ pid: 1001, ppid: 501, port: 4200, command: 'c' }) });
     const commandOf = (pid: number) => ({ 1000: 'a', 500: 'q', 1001: 'c' })[pid] ?? '';
     const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => true, commandOf });
@@ -380,7 +380,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   });
 
   it("starts when the app's record on another port is stale, and leaves that record to its own port", () => {
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' });
     const fs = memoryFs({ [other]: stale });
     const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 2000, commandOf: () => 'b' });
@@ -391,7 +391,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   it('takes its own reload over in place without looking at the other ports again', () => {
     // A dev server whose tsx watch reloads it keeps the session, even while a refused start's record lingers.
     const predecessor = { pid: 1999, ppid: 900, port: 3000, command: 'old', parentCommand: 'tsx watch server.ts' };
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const fs = memoryFs({ [path]: JSON.stringify(predecessor), [other]: JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' }) });
     const commandOf = (pid: number) => ({ 900: 'tsx watch server.ts', 1000: 'a', 2000: 'b' })[pid] ?? '';
     const claim = claimDevPidfile(path, { ...self, parentCommand: 'tsx watch server.ts' }, {
@@ -986,7 +986,7 @@ describe('claimDevSession — release', () => {
     // A backend that throws while it loads ends its dev server before it removes the record it took over.
     const root = mkdtempSync(join(tmpdir(), 'dev-session-release-'));
     try {
-      const pidfile = join(root, '.blocks-sandbox', 'dev-server.41951.pid');
+      const pidfile = join(root, '.cdk-blocks-sandbox', 'dev-server.41951.pid');
       const first = claimDevSession(root, 41951);
       assert.ok(first.acquired);
       writeFileSync(pidfile, JSON.stringify({ pid: 4194302, ppid: 4194303, port: 41951, command: 'node gone.js', token: 'dead-run' }));

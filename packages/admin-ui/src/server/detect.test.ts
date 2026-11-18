@@ -143,7 +143,7 @@ describe('stackNameCandidates', () => {
 	it('adds the sandbox candidate when a sandbox id exists', () => {
 		const root = makeProject({
 			'.blocks/config.json': JSON.stringify({ stackId: 'my-app-abc123' }),
-			'.blocks-sandbox/sandbox-id.txt': 'dev-jane\n',
+			'.cdk-blocks-sandbox/sandbox-id.txt': 'dev-jane\n',
 		});
 		assert.deepStrictEqual(stackNameCandidates(root), ['my-app-abc123-prod', 'my-app-abc123-dev-jane']);
 	});
@@ -151,7 +151,7 @@ describe('stackNameCandidates', () => {
 	it('ignores an empty sandbox id file', () => {
 		const root = makeProject({
 			'.blocks/config.json': JSON.stringify({ stackId: 'my-app-abc123' }),
-			'.blocks-sandbox/sandbox-id.txt': '   \n',
+			'.cdk-blocks-sandbox/sandbox-id.txt': '   \n',
 		});
 		assert.deepStrictEqual(stackNameCandidates(root), ['my-app-abc123-prod']);
 	});

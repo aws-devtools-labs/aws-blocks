@@ -37,8 +37,12 @@ cdk.context.json
 test-apps/.upgrade-in-place/
 
 # Sandbox deploy artifacts (per-deploy state, account-specific)
+.cdk-blocks-sandbox/
+!/packages/create-blocks-app/templates/*/src/app/.cdk-blocks-sandbox/
+# The pre-rename name (D-030). The migration copies state forward rather than
+# moving it, so an upgraded checkout still has this directory and its
+# account-specific contents must stay uncommittable.
 .blocks-sandbox/
-!/packages/create-blocks-app/templates/*/src/app/.blocks-sandbox/
 
 # Per-project telemetry/config state (auto-generated, contains UUIDs)
 .blocks/

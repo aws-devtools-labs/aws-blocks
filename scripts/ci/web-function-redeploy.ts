@@ -42,7 +42,7 @@ try {
   const { startSandbox } = await import('@aws-blocks/blocks/scripts');
   await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
 
-  const outputs = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
+  const outputs = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
     string,
     Record<string, string>
   >;

@@ -190,7 +190,7 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 	const steps = job.slice(job.indexOf('    steps:\n')).split(/^(?=      - )/m).slice(1);
 	const ifOf = (step) => step.match(/^ {8}if: (.+)$/m)?.[1];
 	const minutes = (step) => Number(step.match(/timeout-minutes: (\d+)/)?.[1]);
-	const guard = "always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''";
+	const guard = "always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''";
 
 	it('ends with a bounded always() teardown of the stacks it deployed', () => {
 		const [refresh, teardown] = steps.slice(-2);

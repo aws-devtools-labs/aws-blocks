@@ -190,7 +190,7 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
     assert.strictEqual(args[args.indexOf('--require-approval') + 1], 'never');
-    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.production.json');
+    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.cdk-blocks-sandbox/outputs.production.json');
     assert.strictEqual(args[args.indexOf('--context') + 1], 'projectRoot=/app');
   });
 });

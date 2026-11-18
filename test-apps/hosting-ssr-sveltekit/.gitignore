@@ -1,7 +1,7 @@
 node_modules
 build
 .svelte-kit
-.blocks-sandbox
+.cdk-blocks-sandbox
 test-results
 playwright-report
 *.log

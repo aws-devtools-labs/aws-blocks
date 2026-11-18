@@ -113,8 +113,8 @@ describe('deploy/sandbox configured target', () => {
 				try {
 					await mkdir(join(directory, '.blocks'));
 					await writeFile(join(directory, '.blocks', 'config.json'), '{"stackId":"fixture"}');
-					await mkdir(join(directory, '.blocks-sandbox'));
-					await writeFile(join(directory, '.blocks-sandbox', 'sandbox-id.txt'), 'fixture');
+					await mkdir(join(directory, '.cdk-blocks-sandbox'));
+					await writeFile(join(directory, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'fixture');
 					const config = join(directory, 'config');
 					const credentials = join(directory, 'credentials');
 					// CDK prefers credentials-file Region; SDK normally prefers config.

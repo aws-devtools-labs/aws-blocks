@@ -191,8 +191,8 @@ class CdkBlocksCodegenTaskTest : FunSpec({
 
         error.message shouldContain "\"staging\" is \"https://staging.example.com/\", which has no RPC path"
         error.message shouldContain "for example \"https://staging.example.com/aws-blocks/api\""
-        error.message shouldContain "the dev server writes it to .blocks-sandbox/config.json, " +
-            "a sandbox or production deploy to .blocks-sandbox/config.<stage>.json"
+        error.message shouldContain "the dev server writes it to .cdk-blocks-sandbox/config.json, " +
+            "a sandbox or production deploy to .cdk-blocks-sandbox/config.<stage>.json"
     }
 
     test("a server override with only slashes for a path is rejected") {
