@@ -88,7 +88,10 @@ public struct Holder: Sendable { public let box: Box }'
 if out="$(bash "$COMPILE" "$SENDABLE" 2>&1)"; then
   fail "Case 5b: a struct claiming Sendable over a mutable class should fail: $out"
 fi
-case "$out" in *"01-wrong-sendable/swift/Api.swift:2:"*"non-Sendable type 'Box'"*) ;; *) fail "Case 5b: unexpected output: $out" ;; esac
+case "$out" in *"FAIL: 1 of 1 Swift fixture golden(s) don't compile: 01-wrong-sendable"*) ;; *) fail "Case 5b: unexpected summary: $out" ;; esac
+# The diagnostic's wording and case vary by Swift version (`non-Sendable` / `non-sendable`), so match either form.
+printf '%s' "$out" | grep -qiE "non-sendable type 'Box'|does not conform to the 'Sendable' protocol" \
+  || fail "Case 5b: the Sendable error should be reported: $out"
 
 # --- Case 6: no goldens is an error, not a vacuous pass ---
 mkdir -p "$WORK/empty"
