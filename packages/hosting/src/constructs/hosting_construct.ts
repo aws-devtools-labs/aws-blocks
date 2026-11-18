@@ -241,6 +241,20 @@ export type HostingConstructProps = {
       reservedConcurrency?: number;
     };
     /**
+     * Reserved concurrent executions for the ISR revalidation worker (the
+     * SQS-triggered Lambda that refreshes stale pages; only deployed when the
+     * build emits one, e.g. Next.js ISR). Default: undefined (no reservation),
+     * for the same fresh-account reason as `imageOptimization`.
+     *
+     * A reservation is both a cap and a claim: it also takes that many
+     * executions out of the account's unreserved pool. While throttled, SQS
+     * messages return to the queue and move to the DLQ after 3 receives, so
+     * pages stay stale until traffic triggers another revalidation.
+     */
+    revalidation?: {
+      reservedConcurrency?: number;
+    };
+    /**
      * Provisioned concurrency for the SSR Lambda (cold-start elimination).
      * When > 0, the construct creates a `live` alias with this many
      * always-warm execution environments and points the SSR REST API
@@ -1132,6 +1146,8 @@ export class HostingConstruct extends Construct {
           code: Code.fromAsset(manifest.cache.revalidationFunction.bundle),
           timeout: Duration.seconds(30),
           memorySize: 256,
+          // No reservation by default; see `compute.revalidation.reservedConcurrency`.
+          reservedConcurrentExecutions: props.compute?.revalidation?.reservedConcurrency,
           logGroup: revalidationLogGroup,
           environment: {
             CACHE_BUCKET_NAME: this.cacheBucket.bucketName,
