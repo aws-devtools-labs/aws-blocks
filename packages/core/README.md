@@ -1,6 +1,6 @@
-# @aws-cdk-blocks/core
+# @aws-blocks/core
 
-Core primitives for building full-stack applications with the AWS CDK Blocks.
+Core primitives for building full-stack applications with the AWS Blocks.
 
 ## Key Exports
 
@@ -9,14 +9,14 @@ Core primitives for building full-stack applications with the AWS CDK Blocks.
 Defines the boundary for your backend resources. The `Scope` class docstring serves as an index to all available Building Blocks.
 
 ```typescript
-import { Scope } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-blocks/core';
 
 const scope = new Scope('my-app');
 ```
 
 Pass `compute` to place everything created under a scope, and in its child
 scopes, on one `Compute` (`new Scope('reports', { parent: scope, compute })`);
-see the `@aws-cdk-blocks/bb-compute` README for what follows it.
+see the `@aws-blocks/bb-compute` README for what follows it.
 
 A block's resource names (its table, bucket or queue, and its local `.cdk-blocks/local/data`
 directory) come from its `fullId`: the scope ids from the root down, joined with
@@ -60,7 +60,7 @@ already deployed.
 Define type-safe APIs with automatic frontend/backend integration.
 
 ```typescript
-import { ApiNamespace } from '@aws-cdk-blocks/core';
+import { ApiNamespace } from '@aws-blocks/core';
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async greet(name: string) {
@@ -72,7 +72,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 Frontend usage (fully typed):
 
 ```typescript
-import { api } from 'cdk-blocks';
+import { api } from 'aws-blocks';
 
 const result = await api.greet('World');
 ```
@@ -96,7 +96,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See the `Auth` README (`@aws-cdk-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See the `Auth` README (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
 
 Only the methods your handler's object defines are callable — its own properties (including any spread in from another object), or methods its class defines. Members every object inherits (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …), properties hidden with `Object.defineProperty`, and the methods of a Building Block (exported, e.g. `export const notes = new KVStore(...)`, or returned by a handler) are never endpoints; calling one returns the same "Method not found" error as an unknown name.
 
@@ -111,12 +111,12 @@ The RPC endpoint dispatches `<exportName>.<method>` against your backend module'
 
 #### Calling the API over HTTP (JSON-RPC 2.0)
 
-The typed `import { api } from 'cdk-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.
+The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.
 
-`POST` to the RPC path `/cdk-blocks/api`:
+`POST` to the RPC path `/aws-blocks/api`:
 
-- Local dev: `http://localhost:3000/cdk-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
-- Deployed: the API Gateway stage URL + `/cdk-blocks/api`
+- Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
+- Deployed: the API Gateway stage URL + `/aws-blocks/api`
 
 The body is JSON-RPC 2.0:
 
@@ -124,7 +124,7 @@ The body is JSON-RPC 2.0:
 { "jsonrpc": "2.0", "method": "<namespace>.<methodName>", "params": [...], "id": 1 }
 ```
 
-- `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `cdk-blocks/index.ts` (e.g., `export const api = ...` → `api`).
+- `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
 - Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status — unless the namespace opts in to `httpErrorStatus` (below).
 
@@ -141,7 +141,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
 
-- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/cdk-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/cdk-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
+- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
 - **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
 Error responses use these JSON-RPC codes:
@@ -159,7 +159,7 @@ Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `erro
 Working example:
 
 ```bash
-curl -X POST http://localhost:3000/cdk-blocks/api \
+curl -X POST http://localhost:3000/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
@@ -174,9 +174,9 @@ The typed client handles it: when `fetch` fails with `TypeError: fetch failed` w
 To turn the resend off (at-most-once delivery; the failure reaches your code instead), pass `retryStaleConnection: false`:
 
 ```ts
-import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
+import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
 
-const api = ApiNamespaceClient<typeof import('./cdk-blocks/index.js').api>('api', {
+const api = ApiNamespaceClient<typeof import('./aws-blocks/index.js').api>('api', {
   retryStaleConnection: false,
 });
 ```
@@ -200,7 +200,7 @@ A named object is convenient for `curl`, but it is only safe when the keys are w
 One shape that looks reasonable and is **not** supported: a top-level JSON **array** as the whole body (a JSON-RPC batch). The parser reads `jsonrpc` and `method` off the body object, so an array body fails validation instead of running anything:
 
 ```bash
-curl -X POST http://localhost:3000/cdk-blocks/api \
+curl -X POST http://localhost:3000/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '[{"jsonrpc":"2.0","method":"api.greet","params":["a"],"id":1}]'
 # → HTTP 200
@@ -210,16 +210,16 @@ curl -X POST http://localhost:3000/cdk-blocks/api \
 
 `id` is `null` in that response because an array body has no `id` to echo. Send one call per request. Body that isn't valid JSON at all returns `-32700 Parse error`, also with HTTP `200`.
 
-#### Runtime config (`/.blocks-sandbox/config.json`)
+#### Runtime config (`/.cdk-blocks-sandbox/config.json`)
 
 The generated client does not hardcode the API URL; it resolves one at first call, in this order:
 
 1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute, and by `npm run dev` on the frontend command it runs).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
 3. Node.js 22.3 or later only: the file `.cdk-blocks-sandbox/config.json`, read from the **process working directory**. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
-4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
+4. Browser only: `fetch('/.cdk-blocks-sandbox/config.json')`.
 
-Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
 
 A deploy never rewrites `.cdk-blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs. It records its API URL in a file of its own, which only code that means to target that stage reads: `.cdk-blocks-sandbox/config.sandbox.json` for a sandbox deploy, `.cdk-blocks-sandbox/config.production.json` for `npm run deploy`. The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
 
@@ -227,27 +227,27 @@ An app deployed with an older version still has the deploy's URL in `config.json
 
 Two things about that path burn time when debugging:
 
-- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
-- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
+- The directory is **dotted**: `/.cdk-blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.cdk-blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.cdk-blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
+- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.cdk-blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
 
 What you should see instead, per environment:
 
 ```bash
 # Local dev / sandbox: served by the dev server itself, Cache-Control: no-store
-curl http://localhost:3000/.blocks-sandbox/config.json
-# → {"apiUrl":"http://localhost:3000/cdk-blocks/api","environment":"local"}
+curl http://localhost:3000/.cdk-blocks-sandbox/config.json
+# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
 
 # After a deploy: the URL the deploy recorded (never config.json), and the config uploaded to the origin
 cat .cdk-blocks-sandbox/config.production.json
-# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api", "environment": "production" }
-#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /cdk-blocks/api instead)
-curl https://<your-cloudfront-domain>/.blocks-sandbox/config.json
-# → {"apiUrl":"/cdk-blocks/api","__blocksBuildId":"<build id>"}
+# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
+curl https://<your-cloudfront-domain>/.cdk-blocks-sandbox/config.json
+# → {"apiUrl":"/aws-blocks/api","__blocksBuildId":"<build id>"}
 ```
 
-The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
+The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.cdk-blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
 
-- `apiUrl`, only when Hosting has an `api`: the same-origin `/cdk-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
+- `apiUrl`, only when Hosting has an `api`: the same-origin `/aws-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
 - `__blocksBuildId`: an opaque id for the deploy (a timestamp plus random characters, or a hash of the build's content with `buildId: 'fixed'`).
 - Your `backendConfig`, if you set one. Everything in it is published as is (except `apiUrl` and `__blocksBuildId`, which Hosting sets over any key of the same name), so never put a secret or an internal identifier there. The same object is also set as the `BLOCKS_CONFIG` environment variable on SSR functions.
 
@@ -259,7 +259,7 @@ So a real config problem looks like the client throwing `Blocks API URL not conf
 
 A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
 
-- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/cdk-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-cdk-blocks/bb-compute`) is routed there without changing the app's endpoint.
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
 - **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
@@ -276,19 +276,19 @@ How the backend's API is exposed to clients is chosen with the `apiFrontDoor` pr
 - **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
 - **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway (and builds the gateway as a regional endpoint, so there is a single CloudFront layer); clients call the distribution's domain instead.
 
-Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/cdk-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
+Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
 Either tier serves the API at the same path. The TypeScript client (and any manual caller that addresses a namespace) POSTs JSON-RPC to a per-namespace path:
 
 ```
-POST /cdk-blocks/api/{namespace}
+POST /aws-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /cdk-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/cdk-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-cdk-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/cdk-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/cdk-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
@@ -296,10 +296,10 @@ Neither tier makes CloudFront the only way in: the gateway's own `execute-api` U
 
 ### ApiError / isBlocksError / hasAuthError
 
-Typed error handling across the wire. All three are exported from `@aws-cdk-blocks/core`, and re-exported from `aws-cdk-blocks`.
+Typed error handling across the wire. All three are exported from `@aws-blocks/core`, and re-exported from `@aws-blocks/blocks`.
 
 ```typescript
-import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 
 // Throw with HTTP status and error name
 throw new ApiError('Not found', 404, { name: 'ItemNotFoundException' });
@@ -347,7 +347,7 @@ The client decodes that back into an `ApiError` with the same `status`, `name` a
 #### `hasAuthError(state, name)`
 
 ```typescript
-import { hasAuthError } from '@aws-cdk-blocks/core';
+import { hasAuthError } from '@aws-blocks/core';
 
 function hasAuthError<T extends { errorName?: string }, N extends string>(
   state: T | null | undefined,
@@ -357,11 +357,12 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 
 `Auth`'s state machine (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
 
-In browser code, submit the action with `submitAuthAction` from `aws-cdk-blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
+In browser code, submit the action with `submitAuthAction` from `@aws-blocks/blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
 
 ```typescript
-import { AuthErrors, hasAuthError } from 'aws-cdk-blocks';
-import { submitAuthAction } from 'aws-cdk-blocks/ui';
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { AuthErrors } from '@aws-blocks/bb-auth';
 
 const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
 if (hasAuthError(next, AuthErrors.NotAuthorized)) {
@@ -369,7 +370,7 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 }
 ```
 
-Browser code imports `AuthErrors` and `hasAuthError` from `aws-cdk-blocks`, like the backend: its browser entry re-exports every block's error constants and the error matchers. The string name, `'NotAuthorizedException'`, works too.
+To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `@aws-blocks/blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 
@@ -379,7 +380,7 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 | | |
 |---|---|
-| Namespace | `CDKBlocks` |
+| Namespace | `AWSBlocks` |
 | Metric | `RpcErrors` (Count) |
 | Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
 | Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |
@@ -403,7 +404,7 @@ new RawRoute(scope: ScopeParent, id: string, options: {
 A full `GET` that sets its own status, content type and body:
 
 ```typescript
-import { RawRoute } from 'aws-cdk-blocks';
+import { RawRoute } from '@aws-blocks/blocks';
 
 new RawRoute(scope, 'status', {
   method: 'GET',
@@ -464,8 +465,8 @@ To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which 
 
 Registration rules worth knowing before you hit them at runtime:
 
-- Routes must be constructed while the backend module is loading (top level of `cdk-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
-- `/cdk-blocks` itself and `/cdk-blocks/api` (plus anything under it) are reserved for RPC dispatch (the legacy `/aws-blocks` prefix is served as an alias of `/cdk-blocks`), and `/` is not routable, so use a sub-path.
+- Routes must be constructed while the backend module is loading (top level of `aws-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
+- `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
 - No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
@@ -480,7 +481,7 @@ CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. C
 CDK construct (from the `/cdk` entry point) that deploys a frontend on S3 behind a front door — CloudFront by default, or another door (`frontDoor`, below) — with a single-origin API proxy when a backend stack is provided.
 
 ```typescript
-import { Hosting } from '@aws-cdk-blocks/core/cdk';
+import { Hosting } from '@aws-blocks/core/cdk';
 
 new Hosting(stack, 'Web', {
   root: join(__dirname, '..'),
@@ -514,7 +515,7 @@ Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildR
 
 ```typescript
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
-import { Hosting } from '@aws-cdk-blocks/core/cdk';
+import { Hosting } from '@aws-blocks/core/cdk';
 
 new Hosting(stack, 'Web', {
   root: join(__dirname, '..'),
@@ -542,11 +543,11 @@ A `config()` domain works in `frontDoor.features.domain` too, through the async 
 | `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
 | `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
 
-The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox deploy with `OriginSecretOverPlainHttpError` and warns in one). The standalone `{ kind: 'alb' }` door without a `certificate` and `features.domain` serves plain HTTP too: with an API, a production deploy fails synth (`PlainHttpFrontDoorError`) and a sandbox deploy warns. If the network path is trusted (a private network, or TLS ended upstream), `allowPlainHttp: true` on the door (the `alb`, `custom` or `stacked` door) lets a production deploy synthesize anyway, with an acknowledgeable warning (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`); for the `alb` and `custom` doors `Hosting` also registers `BLOCKS_ALLOW_PLAIN_HTTP` so `Auth` issues its session cookie without `Secure` instead of refusing sign-in. See the hosting README's "Running a plain-HTTP door in production". The router admits only the edge through a header whose value Secrets Manager generates once per stack.
+The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox deploy with `OriginSecretOverPlainHttpError` and warns in one). The standalone `{ kind: 'alb' }` door without a `certificate` and `features.domain` serves plain HTTP too: with an API, a production deploy fails synth (`PlainHttpFrontDoorError`) and a sandbox deploy warns. If the network path is trusted (a private network, or TLS ended upstream), `allowPlainHttp: true` on the door (the `alb`, `custom` or `stacked` door) lets a production deploy synthesize anyway, with an acknowledgeable warning (`@aws-blocks/hosting:PlainHttpAllowedInProduction`); for the `alb` and `custom` doors `Hosting` also registers `BLOCKS_ALLOW_PLAIN_HTTP` so `Auth` issues its session cookie without `Secure` instead of refusing sign-in. See the hosting README's "Running a plain-HTTP door in production". The router admits only the edge through a header whose value Secrets Manager generates once per stack.
 
-Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-cdk-blocks/hosting` README.
+Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
 
-The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as one that sets them in `frontDoor.features`. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-cdk-blocks/hosting` README for each door and for writing your own.
+The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as one that sets them in `frontDoor.features`. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
 #### Preview mode and `HostingPresets`
@@ -554,7 +555,7 @@ The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `conte
 `HostingPresets` are the hosting counterpart of `BlocksPresets`: plain bundles of `Hosting` props. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` is the full shape (it sets nothing). Spread one first and override settings after it:
 
 ```typescript
-import { Hosting, HostingPresets } from '@aws-cdk-blocks/core/cdk';
+import { Hosting, HostingPresets } from '@aws-blocks/core/cdk';
 
 new Hosting(stack, 'Web', {
   ...(process.env.DEPLOY_ENV === 'preview' ? HostingPresets.preview : HostingPresets.production),
@@ -578,7 +579,7 @@ new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, 
 
 Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door (where `edgeRoutes` defaults to `'regional'`, since that door can't invoke Lambda@Edge), and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
 
-From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-cdk-blocks/core/scripts`). On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL:
+From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`). On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL:
 
 ```typescript
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
@@ -598,22 +599,22 @@ Tear a preview sandbox down with `npm run sandbox:destroy`.
 
 ## Building Blocks
 
-Import Building Blocks from their specific packages (or from the `aws-cdk-blocks` umbrella):
+Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):
 
-- `@aws-cdk-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
-- `@aws-cdk-blocks/auth-common` — Auth interfaces and Authenticator component
-- `@aws-cdk-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
-- `@aws-cdk-blocks/bb-database` — SQL database
-- `@aws-cdk-blocks/bb-realtime` — Real-time pub/sub
+- `@aws-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
+- `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
+- `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
+- `@aws-blocks/bb-database` — SQL database
+- `@aws-blocks/bb-realtime` — Real-time pub/sub
 
 ### withAuth (SSR cookie forwarding)
 
-Lives in the `@aws-cdk-blocks/core/server` entry point (also re-exported as `aws-cdk-blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS CDK Blocks API calls — `withAuth` reads them and forwards them to every AWS CDK Blocks API call made inside the callback.
+Lives in the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS Blocks API calls — `withAuth` reads them and forwards them to every AWS Blocks API call made inside the callback.
 
 **Next.js** detection is built in: `withAuth` reads the request's cookies through `cookies()` from `next/headers`, so with no second argument it works anywhere that call does — server components, route handlers and server actions. **Nuxt** is also detected (reads the active Nitro request; requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`). Any other framework passes the request's `Cookie` header explicitly, or registers a provider once:
 
 ```typescript
-import { withAuth } from 'aws-cdk-blocks/server';
+import { withAuth } from '@aws-blocks/blocks/server';
 
 // Next.js server component or route handler: cookies come from next/headers' cookies()
 const posts = await withAuth(() => api.listMyPosts());
@@ -635,12 +636,12 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
-The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/cdk-blocks/settings` shortcut opens `.cdk-blocks/local/data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
 
 The `Host` check doesn't stop a page on another site from sending a request to `http://localhost:3000` itself, so the dev server also checks where state-changing requests come from. Both checks below apply in local mode and in sandbox mode, where the dev server forwards API requests to the deployed sandbox API (`BLOCKS_API_URL`): a refused request is never forwarded.
 
 - A `POST`, `PUT`, `PATCH` or `DELETE` request (JSON-RPC calls and RawRoutes alike) whose `Origin` header names another site gets `403 Forbidden`. Allowed origins are a loopback origin on any port (`http://localhost:5173`, `http://127.0.0.1:3100`, `http://[::1]:4321`, so a frontend dev server calling the backend directly keeps working), the dev server's own address (a page opened by IP address with `BLOCKS_DEV_HOST=0.0.0.0`), and the host set in `BLOCKS_DEV_HOST` (or `startDevServer({ host })`) on any port. A loopback origin includes any other app running on your own machine: the check protects you from other sites, not from other local servers. `Origin: null` is refused. To call the dev server from a page on another hostname, set `BLOCKS_DEV_HOST` to that hostname; there is no separate allowed-origin list for local dev (`defaults.allowedOrigins` applies to the deployed API). A request with no `Origin` header, such as `curl`, server-side rendering or a native client, isn't affected, and neither are `GET`, `HEAD` and `OPTIONS` requests.
-- A JSON-RPC call (`POST /cdk-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run. A browser sends `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data` bodies to another site without asking first, so this refuses them even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients already send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
+- A JSON-RPC call (`POST /aws-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run. A browser sends `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data` bodies to another site without asking first, so this refuses them even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients already send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
 
 You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the dev task also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
@@ -650,7 +651,7 @@ You can also set the host with `npm run dev -- --host <host>` or `"host"` in `pa
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
 
-At startup the dev server regenerates `cdk-blocks/client.js` from your backend. An app that ships its own client turns that off with `"generateClient": false` in `package.json#blocks.dev`, or with `startDevServer({ generateClient: false })`. The Amplify overlay needs this: its `client.js` reads the API URL from `amplify_outputs.json` and adds the Cognito token. For example:
+At startup the dev server regenerates `aws-blocks/client.js` from your backend. An app that ships its own client turns that off with `"generateClient": false` in `package.json#blocks.dev`, or with `startDevServer({ generateClient: false })`. The Amplify overlay needs this: its `client.js` reads the API URL from `amplify_outputs.json` and adds the Cognito token. For example:
 
 ```json
 { "blocks": { "dev": { "port": 3001, "frontend": false, "generateClient": false } } }
@@ -658,7 +659,7 @@ At startup the dev server regenerates `cdk-blocks/client.js` from your backend. 
 
 ## Script output (`BLOCKS_LOG_LEVEL`)
 
-The lifecycle scripts in `@aws-cdk-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print:
+The lifecycle scripts in `@aws-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print:
 
 | `BLOCKS_LOG_LEVEL` | What prints |
 |---|---|
@@ -695,7 +696,7 @@ Each entry in `defaults.allowedOrigins` is one of:
 
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
-- **Same-origin requests** (frontend fetches through the front door's proxy at `/cdk-blocks/api`) work without CORS headers since the browser treats them as same-origin.
+- **Same-origin requests** (frontend fetches through the front door's proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
 - **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
 With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
@@ -720,7 +721,7 @@ defaults: {
 If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
 
 ```typescript
-// cdk-blocks/index.cdk.ts
+// aws-blocks/index.cdk.ts
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
@@ -744,15 +745,15 @@ Each entry is a plain origin, matched exactly, or a regex pattern, anchored as `
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
 
-## Committed baselines (`cdk-blocks/baselines/`)
+## Committed baselines (`aws-blocks/baselines/`)
 
-Some Building Blocks refuse a destructive change at synth by comparing it with a **baseline file** they write into your app: `cdk-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` is the first: it records the user-pool settings that Cognito cannot change after the pool exists.
+Some Building Blocks refuse a destructive change at synth by comparing it with a **baseline file** they write into your app: `aws-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` is the first: it records the user-pool settings that Cognito cannot change after the pool exists.
 
 - **Commit these files.** The check only protects a synth that sees them; a fresh checkout without them starts a new baseline from whatever the configuration is now.
 - **Renaming or removing a block** whose baseline says it owns a stateful resource fails synth on every `BlocksStack` / `BlocksBackend`, even when the block's package is no longer imported. The message names what CloudFormation would delete and the re-baseline variable to set if the removal is intended.
-- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it. Every later release keeps reading every earlier version. A file with a higher version than this release knows fails synth with a message to upgrade `@aws-cdk-blocks/core` and `aws-cdk-blocks`; a file whose `version` is not a whole number from 1 fails synth as invalid (restore it from version control). Neither is ever rewritten or deleted.
+- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it. Every later release keeps reading every earlier version. A file with a higher version than this release knows fails synth with a message to upgrade `@aws-blocks/core` and `@aws-blocks/blocks`; a file whose `version` is not a whole number from 1 fails synth as invalid (restore it from version control). Neither is ever rewritten or deleted.
 
-Building Block authors: the protocol (`claimBaseline`, `baselineDir`, `hasOrphanedBaselines`, `BASELINE_FORMAT_VERSION`) is framework-internal and lives in `@aws-cdk-blocks/core/cdk/internal`; see `src/cdk/baselines.ts`.
+Building Block authors: the protocol (`claimBaseline`, `baselineDir`, `hasOrphanedBaselines`, `BASELINE_FORMAT_VERSION`) is framework-internal and lives in `@aws-blocks/core/cdk/internal`; see `src/cdk/baselines.ts`.
 
 ## IAM: permissions boundary and the composed-policy report
 
@@ -771,30 +772,12 @@ The report is CDK-only and doesn't change the CloudFormation template.
 
 The file is written on **every** synth, whether or not `permissionsBoundary` is set, so expect it in `cdk.out/` if you check that directory's contents. It's a side file only: it isn't part of any CloudFormation template and isn't listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it isn't deployed and `cdk diff` (which compares stack templates) doesn't see it. Producing it costs one walk over the stack's constructs per synth, which is small next to bundling.
 
-### When the role's grants outgrow its inline policy
-
-Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: CDK packs the overflow into managed policies (sized to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before.
-
-To fit more grants into fewer policies, the role's statements are merged before they are packed. Merging combines statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources. It never combines both lists at once, so no permission is added. The role's policy is merged at every size, so the template doesn't switch back and forth as grants are added.
-
-CDK fills the default policy and the overflow policies in order, so adding or removing a grant can move statements from one policy to another, and CloudFormation updates those policies in parallel ([aws/aws-cdk#35611](https://github.com/aws/aws-cdk/issues/35611)). So that a deploy doesn't remove a statement from its old policy before its new policy is attached, each overflow policy gets a logical ID derived from its contents (`BlocksOverflowPolicy<hash>`), and the role's default policy depends on them. A changed overflow policy is created as a new resource before the default policy is updated, and the old one is deleted in CloudFormation's cleanup phase. Overflow policies whose statements didn't change keep their logical IDs. IAM is eventually consistent, so a newly attached policy can still take a few seconds to apply. Because the default policy depends on every overflow policy, making a resource depend on one specific grant to the execution role (for example `grant.applyBefore()`, a grant's `policyDependable`, or constructs such as AgentCore Memory given the execution role) while the role is also granted access to that resource can make CloudFormation report a circular dependency. To fix it, make the resource depend on the whole role, or use a separate role for it.
-
-IAM also limits how many managed policies one role can carry: 20 by default, up to 25 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
-
-```json
-{ "context": { "@aws-cdk-blocks/core:managedPoliciesPerRoleQuota": 25 } }
-```
-
-The check counts the policies the role carries after the deploy. During a deploy that changes overflow policies, the role briefly carries both the old and the new copy of each changed one, so a role at or close to the quota can fail that deploy in CloudFormation; keep some room below the quota. Synth warns when the role is within the quota but a deploy that replaces every overflow policy would exceed it.
-
-Overflow statements appear in `<stack>.blocks-iam.json` like any other, with `policy` naming the managed policy they were packed into.
-
 ### Cap every role: `defaults.permissionsBoundary`
 
-A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS CDK Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).
+A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).
 
 ```typescript
-// cdk-blocks/index.cdk.ts
+// aws-blocks/index.cdk.ts
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
@@ -814,23 +797,23 @@ This is the hook a platform needs when many apps deploy through one pipeline: th
 
 Some platforms deploy many independently written apps, often generated by AI (artificial intelligence) coding agents, through one CI (continuous integration) pipeline into **one AWS account**. Each app's CDK (Cloud Development Kit) code decides the permissions of its own roles. Nothing in the app stops it from granting itself another app's resources: a single `AppSetting.fromExisting(scope, 'x', { name: '/appb-db-password', secret: true })` gives App A read access to App B's secret, and the deploy succeeds.
 
-**The strongest isolation is one AWS account per app** (AWS Organizations with SCPs (service control policies)). When apps must share an account, the platform enforces a per-app ceiling with IAM (Identity and Access Management), outside the apps' code. AWS CDK Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; this section documents what they contain:
+**The strongest isolation is one AWS account per app** (AWS Organizations with SCPs (service control policies)). When apps must share an account, the platform enforces a per-app ceiling with IAM (Identity and Access Management), outside the apps' code. AWS Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; this section documents what they contain:
 
 | Part | Who provides it | How |
 |---|---|---|
-| 1. An identity on everything the app creates | AWS CDK Blocks | `defaults.appIdentity: { id }` tags every resource and role `app=<id>`, and every name it derives starts with `<id>-` |
-| 2. A boundary on every role the app creates | AWS CDK Blocks | `defaults.permissionsBoundary` |
-| 3. The boundary policy, shared by every app | The platform | [The shared permissions boundary](#the-shared-permissions-boundary) |
-| 4. A CloudFormation execution policy, shared by every app, so each app's execution role only creates bounded roles tagged as the app | The platform | [The shared execution policy](#the-shared-execution-policy) |
-| 5. A deploy guard, shared by every app, that keeps each app's deploy role on its own stacks | The platform | [The deploy guard](#the-deploy-guard) |
-| 6. A pipeline step before credentials are issued | The platform | [The pipeline](#the-pipeline): synth, which fails on any violation, and the report's `app.id` |
+| 1. An identity on everything the app creates | AWS Blocks | `defaults.appIdentity: { id }` tags every resource and role `app=<id>`, and every name it derives starts with `<id>-` |
+| 2. A boundary on every role the app creates | AWS Blocks | `defaults.permissionsBoundary` |
+| 3. The boundary policy, shared by every app | The platform | [The shared permissions boundary](./SHARED-ACCOUNT.md#the-shared-permissions-boundary) |
+| 4. A CloudFormation execution policy, shared by every app, so each app's execution role only creates bounded roles tagged as the app | The platform | [The shared execution policy](./SHARED-ACCOUNT.md#the-shared-execution-policy) |
+| 5. A deploy guard, shared by every app, that keeps each app's deploy role on its own stacks | The platform | [The deploy guard](./SHARED-ACCOUNT.md#the-deploy-guard) |
+| 6. A pipeline step before credentials are issued | The platform | [The pipeline](./SHARED-ACCOUNT.md#the-pipeline): synth, which fails on any violation, and the report's `app.id` |
 
-Parts 1 and 2 live in each app's code. A platform team puts them in its own project template once, so no app has to remember them: see [The app's side: what to put in your project template](#the-apps-side-what-to-put-in-your-project-template).
+Parts 1 and 2 live in each app's code. A platform team puts them in its own project template once, so no app has to remember them: see [The app's side: what to put in your project template](./SHARED-ACCOUNT.md#the-apps-side-what-to-put-in-your-project-template).
 
 **1–2. In each app.** Name the stack after the app id, and set the identity and the boundary:
 
 ```typescript
-// cdk-blocks/index.cdk.ts — the app id comes from the platform's pipeline, not the app's code
+// aws-blocks/index.cdk.ts — the app id comes from the platform's pipeline, not the app's code
 export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
@@ -842,7 +825,7 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
 });
 ```
 
-- **The id** is 1–10 lowercase letters and digits, starting with a letter. No hyphen, so one app's prefix (`appa-`) never matches another app's names (`appab-…`). At most 10 characters because the id is also the app's CDK bootstrap qualifier (CDK's limit is 10): every app has its own bootstrap, and no two apps can share one. **Some ids are reserved**, because the app's `<id>-…` / `<id>/…` names, which the platform's policies give the app, would include names other apps, AWS CDK Blocks, CDK or AWS share:
+- **The id** is 1–10 lowercase letters and digits, starting with a letter. No hyphen, so one app's prefix (`appa-`) never matches another app's names (`appab-…`). At most 10 characters because the id is also the app's CDK bootstrap qualifier (CDK's limit is 10): every app has its own bootstrap, and no two apps can share one. **Some ids are reserved**, because the app's `<id>-…` / `<id>/…` names, which the platform's policies give the app, would include names other apps, AWS Blocks, CDK or AWS share:
 
   | Reserved | Why |
   |---|---|
@@ -857,1010 +840,28 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
   | any id starting with `ssm` | Systems Manager rejects parameter names that start with `ssm`, so the app couldn't create its own |
 
   Synth (`defaults.appIdentity`) rejects them, saying why. However the platform hands out ids, it should reject them too, before an app gets one.
-- **Names.** Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. So with the stack named `<id>` or `<id>-…`, every name starts with `<id>-`. Developers don't name anything themselves. AWS CDK Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates (CDK's default names don't put a `-` after the id), unless the app chose a name itself.
-- **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM (AWS Systems Manager)), where `stackId` comes from `.cdk-blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
-- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS CDK Blocks creates, including the CDK custom-resource provider roles that `Tags.of()` doesn't reach, at a priority above the default `Tags.of(...).add()`. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too, which CloudFormation propagates to what a tag aspect can't reach. An app can still raise its own priority or remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS CDK Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name, so that's no gap.
-- **The boundary** goes on every role AWS CDK Blocks creates, including the CDK helper roles and the roles CDK adds while preparing the app, which CDK's own `@aws-cdk/core:permissionsBoundary` context misses.
+- **Names.** Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. So with the stack named `<id>` or `<id>-…`, every name starts with `<id>-`. Developers don't name anything themselves. AWS Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates (CDK's default names don't put a `-` after the id), unless the app chose a name itself.
+- **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM (AWS Systems Manager)), where `stackId` comes from `.blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
+- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS Blocks creates, including the CDK custom-resource provider roles that `Tags.of()` doesn't reach, at a priority above the default `Tags.of(...).add()`. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too, which CloudFormation propagates to what a tag aspect can't reach. An app can still raise its own priority or remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name, so that's no gap.
+- **The boundary** goes on every role AWS Blocks creates, including the CDK helper roles and the roles CDK adds while preparing the app, which CDK's own `@aws-cdk/core:permissionsBoundary` context misses.
 - **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list: a role without the boundary or the app tag; a grant on a name outside the app's prefix (for example `fromExisting` on another app's parameter, or another app's table, queue, bucket, function, layer, RDS cluster or vector bucket; only SSM parameters may also be named `<id>` or `<id>/…`); a name-fenced resource the app itself names outside its prefix (a table, queue, bucket, function, layer, parameter, log group, RDS cluster or instance, vector bucket, event rule or bus, schedule, secret or state machine), which the execution policy would refuse to create; a wildcard grant on a data service (SSM, DynamoDB, SQS (Simple Queue Service), S3, Secrets Manager, Lambda, CloudWatch Logs, Step Functions, Cognito, EventBridge and EventBridge Scheduler, KMS, API Gateway, SNS (Simple Notification Service), SES (Simple Email Service), RDS (Relational Database Service) and its Data API, Aurora DSQL, Bedrock, Bedrock AgentCore, S3 Vectors, ECS (Elastic Container Service), CloudFront KeyValueStores, and IAM and STS (Security Token Service) for passing or assuming a role), on `*` or on a resource name that starts with `*`, except three grants Building Blocks make: model invocation on AWS-owned Bedrock foundation models and system-defined inference profiles (no app's data), an Agent invoking AgentCore runtimes (the boundary caps it to runtimes tagged as the app), and SES sending (an exception listed under Limits); an "everything except" grant (`NotAction`, `NotResource`); a resource the check can't resolve (`Fn::Sub` on a parameter, `Fn::ImportValue`, a template parameter) — these fail closed; a resource policy that opens up another app's resource, or that lets in someone who isn't this app (everyone, another account, another app's role, `NotPrincipal`, or a public Lambda function URL) in a Lambda or layer permission or a bucket, queue, topic, secret, KMS key or replica key, REST API or EventBridge bus policy, in any of the app's stacks — a service, the app's own roles and the account's root are fine, and everyone only when a condition pins it to the app's own ARNs in this account (`aws:SourceArn`, `aws:PrincipalArn`) or to `aws:PrincipalTag/app` together with `aws:PrincipalAccount` (the caller's own account sets its tags, so the tag alone isn't enough), or on a public REST API; a policy the check can't read (an intrinsic, a string) fails closed; a role that trusts anything but an AWS service; a broad AWS managed policy (`AdministratorAccess`, `*FullAccess`); the CDK asset bucket of another bootstrap; a grant on a literal API id, or an API Gateway stage, route or deployment attached to an API that isn't in the app's own template (`api-outside-app`); or a stack or block outside the prefix. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
 
 The report reads grants on the services listed above (and an IAM role's name, for `iam:PassRole` and `sts:AssumeRole`); it doesn't read grants on other services, such as Kinesis, Firehose, ECR, OpenSearch or Glue, so a clean report isn't full coverage. A service the boundary doesn't list is still denied at runtime. The report and the synth failure are fast feedback for developers and their agents. They aren't the boundary: the app's own code runs at synth, so a determined app could get around them. The boundary is IAM, in parts 3–5.
 
-**3–5. The platform's policies.** The platform writes these three policies and owns them: AWS CDK Blocks never creates, changes or reads them. All three are **shared**: one of each per account, created once, never edited per app. Each one is keyed on the calling role's `app` tag (`${aws:PrincipalTag/app}`, which IAM resolves at request time), so the same document confines every app to its own names and tags:
-
-| Policy | Attached to | What it does |
-|---|---|---|
-| `apps-boundary` | every role the app creates (`defaults.permissionsBoundary`) | caps what the app's code can do at runtime |
-| `apps-exec` | each app's CDK bootstrap CloudFormation execution role | caps what the app's deploy can create and change |
-| `apps-deploy-guard` | each app's CDK bootstrap deploy role | keeps the app's deploy on its own stacks and its own execution role |
-
-Each app gets its own CDK bootstrap, tagged with its id, so the two roles in it carry the `app` tag the shared policies read:
-
-```bash
-cdk bootstrap aws://APPS_ACCOUNT/us-east-1 --qualifier appa --toolkit-stack-name CDKToolkit-appa --tags app=appa \
-  --cloudformation-execution-policies arn:aws:iam::APPS_ACCOUNT:policy/apps-exec
-```
-
-CloudFormation propagates the stack tag to the bootstrap's roles. A role's `app` tag is what the policies trust, so no one may set it any other way: a session tag `app` would override it, and CDK's default bootstrap template allows `sts:TagSession` on its roles for principals in the account. Remove `sts:TagSession` from the deploy role's trust policy in the platform's bootstrap template (see [the deploy guard](#the-deploy-guard)).
-
-The examples below use account `APPS_ACCOUNT` (replace it, and `aws` in the ARNs for another partition) and, where a command needs an id, app `appa`. Review them and test them on a deployed app in a sandbox account before relying on them.
-
-#### The shared permissions boundary
-
-One managed policy for every app in the account, created once as `apps-boundary` and set as each app's `defaults.permissionsBoundary`. It's an **allow-list** keyed on the calling role's `app` tag (`${aws:PrincipalTag/app}`, which IAM resolves at request time), so one document serves every app. A service it has no statement for is denied, and IAM, Organizations and STS (Security Token Service) role assumption are never allowed:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "OwnParameters",
-      "Effect": "Allow",
-      "Action": "ssm:*",
-      "Resource": [
-        "arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}",
-        "arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*",
-        "arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}/*",
-        "arn:aws:ssm:*:*:parameter/cdk/exports/${aws:PrincipalTag/app}",
-        "arn:aws:ssm:*:*:parameter/cdk/exports/${aws:PrincipalTag/app}-*",
-        "arn:aws:ssm:*:*:parameter/cdk/exports/${aws:PrincipalTag/app}/*",
-        "arn:aws:ssm:*:*:parameter/cdk/EdgeFunctionArn/*/${aws:PrincipalTag/app}/*",
-        "arn:aws:ssm:*:*:parameter/blocks/${aws:PrincipalTag/app}/*"
-      ]
-    },
-    {
-      "Sid": "OwnHostingSecrets",
-      "Effect": "Allow",
-      "Action": "secretsmanager:*",
-      "Resource": [
-        "arn:aws:secretsmanager:*:*:secret:blocks/${aws:PrincipalTag/app}/*"
-      ]
-    },
-    {
-      "Sid": "OwnTables",
-      "Effect": "Allow",
-      "Action": "dynamodb:*",
-      "Resource": [
-        "arn:aws:dynamodb:*:*:table/${aws:PrincipalTag/app}-*",
-        "arn:aws:dynamodb:*:*:table/${aws:PrincipalTag/app}-*/*"
-      ]
-    },
-    {
-      "Sid": "OwnQueues",
-      "Effect": "Allow",
-      "Action": "sqs:*",
-      "Resource": [
-        "arn:aws:sqs:*:*:${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "OwnBuckets",
-      "Effect": "Allow",
-      "Action": "s3:*",
-      "Resource": [
-        "arn:aws:s3:::${aws:PrincipalTag/app}-*",
-        "arn:aws:s3:::${aws:PrincipalTag/app}-*/*"
-      ]
-    },
-    {
-      "Sid": "ReadOwnCdkAssets",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:GetObjectVersion",
-        "s3:ListBucket",
-        "s3:GetBucketLocation"
-      ],
-      "Resource": [
-        "arn:aws:s3:::cdk-${aws:PrincipalTag/app}-assets-*",
-        "arn:aws:s3:::cdk-${aws:PrincipalTag/app}-assets-*/*"
-      ]
-    },
-    {
-      "Sid": "OwnFunctions",
-      "Effect": "Allow",
-      "Action": "lambda:*",
-      "Resource": [
-        "arn:aws:lambda:*:*:function:${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "OwnLogs",
-      "Effect": "Allow",
-      "Action": "logs:*",
-      "Resource": [
-        "arn:aws:logs:*:*:log-group:${aws:PrincipalTag/app}-*",
-        "arn:aws:logs:*:*:log-group:/aws/lambda/${aws:PrincipalTag/app}-*",
-        "arn:aws:logs:*:*:log-group:/aws/rds/cluster/${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "AgentCoreRuntimeLogsWriteOnly",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-        "logs:DescribeLogStreams"
-      ],
-      "Resource": [
-        "arn:aws:logs:*:*:log-group:/aws/bedrock-agentcore/runtimes/*"
-      ]
-    },
-    {
-      "Sid": "OwnStacksRead",
-      "Effect": "Allow",
-      "Action": [
-        "cloudformation:DescribeStacks",
-        "cloudformation:GetTemplate"
-      ],
-      "Resource": [
-        "arn:aws:cloudformation:*:*:stack/${aws:PrincipalTag/app}/*",
-        "arn:aws:cloudformation:*:*:stack/${aws:PrincipalTag/app}-*/*"
-      ]
-    },
-    {
-      "Sid": "OwnSchedules",
-      "Effect": "Allow",
-      "Action": "scheduler:*",
-      "Resource": [
-        "arn:aws:scheduler:*:*:schedule/*/${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "OwnEvents",
-      "Effect": "Allow",
-      "Action": "events:*",
-      "Resource": [
-        "arn:aws:events:*:*:rule/${aws:PrincipalTag/app}-*",
-        "arn:aws:events:*:*:event-bus/${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "OwnDatabases",
-      "Effect": "Allow",
-      "Action": [
-        "rds-data:*",
-        "rds:*"
-      ],
-      "Resource": [
-        "arn:aws:rds:*:*:cluster:${aws:PrincipalTag/app}-*",
-        "arn:aws:rds:*:*:db:${aws:PrincipalTag/app}-*"
-      ]
-    },
-    {
-      "Sid": "OwnVectorBuckets",
-      "Effect": "Allow",
-      "Action": "s3vectors:*",
-      "Resource": [
-        "arn:aws:s3vectors:*:*:bucket/${aws:PrincipalTag/app}-*",
-        "arn:aws:s3vectors:*:*:bucket/${aws:PrincipalTag/app}-*/index/*"
-      ]
-    },
-    {
-      "Sid": "OwnTaggedResources",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:*",
-        "states:*",
-        "cognito-idp:*",
-        "kms:*",
-        "bedrock:*",
-        "bedrock-agentcore:*",
-        "dsql:*",
-        "cloudfront:*",
-        "cloudfront-keyvaluestore:*"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/app": "${aws:PrincipalTag/app}"
-        }
-      }
-    },
-    {
-      "Sid": "AgentCoreDefaultDirectory",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:GetWorkloadAccessToken",
-        "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
-        "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
-      ],
-      "Resource": "arn:aws:bedrock-agentcore:*:*:workload-identity-directory/default"
-    },
-    {
-      "Sid": "AwsOwnedModelsRead",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:GetFoundationModel",
-        "bedrock:GetInferenceProfile"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:*::foundation-model/*",
-        "arn:aws:bedrock:*:*:inference-profile/*"
-      ]
-    },
-    {
-      "Sid": "ManagedKeysViaService",
-      "Effect": "Allow",
-      "Action": [
-        "kms:Decrypt",
-        "kms:Encrypt",
-        "kms:GenerateDataKey*",
-        "kms:DescribeKey"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringLike": {
-          "kms:ViaService": [
-            "ssm.*.amazonaws.com",
-            "secretsmanager.*.amazonaws.com",
-            "dynamodb.*.amazonaws.com",
-            "s3.*.amazonaws.com",
-            "sqs.*.amazonaws.com"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "ResourcelessActions",
-      "Effect": "Allow",
-      "Action": [
-        "xray:PutTraceSegments",
-        "xray:PutTelemetryRecords",
-        "xray:GetSamplingRules",
-        "xray:GetSamplingTargets",
-        "cloudwatch:PutMetricData",
-        "logs:DescribeLogGroups",
-        "ec2:CreateNetworkInterface",
-        "ec2:DescribeNetworkInterfaces",
-        "ec2:DeleteNetworkInterface",
-        "ec2:AssignPrivateIpAddresses",
-        "ec2:UnassignPrivateIpAddresses",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeVpcs",
-        "ec2:DescribeSecurityGroups",
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:ListInferenceProfiles",
-        "ses:SendEmail",
-        "ses:SendRawEmail",
-        "ses:SendBulkEmail"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "ApisAccountWide",
-      "Effect": "Allow",
-      "Action": [
-        "execute-api:Invoke",
-        "execute-api:ManageConnections"
-      ],
-      "Resource": "arn:aws:execute-api:*:*:*/*"
-    }
-  ]
-}
-```
-
-What each group of statements is for:
-
-- **By name prefix** (`OwnParameters` to `OwnVectorBuckets`): SSM parameters, DynamoDB tables, SQS queues, S3 (Amazon Simple Storage Service) buckets, Lambda functions, log groups (including `/aws/lambda/<id>-…` and a Database's `/aws/rds/cluster/<id>-…`), schedules, event rules and buses, RDS clusters and instances, and S3 Vectors buckets and the indexes in them, named under the app's prefix (`<id>-…`; parameters also `<id>` and `<id>/…`). AWS CDK Blocks guarantees those names under `defaults.appIdentity`. `OwnStacksRead` lets a table's index manager read its own stack. `OwnParameters` also covers CDK's cross-region references for the app's own stacks (`/cdk/exports/<id>…`), the Lambda@Edge ARNs CDK publishes for Hosting (`/cdk/EdgeFunctionArn/<region>/<id>/…`) and Hosting's `config()` values (`/blocks/<id>/…`); `OwnHostingSecrets` covers Hosting's `secret()` values (`blocks/<id>/…`), which the CLI creates untagged.
-- **The app's own CDK assets** (`ReadOwnCdkAssets`): read-only access to its own bootstrap's asset bucket (qualifier = app id), which `BucketDeployment` reads.
-- **By the resource's `app` tag** (`OwnTaggedResources`): Secrets Manager, Step Functions, Cognito, KMS (Key Management Service), Bedrock, AgentCore, DSQL (Aurora DSQL) and CloudFront resources are named by id, not by a name the app controls, so they're matched by `aws:ResourceTag/app`. S3 Vectors is matched by name instead (`OwnVectorBuckets`): a new index carries the tag of the app that creates it, so a tag rule would let App A create an index in App B's vector bucket (see "Fence children by their parent" in [The shared execution policy](#the-shared-execution-policy)).
-- **Exceptions with no app scope, each as narrow as the service allows:** `AgentCoreRuntimeLogsWriteOnly` (AgentCore runtimes log to AWS-named groups, write only); `AgentCoreDefaultDirectory` (workload access tokens from the account's `default` directory; the workload identity itself stays tag-scoped); `AwsOwnedModelsRead` (metadata of AWS-owned foundation models and system-defined inference profiles, not application inference profiles, which are tag-scoped); `ManagedKeysViaService` (AWS-managed keys, only through SSM, Secrets Manager, DynamoDB, S3 and SQS); and `ResourcelessActions` (actions that take only `*`: X-Ray, `PutMetricData`, `DescribeLogGroups`, VPC network interfaces, model invocation and listing, SES).
-- **API calls, account-wide** (`ApisAccountWide`): `execute-api:Invoke` (calling an IAM-authorized API) and `execute-api:ManageConnections` (posting to and disconnecting WebSocket clients, which Realtime publish/subscribe and every Agent's streaming use). An API is named by its id, and these actions support no tag condition, so no statement can scope them to one app: runtime API calls are outside the isolation (see Limits, under [The pipeline](#the-pipeline)). Deploying APIs stays isolated: the execution policy creates and manages only API Gateway APIs tagged as the app.
-
-It is about 4,900 characters, below IAM's 6,144-character limit for a managed policy.
-
-#### The shared execution policy
-
-Every app's CDK bootstrap execution role (the role CloudFormation deploys the app's stacks as) gets the shared `apps-exec` instead of `AdministratorAccess`: the `--cloudformation-execution-policies` in the bootstrap command above. Set the same `@aws-cdk/core:bootstrapQualifier` and `toolkitStackName` in the app's `cdk.json`. In the policy, `${aws:PrincipalTag/app}` is the execution role's own `app` tag, which its bootstrap set. The policy has two parts.
-
-**The role fence.** It can only create roles that carry the boundary, are named `<id>-…` and are tagged `app=<id>`; it can never remove the boundary, edit the shared policies, re-tag a role to another app or untag it, or attach a broad AWS managed policy; and it reads only its own bootstrap's version parameter and asset bucket:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "RolesOnlyWithTheBoundary",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:AttachRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:PutRolePermissionsBoundary"
-      ],
-      "Resource": "arn:aws:iam::APPS_ACCOUNT:role/${aws:PrincipalTag/app}-*",
-      "Condition": {
-        "StringEquals": {
-          "iam:PermissionsBoundary": "arn:aws:iam::APPS_ACCOUNT:policy/apps-boundary"
-        }
-      }
-    },
-    {
-      "Sid": "RoleLifecycle",
-      "Effect": "Allow",
-      "Action": [
-        "iam:GetRole",
-        "iam:GetRolePolicy",
-        "iam:ListRolePolicies",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListRoleTags",
-        "iam:DeleteRole",
-        "iam:TagRole",
-        "iam:UntagRole",
-        "iam:UpdateAssumeRolePolicy",
-        "iam:UpdateRoleDescription",
-        "iam:PassRole"
-      ],
-      "Resource": "arn:aws:iam::APPS_ACCOUNT:role/${aws:PrincipalTag/app}-*"
-    },
-    {
-      "Sid": "RequireThisAppsTag",
-      "Effect": "Deny",
-      "Action": "iam:CreateRole",
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-        }
-      }
-    },
-    {
-      "Sid": "NoRetaggingToAnotherApp",
-      "Effect": "Deny",
-      "Action": "iam:TagRole",
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-        },
-        "ForAnyValue:StringEquals": {
-          "aws:TagKeys": [
-            "app"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "NoUntaggingApp",
-      "Effect": "Deny",
-      "Action": "iam:UntagRole",
-      "Resource": "*",
-      "Condition": {
-        "ForAnyValue:StringEquals": {
-          "aws:TagKeys": [
-            "app"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "KeepTheBoundary",
-      "Effect": "Deny",
-      "Action": "iam:DeleteRolePermissionsBoundary",
-      "Resource": "*"
-    },
-    {
-      "Sid": "NoEditingTheSharedPolicies",
-      "Effect": "Deny",
-      "Action": [
-        "iam:CreatePolicyVersion",
-        "iam:DeletePolicy",
-        "iam:DeletePolicyVersion",
-        "iam:SetDefaultPolicyVersion"
-      ],
-      "Resource": [
-        "arn:aws:iam::APPS_ACCOUNT:policy/apps-boundary*",
-        "arn:aws:iam::APPS_ACCOUNT:policy/apps-exec*",
-        "arn:aws:iam::APPS_ACCOUNT:policy/apps-deploy-guard"
-      ]
-    },
-    {
-      "Sid": "NoBroadManagedPolicies",
-      "Effect": "Deny",
-      "Action": "iam:AttachRolePolicy",
-      "Resource": "*",
-      "Condition": {
-        "ArnLike": {
-          "iam:PolicyARN": [
-            "arn:aws:iam::aws:policy/AdministratorAccess",
-            "arn:aws:iam::aws:policy/PowerUserAccess",
-            "arn:aws:iam::aws:policy/IAMFullAccess",
-            "arn:aws:iam::aws:policy/*FullAccess"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "ReadOwnBootstrapVersion",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameter",
-        "ssm:GetParameters"
-      ],
-      "Resource": "arn:aws:ssm:*:APPS_ACCOUNT:parameter/cdk-bootstrap/${aws:PrincipalTag/app}/*"
-    },
-    {
-      "Sid": "ReadOwnBootstrapAssets",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:GetObjectVersion",
-        "s3:ListBucket",
-        "s3:GetBucket*"
-      ],
-      "Resource": [
-        "arn:aws:s3:::cdk-${aws:PrincipalTag/app}-assets-APPS_ACCOUNT-*",
-        "arn:aws:s3:::cdk-${aws:PrincipalTag/app}-assets-APPS_ACCOUNT-*/*"
-      ]
-    }
-  ]
-}
-```
-
-`RoleLifecycle` has no boundary condition, so `iam:PassRole` and `iam:DeleteRole` work on the app's existing roles; every role it can create already carries the boundary. `NoRetaggingToAnotherApp` denies only a tag write that sets `app`, so other tag updates still work.
-
-**Per-service rules.** Add statements only for the resource types the platform's apps use (`jq -rs '[.[].Resources[]?.Type] | unique[]' cdk.out/*.template.json` for each app), each scoped to the app's names or its `app` tag. `<id>` below stands for `${aws:PrincipalTag/app}` in the policy, and `ACCOUNT` is the account id:
-
-| Resource types | Scoped by |
-|---|---|
-| `AWS::Lambda::Function`, `Permission`, `Version`, `Alias`, `Url`, `EventInvokeConfig` | `lambda:*` on `arn:aws:lambda:*:ACCOUNT:function:<id>-*`, plus `lambda:GetAccountSettings` on `*` (read-only) |
-| `AWS::Lambda::LayerVersion`, `LayerVersionPermission` | `lambda:PublishLayerVersion`, `DeleteLayerVersion`, `GetLayerVersion` on `layer:<id>-*` and `layer:<id>-*:*` |
-| AWS's Lambda Web Adapter layer, which Hosting attaches to server-side rendering behind the API Gateway HTTP API door (for example a preview) | `lambda:GetLayerVersion` on `arn:aws:lambda:*:753240598075:layer:LambdaAdapterLayer*:*`: AWS's published layer, read only, no app's data. Without it, the deploy fails with `lambda:GetLayerVersion` denied |
-| `AWS::Lambda::EventSourceMapping` | the mapping actions on `*` with `ArnLike` `lambda:FunctionArn` = `function:<id>-*`; tag writes on `event-source-mapping:*` with the request tag `app=<id>` on create and the resource tag after |
-| `AWS::Logs::LogGroup`, `LogStream`, `SubscriptionFilter`, `MetricFilter`, `Custom::LogRetention` | `logs:*` on `log-group:<id>-*`, `log-group:/aws/lambda/<id>-*`, `log-group:/aws/rds/cluster/<id>-*`; `logs:DescribeLogGroups` on `*` |
-| `AWS::DynamoDB::Table`, `GlobalTable` | `dynamodb:*` on `table/<id>-*` and `table/<id>-*/*` |
-| `AWS::SQS::Queue`, `QueuePolicy` | `sqs:*` on `arn:aws:sqs:*:ACCOUNT:<id>-*` |
-| `AWS::S3::Bucket`, `BucketPolicy` | `s3:*` on `arn:aws:s3:::<id>-*` and `arn:aws:s3:::<id>-*/*` |
-| `AWS::SSM::Parameter` | `ssm:*` on `parameter/<id>`, `parameter/<id>-*`, `parameter/<id>/*`, `parameter/cdk/EdgeFunctionArn/*/<id>/*` |
-| `Custom::CrossRegionExportReader`, `ExportWriter`, `StringParameterReader` | `ssm:GetParameter`, `GetParameters` on `parameter/cdk/exports/<id>`, `<id>-*`, `<id>/*` |
-| `AWS::Scheduler::Schedule` | `scheduler:*` on `schedule/*/<id>-*` |
-| `AWS::Events::Rule` | `events:*` on `rule/<id>-*` |
-| `AWS::SNS::Topic`, `TopicPolicy`, `Subscription` | `sns:*` on `arn:aws:sns:*:ACCOUNT:<id>-*` |
-| `AWS::CloudWatch::Alarm` | `PutMetricAlarm`, `DescribeAlarms`, `DeleteAlarms` and the tag actions on `alarm:<id>-*` |
-| `AWS::CloudWatch::Dashboard` | `PutDashboard`, `GetDashboard`, `DeleteDashboards`, `TagResource`, `UntagResource`, `ListTagsForResource` on `dashboard/<id>-*`. Without the tag actions the deploy still succeeds: CloudFormation retries the create without tags (its events say "Retrying request without including tags") and the dashboard has no `app` tag |
-| `AWS::IAM::ManagedPolicy` (AWS CDK Blocks' `BlocksOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
-| `AWS::ResourceGroups::Group` | `resource-groups:*` on `group/<id>-*`; `cloudformation:DescribeStacks`, `ListStackResources`, `tag:GetResources` on `*` |
-| `AWS::S3Vectors::VectorBucket`, `Index`, `VectorBucketPolicy` | by name, not tag: `s3vectors:*` on `bucket/<id>-*` and `bucket/<id>-*/index/*`, and a deny on every other bucket (`VectorBuckets` and `VectorBucketsOnlyOwn`, below) |
-| `AWS::RDS::DBCluster`, `DBInstance`, `DBSubnetGroup`, `DBClusterParameterGroup`, `DBParameterGroup`, `OptionGroup` | `rds:*` on `cluster:`, `db:`, `subgrp:`, `cluster-pg:`, `pg:`, `og:`, `cluster-snapshot:` and `snapshot:<id>-*`; create and modify against RDS's `default…` parameter and option groups; `ec2:Describe*` on `*` |
-| `AWS::CloudFront::Function` | `CreateFunction`, `DescribeFunction`, `GetFunction`, `UpdateFunction`, `PublishFunction`, `DeleteFunction`, `TestFunction` and `ListTagsForResource` on `arn:aws:cloudfront::ACCOUNT:function/<id>-*` |
-| `AWS::SecretsManager::Secret`, `SecretTargetAttachment`, `ResourcePolicy`, `RotationSchedule` | tag (five statements, below), plus `secretsmanager:GetRandomPassword` on `*` (it reads nothing) |
-| `AWS::ApiGateway::*` (APIs and their children) and `AWS::ApiGatewayV2::*` | tag (five statements, below), plus `apigateway:UpdateRestApiPolicy` on the `/restapis` collection |
-| `AWS::Cognito::UserPool*` | tag |
-| `AWS::KMS::Key`, `Alias` | tag; aliases by name, `alias/<id>-*` |
-| `AWS::StepFunctions::StateMachine` | tag, on `stateMachine:*` and `execution:*` |
-| `AWS::DSQL::Cluster` | tag |
-| `AWS::ECS::Cluster`, `Service`, `TaskDefinition` | tag, on `cluster/*`, `service/*` and `task-definition/*` (task-definition families are CloudFormation-generated without a `-` after the id, so no name scopes them), plus the reads `DescribeTaskDefinition`, `ListTaskDefinitions`, `DescribeClusters`, `DescribeServices` and `DeregisterTaskDefinition` on `*` (an accepted exception: one app could deregister another app's task-definition revisions); and the cluster fence `EcsOnlyOwnClusters` (below) |
-| `AWS::Bedrock::KnowledgeBase`, `DataSource` | tag (a data source is authorized against its knowledge base) |
-| `AWS::EC2::VPC`, `Subnet`, `RouteTable`, `Route`, `SubnetRouteTableAssociation`, `SecurityGroup*`, `InternetGateway`, `VPCGatewayAttachment`, `NatGateway`, `EIP` | tag; creating a subnet, route table or security group, or attaching an internet gateway, also requires the VPC to be tagged `app=<id>`; security-group rules on `security-group-rule/*`; `ec2:Describe*` on `*` |
-| `AWS::CloudFront::Distribution` | tag |
-| `AWS::CloudFront::KeyValueStore` | tag (the create and manage statements; the denies on `cloudfront:*` come with the distribution's) |
-| `AWS::CloudFront::OriginAccessControl`, `CachePolicy`, `OriginRequestPolicy`, `ResponseHeadersPolicy` | **can't be scoped** (see below) |
-| `AWS::BedrockAgentCore::Runtime` | **not scoped** (see below) |
-| `AWS::IAM::Role`, `Policy`, `RolePolicy`, `AWS::CDK::Metadata`, custom resources, wait conditions | the role fence; nothing else needed |
-
-**Tag-scoped services: five statements each.** A service whose resources are named by id can't be scoped by name, so it's scoped by the `app` tag, and a request tag alone never grants access to an existing resource: **Create** only top-level resources, only tagged `app=<id>`; **Manage** only resources (and their children, which are authorized against their parent's tag) already tagged `app=<id>`, tag writes included, so an untagged resource can't be claimed; deny anything on a resource tagged as **another app** (`NotAnotherApps`); and deny any tag write that sets `app` to another value (`NoRetagging`) or removes it (`NoUntagging`). For API Gateway (REST, HTTP and WebSocket APIs), a tag is written with `apigateway:PUT` and removed with `apigateway:DELETE` on `/tags/<resource ARN>`, so those are the actions the tag statements name. One more action is needed: creating an API Gateway v2 stage (a WebSocket API's, which Realtime and every Agent's streaming use) with tags is authorized as `apigateway:TagResource` on `arn:aws:apigateway:<region>::/apis/<api id>/stages`, so `ApisCreate` allows it with the request tag and `ApisNoRetagging` denies it for another app's tag. IAM Access Analyzer reports `apigateway:TagResource` as `INVALID_ACTION` and the Service Authorization Reference doesn't list it, but IAM evaluates exactly that action on this call; without it the stage fails with `not authorized to perform: apigateway:TagResource`, and IAM accepts the policy with it:
-
-```json
-[
-  {
-    "Sid": "ApisCreate",
-    "Effect": "Allow",
-    "Action": [
-      "apigateway:POST",
-      "apigateway:PUT",
-      "apigateway:TagResource"
-    ],
-    "Resource": [
-      "arn:aws:apigateway:*::/restapis",
-      "arn:aws:apigateway:*::/apis",
-      "arn:aws:apigateway:*::/apis/*/stages",
-      "arn:aws:apigateway:*::/tags/*"
-    ],
-    "Condition": {
-      "StringEquals": {
-        "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-      }
-    }
-  },
-  {
-    "Sid": "ApisManage",
-    "Effect": "Allow",
-    "Action": [
-      "apigateway:GET",
-      "apigateway:POST",
-      "apigateway:PUT",
-      "apigateway:PATCH",
-      "apigateway:DELETE",
-      "apigateway:UpdateRestApiPolicy"
-    ],
-    "Resource": [
-      "arn:aws:apigateway:*::/restapis/*",
-      "arn:aws:apigateway:*::/apis/*",
-      "arn:aws:apigateway:*::/tags/*"
-    ],
-    "Condition": {
-      "StringEquals": {
-        "aws:ResourceTag/app": "${aws:PrincipalTag/app}"
-      }
-    }
-  },
-  {
-    "Sid": "ApisNotAnotherApps",
-    "Effect": "Deny",
-    "Action": "apigateway:*",
-    "Resource": "*",
-    "Condition": {
-      "StringNotEquals": {
-        "aws:ResourceTag/app": "${aws:PrincipalTag/app}"
-      },
-      "Null": {
-        "aws:ResourceTag/app": "false"
-      }
-    }
-  },
-  {
-    "Sid": "ApisNoRetagging",
-    "Effect": "Deny",
-    "Action": [
-      "apigateway:PUT",
-      "apigateway:TagResource"
-    ],
-    "Resource": "*",
-    "Condition": {
-      "StringNotEquals": {
-        "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-      },
-      "ForAnyValue:StringEquals": {
-        "aws:TagKeys": [
-          "app"
-        ]
-      }
-    }
-  },
-  {
-    "Sid": "ApisNoUntagging",
-    "Effect": "Deny",
-    "Action": [
-      "apigateway:DELETE"
-    ],
-    "Resource": "*",
-    "Condition": {
-      "ForAnyValue:StringEquals": {
-        "aws:TagKeys": [
-          "app"
-        ]
-      }
-    }
-  },
-  {
-    "Sid": "ApisPolicyOnCreate",
-    "Effect": "Allow",
-    "Action": "apigateway:UpdateRestApiPolicy",
-    "Resource": "arn:aws:apigateway:*::/restapis"
-  }
-]
-```
-
-The other tag-scoped services follow the same pattern with their own actions: for example Secrets Manager creates with `secretsmanager:CreateSecret` on `*`, manages `secretsmanager:*` on `arn:aws:secretsmanager:*:ACCOUNT:secret:*`, and tags with `secretsmanager:TagResource` / `UntagResource`. An API's children (stages, deployments, routes, integrations) are authorized against their parent API's `app` tag, so `ApisManage` and `ApisNotAnotherApps` cover them too; the IAM report flags a stage, route or deployment attached to an API outside the app's own template (`api-outside-app`). This scopes deploying APIs only: calling them at runtime is outside the isolation (see Limits).
-
-**Fence children by their parent.** For a resource created inside a parent (ECS services and tasks in a cluster, vector indexes in a vector bucket, Cognito app clients and groups in a user pool, data sources in a Bedrock knowledge base), fence by the parent's name or a condition key that names the parent, not by the new child's tag. CloudFormation creates the child with the stack's tags, so it carries the creating app's `app` tag, and a tag rule alone lets App A create a child inside App B's parent. ECS authorizes `CreateService` and `RunTask` against the new service or task, with the cluster only in the `ecs:cluster` condition key; S3 Vectors authorizes `CreateIndex` against the new index. So the ECS statements add a deny on any cluster outside `cluster/<id>-*` (CloudFormation-generated cluster names start with the stack name), and S3 Vectors is matched by name, like S3, with a deny on every other bucket. Cognito clients and groups, and knowledge-base data sources, are authorized against the parent's ARN, so the parent's tag already fences them. Check every tag-scoped service you add for the same case:
-
-```json
-[
-  {
-    "Sid": "EcsOnlyOwnClusters",
-    "Effect": "Deny",
-    "Action": [
-      "ecs:CreateService",
-      "ecs:UpdateService",
-      "ecs:DeleteService",
-      "ecs:RunTask",
-      "ecs:StartTask",
-      "ecs:StopTask",
-      "ecs:CreateTaskSet",
-      "ecs:UpdateTaskSet",
-      "ecs:DeleteTaskSet",
-      "ecs:UpdateServicePrimaryTaskSet"
-    ],
-    "Resource": "*",
-    "Condition": {
-      "Null": {
-        "ecs:cluster": "false"
-      },
-      "ArnNotLike": {
-        "ecs:cluster": "arn:aws:ecs:*:APPS_ACCOUNT:cluster/${aws:PrincipalTag/app}-*"
-      }
-    }
-  },
-  {
-    "Sid": "VectorBuckets",
-    "Effect": "Allow",
-    "Action": "s3vectors:*",
-    "Resource": [
-      "arn:aws:s3vectors:*:APPS_ACCOUNT:bucket/${aws:PrincipalTag/app}-*",
-      "arn:aws:s3vectors:*:APPS_ACCOUNT:bucket/${aws:PrincipalTag/app}-*/index/*"
-    ]
-  },
-  {
-    "Sid": "VectorBucketsOnlyOwn",
-    "Effect": "Deny",
-    "Action": [
-      "s3vectors:CreateIndex",
-      "s3vectors:DeleteIndex",
-      "s3vectors:PutVectors",
-      "s3vectors:DeleteVectors",
-      "s3vectors:GetVectors",
-      "s3vectors:QueryVectors",
-      "s3vectors:ListVectors",
-      "s3vectors:PutVectorBucketPolicy",
-      "s3vectors:DeleteVectorBucketPolicy",
-      "s3vectors:DeleteVectorBucket",
-      "s3vectors:TagResource",
-      "s3vectors:UntagResource"
-    ],
-    "NotResource": [
-      "arn:aws:s3vectors:*:APPS_ACCOUNT:bucket/${aws:PrincipalTag/app}-*",
-      "arn:aws:s3vectors:*:APPS_ACCOUNT:bucket/${aws:PrincipalTag/app}-*/index/*"
-    ]
-  }
-]
-```
-
-**Service-linked roles.** The first deploy of some services in an account creates their service-linked role. Allow `iam:CreateServiceLinkedRole` on `arn:aws:iam::ACCOUNT:role/aws-service-role/*` with `StringEquals` `iam:AWSServiceName` listing only the services the platform's apps use: `rds.amazonaws.com` (RDS), `dsql.amazonaws.com` (DSQL), `runtime-identity.bedrock-agentcore.amazonaws.com` (AgentCore runtimes).
-
-**CloudFront configuration types can't be scoped.** CloudFront origin access controls and cache, origin-request and response-headers policies are named by id and support no tag condition, so no statement can scope them to one app. Granting their `Create`, `Get`, `Get…Config`, `Update` and `Delete` actions on `origin-access-control/*`, `cache-policy/*`, `origin-request-policy/*` and `response-headers-policy/*` is an accepted exception: they hold configuration, not data, but App A's deploy could change or delete one of App B's. If that's not acceptable, leave them out and deploy those resources from the platform.
-
-**AgentCore runtimes are scoped by tag; their workload identities aren't.** A runtime's name can't carry `<id>-` (no hyphens allowed), so scope `AWS::BedrockAgentCore::Runtime` by tag, as for the other tag-matched services: allow `bedrock-agentcore:CreateAgentRuntime` and `TagResource` only with `aws:RequestTag/app` equal to the caller's, allow `bedrock-agentcore:*` on `runtime/*` only with `aws:ResourceTag/app` equal to the caller's, deny any resource tagged as another app, and deny changing or removing the `app` tag. CloudFormation also creates each runtime's workload identity in the account-wide `default` directory, which carries no app tag, so `CreateWorkloadIdentity`, `GetWorkloadIdentity`, `UpdateWorkloadIdentity` and `DeleteWorkloadIdentity` on `workload-identity-directory/default` and `workload-identity-directory/default/workload-identity/*` are an accepted exception: App A's deploy could change or delete one of App B's workload identities. The service-linked role (above) is still needed. Likewise `AWS::ApiGateway::Account` is an account-level setting shared by every app in the region; set it from the platform.
-
-**Size.** IAM limits a managed policy to 6,144 characters, not counting white space. The role fence is about 2,500 characters and the API Gateway statements about 1,400, so with statements for the services a typical AWS CDK Blocks app uses, `apps-exec` goes over the limit. Split it, whole statements in order, into several shared policies (for example `apps-exec`, `apps-exec-2` and `apps-exec-3`, the role fence in the first); staying around 5,000 characters each leaves room to add statements later without another policy, which every app's bootstrap would then need. Pass them all, comma-separated, to `cdk bootstrap --cloudformation-execution-policies`. `NoEditingTheSharedPolicies` covers every `apps-exec…` policy.
-
-#### The deploy guard
-
-CDK's default bootstrap deploy role may change or delete *any* stack, and CloudFormation reuses a stack's previous service role when a request omits one, so without a guard App A's pipeline could deploy into — or delete — App B's stack as App B's execution role. The guard is one shared policy, `apps-deploy-guard`, attached to every app's CDK bootstrap **deploy** role; `${aws:PrincipalTag/app}` is that deploy role's own `app` tag:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "OnlyThisAppsStacks",
-      "Effect": "Deny",
-      "Action": [
-        "cloudformation:CreateChangeSet",
-        "cloudformation:ExecuteChangeSet",
-        "cloudformation:DeleteChangeSet",
-        "cloudformation:CreateStack",
-        "cloudformation:UpdateStack",
-        "cloudformation:DeleteStack",
-        "cloudformation:CancelUpdateStack",
-        "cloudformation:ContinueUpdateRollback",
-        "cloudformation:RollbackStack",
-        "cloudformation:SetStackPolicy",
-        "cloudformation:UpdateTerminationProtection",
-        "cloudformation:SignalResource",
-        "cloudformation:GetTemplate",
-        "cloudformation:CreateStackRefactor",
-        "cloudformation:ExecuteStackRefactor"
-      ],
-      "NotResource": [
-        "arn:aws:cloudformation:*:APPS_ACCOUNT:stack/${aws:PrincipalTag/app}/*",
-        "arn:aws:cloudformation:*:APPS_ACCOUNT:stack/${aws:PrincipalTag/app}-*/*"
-      ]
-    },
-    {
-      "Sid": "OnlyThisAppsExecutionRole",
-      "Effect": "Deny",
-      "Action": [
-        "cloudformation:CreateChangeSet",
-        "cloudformation:CreateStack",
-        "cloudformation:UpdateStack"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "ArnNotLike": {
-          "cloudformation:RoleArn": "arn:aws:iam::APPS_ACCOUNT:role/cdk-${aws:PrincipalTag/app}-cfn-exec-role-APPS_ACCOUNT-*"
-        }
-      }
-    },
-    {
-      "Sid": "DeleteOnlyWithThisAppsExecutionRole",
-      "Effect": "Deny",
-      "Action": "cloudformation:DeleteStack",
-      "Resource": "*",
-      "Condition": {
-        "Null": {
-          "cloudformation:RoleArn": "false"
-        },
-        "ArnNotLike": {
-          "cloudformation:RoleArn": "arn:aws:iam::APPS_ACCOUNT:role/cdk-${aws:PrincipalTag/app}-cfn-exec-role-APPS_ACCOUNT-*"
-        }
-      }
-    },
-    {
-      "Sid": "StackTagAppIsThisApp",
-      "Effect": "Deny",
-      "Action": [
-        "cloudformation:CreateChangeSet",
-        "cloudformation:CreateStack",
-        "cloudformation:UpdateStack"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-        }
-      }
-    },
-    {
-      "Sid": "NoStackRetagging",
-      "Effect": "Deny",
-      "Action": "cloudformation:TagResource",
-      "Resource": "*",
-      "Condition": {
-        "ForAnyValue:StringEquals": {
-          "aws:TagKeys": [
-            "app"
-          ]
-        },
-        "StringNotEquals": {
-          "aws:RequestTag/app": "${aws:PrincipalTag/app}"
-        }
-      }
-    },
-    {
-      "Sid": "NoStackUntagging",
-      "Effect": "Deny",
-      "Action": "cloudformation:UntagResource",
-      "Resource": "*",
-      "Condition": {
-        "ForAnyValue:StringEquals": {
-          "aws:TagKeys": [
-            "app"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "NoResourceImport",
-      "Effect": "Deny",
-      "Action": "cloudformation:CreateChangeSet",
-      "Resource": "*",
-      "Condition": {
-        "Null": {
-          "cloudformation:ImportResourceTypes": "false"
-        }
-      }
-    },
-    {
-      "Sid": "NoPlatformResourceTypes",
-      "Effect": "Deny",
-      "Action": [
-        "cloudformation:CreateChangeSet",
-        "cloudformation:CreateStack",
-        "cloudformation:UpdateStack"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "ForAnyValue:StringLike": {
-          "cloudformation:ResourceTypes": [
-            "AWS::CloudFormation::*Hook*",
-            "AWS::CloudFormation::TypeActivation",
-            "AWS::CloudFormation::*Version",
-            "AWS::CloudFormation::Publisher",
-            "AWS::CloudFormation::Macro",
-            "AWS::CloudFormation::StackSet"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "NoHookOrRegistryAdmin",
-      "Effect": "Deny",
-      "Action": [
-        "cloudformation:SetTypeConfiguration",
-        "cloudformation:ActivateType",
-        "cloudformation:DeactivateType",
-        "cloudformation:RegisterType",
-        "cloudformation:DeregisterType",
-        "cloudformation:SetTypeDefaultVersion",
-        "cloudformation:PublishType",
-        "cloudformation:RegisterPublisher",
-        "cloudformation:TestType",
-        "cloudformation:CreateStackSet",
-        "cloudformation:UpdateStackSet",
-        "cloudformation:DeleteStackSet",
-        "cloudformation:CreateStackInstances",
-        "cloudformation:UpdateStackInstances",
-        "cloudformation:DeleteStackInstances",
-        "cloudformation:ActivateOrganizationsAccess",
-        "cloudformation:DeactivateOrganizationsAccess"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-- `OnlyThisAppsStacks` denies stack changes outside `<id>` and `<id>-…` — including the app's own bootstrap stack (`CDKToolkit-<id>`), which only the platform re-bootstraps. It names the stack actions that take a stack ARN, so `ExecuteChangeSet` (authorized against the stack, not the change set), `UpdateTerminationProtection` and the stack-refactor actions (`CreateStackRefactor`, `ExecuteStackRefactor`, which move resources between stacks) work only on the app's own stacks.
-- `OnlyThisAppsExecutionRole` denies creating or changing a stack without naming the app's own execution role (`cdk-<id>-cfn-exec-role-…`), so CloudFormation can't fall back to another stack's role. It uses `ArnNotLike`, the operator for an ARN-typed key such as `cloudformation:RoleArn` (IAM Access Analyzer flags `StringNotLike` there).
-- `DeleteOnlyWithThisAppsExecutionRole`: deleting one of the app's own stacks may omit the role — CDK does so when it cleans up a failed first deploy (`ROLLBACK_COMPLETE`) — but a role it names must be the app's own. That's safe: `OnlyThisAppsStacks` confines `DeleteStack` to `<id>` / `<id>-…` stacks, and those can only have been created with the app's own execution role, which is the role CloudFormation reuses. If the platform's bootstrap or template turns on termination protection, a stack whose first create rolled back keeps it, and that cleanup fails until termination protection is turned off; the guard allows `UpdateTerminationProtection` on the app's own stacks, so the pipeline can turn it off for its own `ROLLBACK_COMPLETE` stack, or turn protection on only after the first successful deploy.
-- `StackTagAppIsThisApp` denies creating or changing a stack unless the request tags it `app=<id>`, and `NoStackRetagging` / `NoStackUntagging` deny setting a stack's `app` tag to another value or removing it. CloudFormation propagates stack tags to the resources it creates, including types a tag aspect can't reach.
-- `NoResourceImport` denies change sets that import existing resources: an import would adopt a resource the app didn't create (another app's) into the app's stack.
-- `NoPlatformResourceTypes` and `NoHookOrRegistryAdmin` keep the app's deploy from creating or changing CloudFormation hooks, registry types, macros and stack sets, which act on every stack in the account.
-
-**Prefer attaching it in a custom bootstrap template** (`cdk bootstrap --show-template`, add `apps-deploy-guard` to the deploy role's managed policies and remove `sts:TagSession` from its trust policy, `cdk bootstrap --template <file>`), so CloudFormation owns both; attaching it to the existing deploy role (`cdk-<id>-deploy-role-<account>-<region>`) works, but it's drift outside CloudFormation that a re-bootstrap won't restore, and leaves `sts:TagSession` in place.
-
-**Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.appIdentity` set, AWS CDK Blocks names it `<id>-edge`, so the guard and the execution policy treat it as the app's own. Bootstrap the app in `us-east-1` too (same qualifier, same `app` tag, same execution policy) and attach the guard there.
-
-#### The pipeline
-
-Synthesize (without `reportOnly`, as in the project template below), which fails synth on any violation in the IAM report, and confirm that every report names the id the platform gave this app and wasn't written with `reportOnly`, which the app's own code sets:
-
-```bash
-APP_ID=appa NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet   # fails on any violation
-jq -e -s --arg id "$APP_ID" 'length > 0 and all(.[]; .app.id == $id and .app.reportOnly != true and (.violations | length) == 0)' cdk.out/*.blocks-iam.json
-```
-
-`APP_ID` comes from the platform, however it manages ids (a registry, picked by hand, generated): to AWS CDK Blocks it's just a string. It never comes from the app's own repository or code. Fail the pipeline on a non-zero exit from either command.
-
-This is feedback, not the guarantee. Synth runs the app's own code, so a determined app can write any report it likes. What keeps apps apart is IAM: the boundary on every role, the execution role that only creates bounded roles tagged as the app, and the deploy guard. Run synth in a job that has no AWS credentials and no `id-token` permission, and deploy the synthesized assembly (`cdk deploy --app cdk.out`) from a job that has the credentials and doesn't run the app's code.
-
-**Optionally, check the templates themselves too.** The report comes from the app's own synth; the CloudFormation templates in `cdk.out` are what will be deployed. Before deploying, check that every `AWS::IAM::Role` carries the `apps-boundary` boundary and the tag `app=<id>`, and that every stack is named `<id>` or `<id>-…`:
-
-```bash
-for t in cdk.out/*.template.json; do
-  jq -e --arg id "$APP_ID" '
-    [.Resources[]? | select(.Type == "AWS::IAM::Role") | .Properties]
-    | all(
-        ((.PermissionsBoundary // "") | tojson | test("policy/apps-boundary\\\\?\"")) and
-        any(.Tags[]?; .Key == "app" and .Value == $id)
-      )' "$t" > /dev/null || { echo "A role in $t lacks the boundary or the app tag"; exit 1; }
-done
-jq -e --arg id "$APP_ID" '[.artifacts | to_entries[] | select(.value.type == "aws:cloudformation:stack")
-  | (.value.properties.stackName // .key)] | all(. == $id or startswith($id + "-"))' cdk.out/manifest.json > /dev/null \
-  || { echo "A stack isn't named $APP_ID or $APP_ID-…"; exit 1; }
-```
-
-The execution policy and the deploy guard enforce both anyway; the check fails the pipeline before the deploy does, with a clearer message.
-
-**Limits.**
-
-- **It isolates apps from each other, not handlers inside one app.** Every handler in an app still runs as the same role, under the same boundary.
-- **Allow-list coverage.** A service the boundary has no statement for is denied at runtime (`AccessDenied`). Add statements for any service your apps use beyond AWS CDK Blocks' own. A few statements are scoped by resource tag rather than name (Cognito, Step Functions, Secrets Manager, KMS and others); check them on a deployed app.
-- **Exceptions — cross-app reach the boundary still allows.**
-  - `ses:SendEmail` / `SendRawEmail` / `SendBulkEmail` on `*`: App A can send as an identity App B verified. Scope SES by identity if your apps send email.
-  - `ec2:DeleteNetworkInterface` on `*` (for VPC Lambdas): App A could delete another app's network interfaces.
-  - AgentCore runtimes log to AWS-named log groups, which the boundary allows for writing only.
-  - The CloudFront configuration types the execution policy can't scope, if you grant them.
-- **VPC-attached compute isn't fully isolated.** An app's own ECS service in its own cluster can name another app's subnets, and its task then runs inside that app's VPC, reaching what that VPC's security groups and endpoints allow (with no security group given, the VPC's default group). The task's network interface is created by ECS's service-linked role, and a subnet is named only by its id, with no condition key carrying its owner's tag, so no shared policy can stop it. Lambda `VpcConfig` and RDS subnet groups very likely have the same gap (not yet verified). To close it, check subnets outside the app's code: a CloudFormation Guard hook that allows only the app's own subnets in `AWS::ECS::Service` / `TaskSet` network configurations, Lambda `VpcConfig` and DB subnet groups (the hook can't tell a subnet's owner by itself, so the platform publishes which subnets belong to which app), or an SCP (service control policy) or per-app policy that names each app's subnets.
-- **Runtime API calls aren't isolated.** The boundary allows `execute-api:Invoke` and `execute-api:ManageConnections` on every API in the account (`ApisAccountWide`), because neither can be scoped by name or tag. A compromised app could call another app's IAM-authorized APIs, or post to and disconnect another app's WebSocket clients (Realtime, Agent streaming), and the receiving app's handlers would treat an injected message as genuine. Deploying APIs is still isolated: the execution policy only creates and changes API Gateway APIs tagged as the app. If this gap isn't acceptable, give those apps their own AWS accounts.
-- **It isolates apps, not an app's environments.** A preview (`HostingPresets.preview`, in a stack such as `<id>-preview`) is the same app to the policies: its roles carry the app's tag, so they can read and change production's resources too, including Hosting's `secret()` and `config()` values, which both read from the same `stackId`. Deploy an environment that mustn't reach production's data as an app of its own, with its own id and bootstrap.
-- **No hotswap under the shared deploy guard.** CDK hotswaps (`cdk deploy --hotswap`, a preview's `--hotswap-fallback`) with the deploy role's own credentials, outside CloudFormation, and the deploy role has no Lambda permissions, so the deploy fails with `lambda:UpdateFunctionCode` denied; `--hotswap-fallback` doesn't fall back on `AccessDenied`. Deploy previews with `--method direct`. To allow hotswap, grant the deploy role `lambda:UpdateFunctionCode`, `UpdateFunctionConfiguration`, `GetFunction` and `PublishVersion` on the app's own functions only (`function:<id>-preview-*` keeps it off production); those changes skip CloudFormation, the execution policy and any Guard hook.
-- **CDK's cross-region references.** Hosting's `us-east-1` stacks are wired to the app's stack by CDK's cross-region export writer, which is granted `/cdk/exports/*`. The IAM report exempts exactly that grant (its actions on that resource): it's CDK-internal, and the boundary caps it to the exports of the app's own stacks (`/cdk/exports/<id>…`). Likewise, CDK's Lambda@Edge ARN reader's read of `/cdk/EdgeFunctionArn/*` is capped by the boundary to the app's own stack path.
-- **Account quotas are shared.** Each app adds roles and a bootstrap stack; at thousands of apps, spread them across several accounts.
-- **One account per app remains the stronger model.** A boundary only enforces what its statements cover.
-
-#### The app's side: what to put in your project template
-
-A platform team gives every app the same starting point, so the identity and the boundary are there before anyone writes code. Put these files in the platform's own project template (for example a copy of an AWS CDK Blocks starter such as `npm create @aws-cdk-blocks/blocks-app@latest my-app -- --template api-only`). `APP_ID` is the app's id, which the platform gives it however it manages ids; the pipeline sets it, and a developer exports it for a sandbox (`APP_ID=<id> npm run sandbox`).
-
-**`cdk-blocks/index.cdk.ts`.** The app id is the bootstrap qualifier and the stack name, and `defaults.appIdentity` sets the identity. `defaults.appIdentity` validates the id at synth (pattern and reserved ids, with the reason), so the entry only has to check that `APP_ID` is set:
-
-```typescript
-import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { getStackName } from 'aws-cdk-blocks/scripts';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Set by the platform's pipeline (to AWS CDK Blocks, just a string), never chosen by this repository.
-const appId = process.env.APP_ID;
-if (!appId) {
-  throw new Error("APP_ID is not set. The platform's pipeline sets it; for a sandbox, export APP_ID=<your app id> first.");
-}
-
-// The app's own CDK bootstrap: `cdk bootstrap --qualifier <id>`.
-const app = new cdk.App({ context: { '@aws-cdk/core:bootstrapQualifier': appId } });
-
-const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
-const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
-
-// Every derived name starts with the stack name, so name it `<id>`, or `<id>-…` for a sandbox.
-const stackName = sandboxMode ? `${appId}-${getStackName({ sandbox: true, projectRoot })}` : appId;
-
-export const blocksStack = await BlocksStack.create(app, stackName, {
-  backendHandlerPath: join(__dirname, 'index.handler.ts'),
-  backendCDKPath: join(__dirname, 'index.ts'),
-  defaults: {
-    ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
-    appIdentity: { id: appId },
-    permissionsBoundary: 'apps-boundary',
-  },
-});
-```
-
-A sandbox stack is named `<id>-<stackId>-<sandbox id>` (`getStackName({ sandbox: true })` returns `<stackId>-<sandbox id>`).
-
-**`cdk.json`.** AWS CDK Blocks' `npm run deploy` and `npm run sandbox` check the bootstrap with the qualifier in `cdk.json`, and the CDK CLI looks up the app's own toolkit stack. Add both to the starter's `cdk.json`, with the app's id:
-
-```json
-{
-  "context": {
-    "@aws-cdk/core:bootstrapQualifier": "<id>"
-  },
-  "toolkitStackName": "CDKToolkit-<id>"
-}
-```
-
-**`.cdk-blocks/config.json`.** Set `stackId` to the app id, so Hosting's `secret()` and `config()` values are named `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, the app's own:
-
-```json
-{ "stackId": "<id>" }
-```
-
-**`package.json`.** A script that runs the pipeline's synth locally (`APP_ID` must be set). It fails on any violation in the IAM report:
-
-```json
-{
-  "scripts": {
-    "check:iam": "cdk synth --quiet"
-  }
-}
-```
-
-**`AGENTS.md`.** Rules for the coding agents that write the app:
-
-```markdown
-## Platform rules (this app runs on a shared app platform)
-
-This app shares one AWS account with other apps. The platform rejects a deploy that breaks these rules:
-
-- Build with Building Blocks only. Don't write IAM policies, roles or grants (`addToPrincipalPolicy`, `grant*` on raw CDK constructs), and don't attach managed policies.
-- Never reference another app's resources. Don't call `fromExisting(...)` with a name or ARN that isn't this app's, and don't name resources yourself: the Building Blocks name them, and every name starts with this app's id.
-- Don't edit the platform's files: `cdk-blocks/index.cdk.ts`, `cdk.json`, `.cdk-blocks/config.json` and the deploy workflow. They set this app's identity and permissions boundary. Ask a platform reviewer instead.
-- Check before you push: `APP_ID=<this app's id> npm run check:iam` runs the pipeline's synth, which fails on any IAM violation (don't set `reportOnly`). The report is `cdk.out/<stack>.blocks-iam.json`; its `violations` say what to fix.
-```
-
-**The app's own code.** The boundary keeps apps apart, not users inside one app: gate every API method with `await auth.requireAuth(context)`, and keep each user's files under their own prefix (``files.putUrl(`${user.userId}/${path}`, …)``).
-
-#### Adopting `defaults.appIdentity` in an existing app
-
-An app deployed before it set `defaults.appIdentity` has resources with no `app` tag. The execution policy manages resources of the tag-scoped types — Secrets Manager secrets, KMS keys, Cognito user pools, Step Functions state machines, API Gateway APIs, CloudFront distributions and KeyValueStores, DSQL clusters, ECS clusters, services and task definitions, Bedrock knowledge bases and EC2 VPC resources — only once they're tagged `app=<id>`, including the update that would add the tag, so the first deploy under it fails on them (`AccessDenied`, e.g. on `kms:DescribeKey`). That's on purpose: a policy that let a deploy tag an untagged resource would let any app claim one. The tag-scoped types are the ones marked "tag" in the [per-service rules](#the-shared-execution-policy). Adopt in this order:
-
-1. **The stack names must already start with the id** (`<id>` or `<id>-…`): a stack can't be renamed, so another name means new stacks (and moving the data), not adoption.
-2. **An admin, not the app's pipeline, tags the app's existing resources `app=<id>` once**, before the first deploy under the execution policy. Do it for each of the app's stacks, in its region and in `us-east-1` (Hosting's `<id>-CfMonitoring-…` stack, and CloudFront's global resources, which the Tagging API lists in `us-east-1`). CloudFormation tags what it creates `aws:cloudformation:stack-name`, so the Resource Groups Tagging API can find and tag them (`tag-resources` takes up to 20 ARNs at a time):
-
-   ```bash
-   STACK=<stack name>; REGION=<region>; APP=<id>
-   aws resourcegroupstaggingapi get-resources --region "$REGION" \
-     --tag-filters "Key=aws:cloudformation:stack-name,Values=$STACK" \
-     --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' |
-     xargs -n 20 aws resourcegroupstaggingapi tag-resources --region "$REGION" --tags "app=$APP" --resource-arn-list
-   ```
-
-   Compare with `aws cloudformation list-stack-resources --stack-name "$STACK" --region "$REGION"`, which lists every resource in the stack, and tag any tag-scoped one the first command missed with its service's own tag command. Tag IAM roles with `aws iam tag-role --role-name <role> --tags Key=app,Value=<id>` (the execution policy manages the app's roles by their `<id>-…` name, and the deploy adds the tag, so this is optional).
-3. **Set `stackId` in `.cdk-blocks/config.json` to the id**, if it isn't already. Hosting's `secret()` and `config()` values move to `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, so set each value again (`npm run secret -- set …`, `npm run config -- set …`) before deploying; the old ones stay where they were until you delete them. If `index.cdk.ts` builds the stack name from `stackId` (`getStackName()`, `<stackId>-prod`), changing it renames the stack: see step 1.
-4. **Expect replacements on the first deploy.** AWS CDK Blocks renames the CloudFront Functions and KeyValueStores it creates to `<id>-<region>-…`, and a new name replaces the resource. CloudFormation then tries to delete the old ones, and the old Functions fail to delete (`DELETE_FAILED`, skipped; the stack still reaches `UPDATE_COMPLETE`), because their names (`<region>…`) are outside the app's prefix — and so can the old KeyValueStores still associated with them. An admin deletes them once: `aws cloudfront delete-function --name <name> --if-match <ETag from describe-function>`, then `aws cloudfront delete-key-value-store --name <name> --if-match <ETag from describe-key-value-store>`. Hosting's Lambda@Edge stack (Hosting outside `us-east-1`) becomes a new stack, `<id>-edge` (CDK named it `edge-lambda-stack-<hash>`); the app's deploy guard can't touch the old one, so an admin deletes it once the distribution no longer uses its functions (Lambda@Edge replicas can take hours to release).
+**3–5. The platform's policies**, the pipeline (part 6), the project template, and adopting `defaults.appIdentity` in an existing app are in [SHARED-ACCOUNT.md](./SHARED-ACCOUNT.md).
 
 ### Service-principal trust: `aws:SourceAccount` and `aws:SourceArn`
 
-Every IAM role AWS CDK Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
+Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
 
-- **Roles AWS CDK Blocks creates** — under an AWS CDK Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal.
+- **Roles AWS Blocks creates** — under an AWS Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal.
 - **Roles your app creates** — your own constructs in the backend module (on the `BlocksStack` or embedded `BlocksBackend`, at stack scope, or under a `Scope` namespace), roles you add to a `BlocksStack` after `BlocksStack.create()`, roles inside a custom Building Block you write (a `Scope` subclass, see [Pattern 3: Custom BB](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md#pattern-3-custom-bb)), and the roles CDK creates inside any of these (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a **synth warning** instead, and the deploy goes ahead.
 
-Ownership follows who created the role, not where it sits in the construct tree: AWS CDK Blocks marks the constructs its own blocks, computes and stack-level helpers create, and every other covered role is your app's.
+Ownership follows who created the role, not where it sits in the construct tree: AWS Blocks marks the constructs its own blocks, computes and stack-level helpers create, and every other covered role is your app's.
 
 A condition only counts under an operator that requires the key and with a value that names an account. The operator must be `StringEquals`, `StringEqualsIgnoreCase`, `StringLike`, `ArnEquals` or `ArnLike`, or one of their `ForAnyValue:` forms. An `…IfExists` operator, a negated operator (`StringNotEquals`, `ArnNotLike`, …), `Null` or a `ForAllValues:` operator doesn't count. Neither does a value of `*` alone, an `aws:SourceAccount` with a wildcard, or an `aws:SourceArn` whose account segment is empty or a wildcard. A value built from tokens is read by its literal parts, so `arn:${stack.partition}:cloudwatch:*:*:alarm:*` is still caught, while a value that starts with a token and has no literal account segment (such as `${topic.topicArn}/*`) counts. The KMS key-policy check below uses the same rules.
 
-Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role, meaning any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS CDK Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
+Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role, meaning any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
 
 **Resolving the warning.** Add both conditions to the trust statement (but don't condition an API Gateway CloudWatch Logs role: API Gateway doesn't send these keys when it delivers logs, so logs stop arriving. Name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check already accepts, or acknowledge the warning). For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
 
@@ -1886,10 +887,10 @@ eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition',
 });
 ```
 
-**Acknowledging it.** To keep a trust as it is, acknowledge the warning id `@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition`, on the role or on any construct above it (the stack acknowledges it for every role in the stack):
+**Acknowledging it.** To keep a trust as it is, acknowledge the warning id `@aws-blocks/core:serviceRoleTrustWithoutSourceCondition`, on the role or on any construct above it (the stack acknowledges it for every role in the stack):
 
 ```ts
-cdk.Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition');
+cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition');
 ```
 
 **KMS (Key Management Service) key policies.** The same check reads the key policy of every `AWS::KMS::Key` in the same set of scopes. An `Allow` statement that names an AWS service principal must carry one of:
@@ -1901,10 +902,10 @@ A key counts under the same operators and values as for roles (above), so an `�
 
 One principal is exempt: `events.amazonaws.com`, in a statement that grants only `kms:GenerateDataKey*` and `kms:Decrypt`. Amazon SNS documents that `aws:SourceAccount`, `aws:SourceArn` and `aws:SourceOrgID` in a key policy aren't supported for EventBridge publishing to an encrypted topic ([Enable compatibility between event sources from AWS services and encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services)), so either condition stops delivery.
 
-As with roles, a key AWS CDK Blocks creates fails synth, naming the key's construct path, the principal and the statement index; a key your app creates gets a synth warning with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`, which you acknowledge the same way:
+As with roles, a key AWS Blocks creates fails synth, naming the key's construct path, the principal and the statement index; a key your app creates gets a synth warning with the id `@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition`, which you acknowledge the same way:
 
 ```ts
-cdk.Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition');
+cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition');
 ```
 
 The key `Hosting` creates for its alarm topic grants `cloudwatch.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` (this account's alarms in the Region), as [Amazon SNS documents for encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services). Other resource policies and KMS grants aren't checked.

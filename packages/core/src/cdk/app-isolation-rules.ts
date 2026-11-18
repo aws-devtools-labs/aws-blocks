@@ -19,7 +19,8 @@
  * These checks are fast feedback, not the boundary: the app's own code runs at
  * synth, so a determined app could get around them. The boundary is IAM (the
  * platform's permissions boundary, per-app execution role and deploy guard; see
- * the core README's "Running many apps in one AWS account").
+ * `SHARED-ACCOUNT.md`, linked from the core README's "Running many apps in one
+ * AWS account").
  *
  * @internal
  */
