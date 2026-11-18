@@ -26,6 +26,9 @@ public struct CodegenModelBuilder {
         let shortName: String
         let type: ResolvedType
         let parentId: String?
+        /// For a shared parameter's old root type (`Input`), the shared type (`AuthActionInput`) a union that
+        /// deduplicates against it names.
+        var sharedName: String?
     }
 
     // MARK: - Name Allocation
@@ -71,6 +74,14 @@ public struct CodegenModelBuilder {
         }
         mutating func release(_ name: String, for typeRef: TypeRef) {
             if !declared.contains(name), inlineTypes[name] == typeRef { inlineTypes[name] = nil }
+        }
+
+        /// The variant structs top-level unions declare beside them (`Text` for `TicketPayload.text`), each with
+        /// its shape, so an inline type or another union's variant doesn't take one of their names.
+        private var variantStructs: [String: String] = [:]
+        func variantStruct(named name: String) -> String? { variantStructs[name] }
+        mutating func claimVariantStruct(_ name: String, shape: String) {
+            if variantStructs[name] == nil { variantStructs[name] = shape }
         }
     }
 
@@ -127,9 +138,22 @@ public struct CodegenModelBuilder {
         return transform("\(candidate)_\(suffix)")
     }
 
-    /// The name an inline type registered at the top level takes, claimed for it in `names`. It keeps `name`
-    /// unless a component schema or another inline type that isn't the same type has it; then it's prefixed
-    /// with its schema's name (`Ticket.status` → `TicketStatus`), like a nested type that would shadow one.
+    /// The name a top-level enum or union is derived from. For an array or map property it's the property's own
+    /// name, not the element's singular or `…Value` (`AuthenticatedUser.groups: [enum]` → `AuthenticatedUserGroups`,
+    /// `Feature.flags: Record<string, enum>` → `FeatureFlags`), as on Dart. A nested type keeps the element's
+    /// singular name (`Shipment.parcels: [{…}]` → `Shipment.Parcel`).
+    private func topLevelBaseName(_ name: String, origin: NameOrigin?) -> String {
+        guard let origin, origin.key.hasSuffix("[]") || origin.key.hasSuffix("{}"), !origin.key.contains("<")
+        else { return specTypeName(name) }
+        return specTypeName(String(origin.key.prefix { $0 != "[" && $0 != "{" }))
+    }
+
+    /// The name an inline type registered at the top level takes, claimed for it in `names`. It's prefixed with
+    /// its schema's name (`Ticket.status` → `TicketStatus`, `AuthAction.capability` → `AuthActionCapability`), so
+    /// a generated enum or union doesn't take a generic name (`Status`, `Kind`) an app declares too. The prefix is
+    /// always added, as on Dart (`User.userType` → `UserUserType`). A name another type has, a top-level union's
+    /// variant struct has, or that a Swift, Foundation or runtime type has (`Transport.error` →
+    /// `TransportError`), gets a numeric suffix (`TicketStatus_2`, `TransportError_2`).
     private func allocateTopLevelName(
         _ name: String,
         for typeRef: TypeRef,
@@ -141,21 +165,31 @@ public struct CodegenModelBuilder {
             if let component = componentSchemas[candidate] {
                 return component == typeRef || component == .nullable(inner: typeRef)
             }
+            if names.variantStruct(named: candidate) != nil || Self.reservedTopLevelNames.contains(candidate) {
+                return false
+            }
             return names.inlineType(named: candidate).map { $0 == typeRef } ?? true
         }
-        var allocated = name
-        if !fits(allocated) {
-            let prefixed = (enclosing ?? "") + name
-            allocated = prefixed
-            var suffix = 2
-            while !fits(allocated) {
-                allocated = "\(prefixed)_\(suffix)"
-                suffix += 1
-            }
+        // The schema itself keeps its spelled name (`JWT`, not `Jwt`), and an inline type that is a same-named
+        // component schema keeps that schema's name.
+        let ownSchema = [enclosing, name].compactMap { $0 }.first { candidate in
+            componentSchemas[candidate].map { $0 == typeRef || $0 == .nullable(inner: typeRef) } == true
+        }
+        let qualified = ownSchema ?? (enclosing ?? "") + name
+        var allocated = qualified
+        var suffix = 2
+        while !fits(allocated) {
+            allocated = "\(qualified)_\(suffix)"
+            suffix += 1
         }
         if componentSchemas[allocated] == nil { names.claim(allocated, for: typeRef) }
         return allocated
     }
+
+    /// Names a top-level enum, union or shared parameter type can't take: Swift, Foundation and SwiftUI types, the
+    /// types the generated files name unqualified (`TransportError`, `BlocksClient`, `JSONDecoder`) and Swift keywords.
+    static let reservedTopLevelNames: Set<String> = reservedTypeNames.union(nestedShadowingTypeNames)
+        .union(reservedNamespaceClassNames).union(swiftKeywords)
 
     public func build(from rpcModel: RPCModel) -> CodegenModel {
         var typeDefinitions: [TypeDefinition] = []
@@ -185,6 +219,16 @@ public struct CodegenModelBuilder {
         // Inline types use short names and are tracked for nesting.
         var namespaceMap: [String: [Operation]] = [:]
 
+        // A union parameter the spec names (`x-blocks-type-name`) is declared once at the top level under that
+        // name, if no other type there has it, and shared by every operation whose parameter has that shape.
+        var topLevelTypeNames = Set(typeDefinitions.map(\.name)).union(rpcModel.componentSchemas.keys)
+        for typeDef in typeDefinitions {
+            if case .union(_, let variants, _) = typeDef.type { topLevelTypeNames.formUnion(variants.map(\.name)) }
+        }
+        var sharedTypes: [NestedTypeNode] = []
+        var sharedSchemas: [String: TypeRef] = [:]
+        var namingWarnings: [String] = []
+
         for method in rpcModel.methods {
             let parts = method.name.split(separator: ".", maxSplits: 1)
             let namespaceName = parts.count > 1 ? String(parts[0]) : "_default"
@@ -194,28 +238,105 @@ public struct CodegenModelBuilder {
             var inlineTypes: [InlineTypeEntry] = []
 
             // The operation's root scope: an inline result keeps `Result`, then each parameter its own name.
-            // The result's key can't be a parameter name.
+            // The result's key can't be a parameter name. A name the spec gives a union parameter
+            // (`x-blocks-type-name`) is claimed too, so no type the operation's enum declares hides the shared
+            // type from the enum's aliases.
             let resultKey = "#result"
             let rootClaims = directClaims(
                 (method.result.map { [NameClaimant(key: resultKey, name: "Result", type: $0.schema)] } ?? [])
                     + method.params.map { NameClaimant(key: $0.name, name: specTypeName($0.name), type: $0.schema) }
+                    + method.params.compactMap { param in
+                        param.typeName.map { NameClaimant(key: "#type:\($0)", name: $0, type: param.schema) }
+                    }
             )
 
+            var sharedTypeAliases: [SharedTypeAlias] = []
+            // The types each shared parameter's operation declared before, kept in `inlineTypes` so later
+            // parameters and the result name and deduplicate against them, but declared only as aliases.
+            var aliasEntryIds: Set<String> = []
             let parameters = method.params.map { param -> OperationParameter in
                 let shortName = specTypeName(param.name)
-                let resolved = resolveType(
-                    param.schema,
-                    name: shortName,
-                    parentSchemaName: nil,
-                    componentSchemas: rpcModel.componentSchemas,
-                    typeDefinitions: &typeDefinitions,
-                    declaredNames: &declaredNames,
-                    inlineTypes: &inlineTypes,
-                    currentParentId: nil,
-                    origin: NameOrigin(key: param.name, name: shortName),
-                    siblingClaims: rootClaims
+                func resolveNested() -> ResolvedType {
+                    resolveType(
+                        param.schema,
+                        name: shortName,
+                        parentSchemaName: nil,
+                        componentSchemas: rpcModel.componentSchemas,
+                        typeDefinitions: &typeDefinitions,
+                        declaredNames: &declaredNames,
+                        inlineTypes: &inlineTypes,
+                        currentParentId: nil,
+                        origin: NameOrigin(key: param.name, name: shortName),
+                        siblingClaims: rootClaims
+                    )
+                }
+                guard let typeName = param.typeName,
+                      isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas)
+                else {
+                    // Spec order decides which shape gets a contested name, so say which parameter lost it.
+                    if let typeName = param.typeName {
+                        let reason = sharedSchemas[typeName] != nil ? "a parameter of another shape took that name first"
+                            : isValidSwiftIdentifier(typeName) ? "another type has that name" : "it isn't a Swift identifier"
+                        namingWarnings.append(
+                            "swift: parameter '\(param.name)' of \(method.name) keeps its own nested type, not \(typeName): \(reason)."
+                        )
+                    }
+                    let resolved = resolveNested()
+                    return OperationParameter(name: param.name, type: resolved, required: param.required)
+                }
+                // The type the operation's enum declared before: its nested types become the aliases that keep
+                // the old names, or, if the parameter can't share, the parameter's own nested types.
+                let firstNew = inlineTypes.count
+                let old = resolveNested()
+                let added = Array(inlineTypes[firstNew...])
+                var sharedInlineTypes: [InlineTypeEntry] = []
+                var sharedDefinitions = typeDefinitions
+                var sharedNames = declaredNames
+                let shared = resolveType(
+                    param.schema, name: typeName, parentSchemaName: nil,
+                    componentSchemas: rpcModel.componentSchemas, typeDefinitions: &sharedDefinitions,
+                    declaredNames: &sharedNames, inlineTypes: &sharedInlineTypes, currentParentId: nil,
+                    origin: NameOrigin(key: param.name, name: typeName)
                 )
-                return OperationParameter(name: param.name, type: resolved, required: param.required)
+                let oldRoot: String? = {
+                    switch old {
+                    case .union(let name, _, _), .typeReference(let name): return name
+                    case .nullable(.union(let name, _, _)), .nullable(.typeReference(let name)): return name
+                    default: return nil
+                    }
+                }()
+                let oldNode = buildNestedTypeNodes(from: added).first { $0.name == oldRoot }
+                let addedNames = Set(added.map(\.shortName))
+                // Only a union whose every arm is a discriminated object is shared: any other arm's case is named
+                // after the union (`to_Variant2`), so its old case name couldn't be kept. A type the operation's root
+                // scope declares under the shared name (`figure: { label }` → `Place.Figure`) would hide it from the
+                // aliases, so the parameter keeps its nested type then too.
+                if case .union(_, let variants, let discriminator?) = shared, !discriminator.fieldName.isEmpty,
+                   variants.allSatisfy({ $0.discriminatorValue != nil }),
+                   let oldRoot, !addedNames.contains(typeName), rootClaims[typeName] == "#type:\(typeName)",
+                   let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }),
+                   oldNode != nil || oldRoot == typeName {
+                    if sharedSchemas[typeName] == nil {
+                        sharedSchemas[typeName] = param.schema
+                        sharedTypes.append(sharedNode)
+                        typeDefinitions = sharedDefinitions
+                        declaredNames = sharedNames
+                    }
+                    aliasEntryIds.formUnion(added.map(\.id))
+                    if let oldNode {
+                        sharedTypeAliases.append(SharedTypeAlias(old: oldNode, target: typeName))
+                        // A later parameter or the result that deduplicates against the old type names the shared
+                        // one; a type of the old name in another scope (`Result.Input`) keeps its own.
+                        for index in inlineTypes.indices.dropFirst(firstNew)
+                        where inlineTypes[index].parentId == nil && inlineTypes[index].shortName == oldRoot {
+                            inlineTypes[index].sharedName = typeName
+                        }
+                    }
+                    let ref: ResolvedType = .typeReference(name: typeName)
+                    if case .nullable = old { return OperationParameter(name: param.name, type: .nullable(inner: ref), required: param.required) }
+                    return OperationParameter(name: param.name, type: ref, required: param.required)
+                }
+                return OperationParameter(name: param.name, type: old, required: param.required)
             }
 
             let resultType: ResolvedType
@@ -238,13 +359,14 @@ public struct CodegenModelBuilder {
                 resultType = .primitive(.void)
             }
 
-            let nestedTypes = buildNestedTypeNodes(from: inlineTypes)
+            let nestedTypes = buildNestedTypeNodes(from: inlineTypes.filter { !aliasEntryIds.contains($0.id) })
 
             namespaceMap[namespaceName, default: []].append(Operation(
                 name: opName,
                 parameters: parameters,
                 result: OperationResult(type: resultType),
-                nestedTypes: nestedTypes
+                nestedTypes: nestedTypes,
+                sharedTypeAliases: sharedTypeAliases
             ))
         }
 
@@ -261,8 +383,21 @@ public struct CodegenModelBuilder {
             servers: servers,
             declaredTransferableBindings: rpcModel.declaredTransferableBindings,
             unboundTransferableCauses: rpcModel.unboundTransferableCauses,
-            nativeCatalogWarnings: rpcModel.nativeCatalogWarnings
+            nativeCatalogWarnings: rpcModel.nativeCatalogWarnings,
+            sharedTypes: sharedTypes,
+            namingWarnings: namingWarnings
         )
+    }
+
+    /// Whether a union parameter can take the name the spec gives it (`typeName`) as a shared top-level type: the
+    /// name is an identifier no component schema, top-level type or Swift or runtime type has, and a parameter
+    /// that already took it has the same shape. A parameter that can't keeps its operation's nested `Input`.
+    private func isSharedTypeName(
+        _ typeName: String, schema: TypeRef, taken: Set<String>, shared: [String: TypeRef]
+    ) -> Bool {
+        if let existing = shared[typeName] { return existing == schema }
+        return isValidSwiftIdentifier(typeName) && !taken.contains(typeName)
+            && !Self.reservedTopLevelNames.contains(typeName)
     }
 
     // MARK: - Nested Type Node Construction
@@ -492,15 +627,17 @@ public struct CodegenModelBuilder {
                 // A union member, not declared on its own.
                 enumName = safeTypeName(specTypeName(name), parentName: parentName)
             } else {
+                // A top-level enum takes its schema's prefix, so a reserved name (`Group`) needs no other change.
+                let topLevel = inSchema && !nestsInSchema
                 let siblingName = allocateNestedName(
-                    specTypeName(name), origin: origin, siblingClaims: siblingClaims,
+                    topLevel ? topLevelBaseName(name, origin: origin) : specTypeName(name), origin: origin, siblingClaims: siblingClaims,
                     scope: currentParentId, inlineTypes: inlineTypes
                 ) { base in
                     nestsInSchema
                         ? nestedTypeName(base, enclosingId: currentParentId ?? "", componentSchemas: componentSchemas)
-                        : safeTypeName(base, parentName: parentName)
+                        : topLevel ? base : safeTypeName(base, parentName: parentName)
                 }
-                enumName = inSchema && !nestsInSchema
+                enumName = topLevel
                     ? allocateTopLevelName(
                         siblingName, for: typeRef, enclosing: parentSchemaName,
                         componentSchemas: componentSchemas, names: &declaredNames
@@ -654,7 +791,7 @@ public struct CodegenModelBuilder {
             unionName = specTypeName(name)
         } else {
             let siblingName = allocateNestedName(
-                specTypeName(name), origin: origin, siblingClaims: siblingClaims,
+                registersTopLevel ? topLevelBaseName(name, origin: origin) : specTypeName(name), origin: origin, siblingClaims: siblingClaims,
                 scope: currentParentId, inlineTypes: inlineTypes
             ) { base in
                 nestsInSchema
@@ -711,7 +848,7 @@ public struct CodegenModelBuilder {
                     if case .union(_, let existingVariants, let existingDisc) = existing.type,
                        structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key,
                        existing.shortName != unionName {
-                        let ref: ResolvedType = .typeReference(name: existing.shortName)
+                        let ref: ResolvedType = .typeReference(name: existing.sharedName ?? existing.shortName)
                         return hasNullMember ? .nullable(inner: ref) : ref
                     }
                 }
@@ -722,8 +859,11 @@ public struct CodegenModelBuilder {
                     InlineTypeEntry(id: myId, shortName: unionName, type: resolved, parentId: nil),
                     allEntries: inlineTypes
                 )
-                registerTopLevel(name: unionName, type: node.type, into: &typeDefinitions, declaredNames: &declaredNames)
-                return hasNullMember ? .nullable(inner: node.type) : node.type
+                let type = claimVariantStructs(
+                    of: node.type, componentSchemas: componentSchemas, declaredNames: &declaredNames
+                )
+                registerTopLevel(name: unionName, type: type, into: &typeDefinitions, declaredNames: &declaredNames)
+                return hasNullMember ? .nullable(inner: type) : type
             } else {
                 inlineTypes.append(InlineTypeEntry(
                     id: myId,
@@ -825,6 +965,49 @@ public struct CodegenModelBuilder {
         )
     }
 
+    /// Claims the variant structs a top-level union declares beside it. A variant whose name another top-level
+    /// type has, or another union's differently shaped variant has, is renamed after its union, as on Dart
+    /// (`Notification.event`'s `orderStatus` arm → `NotificationEventOrderStatus` beside `OrderStatus`), so neither
+    /// declaration replaces the other.
+    private func claimVariantStructs(
+        of type: ResolvedType, componentSchemas: [String: TypeRef], declaredNames: inout TopLevelNames
+    ) -> ResolvedType {
+        guard case .union(let unionName, let variants, let discriminator) = type else { return type }
+        var renamed: [String: String] = [:]
+        let claimed = variants.map { variant -> UnionVariant in
+            let declaresStruct = (!variant.fields.isEmpty || variant.additionalPropertiesType != nil
+                || variant.embeddedUnion != nil || !variant.nestedTypes.isEmpty)
+                && variant.payloadTypeName == nil && variant.valueType == nil
+            guard declaresStruct else { return variant }
+            let shape = structuralKeyOfUnion(variants: [variant], discriminator: nil)
+            func isFree(_ name: String) -> Bool {
+                if let existing = declaredNames.variantStruct(named: name) { return existing == shape }
+                return componentSchemas[name] == nil && !declaredNames.contains(name)
+                    && declaredNames.inlineType(named: name) == nil && name != unionName
+            }
+            var name = variant.name
+            if !isFree(name) {
+                let base = unionName + variant.name
+                name = base
+                var suffix = 2
+                while !isFree(name) {
+                    name = "\(base)_\(suffix)"
+                    suffix += 1
+                }
+                renamed[variant.name] = name
+            }
+            declaredNames.claimVariantStruct(name, shape: shape)
+            return name == variant.name ? variant : variant.with(name: name)
+        }
+        guard !renamed.isEmpty else { return type }
+        let renamedDiscriminator = discriminator.map { disc in
+            DiscriminatorInfo(
+                fieldName: disc.fieldName, variants: disc.variants.mapValues { renamed[$0] ?? $0 }, kind: disc.kind
+            )
+        }
+        return .union(name: unionName, variants: claimed, discriminator: renamedDiscriminator)
+    }
+
     private func registerTopLevel(
         name: String,
         type: ResolvedType,
@@ -894,10 +1077,20 @@ public struct CodegenModelBuilder {
             // Use a variant-scoped parent ID for inline types found inside this variant's fields
             let variantParentId: String? = currentParentId.map { "\($0):variant:\(earlyVariantName)" }
 
+            // Within a schema, an enum or union declared at the top level for a discriminated variant's field is
+            // named after the variant and its union, as on Dart (`Notification.payload`'s `email` arm's
+            // `priority` → `EmailNotificationPayloadPriority`). A boolean arm is named after its field and value.
+            var memberPrefix = parentSchemaName
+            if parentSchemaName != nil, discriminator != nil, refName == nil, case .inlineObject = member {
+                let isBoolean = discriminator?.kind == .boolean
+                let suffix = unionName.hasSuffix("Input") ? "Input" : unionName
+                memberPrefix = isBoolean ? earlyVariantName : earlyVariantName + suffix
+            }
+
             let resolvedMember = resolveType(
                 member,
                 name: resolveName,
-                parentSchemaName: parentSchemaName,
+                parentSchemaName: memberPrefix,
                 componentSchemas: componentSchemas,
                 typeDefinitions: &typeDefinitions,
                 declaredNames: &declaredNames,

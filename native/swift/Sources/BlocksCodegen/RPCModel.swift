@@ -110,12 +110,16 @@ struct ContentDescriptor {
     let schema: TypeRef
     let required: Bool
     let description: String?
+    /// The name the spec gives a union parameter's type (`x-blocks-type-name`): the TypeScript alias it's
+    /// declared as, like the Auth block's `AuthActionInput`. Nil for any other schema.
+    let typeName: String?
 
-    init(name: String, schema: TypeRef, required: Bool = false, description: String? = nil) {
+    init(name: String, schema: TypeRef, required: Bool = false, description: String? = nil, typeName: String? = nil) {
         self.name = name
         self.schema = schema
         self.required = required
         self.description = description
+        self.typeName = typeName
     }
 }
 

@@ -20,9 +20,9 @@
  * - Version 1, the `store.json` of `KVStore` before it took over
  *   `DistributedTable`: an object of key to JSON string, or of key to
  *   `{ value, ttl }`. It has no version field. The loader converts it, and
- *   first keeps a copy of the file as it was (`store.json.bak`): the store
+ *   first keeps a copy of the file as it was (`store.json.bak`). The store
  *   writes `store.json` again in the current format, and `LegacyKVStore` reads
- *   the items of the release from that copy.
+ *   the items of release 0.4.0 from that copy.
  * - The `data.json` of `DistributedTable`: an array of `[serializedKey, item]`
  *   pairs. The loader reads it only when the directory has no `store.json`,
  *   and converts it.
@@ -31,7 +31,7 @@
  * the key checks, the merge of the key into the value, and the layout checks.
  * It is all or nothing. A file in any other shape, or a file with an entry
  * that does not convert, is renamed to a `.bak` file and reported once at warn
- * level, and the store starts empty. The mock does not write over a file that
+ * level. The store then starts empty. The mock does not write over a file that
  * it cannot read.
  */
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -197,22 +197,23 @@ function backupPath(path: string): string {
 // ── The data file of a release up to 0.4.0, for `LegacyKVStore` ─────────────
 
 /**
- * Load the data file of a store of a release up to 0.4.0 as the items of that
+ * Load the data file of a store of release 0.4.0 or earlier as the items of that
  * release, `{ pk, value: <JSON text>, ttl? }`, in key order.
  *
  * The file is `store.json`, if it is a version 1 file. If a `KVStore` of this
  * release loaded the directory first, with the old line of the app unchanged,
- * `store.json` is not that file any more: the loader converted it, or it could
- * not convert it and set it aside. In both cases the file of the release is a
- * copy, `store.json.bak`, and this function reads the copy. What that
- * `KVStore` wrote to the converted file is not read.
+ * `store.json` is not that file any more. The loader converted it, or it could
+ * not convert it and set it aside. In both cases the file of release 0.4.0 is a
+ * copy, `store.json.bak`, and this function reads the copy. What that `KVStore`
+ * wrote to the converted file is not read.
  *
- * An entry is read as the release reads it: a JSON string, or `{ value, ttl }`.
- * Any other entry is left out. Expired items stay, so `includeExpired` works.
+ * An entry is read as release 0.4.0 reads it: a JSON string, or
+ * `{ value, ttl }`. Any other entry is left out. Expired items stay, so
+ * `includeExpired` works.
  *
- * This function does not write. When the directory holds a data file but no
- * file of a release, it reports that once at warn level, and the store reads
- * as empty.
+ * This function does not write. When the directory holds a data file but no file
+ * of release 0.4.0, it reports that once at warn level, and the store reads as
+ * empty.
  */
 export function loadReleaseFile(dir: string, log: Pick<ChildLogger, 'warn'>, context: Record<string, unknown>): Item[] {
 	const candidates = releaseFileCandidates(dir);

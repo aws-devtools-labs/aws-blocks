@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum DoAction {
 
-        public struct Add: Codable {
+        public struct Add: Codable, Sendable {
             public let value: Double
 
             public init(value: Double) {
@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Remove: Codable {
+        public struct Remove: Codable, Sendable {
             public let id: String
 
             public init(id: String) {
@@ -39,7 +39,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case add(Add)
             case remove(Remove)
 
@@ -71,7 +71,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

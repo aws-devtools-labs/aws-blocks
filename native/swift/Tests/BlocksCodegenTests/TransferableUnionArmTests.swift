@@ -83,7 +83,7 @@ final class TransferableUnionArmTests: XCTestCase {
         let output = try generate(methods: [method("openFeed", result: anyOf(channel(object(["text": string])), failure))])
 
         assertContains(output.api, "case result_Variant0(RealtimeChannel<Result_Variant0Message>)")
-        assertContains(output.api, "public struct Result_Variant0Message: Codable {")
+        assertContains(output.api, "public struct Result_Variant0Message: Codable, Sendable {")
     }
 
     func testDiscriminatedUnionTriesATransferableArmOnlyWithoutTheDiscriminator() throws {

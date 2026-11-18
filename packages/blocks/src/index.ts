@@ -304,29 +304,30 @@ export type {
  * string-keyed store for caches, flags, sessions and user preferences. With a
  * `schema` and a `key` it holds records you list or query as a collection
  * (todos, orders, messages) with composite keys, range queries and batch
- * operations; add `indexes` to read the same records by other fields. Supports
- * Zod/Valibot schemas for type-safe validation and conditional writes. Zero
+ * operations. Add `indexes` to read the same records by other fields. Supports
+ * Zod and Valibot schemas for type-safe validation and conditional writes. Zero
  * cost at rest, scales automatically. Use `Database` when you need SQL
- * JOINs/transactions.
+ * JOINs or transactions.
  *
  * Package: `@aws-blocks/bb-kv-store`
  * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
  */
 /**
- * **The store of a `KVStore` release up to 0.4.0, for an upgrade.**
+ * **The store of `KVStore` release 0.4.0 or earlier, for an upgrade.**
  *
  * It has the data methods of that store over its table: `get`, `put`,
- * `delete`, and `scan`. Use it only to move the data of an app that has a
- * `KVStore` from such a release: change the class on the line of the old
- * store, keep its id and its options, add a `KVStore` with a new id, and copy
- * the items in your own code. For new data, use `KVStore`.
+ * `delete`, and `scan`. Use it only to migrate the data of an app that has a
+ * `KVStore` from release 0.4.0 or earlier: change the class on the line of the old
+ * store, keep its id and its options, add a `KVStore` with a new id, and
+ * migrate the data in your own code, however is appropriate for your app. For
+ * new data, use `KVStore`.
  *
  * Package: `@aws-blocks/bb-kv-store`
  * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
  *
- * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
- *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
- *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
+ *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the data is in the new store. The steps are in the README section "Upgrade from release
  *   0.4.0 or earlier":
  *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  */

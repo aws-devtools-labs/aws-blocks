@@ -37,6 +37,17 @@ struct OpenRPCSpec: Decodable {
         let name: String
         let required: Bool?
         let schema: JSONSchema
+        /// The type alias a union parameter is declared as (`x-blocks-type-name` on its `oneOf`, e.g.
+        /// `AuthActionInput`), so every namespace that takes it can share one type of that name.
+        let typeName: String?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: ParamCodingKeys.self)
+            self.name = try container.decode(String.self, forKey: .name)
+            self.required = try container.decodeIfPresent(Bool.self, forKey: .required)
+            self.schema = try container.decode(JSONSchema.self, forKey: .schema)
+            self.typeName = (try? container.decode(ParamTypeNameHint.self, forKey: .schema))?.typeName
+        }
     }
 
     struct Result: Decodable {
@@ -395,5 +406,19 @@ struct RawJSON: Decodable {
         } else {
             self.encodedString = "null"
         }
+    }
+}
+
+/// The keys `OpenRPCSpec.Param` decodes. Top-level so the types stay within SwiftLint's nesting limit.
+private enum ParamCodingKeys: String, CodingKey {
+    case name, required, schema
+}
+
+/// The `x-blocks-type-name` hint on a parameter's schema, read beside the schema itself.
+private struct ParamTypeNameHint: Decodable {
+    let typeName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case typeName = "x-blocks-type-name"
     }
 }

@@ -18,8 +18,10 @@
 # directory, as a library module for the package's minimum macOS. Each golden is
 # then compiled and linked as a separate library module that imports it, the
 # way an app that keeps its generated client in its own module builds it. The
-# `public` surface, access control and cross-module rules all apply. Swift 5
-# language mode, as in Package.swift.
+# `public` surface, access control and cross-module rules all apply. A golden
+# compiles in Swift 6 language mode, so a `Sendable` it claims but can't keep is
+# an error, not an advisory warning; BlocksRuntime and the stubs compile in
+# Swift 5 mode, as in Package.swift.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,6 +32,7 @@ read -r -a SWIFTC_CMD <<< "${SWIFTC:-xcrun swiftc}"
 # Package.swift: `platforms: [.iOS(.v16), .macOS(.v13)]`.
 TARGET="$(uname -m)-apple-macos13.0"
 COMMON=(-swift-version 5 -target "$TARGET" -parse-as-library)
+GOLDEN=(-swift-version 6 -target "$TARGET" -parse-as-library)
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -91,7 +94,7 @@ for dir in "$FIXTURES_DIR"/*/swift; do
   sources=("$dir/Api.swift")
   # Models.swift is empty when the spec has no component schemas.
   [ -s "$dir/Models.swift" ] && sources=("$dir/Models.swift" "${sources[@]}")
-  if "${SWIFTC_CMD[@]}" "${COMMON[@]}" -module-name "$module" -emit-library -emit-module \
+  if "${SWIFTC_CMD[@]}" "${GOLDEN[@]}" -module-name "$module" -emit-library -emit-module \
       -emit-module-path "$out/$module.swiftmodule" -o "$out/lib$module.dylib" \
       -I "$WORK/runtime" -L "$WORK/runtime" -lBlocksRuntime ${stub_flags[@]+"${stub_flags[@]}"} \
       "${sources[@]}" > "$out/compile.log" 2>&1; then

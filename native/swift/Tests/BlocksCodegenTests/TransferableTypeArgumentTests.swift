@@ -62,7 +62,7 @@ final class TransferableTypeArgumentTests: XCTestCase {
         assertNotContains(output.api, "RealtimeChannel<ResultMessage>")
         // The body spells the qualified name too.
         assertContains(output.api, "return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)")
-        assertContains(output.api, "public enum GetChannel {\n\n        public struct ResultMessage: Codable {")
+        assertContains(output.api, "public enum GetChannel {\n\n        public struct ResultMessage: Codable, Sendable {")
     }
 
     func testChannelWhoseInlineMessageHoldsAnotherInlineType() throws {

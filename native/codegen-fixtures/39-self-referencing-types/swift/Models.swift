@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Category: Codable {
+public nonisolated struct Category: Codable, Sendable {
     public let name: String
     public let products: [Product]
 
@@ -11,7 +11,7 @@ public nonisolated struct Category: Codable {
     }
 }
 
-public nonisolated struct Comment: Codable {
+public nonisolated struct Comment: Codable, Sendable {
     public let replies: [Comment]?
     public let text: String
 
@@ -32,7 +32,7 @@ public nonisolated struct Comment: Codable {
     }
 }
 
-public nonisolated struct Product: Codable {
+public nonisolated struct Product: Codable, Sendable {
     public let categories: [Category]
     public let sku: String
 
@@ -42,7 +42,7 @@ public nonisolated struct Product: Codable {
     }
 }
 
-public nonisolated struct TreeNode: Codable {
+public nonisolated struct TreeNode: Codable, Sendable {
     public let byName: [String: TreeNode]?
     public let children: [TreeNode]
     public let label: String

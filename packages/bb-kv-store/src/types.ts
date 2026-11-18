@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared types for KVStore. Imported by mock, aws, cdk, and browser entry points.
- * This file has zero runtime dependencies — types only.
+ * Shared types for KVStore. Imported by mock, aws, cdk, and browser entry
+ * points. This file has zero runtime dependencies and holds types only.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -52,10 +52,10 @@ export type NumberField<In, Out> =
 /**
  * The declared key of a store: the fields of the value that form it.
  *
- * A key field is a required field of the schema that holds a string or a
- * number. DynamoDB keys are compound by nature — a partition key and an
- * optional sort key that together identify an item — so the key of a store
- * with a `key` option is an object with exactly these fields.
+ * A key field is a required field of the schema that holds a string or a number.
+ * A DynamoDB key is compound: a partition key and an optional sort key together
+ * identify an item. So the key of a store with a `key` option is an object with
+ * exactly these fields.
  */
 export interface KeyConfig<In, Out> {
 	/** Field of the value used as the partition key. Must be a required string or number field of the schema. */
@@ -65,9 +65,9 @@ export interface KeyConfig<In, Out> {
 }
 
 /**
- * One secondary index: the fields of the value that form its key. An index
- * field can be optional in the schema — an index holds an item only when each
- * indexed field is present, is not an empty string, and has the declared type.
+ * One secondary index: the fields of the value that form its key. An index field
+ * can be optional in the schema. An index holds an item only when each indexed
+ * field is present, is not an empty string, and has the declared type.
  */
 export interface IndexConfig<In, Out> {
 	/** Field of the value used as the index partition key. */
@@ -99,8 +99,8 @@ export type ValueOf<T, K> = [K] extends [undefined]
 	: Omit<T, FieldsOf<K>> & { [F in FieldsOf<K> & keyof T]?: T[F] };
 
 /**
- * One entry of a `query` or `scan`. `expiresAt` is present when the item has
- * an expiry, in Unix epoch seconds — a copy job passes it back to `put`.
+ * One entry of a `query` or `scan`. `expiresAt` is present when the item has an
+ * expiry, in Unix epoch seconds. A copy job passes it back to `put`.
  */
 export interface Entry<T, K> {
 	key: KeyOf<T, K>;
@@ -124,14 +124,14 @@ export type RecordPart<T> = T extends readonly unknown[] ? never : T extends obj
 export type OtherPart<T> = T extends readonly unknown[] ? T : T extends object ? never : T;
 
 /**
- * Expiry options for a write. `ttlSeconds` and `expiresAt` exclude each other;
- * passing both throws `ValidationFailedException`.
+ * Expiry options for a write. `ttlSeconds` and `expiresAt` exclude each other. A
+ * call that passes both throws `ValidationFailedException`.
  */
 export type Expiry =
 	| {
 			/**
-			 * Expire this item `ttlSeconds` from now (relative). Must be a finite
-			 * number greater than zero; fractional values round up to the next second.
+			 * Expire this item `ttlSeconds` from now (relative). Must be a finite number
+			 * greater than zero. A fractional value rounds up to the next second.
 			 *
 			 * @example
 			 * ```typescript
@@ -143,10 +143,10 @@ export type Expiry =
 	  }
 	| {
 			/**
-			 * Expire this item at an absolute point in time — either a `Date` or a Unix
-			 * epoch timestamp **in seconds** (the DynamoDB TTL unit). Values that look
-			 * like epoch milliseconds are rejected rather than silently stored as a
-			 * year-5138 expiry.
+			 * Expire this item at an absolute point in time: a `Date`, or a Unix epoch
+			 * timestamp **in seconds** (the DynamoDB TTL unit). A value that looks like
+			 * epoch milliseconds is rejected. Otherwise it would be stored as an expiry in
+			 * the year 5138, with no error.
 			 *
 			 * @example
 			 * ```typescript
@@ -159,19 +159,20 @@ export type Expiry =
 
 /**
  * The value check of a condition. `ifFieldEquals` compares fields of an object
- * value; `ifValueEquals` compares a value that is not an object (a string, a
- * number, an array, ...). Each is available only for the matching part of the
- * value type, so `ifValueEquals` with an object value is a compile error.
+ * value. `ifValueEquals` compares a value that is not an object, such as a
+ * string, a number, or an array. Each is available only for the matching part of
+ * the value type, so `ifValueEquals` with an object value is a compile error.
  */
 export type ValueCheck<T> = ([RecordPart<T>] extends [never]
 	? { ifFieldEquals?: undefined }
 	: {
 			/**
-			 * Only write if every listed field of the current value equals the given
-			 * value (AND semantics) — optimistic locking / compare-and-swap on an
-			 * object value, typically with a `version` field. Needs at least one
-			 * field; an empty object throws `InvalidQueryException`. Nested values
-			 * compare structurally (object key order does not matter; array order does).
+			 * Only write if every listed field of the current value equals the given value
+			 * (AND semantics). This is optimistic locking, or compare-and-swap, on an object
+			 * value, typically with a `version` field. Needs at least one field. An empty
+			 * object throws `InvalidQueryException`. Nested values compare structurally: the
+			 * order of the keys of an object does not matter, and the order of an array
+			 * does.
 			 */
 			ifFieldEquals?: AtLeastOne<RecordPart<T>>;
 		}) &
@@ -179,10 +180,9 @@ export type ValueCheck<T> = ([RecordPart<T>] extends [never]
 		? { ifValueEquals?: undefined }
 		: {
 				/**
-				 * Only write if the current value equals this value — optimistic
-				 * locking / compare-and-swap on a value that is not an object. An
-				 * object value uses `ifFieldEquals` instead; passing an object here
-				 * throws `InvalidQueryException`.
+				 * Only write if the current value equals this value. This is optimistic locking,
+				 * or compare-and-swap, on a value that is not an object. An object value uses
+				 * `ifFieldEquals` instead. An object passed here throws `InvalidQueryException`.
 				 */
 				ifValueEquals?: OtherPart<T>;
 			});
@@ -190,10 +190,10 @@ export type ValueCheck<T> = ([RecordPart<T>] extends [never]
 /**
  * Conditions accepted by `put`.
  *
- * When BOTH `ifNotExists` and a value check are set they compose with OR:
- * the write succeeds if the key is absent OR its current value matches — the
- * optimistic "create it, or update it only if unchanged" pattern. It fails
- * only when the key exists AND the value differs.
+ * When BOTH `ifNotExists` and a value check are set they compose with OR: the
+ * write succeeds if the key is absent OR its current value matches. This is the
+ * optimistic "create it, or update it only if unchanged" pattern. The write
+ * fails only when the key exists AND the value differs.
  */
 export type ConditionalWriteOptions<T = unknown> = {
 	/** Only write if the key does not already exist. */
@@ -201,19 +201,19 @@ export type ConditionalWriteOptions<T = unknown> = {
 } & ValueCheck<T>;
 
 /**
- * Options accepted by `put`. A superset of {@link ConditionalWriteOptions} —
+ * Options accepted by `put`. A superset of {@link ConditionalWriteOptions}, so
  * every existing `put(key, value, { ifNotExists })` call remains valid.
  *
- * `ttlSeconds` and `expiresAt` are mutually exclusive; passing both throws
- * `ValidationFailedException`. DynamoDB TTL is always on for a table the block
- * creates, so an expired item is deleted in the background; reads hide expired
- * items regardless.
+ * `ttlSeconds` and `expiresAt` are mutually exclusive. A call that passes both
+ * throws `ValidationFailedException`. DynamoDB TTL is always on for a table the
+ * block creates, so an expired item is deleted in the background. Reads hide
+ * expired items regardless.
  */
 export type PutOptions<T = unknown> = Expiry & ConditionalWriteOptions<T>;
 
 /**
  * Conditions accepted by `delete`. `ifExists` and a value check compose with
- * AND — both must hold.
+ * AND, so both must hold.
  */
 export type ConditionalDeleteOptions<T = unknown> = {
 	/** Only delete if the key exists. Throws ConditionalCheckFailedException otherwise. */
@@ -251,12 +251,12 @@ export interface ScanOptions {
 	/** The position to start after, from the `cursor` of an earlier `scan`. */
 	cursor?: string;
 	/**
-	 * Yield items whose expiry has passed but which DynamoDB's reaper has not
-	 * deleted yet. Defaults to `false`, so a scan sees only live items.
+	 * Yield items whose expiry has passed but which DynamoDB has not deleted yet.
+	 * Defaults to `false`, so a scan sees only live items.
 	 *
-	 * Enable this only for maintenance sweeps that must act on every row still
-	 * physically present — deleting the remains of expired items, for example.
-	 * Reads that answer "is this still valid?" must leave it off.
+	 * Enable this only for a maintenance job that must act on every row still
+	 * physically present, for example a job that deletes the remains of expired
+	 * items. Reads that answer "is this still valid?" must leave it off.
 	 *
 	 * @example
 	 * ```typescript
@@ -271,8 +271,8 @@ export interface ScanOptions {
 // ── Query ───────────────────────────────────────────────────────────────────
 
 /**
- * Sort key condition — exactly one of the comparisons. `beginsWith` is for a
- * string field only. DynamoDB allows one sort-key condition per query; use
+ * Sort key condition: exactly one of the comparisons. `beginsWith` is for a
+ * string field only. DynamoDB allows one sort-key condition per query. Use
  * `between` for a range.
  */
 export type SortCondition<V> = OneOf<
@@ -287,7 +287,7 @@ export type SortCondition<V> = OneOf<
 	} & ([V] extends [string] ? { beginsWith: string } : {})
 >;
 
-/** Partition key condition — DynamoDB requires an exact match on the partition key in a Query. */
+/** Partition key condition. DynamoDB requires an exact match on the partition key in a Query. */
 export type PartitionCondition<V> = { equals: V };
 
 /**
@@ -320,9 +320,9 @@ export interface Page {
 
 /**
  * What `query` and `scan` return: an async iterable of entries with one more
- * property, `cursor` — the position after the last entry that the iterator
- * returned. It is `undefined` when the read reached the end. Pass it to the
- * same call to read the next page, in this request or in a later one.
+ * property, `cursor`. The cursor is the position after the last entry that the
+ * iterator returned. It is `undefined` when the read reached the end. Pass it to
+ * the same call to read the next page, in this request or in a later one.
  */
 export interface Results<T, K> extends AsyncIterable<Entry<T, K>> {
 	readonly cursor: string | undefined;
@@ -357,15 +357,21 @@ export type QueryOptions<T, K, I> =
  * Controls how reads reconcile a stored item with the schema. See
  * {@link SchemaOptions.readValidation} for full semantics.
  *
- * - `'coerce'` (default): pass through the schema, return coerced output; on
- *   validation failure return the raw value + warn (never throws).
- * - `'strict'`: validate and throw `ValidationFailed` on any non-conforming item.
+ * - `'coerce'` (default): pass through the schema and return the coerced output.
+ *   On validation failure, return the raw value with a warning (never throws).
+ * - `'strict'`: validate and throw `ValidationFailedException` on any
+ *   non-conforming item.
  * - `'off'`: return the raw stored value with no validation.
  */
 export type ReadValidationMode = 'off' | 'coerce' | 'strict';
 
 // ── Options ─────────────────────────────────────────────────────────────────
 
+/**
+ * A reference to an existing DynamoDB table, produced by
+ * `KVStore.fromExisting`. Pass it as the `table` option to use that table
+ * instead of creating one.
+ */
 export interface ExternalTableRef {
 	readonly __brand: 'ExternalTableRef';
 	readonly tableName: string;
@@ -373,9 +379,9 @@ export interface ExternalTableRef {
 
 /**
  * A reference to an existing customer-managed KMS key, produced by
- * `KVStore.fromKmsKey`. Pass it as the `encryption` option to encrypt the
- * table with a CMK you already own — letting several tables share one key
- * instead of each provisioning its own dedicated key.
+ * `KVStore.fromKmsKey`. Pass it as the `encryption` option to encrypt the table
+ * with a CMK you already own. Several tables can then share one key, and no
+ * table provisions its own dedicated key.
  */
 export interface ExternalKmsKeyRef {
 	readonly __brand: 'ExternalKmsKeyRef';
@@ -385,53 +391,53 @@ export interface ExternalKmsKeyRef {
 /** Table options that apply to every form of a store. */
 export interface TableOptions {
 	/**
-	 * How hard the table is to destroy — a single knob spanning DynamoDB
-	 * deletion protection and the CloudFormation removal policy, which together
-	 * answer one question: "can this table be destroyed?"
+	 * How hard the table is to destroy. One option covers DynamoDB deletion
+	 * protection and the CloudFormation removal policy, which together answer one
+	 * question: "can this table be destroyed?"
 	 *
 	 * - `'disposable'`: `RemovalPolicy.DESTROY`, deletion protection **off**.
-	 *   Deleting the stack deletes the table. The **sandbox default** — keeps
-	 *   `sandbox:destroy` a one-command teardown.
-	 * - `'retained'`: `RemovalPolicy.RETAIN`, deletion protection **off**.
-	 *   Deleting the stack orphans (keeps) the table, but a direct
-	 *   `DeleteTable`/console delete still works. Use when you want the data to
-	 *   survive stack teardown without blocking intentional deletes.
-	 * - `'locked'`: `RemovalPolicy.RETAIN` **and** deletion protection **on**.
-	 *   The table survives stack deletion and DynamoDB refuses a direct delete
-	 *   until protection is turned off. The **production default**.
+	 *   Deleting the stack deletes the table. The **sandbox default**, so
+	 *   `sandbox:destroy` removes everything with one command.
+	 * - `'retained'`: `RemovalPolicy.RETAIN`, deletion protection **off**. Deleting
+	 *   the stack keeps the table in the account, but a direct `DeleteTable` call or
+	 *   a console delete still works. Use when you want the data to survive stack
+	 *   teardown without blocking intentional deletes.
+	 * - `'locked'`: `RemovalPolicy.RETAIN` **and** deletion protection **on**. The
+	 *   table survives stack deletion and DynamoDB refuses a direct delete until
+	 *   protection is turned off. The **production default**.
 	 *
 	 * When omitted, removal policy and deletion protection follow the stack-wide
-	 * `defaults` (`BlocksPresets.production` ≈ `'locked'`, `BlocksPresets.sandbox`
-	 * ≈ `'disposable'`). A per-block value always wins.
+	 * `defaults`. `BlocksPresets.production` is close to `'locked'`, and
+	 * `BlocksPresets.sandbox` is close to `'disposable'`. A per-block value always
+	 * wins.
 	 *
-	 * Replaces the separate `deletionProtection` + `removalPolicy` booleans:
-	 * those two knobs could encode the contradictory `deletionProtection: true`
-	 * + `removalPolicy: 'destroy'` state, which wedges stack deletion (CFN
-	 * issues `DeleteTable`, DynamoDB refuses it, the stack lands in
-	 * `DELETE_FAILED`). A single enum makes that state unrepresentable.
+	 * Replaces the separate `deletionProtection` and `removalPolicy` options. Those
+	 * two options could encode the contradictory state `deletionProtection: true`
+	 * with `removalPolicy: 'destroy'`, which blocks stack deletion: CloudFormation
+	 * issues `DeleteTable`, DynamoDB refuses it, and the stack ends in
+	 * `DELETE_FAILED`. A single enum cannot express that state.
 	 *
 	 * Ignored by the mock and browser runtimes (no AWS resource to protect).
 	 */
 	protection?: 'disposable' | 'retained' | 'locked';
 	/**
-	 * DynamoDB Point-in-Time Recovery (continuous backups) — restore the table
-	 * to any second within a retention window, protecting against accidental
-	 * writes/deletes and logical corruption.
+	 * DynamoDB Point-in-Time Recovery (continuous backups). You can restore the
+	 * table to any second within a retention window, which protects against
+	 * accidental writes, accidental deletes, and logical corruption.
 	 *
-	 * A single knob, since the recovery window only means anything when PITR is
-	 * on:
-	 * - `true` — enable PITR with the default 35-day window.
-	 * - `false` — disable PITR.
-	 * - `{ retentionDays: n }` — enable PITR and keep `n` days of continuous
-	 *   backups (**1–35**). A shorter window reduces backup-storage cost at the
-	 *   expense of how far back you can restore.
+	 * One option, since the recovery window only means anything when PITR is on:
+	 * - `true`: enable PITR with the default 35-day window.
+	 * - `false`: disable PITR.
+	 * - `{ retentionDays: n }`: enable PITR and keep `n` days of continuous backups
+	 *   (**1 to 35**). A shorter window reduces backup-storage cost, and you cannot
+	 *   restore as far back.
 	 *
-	 * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
-	 * from `BlocksPresets` — on under `production`, off under `sandbox`). A
-	 * per-block value always wins.
+	 * When omitted, the stack-wide default applies: `defaults.pointInTimeRecovery`
+	 * from `BlocksPresets`, which is on under `production` and off under `sandbox`.
+	 * A per-block value always wins.
 	 *
-	 * Note: PITR bills for continuous-backup storage (per GB-month of table
-	 * size), so it is not free on large tables.
+	 * Note: PITR bills for continuous-backup storage (per GB-month of table size),
+	 * so it is not free on large tables.
 	 *
 	 * Ignored by the mock and browser runtimes (no AWS resource to back up).
 	 */
@@ -439,21 +445,21 @@ export interface TableOptions {
 	/**
 	 * Server-side encryption at rest.
 	 *
-	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
-	 *   key. Auditable via CloudTrail with no per-key monthly charge.
-	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
-	 *   key (CMK) for this table, giving you full control over rotation and key
-	 *   policy. Incurs standard KMS key + request charges — and note this mints
-	 *   a **separate key per table**, so a dozen tables means a dozen keys. The
-	 *   dedicated key is retained on stack teardown (not auto-deleted), so each
-	 *   torn-down stack leaves its key behind (its monthly key charge plus
-	 *   rotation); a bring-your-own key via `KVStore.fromKmsKey` avoids
-	 *   this per-stack key sprawl.
-	 * - a {@link ExternalKmsKeyRef} from `KVStore.fromKmsKey`:
-	 *   uses an **existing** CMK you already own, so several tables can share one
-	 *   key (and one monthly charge) instead of each provisioning its own.
+	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS key.
+	 *   Auditable through CloudTrail with no per-key monthly charge.
+	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS key
+	 *   (CMK) for this table, giving you full control over rotation and key policy.
+	 *   Incurs standard KMS key and request charges. This creates a **separate key
+	 *   per table**, so a dozen tables means a dozen keys. The dedicated key follows
+	 *   the removal policy of its table. The key of a retained table stays in the
+	 *   account after stack teardown and keeps its monthly charge. The key of a
+	 *   `'disposable'` table is scheduled for deletion with the table. To use one
+	 *   key for several tables, pass a key from `KVStore.fromKmsKey`.
+	 * - a {@link ExternalKmsKeyRef} from `KVStore.fromKmsKey`: uses an **existing**
+	 *   CMK you already own, so several tables can share one key (and one monthly
+	 *   charge) instead of each provisioning its own.
 	 *
-	 * DynamoDB is always encrypted at rest; this only selects the key.
+	 * DynamoDB is always encrypted at rest. This option only selects the key.
 	 *
 	 * @example
 	 * ```ts
@@ -469,21 +475,20 @@ export interface TableOptions {
 	 */
 	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
 	/**
-	 * Wrap an existing DynamoDB table instead of creating one. Pass the `key`
-	 * option that matches the table's key schema; without `key`, the table must
-	 * have the string partition key `_bkv_pk`. The block does not create,
-	 * change, or delete that table, and it ignores `protection`,
-	 * `pointInTimeRecovery`, and `encryption` for it — you own the table's
-	 * indexes and TTL setting.
+	 * Wrap an existing DynamoDB table instead of creating one. Pass the `key` option
+	 * that matches the table's key schema. Without `key`, the table must have the
+	 * string partition key `_bkv_pk`. The block does not create, change, or delete
+	 * that table, and it ignores `protection`, `pointInTimeRecovery`, and
+	 * `encryption` for it. You own the table's indexes and TTL setting.
 	 */
 	table?: ExternalTableRef;
 	/**
-	 * Optional logger for internal KVStore operations. Accepts a `Logger`
-	 * instance or any `ChildLogger` from `@aws-blocks/bb-logger`.
+	 * Optional logger for internal KVStore operations. Accepts a `Logger` instance
+	 * or any `ChildLogger` from `@aws-blocks/bb-logger`.
 	 *
-	 * When omitted, a default Logger at warn level is created so the
-	 * `readValidation: 'coerce'` fallback warnings surface (silent during
-	 * normal operation).
+	 * When omitted, a default Logger at warn level is created, so the fallback
+	 * warnings of `readValidation: 'coerce'` are logged. It logs nothing during
+	 * normal operation.
 	 *
 	 * @example
 	 * ```typescript
@@ -499,36 +504,36 @@ export interface TableOptions {
 export interface SchemaOptions<In, Out, K, I> {
 	/**
 	 * Runtime schema for value validation on `put`. Accepts any StandardSchemaV1
-	 * implementation (Zod, Valibot, ArkType, etc.). When provided, the value
-	 * types are inferred from the schema: `put` takes the schema's input type and
-	 * a read returns its output type. Required for `key`, `indexes`, and `ttl`.
+	 * implementation, such as Zod, Valibot, or ArkType. When provided, the value
+	 * types are inferred from the schema: `put` takes the schema's input type and a
+	 * read returns its output type. Required for `key`, `indexes`, and `ttl`.
 	 */
 	schema: StandardSchemaV1<In, Out>;
 	/**
-	 * The fields of the value that form the key. Without `key`, the key is a
-	 * string and the table's partition key is the attribute `_bkv_pk`. With
-	 * `key`, the key of the store is an object with exactly these fields, and
-	 * the table uses those attributes as its key schema. A key field is a
-	 * required string or number field of the schema.
+	 * The fields of the value that form the key. Without `key`, the key is a string
+	 * and the table's partition key is the attribute `_bkv_pk`. With `key`, the key
+	 * of the store is an object with exactly these fields, and the table uses those
+	 * attributes as its key schema. A key field is a required string or number field
+	 * of the schema.
 	 *
-	 * A store fixes its key when it creates its table. DynamoDB cannot change
-	 * the key schema of a table, so a changed `key` on a deployed store fails
-	 * the deploy; copy the items to a store with a new id instead.
+	 * A store fixes its key when it creates its table. DynamoDB cannot change the
+	 * key schema of a table, so a changed `key` on a deployed store fails the
+	 * deploy. Copy the items to a store with a new id instead.
 	 */
 	key?: K;
 	/** Global secondary index definitions over fields of the value. Optional. */
 	indexes?: I;
 	/**
-	 * Keep the expiry in this number field of the value instead of the block's
-	 * own `_bkv_ttl` attribute. The field holds a Unix epoch timestamp in
-	 * seconds. A `put` with no expiry option then uses the field of the value;
-	 * a `put` with `ttlSeconds` or `expiresAt` writes the field, before the
-	 * schema validates the value, so the schema validates what is stored. DynamoDB
-	 * automatically deletes items whose TTL attribute value is older than the
-	 * current time, and every read hides an expired item until then.
+	 * Keep the expiry in this number field of the value instead of the block's own
+	 * `_bkv_ttl` attribute. The field holds a Unix epoch timestamp in seconds. A
+	 * `put` with no expiry option then uses the field of the value. A `put` with
+	 * `ttlSeconds` or `expiresAt` writes the field before the schema validates the
+	 * value, so the schema validates what is stored. DynamoDB automatically deletes
+	 * items whose TTL attribute value is older than the current time, and every read
+	 * hides an expired item until then.
 	 *
-	 * Do not change `ttl` on a deployed store: items from before the change
-	 * keep their expiry in the old attribute and stop expiring.
+	 * Do not change `ttl` on a deployed store: items from before the change keep
+	 * their expiry in the old attribute and stop expiring.
 	 *
 	 * @example
 	 * ```typescript
@@ -542,32 +547,36 @@ export interface SchemaOptions<In, Out, K, I> {
 	ttl?: NumberField<In, Out>;
 	/**
 	 * How reads (`get`, `getBatch`, `query`, `scan`) reconcile a stored item with
-	 * the configured `schema`. Writes (`put`/`putBatch`) always validate; this
-	 * governs the read side, which matters after a schema change: a row written
-	 * under an older schema may no longer conform to the current output type.
+	 * the configured `schema`. Writes (`put` and `putBatch`) always validate. This
+	 * option governs the read side, which matters after a schema change: a row
+	 * written under an older schema may no longer conform to the current output
+	 * type.
 	 *
-	 * - **`'coerce'`** (default) — pass each stored item through the schema and
-	 *   return its output. For transform-bearing schemas (e.g. Zod) this fills
-	 *   `.default()`s and narrows types so the value satisfies the output type and
-	 *   the read-modify-write cycle (`get()` → mutate → `put()`) round-trips. **Never
-	 *   throws:** an item that fails validation is returned **as-is** with a
-	 *   warning, keeping drifted/legacy rows readable for migration.
-	 * - **`'strict'`** — validate on read and **throw** `ValidationFailed` on any
-	 *   item that doesn't satisfy the schema. For tables where a mismatch should be
-	 *   treated as corruption/tampering and rejected rather than absorbed. Note
-	 *   this makes a single bad row fail the whole `query`/`scan`/`getBatch`.
-	 * - **`'off'`** — return the raw stored value with no validation (lowest cost).
+	 * - **`'coerce'`** (default): pass each stored item through the schema and
+	 *   return its output. For a schema that transforms its input, such as a Zod
+	 *   schema, this fills `.default()`s and narrows types. The value then satisfies
+	 *   the output type, and a read-modify-write cycle (`get()`, change the value,
+	 *   `put()`) works. **Never throws:** an item that fails validation is returned
+	 *   **as-is** with a warning, so rows from an older schema stay readable for
+	 *   migration.
+	 * - **`'strict'`**: validate on read and **throw** `ValidationFailedException`
+	 *   on any item that doesn't satisfy the schema. For tables where a mismatch
+	 *   should be treated as corruption or tampering and rejected rather than
+	 *   absorbed. Note this makes a single bad row fail the whole `query`, `scan`,
+	 *   or `getBatch`.
+	 * - **`'off'`**: return the raw stored value with no validation (lowest cost).
 	 *   Use for hot paths, data you trust was written through this schema, or to
 	 *   read items you can't yet coerce during a migration.
 	 *
 	 * Defaults to `'coerce'`.
 	 *
 	 * > **Best-effort coercion (validator-dependent).** Coercion relies on the
-	 * > schema *transforming* its input. Zod fills defaults and casts; a check-only
-	 * > Standard Schema validator (some Valibot/ArkType schemas) validates without
-	 * > transforming, so `'coerce'` returns the value unchanged for those — it never
-	 * > invents data. A required field with no default is never fabricated: under
-	 * > `'coerce'` such a row is returned raw + warned; under `'strict'` it throws.
+	 * > schema *transforming* its input. Zod fills defaults and casts. A check-only
+	 * > Standard Schema validator (some Valibot and ArkType schemas) validates
+	 * > without transforming, so `'coerce'` returns the value unchanged for those.
+	 * > It never invents data. A required field with no default is never fabricated:
+	 * > under `'coerce'` such a row is returned raw with a warning, and under
+	 * > `'strict'` the read throws.
 	 *
 	 * @example
 	 * ```typescript
@@ -576,8 +585,8 @@ export interface SchemaOptions<In, Out, K, I> {
 	 *   key: { partitionKey: 'orderId' },
 	 *   // readValidation: 'coerce' is the default
 	 * });
-	 * const order = await orders.get({ orderId: 'o1' }); // legacy row → currency: 'USD'
-	 * await orders.put({ orderId: 'o1' }, { ...order, total: 20 }); // round-trips cleanly
+	 * const order = await orders.get({ orderId: 'o1' }); // a row from the old schema gets currency: 'USD'
+	 * await orders.put({ orderId: 'o1' }, { ...order, total: 20 }); // the value passes validation
 	 * ```
 	 */
 	readValidation?: ReadValidationMode;
@@ -600,14 +609,14 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
 
 /**
  * Constructor options of `LegacyKVStore`: the options that `KVStore` took in
- * the releases up to 0.4.0. Keep the options that the old store had, with
+ * release 0.4.0 or earlier. Keep the options that the old store had, with
  * their values. The block declares the table of the old store from them, and
  * a difference makes CloudFormation change that table.
  */
 export interface LegacyKVStoreOptions<T = string> {
 	/**
 	 * The schema of the old store. It gives the value type `T`, and `put`
-	 * validates a value with it before the write, as in the release. A read
+	 * validates a value with it before the write, as in release 0.4.0. A read
 	 * does not validate.
 	 */
 	schema?: StandardSchemaV1<T>;
@@ -620,7 +629,7 @@ export interface LegacyKVStoreOptions<T = string> {
 	logger?: ChildLogger;
 	/**
 	 * The `removalPolicy` of the old store, if it had one. When omitted, the
-	 * stack-wide `defaults` apply, as in the release (`production` retains the
+	 * stack-wide `defaults` apply, as in release 0.4.0 (`production` retains the
 	 * table, `sandbox` destroys it). It decides what happens to the table when
 	 * you remove the `LegacyKVStore`: a table with `'destroy'` is deleted, and a
 	 * table with `'retain'` stays in the account.
@@ -640,8 +649,8 @@ export interface LegacyKVStoreOptions<T = string> {
 }
 
 /**
- * Options of `LegacyKVStore.put`: the options that `put` took in a release up
- * to 0.4.0.
+ * Options of `LegacyKVStore.put`: the options that `put` took in release
+ * 0.4.0.
  *
  * `ttlSeconds` and `expiresAt` exclude each other. When both `ifNotExists` and
  * `ifValueEquals` are set they compose with OR, as in that release: the write
@@ -658,8 +667,8 @@ export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
 };
 
 /**
- * Conditions of `LegacyKVStore.delete`: the conditions that `delete` took in a
- * release up to 0.4.0. When both are set, both must hold.
+ * Conditions of `LegacyKVStore.delete`: the conditions that `delete` took in
+ * release 0.4.0. When both are set, both must hold.
  */
 export type LegacyKVStoreDeleteOptions<T = unknown> = {
 	/** Only delete if the key exists. */
