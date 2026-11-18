@@ -39,6 +39,7 @@ import kotlinx.serialization.json.put
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Shares one WebSocket per URL between the subscriptions that use it. The URL carries the
@@ -56,6 +57,9 @@ import kotlin.time.Duration.Companion.minutes
  *
  * @param sessionFactory opens a session for a URL instead of the channel's HTTP client
  * @param scope where readers and pings run
+ * @param handshakeTimeout how long opening a socket can take before the collection fails with
+ *   [RealtimeConnectionException]. It covers the whole connect and upgrade, which the open
+ *   socket's own timeout no longer does. The default matches the Swift client.
  * @param pingInterval how often each socket sends `{"action":"ping"}` while it has a
  *   subscription. The server re-checks the socket's subscriptions only on this message (a
  *   protocol-level ping doesn't trigger it), and it also keeps the gateway's 10-minute idle
@@ -65,10 +69,14 @@ internal class WebSocketPool(
     private val sessionFactory: (suspend (String) -> WebSocketSession)? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val pingInterval: Duration = DEFAULT_PING_INTERVAL,
+    private val handshakeTimeout: Duration = DEFAULT_HANDSHAKE_TIMEOUT,
 ) {
     companion object {
         /** Matches the web client's `KEEP_ALIVE_MS`. */
         val DEFAULT_PING_INTERVAL: Duration = 9.minutes
+
+        /** Matches the Swift client's `handshakeTimeout`. */
+        val DEFAULT_HANDSHAKE_TIMEOUT: Duration = 30.seconds
 
         val default = WebSocketPool()
 
@@ -141,10 +149,14 @@ internal class WebSocketPool(
         }.toString()
         try {
             connection.session.send(Frame.Text(subscribeMessage))
-        } catch (e: CancellationException) {
-            withContext(NonCancellable) { release(subscription) }
-            throw e
         } catch (e: Throwable) {
+            // A socket that is closing can close `outgoing` with a CancellationException before
+            // the reader sees `incoming` close. Only a cancelled caller rethrows it; otherwise
+            // the socket is going away, and the collector gets a RealtimeConnectionException.
+            if (e is CancellationException && !currentCoroutineContext().isActive) {
+                withContext(NonCancellable) { release(subscription) }
+                throw e
+            }
             val error = connectionFailed(e)
             withContext(NonCancellable) {
                 fail(connection, error)
@@ -164,12 +176,22 @@ internal class WebSocketPool(
         }
 
         val session = try {
-            sessionFactory?.invoke(url) ?: httpClient.webSocketSession(url) {
-                // The client's socket timeout is for request/response calls. A realtime socket
-                // is quiet for up to the ping interval, and the Darwin engine applies this
-                // value as the WebSocket request's timeout interval, so turn it off here.
-                timeout { socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS }
-            }
+            // withTimeoutOrNull rather than withTimeout: a TimeoutCancellationException is a
+            // CancellationException, and the catch below would pass it on as a silent cancel.
+            withTimeoutOrNull(handshakeTimeout) {
+                sessionFactory?.invoke(url) ?: httpClient.webSocketSession(url) {
+                    // The client's socket timeout is for request/response calls. A realtime
+                    // socket is quiet for up to the ping interval, and the Darwin engine applies
+                    // this value as the WebSocket request's timeout interval, so turn it off
+                    // here. That also removes the engine's bound on the handshake, which
+                    // handshakeTimeout replaces.
+                    timeout { socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS }
+                }
+            } ?: throw RealtimeConnectionException(
+                "Realtime connection failed: no handshake response within $handshakeTimeout",
+            )
+        } catch (e: RealtimeConnectionException) {
+            throw e
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

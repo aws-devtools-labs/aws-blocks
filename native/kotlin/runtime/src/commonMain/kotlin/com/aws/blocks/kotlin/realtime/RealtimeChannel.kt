@@ -80,8 +80,7 @@ class RealtimeChannel<T> internal constructor(
         }
 
         return flow {
-            if (closed.value) return@flow
-            val subscription = pool.subscribe(wsUrl, channel, token, httpClient)
+            val subscription = connectUnlessClosed() ?: return@flow
             try {
                 coroutineScope {
                     val closeWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -100,6 +99,36 @@ class RealtimeChannel<T> internal constructor(
                 withContext(NonCancellable) { pool.release(subscription) }
             }
         }
+    }
+
+    /**
+     * Subscribes through the pool, or returns `null` when [close] runs first, including while
+     * the socket is still opening, so a connecting collection completes normally.
+     */
+    private suspend fun connectUnlessClosed(): WebSocketPool.Subscription? {
+        if (closed.value) return null
+        // Set from the connect rather than returned through a Deferred: a coroutine cancelled
+        // just as it returns drops its result, and the subscription would never be released.
+        var subscription: WebSocketPool.Subscription? = null
+        try {
+            coroutineScope {
+                val connect = launch { subscription = pool.subscribe(wsUrl, channel, token, httpClient) }
+                val closeWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
+                    closed.first { it }
+                    connect.cancel()
+                }
+                connect.join()
+                closeWatcher.cancel()
+            }
+        } catch (e: Throwable) {
+            subscription?.let { withContext(NonCancellable) { pool.release(it) } }
+            throw e
+        }
+        if (closed.value) {
+            subscription?.let { withContext(NonCancellable) { pool.release(it) } }
+            return null
+        }
+        return subscription
     }
 
     /**

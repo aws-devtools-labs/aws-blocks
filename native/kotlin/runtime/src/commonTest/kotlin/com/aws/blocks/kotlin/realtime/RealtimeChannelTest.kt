@@ -24,8 +24,12 @@ import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -39,6 +43,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -87,6 +92,11 @@ class RealtimeChannelTest {
 
         val closed: Boolean get() = sent().any { it is Frame.Close }
 
+        /** Closes `outgoing` the way Ktor does when the server closes the socket. */
+        fun closeOutgoing(cause: Throwable) {
+            outbound.close(cause)
+        }
+
         fun receive(text: String) {
             inbound.trySend(Frame.Text(text))
         }
@@ -97,9 +107,15 @@ class RealtimeChannelTest {
         val sessions = mutableListOf<FakeWebSocketSession>()
         var connectFailure: Throwable? = null
 
+        /** When set, opening a socket waits on this until it completes, like an unanswered upgrade. */
+        var handshake: CompletableDeferred<Unit>? = null
+        var handshakesStarted = 0
+
         val pool = WebSocketPool(
             sessionFactory = {
                 connectFailure?.let { throw it }
+                handshakesStarted++
+                handshake?.await()
                 FakeWebSocketSession().also { sessions += it }
             },
             scope = scope,
@@ -130,15 +146,15 @@ class RealtimeChannelTest {
             """{"type":"message","channel":"$channel","data":{"userId":"$userId"}}"""
     }
 
+    /** The first cause that isn't the recovered copy described on [causes]. */
+    private fun platformCause(error: Throwable): Throwable? =
+        generateSequence(error.cause) { it.cause }.firstOrNull { it !is RealtimeConnectionException }
+
     /**
      * The messages of [error]'s causes. On the JVM, coroutines can rethrow a copy of an
      * exception with a recovered stack trace whose cause is the original, so a test can't
      * compare the cause by identity or by depth.
      */
-    /** The first cause that isn't the recovered copy described on [causes]. */
-    private fun platformCause(error: Throwable): Throwable? =
-        generateSequence(error.cause) { it.cause }.firstOrNull { it !is RealtimeConnectionException }
-
     private fun causes(error: Throwable): List<String?> =
         generateSequence(error.cause) { it.cause }.map { it.message }.toList()
 
@@ -605,11 +621,112 @@ class RealtimeChannelTest {
             pool = WebSocketPool(scope = backgroundScope),
         )
 
-        assertFailsWith<RealtimeConnectionException> { channel.subscribe().toList() }
+        // The engine runs on its own dispatcher, so connect in real time: under virtual time the
+        // handshake timeout would fire before the engine sees the request.
+        withContext(Dispatchers.Default) {
+            assertFailsWith<RealtimeConnectionException> { channel.subscribe().toList() }
+        }
 
         // The client's 60 s default would otherwise apply to the socket, which is quiet for
         // up to the 9-minute ping interval.
         socketTimeout shouldBe HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+    }
+
+    @Test
+    fun `a handshake with no answer fails after 30 seconds`() = runTest {
+        val h = Harness(backgroundScope)
+        h.handshake = CompletableDeferred()
+        val (_, end) = collecting(h.channel().subscribe())
+
+        advanceTimeBy(30.seconds - 1.milliseconds)
+        runCurrent()
+        end.isActive shouldBe true
+
+        advanceTimeBy(1.milliseconds)
+        runCurrent()
+        val error = end.await().shouldBeInstanceOf<RealtimeConnectionException>()
+        error.message shouldBe "Realtime connection failed: no handshake response within 30s"
+        h.pool.connectionCount() shouldBe 0
+    }
+
+    @Test
+    fun `the handshake timeout bounds the WebSocket upgrade through the HTTP client`() = runTest {
+        // An engine that takes the request and never answers, as a server that leaves the
+        // upgrade hanging. The open socket's own timeout is infinite, so only the handshake
+        // timeout can end this. The engine runs on its own dispatcher, so this uses real time
+        // and a short handshake timeout.
+        val reached = CompletableDeferred<Unit>()
+        val engine = MockEngine {
+            reached.complete(Unit)
+            awaitCancellation()
+        }
+        val channel = RealtimeChannel(
+            channel = "c",
+            wsUrl = "wss://example/rt",
+            token = "tok",
+            deserializer = { userId(it) },
+            httpClient = defaultHttpClient(engine),
+            pool = WebSocketPool(scope = backgroundScope, handshakeTimeout = 1.seconds),
+        )
+
+        val error = withContext(Dispatchers.Default) {
+            withTimeout(10.seconds) {
+                assertFailsWith<RealtimeConnectionException> { channel.subscribe().toList() }
+            }
+        }
+
+        reached.isCompleted shouldBe true
+        error.message shouldBe "Realtime connection failed: no handshake response within 1s"
+    }
+
+    @Test
+    fun `close while the socket is opening completes the collection normally`() = runTest {
+        val h = Harness(backgroundScope)
+        h.handshake = CompletableDeferred()
+        val channel = h.channel()
+        val (_, end) = collecting(channel.subscribe())
+        runCurrent()
+        h.handshakesStarted shouldBe 1
+
+        channel.close()
+        runCurrent()
+
+        end.await() shouldBe null
+        h.pool.connectionCount() shouldBe 0
+    }
+
+    @Test
+    fun `close as the handshake finishes completes normally and leaves no socket open`() = runTest {
+        val h = Harness(backgroundScope)
+        val handshake = CompletableDeferred<Unit>()
+        h.handshake = handshake
+        val channel = h.channel()
+        val (_, end) = collecting(channel.subscribe())
+        runCurrent()
+
+        handshake.complete(Unit)
+        channel.close()
+        runCurrent()
+
+        end.await() shouldBe null
+        h.pool.connectionCount() shouldBe 0
+        h.sessions.forEach { it.closed shouldBe true }
+    }
+
+    @Test
+    fun `joining a socket whose outgoing is closing ends with RealtimeConnectionException`() = runTest {
+        val h = Harness(backgroundScope)
+        val (_, first) = collecting(h.channel("a").subscribe())
+        runCurrent()
+
+        // Ktor closes `outgoing` with a CancellationException before the reader sees `incoming` close.
+        h.session.closeOutgoing(CancellationException("WebSocket session closed with code 1001"))
+        val (_, second) = collecting(h.channel("b").subscribe())
+        runCurrent()
+
+        second.await().shouldBeInstanceOf<RealtimeConnectionException>()
+        first.await().shouldBeInstanceOf<RealtimeConnectionException>()
+        h.pool.connectionCount() shouldBe 0
     }
 
     @Test
