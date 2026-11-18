@@ -27,7 +27,7 @@ public nonisolated struct Bundle: Codable {
     }
 }
 
-public nonisolated struct Note: Codable {
+public nonisolated struct Note: Codable, Sendable {
     public let body: String
     public let id: String
 
