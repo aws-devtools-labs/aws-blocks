@@ -348,4 +348,27 @@ final class WebSocketSessionTests: XCTestCase {
         await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
         harness.session.release(wsUrl: url, listener: listener)
     }
+
+    // MARK: - Task handles
+
+    func testASocketThatFailsAtOnceLeavesNoKeepAliveRunning() async throws {
+        // The receive loop can drop the socket before `acquire` returns. The keep-alive must still stop.
+        for _ in 0 ..< 200 {
+            let clock = ManualClock()
+            let session = WebSocketSession(
+                makeSocket: { request in
+                    let socket = FakeRealtimeSocket(request: request)
+                    socket.fail()
+                    return socket
+                },
+                sleep: { try await clock.sleep($0) }
+            )
+            let listener = RecordingListener()
+            try session.acquire(wsUrl: url, listener: listener)
+            await waitUntil("the listener hears the failure") { !listener.errors.isEmpty }
+            XCTAssertEqual(session.connectionCount, 0)
+            // A sleep that starts after the drop is cancelled at once, so none stays waiting.
+            await waitUntil("the keep-alive stops") { clock.pendingDurations.isEmpty }
+        }
+    }
 }

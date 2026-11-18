@@ -149,13 +149,15 @@ class WebSocketSession {
         let socket: RealtimeSocket
         private var listeners: [RealtimeSocketListener] = []
         private var isOpen = false
+        /// `stopSending` ran. A task handle set after this is cancelled at once.
+        private var stopped = false
+        private var receiveLoop: Task<Void, Never>?
+        private var keepAlive: Task<Void, Never>?
         private let lock = NSLock()
         /// Every outgoing frame for the socket, in the order it must reach the server. One writer drains it, so an
         /// unsubscribe queued before a subscribe for the same channel is always sent first.
         private let outbox: AsyncStream<String>.Continuation
         private let writer: Task<Void, Never>
-        var receiveLoop: Task<Void, Never>?
-        var keepAlive: Task<Void, Never>?
 
         init(socket: RealtimeSocket) {
             self.socket = socket
@@ -223,16 +225,49 @@ class WebSocketSession {
             return listeners
         }
 
-        /// Stops the keep-alive and the writer and closes the socket. Called once the socket has left the pool.
+        func setReceiveLoop(_ task: Task<Void, Never>) {
+            if !store(task, in: \.receiveLoop) { task.cancel() }
+        }
+
+        func setKeepAlive(_ task: Task<Void, Never>) {
+            if !store(task, in: \.keepAlive) { task.cancel() }
+        }
+
+        /// Stores `task` unless the entry has stopped. Returns whether it was stored.
+        private func store(
+            _ task: Task<Void, Never>,
+            in field: ReferenceWritableKeyPath<ConnectionEntry, Task<Void, Never>?>
+        ) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !stopped else { return false }
+            self[keyPath: field] = task
+            return true
+        }
+
+        /// Stops the receive loop, the keep-alive and the writer and closes the socket. Called once the socket has
+        /// left the pool.
         func stop(reason: String) {
-            receiveLoop?.cancel()
+            lock.lock()
+            // Set with the read, so a receive loop handle set after this is cancelled by its setter.
+            stopped = true
+            let loop = receiveLoop
+            receiveLoop = nil
+            lock.unlock()
+            loop?.cancel()
             stopSending()
             socket.cancel(reason: reason)
         }
 
-        /// Stops the keep-alive and the writer. Frames still queued are dropped.
+        /// Stops the keep-alive and the writer. Frames still queued are dropped. A keep-alive handle set after this
+        /// is cancelled at once.
         func stopSending() {
-            keepAlive?.cancel()
+            lock.lock()
+            stopped = true
+            let task = keepAlive
+            keepAlive = nil
+            lock.unlock()
+            task?.cancel()
             outbox.finish()
             writer.cancel()
         }
@@ -269,7 +304,20 @@ class WebSocketSession {
 
     private func start(_ entry: ConnectionEntry, key: String) {
         let sleep = sleep
-        entry.receiveLoop = Task { [weak self] in
+        // The keep-alive is held by the entry before the receive loop starts, so a receive loop that drops the
+        // socket at once cancels it.
+        entry.setKeepAlive(Task {
+            while true {
+                do {
+                    try await sleep(Self.keepAliveInterval)
+                } catch {
+                    return
+                }
+                if Task.isCancelled { return }
+                entry.enqueue(Self.pingFrame)
+            }
+        })
+        entry.setReceiveLoop(Task { [weak self] in
             let socket = entry.socket
             entry.markOpen()
 
@@ -295,18 +343,7 @@ class WebSocketSession {
                     return
                 }
             }
-        }
-        entry.keepAlive = Task {
-            while true {
-                do {
-                    try await sleep(Self.keepAliveInterval)
-                } catch {
-                    return
-                }
-                if Task.isCancelled { return }
-                entry.enqueue(Self.pingFrame)
-            }
-        }
+        })
     }
 
     /// Removes `entry` from the pool if it is still the pooled socket for `key`, and stops it.
