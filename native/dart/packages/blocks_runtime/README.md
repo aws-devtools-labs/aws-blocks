@@ -134,6 +134,31 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 - For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
 - Sign in with `signIn`. `signInDirect`, the direct flow, sends the IdP a custom-scheme `redirect_uri`, which most identity providers reject.
 
+### Federated sign-in on each platform
+
+| Platform | How `signIn` gets the redirect | What to pass |
+|---|---|---|
+| iOS, Android | The app's custom scheme | `launcher: FlutterBrowserLauncher()` and a `relayTo` in the block's `redirects.allowedRelayOrigins` |
+| macOS, Linux, Windows | A loopback listener on `127.0.0.1` | Nothing: `oidc.signIn(OidcApiGetClientProvider.google)` |
+| Web | Not supported: a browser app signs in on its own origin | |
+
+On desktop, a call without a `launcher` binds `127.0.0.1` on a port the operating system picks, relays to `http://127.0.0.1:<port>/oidc/callback` (the backend allows a loopback relay target without an `allowedRelayOrigins` entry), opens the browser and waits for the redirect. A `launcher`, when passed, always wins.
+
+- `oidc.openBrowser` sets how the browser opens. It defaults to the platform's URL handler (`open`, `xdg-open` or `rundll32`). A Flutter desktop app should set it, for example to `url_launcher`, throwing when no browser opened, and handle the error `signIn` then throws:
+
+  ```dart
+  oidc.openBrowser = (url) async {
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      throw StateError('No browser to sign in with');
+    }
+  };
+  ```
+
+- `oidc.signInTimeout` (default 5 minutes) bounds the wait. When it passes, `signIn` throws `OidcCancelledException`. Both fields apply only to a call without a `launcher`.
+- Pass `cancel:` to stop waiting early, for example when the user closes the sign-in dialog: `oidc.signIn(OidcApiGetClientProvider.google, cancel: dialogClosed.future)`. When it completes before the redirect arrives, the listener closes and `signIn` throws `OidcCancelledException`.
+- For a command-line app: when the default handler can't open a browser, for example on a Linux host with no `xdg-open`, the client prints a one-time `http://127.0.0.1:<port>/oidc/start/<random>` URL to stderr and keeps waiting. Opening it redirects to the sign-in page. Treat it like the sign-in link itself: it works once, for this sign-in only. On Windows, `rundll32` usually exits 0 even when nothing opened, so this fallback rarely runs there. A Flutter app has no stderr to read, which is why it should set `openBrowser`.
+- A sandboxed macOS app needs the `com.apple.security.network.server` entitlement to accept the redirect on its listener, and should set `openBrowser` to `url_launcher`, because the sandbox can stop it from running `open`.
+
 ## Typed OIDC providers
 
 This section covers custom blocks that return an OIDC client; for `Auth`, see [Using Auth](#using-auth). `OidcClient`'s `signInDirect`, `signIn` and `exchange` take a provider by the name the backend knows it by. `TypedOidcClient<P extends OidcProvider>` is an extension type over an `OidcClient` that narrows those three methods to providers of type `P`. A generated client returns one, with `P` an enum it generates from the spec's provider names, so passing a provider that client doesn't have is a compile error:

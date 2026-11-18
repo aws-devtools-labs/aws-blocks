@@ -78,6 +78,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- On mobile and the web, a `signIn` call that leaves out the `launcher` now
+  compiles and throws a `StateError` at run time, because no loopback sign-in
+  exists there. It used to be a compile error.
+- A class that implements `OidcClient` and overrides `signIn` with a
+  required `launcher` no longer compiles.
 
 ### Other changes
 
@@ -92,6 +97,20 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   200 used to sign back in after a sign-out.
 - The `OidcClient` docs say to hold one client per block for the app's
   lifetime instead of calling `getClient()` again.
+- `OidcClient.signIn`'s `launcher` is optional. Without one, on macOS,
+  Linux and Windows, it signs in through a loopback listener on `127.0.0.1` and
+  relays to `http://127.0.0.1:<port>/oidc/callback`, as the Kotlin JVM client
+  does; `relayTo` is not used then, and is now optional; with a launcher, a
+  missing `relayTo` throws a `StateError` before any request. A `launcher`, when
+  passed, always wins. Add `OidcClient.openBrowser`, which opens the browser for
+  that sign-in, `OidcClient.signInTimeout`, after which it throws
+  `OidcCancelledException`, and a `cancel` future that stops the wait with
+  `OidcCancelledException` when it completes. `OidcCancelledException` takes an
+  optional message.
+- `OidcClient.signInDirect` throws `OidcCallbackException` for a callback that carries
+  an IdP `error` or no `code`. It threw a `TypeError` from a null check. It also
+  deletes the attempt's stored PKCE values whatever happens, where a launcher
+  error or a state mismatch left them in the token store.
 - `OidcClient.fromJson` reads the descriptor's `sessionPath` and `refreshPath`
   when it sends them, and otherwise derives them, and a missing `signOutPath`,
   `callbackPath` or `authorizeParamsBasePath`, from the directory of
