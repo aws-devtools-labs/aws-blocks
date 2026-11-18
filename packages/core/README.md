@@ -27,6 +27,34 @@ warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
 synth`); rename one of the scopes. A future release will reject the collision.
 Constructing the same path again is accepted.
 
+Use lowercase letters, digits and hyphens in scope and block ids. An id is part
+of the name of each resource created under it, unescaped, and every service
+accepts those characters. The rest depends on the resource:
+
+| Named from the id | Block | Characters its name accepts |
+|---|---|---|
+| DynamoDB table | `KVStore`, `DistributedTable` | letters, digits, `_`, `.`, `-` |
+| SQS queue | `AsyncJob` | letters, digits, `_`, `-` |
+| EventBridge Scheduler schedule | `CronJob` | letters, digits, `_`, `.`, `-` |
+| S3 bucket | `FileBucket` | lowercase letters, digits, `.`, `-` |
+| Cognito user pool | `Auth` | letters, digits, spaces, `_`, `+`, `=`, `,`, `.`, `@`, `-` |
+| Systems Manager parameter | `AppSetting` | letters, digits, `_`, `.`, `-`, `/` |
+| Secrets Manager secret | `Secret` | letters, digits, `/`, `_`, `+`, `=`, `.`, `@`, `-` |
+| Bedrock knowledge base and data source | `KnowledgeBase` | letters, digits, `_`, `-` |
+
+An id is not rejected when the scope is constructed, because whether it deploys
+depends on the blocks under it: `new Scope('@acme/shop')` runs locally, and is
+valid with only an `ApiNamespace` under it (which names nothing from the id) or
+a `Secret` (Secrets Manager accepts `@` and `/`). `cdk synth` fails once a block
+under it names a resource that does not accept the id, for example a `KVStore`,
+whose table name cannot contain `@` or `/`. The error names the id, the
+characters and what the service accepts. This covers the DynamoDB, SQS,
+Scheduler, Cognito, Secrets Manager and Bedrock names above when they are
+literal strings at synth; `FileBucket` checks its bucket name itself, and
+`aws-cdk-lib` checks the parameter name of an `AppSetting` that is not a
+secret. Renaming an id renames every resource under it, which replaces those
+already deployed.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
