@@ -2331,6 +2331,109 @@ describe('Hosting', () => {
     });
   });
 
+  // ── What a deployed origin serves at /.cdk-blocks-sandbox/config.json ──
+  describe('the runtime config.json a deployed origin serves', () => {
+    const ACCOUNT = '111111111111';
+    const REGION = 'eu-west-3';
+
+    /**
+     * The exact JSON the `BlocksConfigDeployment` uploads: the staged asset its
+     * `SourceObjectKeys` names, read from the cloud assembly. This is the body
+     * every visitor gets from `GET /.cdk-blocks-sandbox/config.json`.
+     */
+    const servedConfig = (app: App, stack: Stack): { config: Record<string, unknown>; raw: string } => {
+      const assembly = app.synth();
+      const resources = assembly.getStackByName(stack.stackName).template.Resources as Record<
+        string,
+        { Type: string; Properties?: { SourceObjectKeys?: unknown[] } }
+      >;
+      const deployment = Object.entries(resources).find(
+        ([id, r]) => r.Type === 'Custom::CDKBucketDeployment' && id.includes('BlocksConfigDeployment'),
+      );
+      assert.ok(deployment, 'expected a BlocksConfigDeployment');
+      const keys = deployment[1].Properties?.SourceObjectKeys ?? [];
+      assert.strictEqual(keys.length, 1, 'the config deployment uploads one source');
+      const key = keys[0];
+      assert.strictEqual(typeof key, 'string', 'the config source is a literal asset key');
+      const raw = fs.readFileSync(
+        path.join(assembly.directory, `asset.${String(key).replace(/\.zip$/, '')}`, 'config.json'),
+        'utf-8',
+      );
+      return { config: JSON.parse(raw), raw };
+    };
+
+    const buildIdOutput = (stack: Stack): string => {
+      const outputs = Template.fromStack(stack).toJSON().Outputs ?? {};
+      const key = Object.keys(outputs).find((k) => k.includes('Hosting') && k.includes('BuildId'));
+      assert.ok(key, 'a HostingBuildId output');
+      return String(outputs[key].Value);
+    };
+
+    it('holds only the same-origin API prefix and the build id behind the CloudFront door', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ShopProdStack', { env: { account: ACCOUNT, region: REGION } });
+      const api: BlocksStackApi = {
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+      };
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const { config, raw } = servedConfig(app, stack);
+      assert.deepStrictEqual(config, {
+        apiUrl: BLOCKS_RPC_PREFIX,
+        [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack),
+      });
+      // Nothing that names the account, the region, the stack or the backend's
+      // own API Gateway host: the browser reaches the API through this origin.
+      for (const secretish of [ACCOUNT, REGION, 'ShopProdStack', 'execute-api', 'arn:']) {
+        assert.ok(!raw.includes(secretish), `served config must not contain ${secretish}: ${raw}`);
+      }
+    });
+
+    it("holds only the absolute API URL the browser calls, and the build id, with frontDoor: 'none'", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ShopWebsiteStack', { env: { account: ACCOUNT, region: REGION } });
+      const publicApiUrl = 'https://d111111abcdef8.cloudfront.net/aws-blocks/api';
+      const api: BlocksStackApi = {
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        publicApiUrl,
+      };
+      new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: 'none' });
+
+      const { config, raw } = servedConfig(app, stack);
+      // A cross-origin page needs the absolute URL; it is the one every RPC goes to.
+      assert.deepStrictEqual(config, { apiUrl: publicApiUrl, [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack) });
+      for (const secretish of [ACCOUNT, 'ShopWebsiteStack', 'arn:']) {
+        assert.ok(!raw.includes(secretish), `served config must not contain ${secretish}: ${raw}`);
+      }
+    });
+
+    it('adds nothing but the backendConfig the app chose to publish', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ShopBackendConfigStack', { env: { account: ACCOUNT, region: REGION } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, backendConfig: { theme: 'dark' } });
+
+      const { config } = servedConfig(app, stack);
+      assert.deepStrictEqual(config, {
+        theme: 'dark',
+        apiUrl: BLOCKS_RPC_PREFIX,
+        [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack),
+      });
+    });
+
+    it('holds only the build id for a static site with no backend', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'StaticProdStack', { env: { account: ACCOUNT, region: REGION } });
+      new Hosting(stack, 'Hosting', { root: tmpDir });
+
+      const { config } = servedConfig(app, stack);
+      assert.deepStrictEqual(config, { [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack) });
+    });
+  });
+
   // ── value() integration ─────────────────────────────────────────
   //
   // Runtime values: the store LOCATOR (never the value) is injected as a Lambda
