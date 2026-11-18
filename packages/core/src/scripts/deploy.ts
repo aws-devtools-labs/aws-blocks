@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
@@ -277,14 +277,6 @@ async function runDeploy(options: DeployOptions) {
       projectRoot: options.projectRoot,
       checkBootstrap: true,
     });
-
-    // Provision secrets for production. projectRoot must match the root cdk
-    // synth uses (passed as --context below) so the written parameter name
-    // equals the one the app resolves at synth.
-    const secrets = await ensureSecrets('production', options.projectRoot);
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
 
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,

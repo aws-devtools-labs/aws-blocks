@@ -61,7 +61,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
-	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
+	 * (e.g. a connection string stored by `cdk-blocks db connect --stage`). The
 	 * construct does not create, seed, tag, or delete it — it only grants the app
 	 * **read-only** access (`ssm:GetParameter`, plus `kms:Decrypt` when `secret`)
 	 * and registers the name for config resolution.
@@ -113,8 +113,8 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 		if (options.secret) {
 			// ── SecureString ────────────────────────────────────────────────
-			// Externally-owned secrets (e.g. the connection string seeded by
-			// ensureSecrets) are NOT enrolled in the bulk-init: it would
+			// Externally-owned secrets (e.g. a connection string stored before
+			// the deploy) are NOT enrolled in the bulk-init: it would
 			// PutParameter a random placeholder over a parameter we don't own and
 			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
 			// We only need runtime read access, granted below.

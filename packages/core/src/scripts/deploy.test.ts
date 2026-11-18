@@ -249,7 +249,6 @@ const replace = async (url, overrides) => {
 };
 await replace(moduleUrl('preflight-credentials'), { assertAwsCredentials: async () => {} });
 await replace(moduleUrl('ensure-secrets'), {
-  ensureSecrets: async () => ({ created: [], updated: [] }),
   loadProductionEnv: () => {},
 });
 await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });

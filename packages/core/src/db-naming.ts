@@ -10,11 +10,12 @@
  * deployment's stack name), so two Blocks apps in the same account + region +
  * stage get distinct names and cannot overwrite each other's credentials.
  *
- * Two call sites compute the name: the pre-deploy writer (`ensure-secrets`) and
- * the app's wiring at synth. Both pass the result of
- * `getStackName({ sandbox, projectRoot })` into this function, so they produce
- * the same name by construction. The runtime Lambda does not call this function;
- * it reads the name recorded at synth.
+ * One call site computes the name: the sandbox cleanup (`deleteSandboxSecrets`
+ * in `scripts/ensure-secrets.ts`). It passes the result of
+ * `getStackName({ sandbox: true, projectRoot })` into this function. The
+ * `Database` block derives the same string for the default connection name
+ * (`/<stackName>-<name>` with the name `db-url`), and `cdk-blocks db connect
+ * --stage` writes it. The runtime Lambda does not call this function.
  */
 
 /**
