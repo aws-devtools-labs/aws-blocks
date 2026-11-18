@@ -55,18 +55,20 @@ const PG_17 = 170000;
 // pg_dump 17 and later writes this line into every dump; a server below 17 refuses it and the dump's own
 // transaction with it. It only lifts a limit that such a server does not have.
 const SETS_TRANSACTION_TIMEOUT = /^\s*SET\s+(?:SESSION\s+)?transaction_timeout\b/i;
+// `SET name ...`, `SET SESSION name ...` or `SET LOCAL name ...`: the parameter a statement of a file sets.
+const SETS_PARAMETER = /^\s*SET\s+(?:SESSION\s+|LOCAL\s+)?([a-z_]+)\s*(?:=|\bTO\b)/i;
 
 /** What the kind of cluster adds to each transaction of a file. */
 interface TransactionRules {
 	/** One query sent after BEGIN, before the file's first statement. */
 	settings?: string;
-	/** A statement of the file that this server refuses and that changes nothing on it. */
-	skips(sql: string): boolean;
+	/** Why a statement of the file is not sent, for a statement that is not: the text that follows "skipped". */
+	skips(sql: string): string | undefined;
 	/** The file is recorded in its own transaction, not in one after it. */
 	recordsInFile: boolean;
 }
 
-const NO_RULES: TransactionRules = { skips: () => false, recordsInFile: false };
+const NO_RULES: TransactionRules = { skips: () => undefined, recordsInFile: false };
 
 async function transactionRules(
 	engine: DatabaseEngine,
@@ -79,21 +81,31 @@ async function transactionRules(
 	if (plan.kind !== 'external') return NO_RULES;
 	const rows = await engine.query<{ server_version_num: string }>('SHOW server_version_num');
 	const serverVersion = Number(rows[0]?.server_version_num ?? 0);
+	// The limits this run applies. A file's own SET of one of them (every pg_dump file has them, set to 0)
+	// would replace the limit for the rest of the transaction, so the runner does not send it.
+	const limits = ['idle_in_transaction_session_timeout'];
 	const settings = [`SET LOCAL idle_in_transaction_session_timeout = ${EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS}`];
 	// Transaction-local, so it also holds through a transaction pooler; the ledger is schema-qualified.
 	if (options.schemaName !== DEFAULT_SCHEMA) {
 		settings.push(`SET LOCAL search_path TO ${quoteIdent(options.schemaName)}, ${quoteIdent(DEFAULT_SCHEMA)}`);
 	}
 	if (options.boundToInvocation) {
+		limits.push('statement_timeout');
 		settings.push(`SET LOCAL statement_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
 		if (serverVersion >= PG_17) {
+			limits.push('transaction_timeout');
 			settings.push(`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
 		}
 	}
 	return {
 		// One query: the settings are a round trip each otherwise, on every file.
 		settings: settings.join('; '),
-		skips: (sql) => serverVersion < PG_17 && SETS_TRANSACTION_TIMEOUT.test(sql),
+		skips: (sql) => {
+			if (serverVersion < PG_17 && SETS_TRANSACTION_TIMEOUT.test(sql))
+				return 'the server is older than PostgreSQL 17';
+			const limit = SETS_PARAMETER.exec(sql)?.[1].toLowerCase();
+			return limit !== undefined && limits.includes(limit) ? 'the migration run sets this limit' : undefined;
+		},
 		recordsInFile: true,
 	};
 }
@@ -434,10 +446,9 @@ export async function runMigrationPlan(
 						handle = await engine.beginTransaction();
 						if (rules.settings) await engine.executeInTransaction(handle, rules.settings);
 					}
-					if (rules.skips(step.sql)) {
-						log(
-							`[bb-database] ${file.file}: skipped "${step.sql.trim()}" (the server is older than PostgreSQL 17)`,
-						);
+					const skipped = rules.skips(step.sql);
+					if (skipped) {
+						log(`[bb-database] ${file.file}: skipped "${step.sql.trim()}" (${skipped})`);
 					} else {
 						await engine.executeInTransaction(handle, step.sql);
 					}

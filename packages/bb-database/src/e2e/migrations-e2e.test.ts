@@ -359,7 +359,7 @@ describe('bb-database migrate + types E2E: Supabase', { skip }, () => {
 		assert.strictEqual(readFileSync(typesFile, 'utf8'), written, 'the same schema gives the same file');
 
 		// connect and the refresh write these two files and no others: no scaffolding.
-		assert.deepStrictEqual(readdirSync(join(ws.cwd, 'aws-blocks')).sort(), ['database.ca.ts', 'database.types.ts']);
+		assert.deepStrictEqual(readdirSync(join(ws.cwd, 'aws-blocks')).sort(), ['database.e2e.ca.ts', 'database.types.ts']);
 	});
 
 	test('a delta migration + refresh surfaces the new column', async () => {

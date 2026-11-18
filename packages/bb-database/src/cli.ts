@@ -121,7 +121,13 @@ async function run(argv: string[]): Promise<{ json: unknown; text: string }> {
 				...(result.pooler ? [`Supabase ${result.pooler.mode} endpoint.`] : []),
 				...result.warnings.map((w) => `Warning: ${w}`),
 				where,
-				...(result.caModule ? [`Wrote ${result.caModule}.`] : []),
+				...(result.caModule
+					? [
+							values.ca
+								? `Wrote ${result.caModule}.`
+								: `Verified with the certificate authority in ${result.caModule}.`,
+						]
+					: []),
 				...(result.stored === 'none' ? [] : ['', 'Add to your backend file:', linesToPaste(result)]),
 			].join('\n');
 			return { json: result, text };

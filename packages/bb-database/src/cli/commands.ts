@@ -10,6 +10,7 @@ import {
 	CONNECTION_NAME_PATTERN,
 	CONNECTION_NAME_RULE,
 	connectionParameterName,
+	DEFAULT_CONNECTION_NAME,
 	DEFAULT_SCHEMA,
 } from '../constants.js';
 import {
@@ -41,7 +42,12 @@ export interface CommonFlags {
 	yes: boolean;
 }
 
-const CA_MODULE = 'aws-blocks/database.ca.ts';
+/**
+ * The module that holds the certificate authority of connection `name`. Each connection has its own, because two
+ * databases can have two authorities; the default name keeps the plain file name.
+ */
+const caModuleOf = (name: string): string =>
+	name === DEFAULT_CONNECTION_NAME ? 'aws-blocks/database.ca.ts' : `aws-blocks/database.${name}.ca.ts`;
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 const PG_16 = 160000;
 
@@ -62,23 +68,25 @@ function readCaFile(path: string): string {
 	return pem;
 }
 
-// The certificate authority a `connect --ca` wrote for the app. The later verbs read it back from that file, so
-// they verify the server the same way without the flag.
-function storedCa(): string | undefined {
-	if (!existsSync(CA_MODULE)) return undefined;
-	const match = /export const DATABASE_CA = ("(?:[^"\\]|\\.)*");/.exec(readFileSync(CA_MODULE, 'utf8'));
+// The certificate authority a `connect --ca` wrote for the app, for this connection. Every verb reads it back
+// from that file, so it verifies the server the same way without the flag.
+function storedCa(name: string): string | undefined {
+	const module = caModuleOf(name);
+	if (!existsSync(module)) return undefined;
+	const match = /export const DATABASE_CA = ("(?:[^"\\]|\\.)*");/.exec(readFileSync(module, 'utf8'));
 	return match ? (JSON.parse(match[1]) as string) : undefined;
 }
 
-function writeCaModule(pem: string): string {
-	mkdirSync(dirname(CA_MODULE), { recursive: true });
+function writeCaModule(name: string, pem: string): string {
+	const module = caModuleOf(name);
+	mkdirSync(dirname(module), { recursive: true });
 	writeFileSync(
-		CA_MODULE,
+		module,
 		'// Written by `cdk-blocks db connect --ca`. The certificate authority that signed the database server\n' +
 			'// certificate: a public certificate, safe to commit. Pass it as `ca` to DatabaseCluster.fromExisting().\n' +
 			`export const DATABASE_CA = ${JSON.stringify(pem)};\n`,
 	);
-	return CA_MODULE;
+	return module;
 }
 
 async function stackNameFor(stage: Stage): Promise<string> {
@@ -119,7 +127,7 @@ async function withStored<T>(
 	fn: (opened: Opened) => Promise<T>,
 ): Promise<T> {
 	const stored = await storedValue(flags.name, stage);
-	const opened = open(stored.value, stored.label, storedCa(), flags.schema);
+	const opened = open(stored.value, stored.label, storedCa(flags.name), flags.schema);
 	try {
 		return await fn(opened);
 	} finally {
@@ -176,7 +184,9 @@ async function hasIpv4(host: string): Promise<boolean> {
 
 export async function connect(flags: ConnectFlags): Promise<ConnectResult> {
 	checkName(flags.name);
-	const ca = flags.ca ? readCaFile(flags.ca) : undefined;
+	// Without the flag, the authority an earlier `connect --ca` wrote for this connection still applies: the app
+	// passes that module as `ca`, so the check here must be the one the app makes.
+	const ca = flags.ca ? readCaFile(flags.ca) : storedCa(flags.name);
 	let value: string;
 	if (flags.valueStdin) value = await readStdin();
 	else if (flags.noInput)
@@ -270,7 +280,7 @@ export async function connect(flags: ConnectFlags): Promise<ConnectResult> {
 			await localConnectionSetting(flags.name).put(value);
 			result.stored = 'local';
 		}
-		if (ca) result.caModule = writeCaModule(ca);
+		if (ca) result.caModule = flags.ca ? writeCaModule(flags.name, ca) : caModuleOf(flags.name);
 		return result;
 	} finally {
 		await engine.destroy().catch(() => {});
@@ -278,12 +288,24 @@ export async function connect(flags: ConnectFlags): Promise<ConnectResult> {
 }
 
 /** The lines `connect` prints for the app's backend file. */
-export function linesToPaste(result: ConnectResult): string {
+/**
+ * The block as the backend file declares it for this connection. `migrationsPath` is the directory that
+ * `migrate` applies: the block's own default is another one (`aws-blocks/migrations/<id>`), and a deploy runs
+ * only the files of the directory the block names. An explicit path must exist, so it is a comment until it does.
+ */
+export function linesToPaste(
+	result: ConnectResult,
+	hasMigrationsDir: boolean = existsSync(DEFAULT_MIGRATIONS_DIR),
+): string {
 	const ca = result.caModule ? ', ca: DATABASE_CA' : '';
+	const module = result.caModule?.replace(/^aws-blocks\//, './').replace(/\.ts$/, '.js');
 	return [
-		...(result.caModule ? ["import { DATABASE_CA } from './database.ca.js';"] : []),
+		...(module ? [`import { DATABASE_CA } from '${module}';`] : []),
 		"const db = new Database(scope, 'db', {",
 		`  cluster: DatabaseCluster.fromExisting({ name: '${result.name}'${ca} }),`,
+		hasMigrationsDir
+			? `  migrationsPath: '${DEFAULT_MIGRATIONS_DIR}',`
+			: `  // migrationsPath: '${DEFAULT_MIGRATIONS_DIR}', // add with your first migration file`,
 		'});',
 	].join('\n');
 }

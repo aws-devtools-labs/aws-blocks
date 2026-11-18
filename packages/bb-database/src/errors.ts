@@ -64,6 +64,9 @@ const NODE_CONNECT_REFUSED_CODES = new Set([
 const TLS_ERROR_CODE = /^(?:ERR_TLS_|ERR_SSL_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|CERT_|HOSTNAME_MISMATCH)/;
 const PG_INVALID_AUTHORIZATION_CLASS = '28';
 const PG_REFUSED_CODES = new Set(['3D000', '53300', '57P03']);
+// Of the refusals, the ones that pass: the server is full or still starting, or the address did not answer or
+// resolve this time.
+const REFUSED_FOR_NOW_CODES = new Set(['53300', '57P03', 'EAI_AGAIN', 'ETIMEDOUT']);
 const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
 const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 const DSQL_STALE_SCHEMA_CACHE_MESSAGE = /\bOC001\b/;
@@ -265,7 +268,8 @@ export function isConnectionLost(e: unknown): boolean {
 
 /**
  * The connection was never made: the address did not resolve or did not answer, the server certificate was not
- * accepted, or the server refused the login. Trying again gives the same answer, so nothing retries it.
+ * accepted, or the server refused the login. A request does not try again; a migration run does when the refusal
+ * is one that passes (`isRefusedForNow`).
  */
 export function isConnectionRefused(e: unknown): boolean {
 	const code = pgErrorCode(e);
@@ -276,6 +280,21 @@ export function isConnectionRefused(e: unknown): boolean {
 		code.startsWith(PG_INVALID_AUTHORIZATION_CLASS) ||
 		PG_REFUSED_CODES.has(code)
 	);
+}
+
+/** A refusal that passes: too many connections, a server that is starting up, a lookup or a connect that timed out. */
+export function isRefusedForNow(e: unknown): boolean {
+	const code = pgErrorCode(e);
+	return code !== undefined && REFUSED_FOR_NOW_CODES.has(code);
+}
+
+/**
+ * The socket failed under a statement (`ECONNRESET`, `EPIPE`). The server may have run the statement before the
+ * failure reached the client, so the statement is not run again.
+ */
+export function isSocketReset(e: unknown): boolean {
+	const code = pgErrorCode(e);
+	return code !== undefined && NODE_SOCKET_LOST_CODES.has(code);
 }
 
 /** pg gave up waiting for a connection (`connectionTimeoutMillis`): the cluster is resuming or unreachable. */

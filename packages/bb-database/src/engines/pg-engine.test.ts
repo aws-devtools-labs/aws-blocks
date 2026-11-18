@@ -79,6 +79,29 @@ function stubbedEngine(): { engine: PgEngine; client: StubClient } {
 	return { engine, client: pool.client };
 }
 
+describe('a single statement and a connection that ends', () => {
+	// The server may have run and committed the statement before the reset reached the client, so a second
+	// run can apply a write twice.
+	for (const code of ['ECONNRESET', 'EPIPE']) {
+		test(`a statement that fails with ${code} is reported once and not run again`, async () => {
+			const { engine, client } = stubbedEngine();
+			const update = 'UPDATE accounts SET balance = balance - 1 WHERE id = 1';
+			client.failOn.set(update, Object.assign(new Error(`read ${code}`), { code }));
+			await assert.rejects(engine.execute(update), (e: unknown) =>
+				isBlocksError(e, DatabaseErrors.ConnectionFailed),
+			);
+			assert.deepStrictEqual(client.statements, [update]);
+		});
+	}
+
+	test('a connection the server closed while it sat idle is replaced and the statement runs', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('SELECT 1', new Error('Connection terminated unexpectedly'));
+		await engine.query('SELECT 1');
+		assert.deepStrictEqual(client.statements, ['SELECT 1', 'SELECT 1']);
+	});
+});
+
 describe('DSQL transaction handle lifecycle', () => {
 	test('a failed COMMIT frees the client once', async () => {
 		const { engine, client } = stubbedEngine();

@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events';
 import { describe, test } from 'node:test';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
 import type pg from 'pg';
+import { linesToPaste } from '../cli/commands.js';
 import { externalPoolConfig, PgEngine, type PgPool, type PgPoolClient } from '../engines/pg-engine.js';
 import {
 	DatabaseErrors,
@@ -25,6 +26,7 @@ import { roleDatabase } from '../runtime/scoped.js';
 import { freshScope, installLocalTestHooks } from '../test-support/lifecycle.js';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { parseConnectionString } from './connection.js';
+import { readSsmConnectionString } from './ssm-store.js';
 
 installLocalTestHooks();
 
@@ -396,6 +398,32 @@ describe('migrations on an existing database', () => {
 		);
 	});
 
+	test("a file's own SET of a limit the runner applies is skipped, so the limit holds for the whole file", async () => {
+		// Every pg_dump file starts with these lines. A plain SET after the runner's SET LOCAL replaces it.
+		const dump = {
+			'000_baseline.sql':
+				'SET statement_timeout = 0;\nSET lock_timeout = 0;\nSET idle_in_transaction_session_timeout = 0;\n' +
+				'SET transaction_timeout = 0;\nCREATE TABLE t (id int);',
+		};
+		const sent = async (boundToInvocation: boolean) => {
+			const engine = new ExternalEngine(170006);
+			await runMigrationPlan(engine, buildMigrationPlan(dump, 'external'), {
+				schemaName: 'public',
+				boundToInvocation,
+				log: () => {},
+			});
+			return inFileTransaction(engine).filter((s) => /^SET (?!LOCAL)/.test(s));
+		};
+		// From the command line the runner applies the idle limit only; the others are the file's to set.
+		assert.deepStrictEqual(await sent(false), [
+			'SET statement_timeout = 0',
+			'SET lock_timeout = 0',
+			'SET transaction_timeout = 0',
+		]);
+		// In the migration function it also bounds the statement and the transaction.
+		assert.deepStrictEqual(await sent(true), ['SET lock_timeout = 0']);
+	});
+
 	test("a pg_dump file's SET transaction_timeout is skipped below PostgreSQL 17 and sent from 17", async () => {
 		const dump = {
 			'000_baseline.sql': 'SET statement_timeout = 0;\nSET transaction_timeout = 0;\nCREATE TABLE t (id int);',
@@ -447,6 +475,51 @@ describe('migrations on an existing database', () => {
 			},
 		);
 		assert.strictEqual(engine.statements.at(-1), 'ROLLBACK');
+	});
+});
+
+describe('a connection string that the application stored itself', () => {
+	// AppSetting.put() and Secret.put() store the value as JSON, so the parameter holds the string in quotes.
+	const fake = (value: string) =>
+		({ send: async () => ({ Parameter: { Value: value } }) }) as unknown as NonNullable<
+			Parameters<typeof readSsmConnectionString>[1]
+		>;
+
+	test('a JSON-encoded value is decoded, as the app decodes it at run time', async () => {
+		const url = `postgresql://app:${PASSWORD}@db.example.com:6543/postgres`;
+		const stored = await readSsmConnectionString('/stack-db-url', fake(JSON.stringify(url)));
+		assert.strictEqual(stored.value, url);
+		assert.strictEqual(parseConnectionString(stored.value, stored.label).host, 'db.example.com');
+	});
+
+	test('a value that `cdk-blocks db connect --stage` stored as it is stays as it is', async () => {
+		const url = `postgresql://app:${PASSWORD}@db.example.com:6543/postgres`;
+		assert.strictEqual((await readSsmConnectionString('/stack-db-url', fake(url))).value, url);
+	});
+});
+
+describe('the lines that connect prints', () => {
+	const result = {
+		ok: true as const,
+		name: 'db-url',
+		stored: 'local' as const,
+		tls: { verified: true as const, trust: 'system' as const },
+		host: { ipv4: true },
+		server: { version: '17.6' },
+		role: { name: 'postgres', superuser: false, bypassRls: true, canSetRole: [] },
+		policies: { usingAuthFunctions: [] },
+		warnings: [],
+	};
+
+	test('name the directory that `db migrate` applies, so a deploy runs the same files', () => {
+		// The block's own default is aws-blocks/migrations/<id>; without this line a deploy finds no file.
+		assert.match(linesToPaste(result, true), /\n {2}migrationsPath: '\.\/migrations',\n/);
+	});
+
+	test('do not name a directory that does not exist: an explicit path must exist', () => {
+		const lines = linesToPaste(result, false);
+		assert.doesNotMatch(lines, /^ {2}migrationsPath/m);
+		assert.match(lines, /migrationsPath: '\.\/migrations'/, 'the option is shown as a comment');
 	});
 });
 

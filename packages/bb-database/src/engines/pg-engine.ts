@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { TransactionHandle } from '../common/engine.js';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { Signer as RdsSigner } from '@aws-sdk/rds-signer';
 import pg from 'pg';
+import type { TransactionHandle } from '../common/engine.js';
 import {
 	CLAIMS_SETTING,
 	DEFAULT_POOL_SIZE,
@@ -15,7 +15,15 @@ import {
 	PG_PORT,
 	quoteIdent,
 } from '../constants.js';
-import { asError, isConnectionLost, isStaleSchemaCache, pgErrorCode, translated, translatePgError } from '../errors.js';
+import {
+	asError,
+	isConnectionLost,
+	isSocketReset,
+	isStaleSchemaCache,
+	pgErrorCode,
+	translated,
+	translatePgError,
+} from '../errors.js';
 import type { ConnectionFields } from '../external/connection.js';
 import type { ClusterType } from '../types.js';
 import {
@@ -236,8 +244,9 @@ const statement = (client: Queryable, sql: string, params?: unknown[]): Promise<
 
 // An autocommit statement on the pool is safe to run once more: a stale schema cache (OC001, see isStaleSchemaCache) is
 // refreshed by the retry, and a connection the server closed while it sat idle (or an Aurora cluster that paused and
-// resumed) is replaced by the pool on the retry.
-const retriedOnce = (e: unknown): boolean => isStaleSchemaCache(e) || isConnectionLost(e);
+// resumed) is replaced by the pool on the retry. A socket that was reset under the statement is not such a case:
+// the server may have run the statement already.
+const retriedOnce = (e: unknown): boolean => isStaleSchemaCache(e) || (isConnectionLost(e) && !isSocketReset(e));
 
 const pooledStatement = (pool: Queryable, sql: string, params?: unknown[]): Promise<pg.QueryResult> =>
 	translate(() =>

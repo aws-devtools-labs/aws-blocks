@@ -19,12 +19,13 @@ import {
 	isConnectionLost,
 	isConnectionRefused,
 	isConnectTimeout,
+	isRefusedForNow,
 	isSerializationConflict,
 	sqlStateOf,
 } from '../errors.js';
 import { parseConnectionString } from '../external/connection.js';
 import { externalEngine } from '../external/engine.js';
-import { readSsmConnectionString } from '../external/ssm-store.js';
+import { decodeStoredValue, readSsmConnectionString } from '../external/ssm-store.js';
 import { grantSchemaAccess } from '../migrations/grants.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
@@ -42,9 +43,11 @@ export function isRetryableMigrationError(e: unknown): boolean {
 		isConnectionLost(err) ||
 		isConnectTimeout(err);
 	// The runner wraps the engine's error, which wraps the driver's: walk the chain. A connection the server
-	// refused (trust, address, login) gets the same answer on every attempt, so it is reported at once.
+	// refused for good (trust, address, login) gets the same answer on every attempt, so it is reported at once.
+	// A refusal that passes (a full or starting server, a lookup that timed out) is tried again.
 	const chain = causeChain(e);
-	return !chain.some((err) => isConnectionRefused(err)) && chain.some(matches);
+	const refusedForGood = chain.some((err) => isConnectionRefused(err) && !isRefusedForNow(err));
+	return !refusedForGood && chain.some((err) => matches(err) || isRefusedForNow(err));
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -168,7 +171,7 @@ async function readConnectionString(props: MigrationProperties): Promise<{ value
 		const result = await new SecretsManagerClient({}).send(
 			new GetSecretValueCommand({ SecretId: props.connectionSecretArn }),
 		);
-		return { value: result.SecretString ?? null, label: 'The secret that holds the connection string' };
+		return { value: decodeStoredValue(result.SecretString), label: 'The secret that holds the connection string' };
 	}
 	throw new Error('connectionParameter or connectionSecretArn is required for an existing database');
 }
