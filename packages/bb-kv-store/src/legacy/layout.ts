@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The item layout of the `KVStore` releases up to 0.4.0, which `LegacyKVStore`
- * reads and writes: the key in `pk`, the whole value as JSON text in `value`, and the
- * expiry in `ttl`.
+ * The item layout of `KVStore` release 0.4.0 or earlier, which `LegacyKVStore`
+ * reads and writes. The key is in `pk`, the whole value is JSON text in `value`,
+ * and the expiry is in `ttl`.
  *
  * ```json
  * { "pk": "theme", "value": "{\"color\":\"dark\"}", "ttl": 1800000000 }
@@ -23,7 +23,7 @@ export const RELEASE_VALUE = 'value';
 /** The attribute that holds the expiry, in epoch seconds. */
 export const RELEASE_TTL = 'ttl';
 
-/** The key model of a table of such a release: a string key in `pk`, and the expiry in `ttl`. */
+/** The key model of a table of release 0.4.0 or earlier: a string key in `pk`, and the expiry in `ttl`. */
 export const RELEASE_MODEL: KeyModel = {
 	table: { partitionKey: RELEASE_PK },
 	declared: false,
@@ -47,7 +47,8 @@ export function releaseKey(key: unknown): string {
 /**
  * The value of an item of the layout.
  *
- * @throws {KVStoreErrors.ValidationFailed} If the item is not an item of a release: its `value` is not JSON text.
+ * @throws {KVStoreErrors.ValidationFailed} If the item is not an item of release 0.4.0 or earlier: its
+ *   `value` is not JSON text.
  */
 export function releaseValue(item: Item): unknown {
 	const text = item[RELEASE_VALUE];
@@ -80,7 +81,7 @@ export function releaseEntry<T>(item: Item): Entry<T, undefined> {
 
 /** What a `put` of the old store writes, and the condition that it writes under. */
 export interface ReleaseWrite {
-	/** The item, in the layout of the release. */
+	/** The item, in the layout of release 0.4.0. */
 	item: Item;
 	/** `ifNotExists`: the write goes ahead if the key is absent. */
 	ifAbsent: boolean;
@@ -142,7 +143,7 @@ export interface ReleaseDelete {
 
 /**
  * Check a `delete` of the old store. Both runtimes call it first. The
- * conditions are those of the release, and both must hold when both are set.
+ * conditions are those of release 0.4.0, and both must hold when both are set.
  *
  * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
  * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string.
