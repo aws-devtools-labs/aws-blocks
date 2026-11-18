@@ -1,8 +1,7 @@
 import { ApiNamespace, Scope } from '@aws-blocks/core';
 import { Auth } from '@aws-blocks/bb-auth';
 import { KVStore } from '@aws-blocks/bb-kv-store';
-import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import { sql } from '@aws-blocks/data-common';
+import { Database, sql } from '@aws-blocks/bb-database';
 
 // Keep the Scope id a STABLE LOGICAL id — it must be byte-for-byte identical at
 // synth time and at Lambda runtime, since physical resource names (tables, IAM
@@ -14,7 +13,8 @@ const scope = new Scope('amp-gen2');
 
 const store = new KVStore(scope, 'notes', {});
 
-const db = new DistributedDatabase(scope, 'db', {
+// Owns an Aurora DSQL cluster. The migration files are written in DSQL.
+const db = new Database(scope, 'db', {
   migrationsPath: './aws-blocks/migrations',
 });
 

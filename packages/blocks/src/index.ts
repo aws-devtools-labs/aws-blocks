@@ -16,13 +16,10 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
 //
 // Each export below includes a brief summary of what the Building Block does
 // and when to use it. For full documentation (API reference, examples, best
-// practices, scaling characteristics), read the block's docs bundled in this
-// package under `docs/<package>/`, where `<package>` is the name in each JSDoc
-// block without the `@aws-blocks/` scope (e.g. `docs/bb-kv-store/README.md`).
-//
-// To locate the bundled docs folder:
-//   node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
-// If resolution fails, fall back to node_modules/@aws-blocks/blocks/docs.
+// practices, scaling characteristics), print the block's docs bundled in this
+// package with `npx --no -- cdk-blocks docs <package>`, where `<package>` is the
+// name in each JSDoc block without the `@aws-blocks/` scope (e.g.
+// `npx --no -- cdk-blocks docs bb-kv-store`). `npx --no -- cdk-blocks docs` lists them all.
 //
 
 /**
@@ -33,7 +30,7 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
  * `onAuthChange`). Import these when writing provider-agnostic auth code.
  *
  * Package: `@aws-blocks/auth-common`
- * Full docs: `docs/auth-common/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs auth-common`.
  */
 export type {
 	AuthAction,
@@ -69,7 +66,7 @@ export type {
  * Set `inferenceOnly: true` for simple prompt→response without persistence.
  *
  * Package: `@aws-blocks/bb-agent`
- * Full docs: `docs/bb-agent/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-agent`.
  */
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
@@ -84,7 +81,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * validation for typed objects.
  *
  * Package: `@aws-blocks/bb-app-setting`
- * Full docs: `docs/bb-app-setting/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-app-setting`.
  */
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
@@ -109,7 +106,7 @@ export type {
  * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
- * Full docs: `docs/bb-async-job/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-async-job`.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 export type * from '@aws-blocks/bb-auth';
@@ -126,7 +123,7 @@ export type * from '@aws-blocks/bb-auth';
  * `AuthOIDC`.
  *
  * Package: `@aws-blocks/bb-auth`
- * Full docs: `docs/bb-auth/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-auth`.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
@@ -143,7 +140,7 @@ export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubI
  * the workload uses the app default (serverless).
  *
  * Package: `@aws-blocks/bb-compute`
- * Full docs: `docs/bb-compute/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-compute`.
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
@@ -156,7 +153,7 @@ export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
  * constructor defines the schedule and handler.
  *
  * Package: `@aws-blocks/bb-cron-job`
- * Full docs: `docs/bb-cron-job/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-cron-job`.
  */
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {
@@ -175,36 +172,37 @@ export type {
  * `logs` / `traces` options.
  *
  * Package: `@aws-blocks/bb-dashboard`
- * Full docs: `docs/bb-dashboard/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-dashboard`.
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
+export type {
+	ClusterKind,
+	ClusterType,
+	ConnectionStringSource,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ScopedDatabase,
+	SqlQuery,
+	Transaction,
+	TransactionOptions,
+} from '@aws-blocks/bb-database';
 /**
- * **SQL database with Kysely query builder backed by Aurora Serverless v2.**
+ * **SQL database on PostgreSQL.**
  *
- * Use only when you specifically need complex multi-table JOINs, SQL
- * transactions, foreign key constraints, or complex aggregations. For most
- * application data, prefer `KVStore` (lower cost, simpler ops).
- * Requires a `migrations/` folder with `.sql` files.
+ * Use when you need multi-table JOINs, SQL transactions or aggregations. For
+ * most application data, prefer `KVStore` (lower cost, simpler ops).
+ * `new Database(scope, id)` owns an Aurora DSQL cluster. To use Aurora
+ * PostgreSQL Serverless v2 (express configuration), or to put several
+ * databases on one cluster, pass a `DatabaseCluster` as `cluster`. For a
+ * PostgreSQL database that already exists, pass `DatabaseCluster.fromExisting()`.
+ * Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
  *
- * Package: `@aws-blocks/bb-data`
- * Full docs: `docs/bb-data/README.md` in `@aws-blocks/blocks`.
+ * Package: `@aws-blocks/bb-database`
+ * Full docs: `npx --no -- cdk-blocks docs bb-database`.
  */
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-/**
- * **Serverless SQL database backed by Aurora DSQL.**
- *
- * Use for zero-ops SQL with instant provisioning, scale-to-zero, and
- * optionally multi-region active-active writes. DSQL is a strict PostgreSQL
- * subset — no foreign keys, RLS, triggers, or views. Transactions use
- * optimistic concurrency control (OCC) and may conflict at commit.
- * For full PostgreSQL with FK/RLS/triggers, use `Database`.
- *
- * Package: `@aws-blocks/bb-distributed-data`
- * Full docs: `docs/bb-distributed-data/README.md` in `@aws-blocks/blocks`.
- */
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 /**
  * **Transactional email with AWS SES integration.**
@@ -214,7 +212,7 @@ export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@a
  * batch sending with partial failure handling.
  *
  * Package: `@aws-blocks/bb-email-client`
- * Full docs: `docs/bb-email-client/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-email-client`.
  */
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -241,7 +239,7 @@ export type {
  * `KVStore`.
  *
  * Package: `@aws-blocks/bb-file-bucket`
- * Full docs: `docs/bb-file-bucket/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-file-bucket`.
  */
 export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
@@ -267,7 +265,7 @@ export type {
  * and indexed via Bedrock with configurable chunking and embedding models.
  *
  * Package: `@aws-blocks/bb-knowledge-base`
- * Full docs: `docs/bb-knowledge-base/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-knowledge-base`.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 // A type keeps its own name. It gets the block prefix only when another block
@@ -304,29 +302,30 @@ export type {
  * string-keyed store for caches, flags, sessions and user preferences. With a
  * `schema` and a `key` it holds records you list or query as a collection
  * (todos, orders, messages) with composite keys, range queries and batch
- * operations; add `indexes` to read the same records by other fields. Supports
- * Zod/Valibot schemas for type-safe validation and conditional writes. Zero
+ * operations. Add `indexes` to read the same records by other fields. Supports
+ * Zod and Valibot schemas for type-safe validation and conditional writes. Zero
  * cost at rest, scales automatically. Use `Database` when you need SQL
- * JOINs/transactions.
+ * JOINs or transactions.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-kv-store`.
  */
 /**
- * **The store of a `KVStore` release up to 0.4.0, for an upgrade.**
+ * **The store of `KVStore` release 0.4.0 or earlier, for an upgrade.**
  *
  * It has the data methods of that store over its table: `get`, `put`,
- * `delete`, and `scan`. Use it only to move the data of an app that has a
- * `KVStore` from such a release: change the class on the line of the old
- * store, keep its id and its options, add a `KVStore` with a new id, and copy
- * the items in your own code. For new data, use `KVStore`.
+ * `delete`, and `scan`. Use it only to migrate the data of an app that has a
+ * `KVStore` from release 0.4.0 or earlier: change the class on the line of the old
+ * store, keep its id and its options, add a `KVStore` with a new id, and
+ * migrate the data in your own code, however is appropriate for your app. For
+ * new data, use `KVStore`.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-kv-store`.
  *
- * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
- *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
- *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
+ *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the data is in the new store. The steps are in the README section "Upgrade from release
  *   0.4.0 or earlier":
  *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  */
@@ -344,7 +343,7 @@ export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-block
  * request tracing, use `Tracing`.
  *
  * Package: `@aws-blocks/bb-logger`
- * Full docs: `docs/bb-logger/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-logger`.
  */
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {
@@ -366,7 +365,7 @@ export type {
  * batch emission, and child emitters for scoped dimension inheritance.
  *
  * Package: `@aws-blocks/bb-metrics`
- * Full docs: `docs/bb-metrics/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-metrics`.
  */
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type {
@@ -385,7 +384,7 @@ export type {
  * AppSync Events API.
  *
  * Package: `@aws-blocks/bb-realtime`
- * Full docs: `docs/bb-realtime/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-realtime`.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
@@ -405,7 +404,7 @@ export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo
  * for a low-value secret (e.g. a prototype).
  *
  * Package: `@aws-blocks/bb-secret`
- * Full docs: `docs/bb-secret/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-secret`.
  */
 export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
@@ -418,7 +417,7 @@ export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tra
  * annotations for searchable values and metadata for debugging data.
  *
  * Package: `@aws-blocks/bb-tracer`
- * Full docs: `docs/bb-tracer/README.md` in `@aws-blocks/blocks`.
+ * Full docs: `npx --no -- cdk-blocks docs bb-tracer`.
  */
 export { Tracer } from '@aws-blocks/bb-tracer';
 export type {

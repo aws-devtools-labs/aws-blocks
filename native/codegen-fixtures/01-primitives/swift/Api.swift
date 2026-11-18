@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Echo {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let count: Int
             public let enabled: Bool
             public let score: Double

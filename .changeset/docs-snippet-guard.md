@@ -1,6 +1,5 @@
 ---
 '@aws-blocks/blocks': patch
-'@aws-blocks/bb-data': patch
 '@aws-blocks/bb-auth': patch
 '@aws-blocks/pipeline': patch
 '@aws-blocks/core': patch

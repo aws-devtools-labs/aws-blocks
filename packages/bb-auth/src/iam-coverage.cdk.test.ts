@@ -144,6 +144,19 @@ describe('IAM coverage — the account surface needs only the base statement', (
 	});
 });
 
+describe('IAM coverage — session refresh', () => {
+	test('refreshing an expired session (GetTokensFromRefreshToken) is granted without admin', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		const b = new Browser();
+		await signInAs(h, b, 'alice', h.idp.authResult('alice', { accessExpIn: -60 }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+		await b.request((c) => h.auth.requireAuth(c));
+		const sent = [...new Set(h.sentNames().map((n) => `cognito-idp:${n.replace(/Command$/, '')}`))];
+		assert.ok(sent.includes('cognito-idp:GetTokensFromRefreshToken'), 'the refresh was sent');
+		assertCovered(sent, granted(BASE), 'session refresh');
+	});
+});
+
 describe("IAM coverage — admin: { actions: ['groups'] }", () => {
 	test('every groups method is granted', async () => {
 		const sent = await observedActions(async (h) => {

@@ -97,7 +97,7 @@ final class OpenRecordFlatteningTests: XCTestCase {
     func testOperationScopedOpenRecordHasAPublicInitAndFlatCoding() throws {
         let output = try generate(fixture: "07-maps-and-records")
         assertContains(output.api, """
-                public struct Input: Codable {
+                public struct Input: Codable, Sendable {
                     public let password: String
                     public let username: String
                     public let attributes: [String: String]
@@ -123,7 +123,7 @@ final class OpenRecordFlatteningTests: XCTestCase {
     func testDiscriminatedVariantOpenRecordTreatsTheDiscriminatorAsAFixedKey() throws {
         let output = try generate(fixture: "18-hybrid-arm")
         assertContains(output.api, """
-                public struct SignUp: Codable {
+                public struct SignUp: Codable, Sendable {
                     public let password: String
                     public let username: String
                     public let attributes: [String: String]
@@ -156,7 +156,7 @@ final class OpenRecordFlatteningTests: XCTestCase {
     func testComponentOpenRecordKeepsItsCodingAndSkipsAttributesNamedLikeAProperty() throws {
         let output = try generate(try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(extraSpec.utf8)) as? [String: Any]))
         assertContains(output.models, """
-        public nonisolated struct Directory: Codable {
+        public nonisolated struct Directory: Codable, Sendable {
             public let owner: String
             public let attributes: [String: Note]
 

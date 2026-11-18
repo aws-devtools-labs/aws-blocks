@@ -293,7 +293,7 @@ describe('create-blocks-app template metadata', () => {
   it('every frontend template starts its frontend dev server on the --frontend-port it is given', async () => {
     // A hard-coded `frontendCommand` would keep its own `--port 3100`, so the dev server
     // would proxy to the requested port while the frontend listened on another one.
-    const vite = (port: number) => `npx vite --port ${port} --strictPort`;
+    const vite = (port: number) => `npx vite --host 127.0.0.1 --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
       nextjs: next, auth: vite, 'auth-oidc': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
@@ -401,11 +401,12 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
-  it('AGENTS.md names the cdk-blocks db and cdk-blocks vendorize commands of the scaffolded app', () => {
+  it('AGENTS.md names where SQL migrations live and the cdk-blocks vendorize command of the scaffolded app', () => {
     const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
-    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations')), 'the sql template keeps aws-blocks/migrations');
-    assert.match(guide, /`npx --no -- cdk-blocks db migrate aws-blocks\/migrations`/);
-    assert.match(guide, /`npx --no -- cdk-blocks db status aws-blocks\/migrations`/);
+    // The Database block reads aws-blocks/migrations/<block id>/; the sql template's block id is 'main'.
+    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations', 'main')), 'the sql template keeps aws-blocks/migrations/main');
+    assert.match(guide, /`aws-blocks\/migrations\/<block id>\/`/);
+    assert.doesNotMatch(guide, /cdk-blocks db /, 'cdk-blocks db is for an existing database, which the templates do not have');
     assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
   });
 
@@ -866,7 +867,7 @@ describe('create-blocks-app auto-detection', () => {
     // copied: a Next.js project with the default (Vite) template still runs `next dev`.
     const projects: Record<string, { deps: Record<string, unknown>; command: string }> = {
       next: { deps: { dependencies: { next: '*' } }, command: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100' },
-      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --port 3100 --strictPort' },
+      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --host 127.0.0.1 --port 3100 --strictPort' },
     };
     for (const template of ['default', 'nextjs']) {
       for (const [framework, { deps, command }] of Object.entries(projects)) {

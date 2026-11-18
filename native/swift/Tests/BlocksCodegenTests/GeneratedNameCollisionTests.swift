@@ -322,7 +322,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         let second = object([("kind", #"{ "const": "plain" }"#), ("y", string)])
         let union = #"{ "oneOf": [\#(first), \#(second)], "discriminator": { "propertyName": "kind" } }"#
         let output = try generate(schemas: #"{ "U": \#(union) }"#, methods: [method("api.get", result: ref("U"))])
-        assertContains(output.models, "public nonisolated struct KindSelf: Codable {")
+        assertContains(output.models, "public nonisolated struct KindSelf: Codable, Sendable {")
         assertContains(output.models, "case kindSelf(KindSelf)")
         assertContains(output.models, "case plain(Plain)")
         assertNotContains(output.models, "struct Self")

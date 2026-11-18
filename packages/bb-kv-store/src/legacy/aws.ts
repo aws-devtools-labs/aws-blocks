@@ -30,24 +30,26 @@ import {
 } from './layout.js';
 
 /**
- * The store of a `KVStore` release up to 0.4.0, for an upgrade: it has the
+ * The store of `KVStore` release 0.4.0 or earlier, for an upgrade. It has the
  * data methods of that store over its table: `get`, `put`, `delete`, and `scan`.
  *
- * **When to use:** Your app has a `KVStore` from a release up to 0.4.0. This
+ * **When to use:** Your app has a `KVStore` from release 0.4.0 or earlier. This
  * release keeps items in another layout, in a table with another key, so a
  * `KVStore` of this release cannot take over that table. Change the class on
  * the line of the old store to `LegacyKVStore`, keep its id and its options,
- * and add a `KVStore` with a new id. Copy the items in your own code, then
- * remove the `LegacyKVStore`.
+ * and add a `KVStore` with a new id. Migrate the data in your own code,
+ * however is appropriate for your app, then remove the `LegacyKVStore`. The
+ * block does not copy the items, and it does not carry a write from one store
+ * to the other.
  *
  * **When NOT to use:** For new data. Use `KVStore`.
  *
  * **What it does to the table:** Nothing. The deploy keeps the table as it is,
  * with its items. The app's role keeps read and write access to it.
  *
- * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
- *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
- *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
+ *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the data is in the new store. The steps are in the README section "Upgrade from release
  *   0.4.0 or earlier":
  *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  *
@@ -56,15 +58,6 @@ import {
  * // Release 0.4.0: const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
  * const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
  * const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
- *
- * // In a handler: copy each item, with its expiry. A key that the app wrote since stays as it is.
- * for await (const { key, value, expiresAt } of oldPrefs.scan()) {
- *   try {
- *     await prefs.put(key, value, { ifNotExists: true, expiresAt });
- *   } catch (e: unknown) {
- *     if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
- *   }
- * }
  * ```
  */
 export class LegacyKVStore<T = string> extends Scope {
@@ -88,7 +81,7 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * Retrieve a value of the old store by key.
 	 *
 	 * A strongly consistent read by default, so it does not return a key that
-	 * {@link LegacyKVStore.delete} removed a moment before; pass
+	 * {@link LegacyKVStore.delete} removed a moment before. Pass
 	 * `{ consistentRead: false }` where a stale value is acceptable at half the
 	 * read cost. An item whose expiry has passed is treated as absent.
 	 *
@@ -96,12 +89,12 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * @param options - `consistentRead` (default `true`).
 	 * @returns The value, or `null` if the key does not exist or has expired.
 	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
-	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string, or the item is not an item of a release.
+	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string, or the item is not an item of
+	 *   release 0.4.0 or earlier.
 	 *
 	 * @example
 	 * ```typescript
-	 * // While the app reads both stores, a read can fall back to the old store.
-	 * const value = (await prefs.get(key)) ?? (await oldPrefs.get(key));
+	 * const value = await oldPrefs.get('alice');
 	 * ```
 	 */
 	async get(key: string, options?: GetOptions): Promise<T | null> {
@@ -116,14 +109,13 @@ export class LegacyKVStore<T = string> extends Scope {
 	}
 
 	/**
-	 * Store a value in the old store, as the release stores it: the JSON text
+	 * Store a value in the old store, as release 0.4.0 stores it: the JSON text
 	 * of the value, under the key. Replaces the value of the key unless a
 	 * condition is set.
 	 *
 	 * It is here so that the code that writes the old store runs unchanged
-	 * until you move it. The block does not carry a write to the new store: a
-	 * value that goes to the old store after your copy read its key does not
-	 * reach the new one.
+	 * until you migrate it. The block does not carry a write from one store to
+	 * the other.
 	 *
 	 * @param key - The string key.
 	 * @param value - The value. With a `schema`, it is validated before the write.
@@ -186,18 +178,14 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * @param options - `limit`, `cursor`, and `includeExpired` (default `false`).
 	 * @returns An async iterable of `{ key, value, expiresAt }`, with a `cursor`.
 	 * @throws {KVStoreErrors.InvalidQuery} If `limit` is not a positive integer, or `cursor` is not a cursor of this store.
-	 * @throws {KVStoreErrors.ValidationFailed} If an item is not an item of a release.
+	 * @throws {KVStoreErrors.ValidationFailed} If an item is not an item of release 0.4.0 or earlier.
 	 *
 	 * @example
 	 * ```typescript
-	 * // One page of the copy. Run it again with the cursor, until the cursor is undefined.
+	 * // One page. Pass `page.cursor` to the next call, until it is undefined.
 	 * const page = oldPrefs.scan({ limit: 500, cursor });
 	 * for await (const { key, value, expiresAt } of page) {
-	 *   try {
-	 *     await prefs.put(key, value, { ifNotExists: true, expiresAt });
-	 *   } catch (e: unknown) {
-	 *     if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-	 *   }
+	 *   console.log(key, value, expiresAt);
 	 * }
 	 * const next = page.cursor;
 	 * ```
@@ -228,15 +216,12 @@ export class LegacyKVStore<T = string> extends Scope {
 	 * Delete a key of the old store. A key that does not exist is not an error,
 	 * unless `ifExists` is set.
 	 *
-	 * While the app reads both stores, a key that leaves the new store while
-	 * the old store has it comes back through the copy, and through a read that
-	 * falls back to the old store. An app that deletes a key can delete it in
-	 * the old store first, and then in the new one. An app that writes a key
-	 * with an expiry to the new store can delete it in the old store after the
-	 * write, so that the old value does not show again when the new one expires.
+	 * While the app reads both stores, a read that falls back to the old store
+	 * returns the old value of a key that the new store does not have. The
+	 * README section "Upgrade from release 0.4.0 or earlier" lists the limits.
 	 *
 	 * @param key - The string key.
-	 * @param conditions - `ifExists` and `ifValueEquals`, the conditions of the release. With both, both must hold.
+	 * @param conditions - `ifExists` and `ifValueEquals`, the conditions of release 0.4.0. With both, both must hold.
 	 * @throws {KVStoreErrors.InvalidQuery} If the key is not a string.
 	 * @throws {KVStoreErrors.ValidationFailed} If the key is an empty string.
 	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a condition is set and does not hold. Status 409.
@@ -244,8 +229,10 @@ export class LegacyKVStore<T = string> extends Scope {
 	 *
 	 * @example
 	 * ```typescript
-	 * await oldPrefs.delete(key);
-	 * await prefs.delete(key);
+	 * await oldPrefs.delete('alice');
+	 *
+	 * // Throws `ConditionalCheckFailedException` if the key does not exist.
+	 * await oldPrefs.delete('alice', { ifExists: true });
 	 * ```
 	 */
 	async delete(key: string, conditions?: LegacyKVStoreDeleteOptions<T>): Promise<void> {

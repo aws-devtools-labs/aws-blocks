@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Invoice: Codable {
+public nonisolated struct Invoice: Codable, Sendable {
     public let id: String
     public let meta: Meta
 
@@ -10,7 +10,7 @@ public nonisolated struct Invoice: Codable {
         self.meta = meta
     }
 
-    public nonisolated struct Meta: Codable {
+    public nonisolated struct Meta: Codable, Sendable {
         public let value: Int
 
         public init(value: Int) {
@@ -19,7 +19,7 @@ public nonisolated struct Invoice: Codable {
     }
 }
 
-public nonisolated struct Receipt: Codable {
+public nonisolated struct Receipt: Codable, Sendable {
     public let id: String
     public let meta: Meta
 
@@ -28,7 +28,7 @@ public nonisolated struct Receipt: Codable {
         self.meta = meta
     }
 
-    public nonisolated struct Meta: Codable {
+    public nonisolated struct Meta: Codable, Sendable {
         public let value: String
 
         public init(value: String) {
@@ -37,7 +37,7 @@ public nonisolated struct Receipt: Codable {
     }
 }
 
-public nonisolated struct Shipment: Codable {
+public nonisolated struct Shipment: Codable, Sendable {
     public let customs: [String: CustomsValue]?
     public let destination: Destination
     public let id: String
@@ -73,7 +73,7 @@ public nonisolated struct Shipment: Codable {
         self.signature = signature
     }
 
-    public nonisolated struct CustomsValue: Codable {
+    public nonisolated struct CustomsValue: Codable, Sendable {
         public let code: String
         public let value: Double
 
@@ -83,7 +83,7 @@ public nonisolated struct Shipment: Codable {
         }
     }
 
-    public nonisolated struct Destination: Codable {
+    public nonisolated struct Destination: Codable, Sendable {
         public let city: String
         public let geo: Geo
 
@@ -92,7 +92,7 @@ public nonisolated struct Shipment: Codable {
             self.geo = geo
         }
 
-        public nonisolated struct Geo: Codable {
+        public nonisolated struct Geo: Codable, Sendable {
             public let accuracy: Accuracy?
             public let lat: Double
             public let lng: Double
@@ -116,7 +116,7 @@ public nonisolated struct Shipment: Codable {
                 self.lng = lng
             }
 
-            public nonisolated struct Accuracy: Codable {
+            public nonisolated struct Accuracy: Codable, Sendable {
                 public let meters: Double
                 public let source: Source
 
@@ -125,7 +125,7 @@ public nonisolated struct Shipment: Codable {
                     self.source = source
                 }
 
-                public enum Source: String, Codable {
+                public enum Source: String, Codable, Sendable {
                     case gps
                     case cell
                 }
@@ -133,7 +133,7 @@ public nonisolated struct Shipment: Codable {
         }
     }
 
-    public nonisolated struct Insurance: Codable {
+    public nonisolated struct Insurance: Codable, Sendable {
         public let amount: Double?
         public let provider: String
 
@@ -154,7 +154,7 @@ public nonisolated struct Shipment: Codable {
         }
     }
 
-    public nonisolated struct Parcel: Codable {
+    public nonisolated struct Parcel: Codable, Sendable {
         public let sku: String
         public let weightKg: Double
 
@@ -164,7 +164,7 @@ public nonisolated struct Shipment: Codable {
         }
     }
 
-    public nonisolated struct Signature: Codable {
+    public nonisolated struct Signature: Codable, Sendable {
         public let signedAt: String
         public let signedBy: String
 

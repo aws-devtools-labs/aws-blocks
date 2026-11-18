@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-// Exercise real command ordering, env-file loading, preflight and ensureSecrets.
+// Exercise real command ordering, env-file loading and preflight.
 // Only AWS requests and process launch boundaries are replaced. A fresh process
 // isolates SDK configuration caches and process.env from the developer's machine.
 const scriptsUrl = new URL('./', import.meta.url).href;
@@ -30,7 +30,6 @@ const stop = new Error('fixture stopped before CDK');
 // Resolve these through the same import locations as the real callers. The
 // SDK clients remain real; no credential provider or request is ever executed.
 const { STSClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-sts'))});
-const { SSMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-ssm'))});
 const { AccountClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-account'))});
 const { FreeTierClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-freetier'))});
 const { IAMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-iam'))});
@@ -38,12 +37,6 @@ mock.method(STSClient.prototype, 'send', async function () {
   assert.equal(this.config.profile, explicitProfile);
   seen.push(['sts', await this.config.region()]);
   return { Arn: 'arn:aws:sts::123456789012:assumed-role/WorkspaceAdminAccess/fixture', $metadata: {} };
-});
-mock.method(SSMClient.prototype, 'send', async function (command) {
-  assert.equal(command.constructor.name, 'GetParameterCommand');
-  assert.equal(this.config.profile, explicitProfile);
-  seen.push(['ssm', await this.config.region()]);
-  return { Parameter: { Value: 'fixture-connection' }, $metadata: {} };
 });
 // The metadata reads must reuse the credentials that STS resolved, for the same profile and Region.
 const destroyed = [];
@@ -68,9 +61,6 @@ for (const [name, Client, response] of [
 mock.method(childProcess, 'execFileSync', () => Buffer.alloc(0));
 syncBuiltinESMExports();
 
-mock.module(moduleUrl('external-migrations-step'), {
-  namedExports: { applyExternalMigrations: async () => {} },
-});
 mock.module(new URL('../telemetry/trackCommand.js', scripts).href, {
   namedExports: { trackCommand: async (_command, callback) => callback(), classifyError: () => ({}) },
 });
@@ -99,6 +89,7 @@ mock.module(moduleUrl('run-command'), {
     runSync: (_command, _args, options) => reachedCdk(options.env),
     runCapture: () => '',
     spawnCommand: () => { throw new Error('unexpected watch process'); },
+    spawnShellCommand: () => { throw new Error('unexpected dev server process'); },
   },
 });
 
@@ -109,7 +100,7 @@ const run = command === 'deploy'
 await assert.rejects(run, (error) => error === stop);
 assert.deepEqual(seen[0], ['sts', expectedRegion]);
 assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);
-assert.deepEqual(seen.slice(4), [['ssm', expectedRegion], ['cdk']]);
+assert.deepEqual(seen.slice(4), [['cdk']]);
 assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 `;
 }
@@ -117,7 +108,7 @@ assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 describe('deploy/sandbox configured target', () => {
 	for (const command of ['deploy', 'sandbox'] as const) {
 		for (const source of ['profile', 'default-region', 'environment', 'cdk-profile', 'cdk-region'] as const) {
-			it(`${command} resolves ${source} for STS, metadata and SSM, prints it, and keeps CDK's environment`, async () => {
+			it(`${command} resolves ${source} for STS and metadata, prints it, and keeps CDK's environment`, async () => {
 				const directory = await mkdtemp(join(tmpdir(), 'blocks-target-'));
 				try {
 					await mkdir(join(directory, '.blocks'));
@@ -138,7 +129,7 @@ describe('deploy/sandbox configured target', () => {
 						await writeFile(join(directory, 'cdk.json'), '{"region":"eu-north-1"}');
 					await writeFile(
 						join(directory, command === 'deploy' ? '.env.production' : '.env.local'),
-						`AWS_PROFILE=${source === 'cdk-profile' ? 'default' : 'deployment'}\nFIXTURE_DB_URL=fixture-connection\n${source === 'profile' || source === 'cdk-profile' ? '' : 'AWS_DEFAULT_REGION=us-gov-west-1\n'}`,
+						`AWS_PROFILE=${source === 'cdk-profile' ? 'default' : 'deployment'}\n${source === 'profile' || source === 'cdk-profile' ? '' : 'AWS_DEFAULT_REGION=us-gov-west-1\n'}`,
 					);
 					const env: NodeJS.ProcessEnv = {
 						PATH: process.env.PATH,

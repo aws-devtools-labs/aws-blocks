@@ -39,7 +39,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetClass {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let `class`: String
             public let `default`: String
             public let `in`: String
@@ -87,7 +87,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Import {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let abstract: Bool
             public let `do`: Bool
             public let `else`: String
@@ -120,7 +120,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -131,7 +131,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Export {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let `false`: Bool
             public let `internal`: String
             public let null: String

@@ -215,27 +215,31 @@ function cognitoPool(h: Pick<AwsAuthHarness<CognitoAuthOptions>, 'on' | 'idp'>, 
 	});
 	h.on('InitiateAuthCommand', (input) => {
 		const params: Record<string, unknown> = Object(input.AuthParameters);
-		const name =
-			input.AuthFlow === 'REFRESH_TOKEN_AUTH'
-				? String(params.REFRESH_TOKEN).replace(/^refresh-/, '')
-				: resolve(String(params.USERNAME));
+		const name = resolve(String(params.USERNAME));
 		const user = name === undefined ? undefined : users.get(name);
 		if (name === undefined || !user)
 			throw cognitoError('NotAuthorizedException', 'Incorrect username or password.');
-		if (input.AuthFlow !== 'REFRESH_TOKEN_AUTH') {
-			if (user.password !== params.PASSWORD) {
-				throw cognitoError('NotAuthorizedException', 'Incorrect username or password.');
-			}
-			if (!user.confirmed) throw cognitoError('UserNotConfirmedException', 'User is not confirmed.');
+		if (user.password !== params.PASSWORD) {
+			throw cognitoError('NotAuthorizedException', 'Incorrect username or password.');
 		}
+		if (!user.confirmed) throw cognitoError('UserNotConfirmedException', 'User is not confirmed.');
+		return { AuthenticationResult: authResultFor(name, user) };
+	});
+	h.on('GetTokensFromRefreshTokenCommand', (input) => {
+		const name = String(input.RefreshToken).replace(/^refresh-/, '');
+		const user = users.get(name);
+		if (!user) throw cognitoError('NotAuthorizedException', 'Invalid Refresh Token');
+		return { AuthenticationResult: authResultFor(name, user) };
+	});
+	const authResultFor = (name: string, user: PoolUser) => {
 		const claims: Record<string, unknown> = { sub: user.sub };
 		for (const c of CONTACTS) {
 			if (user.attributes[c] === undefined) continue;
 			claims[c] = user.attributes[c];
 			claims[`${c}_verified`] = user.attributes[`${c}_verified`] === 'true';
 		}
-		return { AuthenticationResult: h.idp.authResult(name, { claims }) };
-	});
+		return h.idp.authResult(name, { claims });
+	};
 	h.on('GetUserCommand', (input) => {
 		const [name, user] = fromToken(input.AccessToken);
 		return { Username: name, UserAttributes: toList(user) };

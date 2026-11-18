@@ -8,7 +8,7 @@ import { isBlocksError } from '@aws-blocks/core';
 import { DatabaseErrors } from '../errors.js';
 import { runInTransactionScope, TransactionScope } from '../runtime/tx-scope.js';
 import { installLocalTestHooks } from '../test-support/lifecycle.js';
-import { _closeAllPgliteClusters, sharedPgliteCluster } from './pglite-cluster.js';
+import { _closeAllPgliteClusters, type SchemaEngine, sharedPgliteCluster } from './pglite-cluster.js';
 
 const DATA_DIR = join(process.cwd(), '.bb-data', `pglite-cluster-test-${process.pid}`);
 let counter = 0;
@@ -16,11 +16,20 @@ const cluster = () => sharedPgliteCluster(join(DATA_DIR, `c${++counter}`, 'pglit
 
 installLocalTestHooks({ mockDataPrefix: 'pglite-cluster-test' });
 
+// Setup the app role cannot do: it owns nothing and has no grants until a block issues them.
+const asAdmin = (engine: SchemaEngine, statements: string[]) =>
+	engine.asAdmin(async () => {
+		for (const sql of statements) await engine.execute(sql);
+	});
+
 describe('PGlite cluster transaction handle lifecycle', () => {
 	test('a failed COMMIT frees the session once', async () => {
 		const engine = cluster().forSchema('public');
 		// A deferred constraint fails at COMMIT, not at the INSERT.
-		await engine.execute('CREATE TABLE t (id INT, CONSTRAINT t_id UNIQUE (id) DEFERRABLE INITIALLY DEFERRED)');
+		await asAdmin(engine, [
+			'CREATE TABLE t (id INT, CONSTRAINT t_id UNIQUE (id) DEFERRABLE INITIALLY DEFERRED)',
+			'GRANT SELECT, INSERT ON t TO PUBLIC',
+		]);
 		const first = await engine.beginTransaction();
 		await engine.executeInTransaction(first, 'INSERT INTO t VALUES (1), (1)');
 		await assert.rejects(engine.commitTransaction(first), (e: unknown) =>
@@ -41,7 +50,7 @@ describe('PGlite cluster transaction handle lifecycle', () => {
 
 	test('rollbackTransaction is idempotent and a statement on an ended handle is refused', async () => {
 		const engine = cluster().forSchema('public');
-		await engine.execute('CREATE TABLE t (id INT)');
+		await asAdmin(engine, ['CREATE TABLE t (id INT)', 'GRANT SELECT, INSERT ON t TO PUBLIC']);
 		const first = await engine.beginTransaction();
 		await engine.rollbackTransaction(first);
 		const second = await engine.beginTransaction();
@@ -58,8 +67,7 @@ describe('PGlite cluster transaction handle lifecycle', () => {
 		const c = cluster();
 		const a = c.forSchema('a');
 		const b = c.forSchema('b');
-		await a.execute('CREATE SCHEMA a');
-		await b.execute('CREATE SCHEMA b');
+		await asAdmin(a, ['CREATE SCHEMA a', 'CREATE SCHEMA b']);
 		const events: string[] = [];
 		const inside = (handle: Awaited<ReturnType<typeof a.beginTransaction>>, fn: () => Promise<void>) =>
 			runInTransactionScope(new TransactionScope(a, handle), fn);

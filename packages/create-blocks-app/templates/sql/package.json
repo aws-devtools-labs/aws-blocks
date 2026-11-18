@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "sql",
-  "blocksTemplateDescription": "PostgreSQL backend \u2014 Database Building Block with SQL migrations, foreign keys, and transactions (Aurora Serverless v2)",
+  "blocksTemplateDescription": "PostgreSQL backend \u2014 Database Building Block with SQL migrations, foreign keys, and transactions (Aurora DSQL)",
   "engines": {
     "node": ">=22.0.0"
   },
