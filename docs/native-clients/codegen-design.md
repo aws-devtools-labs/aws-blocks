@@ -213,6 +213,14 @@ When a spec value already takes the fallback's name, the spec value keeps it and
 
 Unions follow the same rule. A union with a JSON string discriminator whose arms are all objects, when a method's result reaches it, gets one extra arm for an object whose discriminator names no arm. That arm holds the object as the server sent it and encodes it back as equal JSON: Dart `XUnknown` (with `json`, a copy from `toJson()`, and `discriminator`), Swift `case unknown(JSONValue)` (with the union's `unknownDiscriminator`), Kotlin `X.Unknown(json: JsonObject)` (with `discriminator`; Kotlin generates the union's serializer for this, since kotlinx's sealed-class serializer can't fall back). An arm tagged `unknown` keeps its own name, so the fallback steps aside: Swift `unknownValue`, Kotlin `UnknownValue`. An exhaustive match over such a union needs the fallback case. An unknown arm's JSON can carry fields that a generated type would never expose, so don't log or display it whole; read the fields you need. These stay closed: a union only parameters use, one with a boolean discriminator (`true`/`false` is already exhaustive), one with a bare value arm or no discriminator (there is no tag to call unknown), and a union embedded in another arm's object, which shares that object.
 
+| SDK | Unknown arm of `X` | Its tag | Hand-built without a tag |
+|---|---|---|---|
+| Dart | `XUnknown(json)` | `discriminator` (`String`) | `discriminator` throws |
+| Swift | `case unknown(JSONValue)` | `unknownDiscriminator` on `X` (`String?`) | `unknownDiscriminator` is `nil` |
+| Kotlin | `X.Unknown(json: JsonObject)` | `discriminator` (`String`) | `discriminator` throws |
+
+Decoding only builds the unknown arm for an object whose tag is a string, so the last column applies to an arm an app builds itself.
+
 ---
 
 ## Authoring progression: plain TypeScript → Zod
