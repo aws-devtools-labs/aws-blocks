@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Step 3 (verifier): `npm run build`, then launch the dev server FRESH and run the task's Playwright
 # spec against it. This step OWNS the dev server (step 2 ran with none bound): it frees the ports,
 # starts `npm run dev`, discovers the port from the framework banner, and points Playwright at it.

@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Public diagnostics use verifier-owned identifiers, never arbitrary runtime text."""
 import json
 from pathlib import Path

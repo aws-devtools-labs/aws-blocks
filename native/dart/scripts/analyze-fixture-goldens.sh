@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Runs `dart analyze` over every codegen fixture's Dart golden and fails if any
 # has an analyzer error. The goldens are what `blocks_codegen` emits for each
 # spec, so an error here is an error in a customer's generated client.

@@ -247,7 +247,11 @@ jobs:
         run: npm run lint:deps
 
       # Every tracked source file under packages/, native/ and scripts/ carries
-      # the Apache-2.0 license header (exclusions listed in the script).
+      # the Apache-2.0 license header (exclusions listed in the script). The
+      # checker's header detection, insertion and exclusions are tested first.
+      - name: Test the license-header check
+        run: node --test scripts/check-license-headers.test.mjs
+
       - name: Check license headers
         run: npm run check:headers
 

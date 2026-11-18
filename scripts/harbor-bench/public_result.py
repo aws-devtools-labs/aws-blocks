@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Never publish raw Harbor logs, trajectories, generated app files, or exception text."""
 import json
 import re

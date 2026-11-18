@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Single source for the benchmark's model, CLI, Harbor and skill pins.
 
 requirements.txt and the workflow's Bedrock session policy must restate the Harbor

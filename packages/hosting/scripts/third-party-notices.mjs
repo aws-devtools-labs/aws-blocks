@@ -45,10 +45,12 @@ function licenseOf(pkgJson) {
 }
 
 function isAllowed(expr) {
-  return expr
-    .replace(/[()]/g, '')
-    .split(/\s+OR\s+/)
-    .some((id) => ALLOWED_LICENSES.has(id.trim()));
+  const flat = expr.trim().replace(/^\((.*)\)$/, '$1');
+  const ids = flat.replace(/[()]/g, ' ').split(/\s+(?:AND|OR)\s+/).map((id) => id.trim());
+  // A flat `A OR B` list passes when one branch is allowed. Anything with AND,
+  // WITH or nested parentheses passes only when every id in it is allowed.
+  if (!/[()]|\s(?:AND|WITH)\s/.test(flat)) return ids.some((id) => ALLOWED_LICENSES.has(id));
+  return ids.every((id) => ALLOWED_LICENSES.has(id));
 }
 
 function repositoryOf(pkgJson) {

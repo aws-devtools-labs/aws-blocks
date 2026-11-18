@@ -46,6 +46,24 @@ describe('buildThirdPartyNotices', () => {
     assert.throws(() => run({ [input]: 10 }), /gpl-pkg@1\.0\.0: license "GPL-3\.0" is not in the allowlist/);
   });
 
+  it('fails for an AND expression with a license outside the allowlist', () => {
+    const input = fakePackage(
+      'gpl-and-pkg',
+      { name: 'gpl-and-pkg', version: '1.0.0', license: 'GPL-3.0 AND (MIT OR ISC)' },
+      { LICENSE: 'text' },
+    );
+    assert.throws(() => run({ [input]: 10 }), /gpl-and-pkg@1\.0\.0: license "GPL-3\.0 AND \(MIT OR ISC\)" is not in the allowlist/);
+  });
+
+  it('passes an AND expression whose licenses are all in the allowlist', () => {
+    const input = fakePackage(
+      'mit-and-bsd-pkg',
+      { name: 'mit-and-bsd-pkg', version: '1.0.0', license: 'MIT AND BSD-3-Clause' },
+      { LICENSE: 'text' },
+    );
+    assert.match(run({ [input]: 10 }), /License: MIT AND BSD-3-Clause/);
+  });
+
   it('uses the shared Apache text for an Apache-2.0 package without a LICENSE file', () => {
     const input = fakePackage('@aws-sdk/no-license', { name: '@aws-sdk/no-license', version: '3.0.0', license: 'Apache-2.0' });
     const out = run({ [input]: 10 });
