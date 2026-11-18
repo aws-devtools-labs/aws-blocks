@@ -273,7 +273,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew blocksCodegen
+        run: ./gradlew cdkBlocksCodegen
 
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
@@ -931,7 +931,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew blocksCodegen
+        run: ./gradlew cdkBlocksCodegen
 
       - name: Run Kotlin E2E against sandbox
         if: matrix.label != 'Android'
