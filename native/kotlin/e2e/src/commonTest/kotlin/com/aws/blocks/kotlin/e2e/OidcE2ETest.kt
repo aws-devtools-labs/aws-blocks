@@ -14,6 +14,8 @@ import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
 import com.aws.blocks.kotlin.oidc.OidcSignInOptions
 import com.aws.blocks.kotlin.oidc.OidcSignInOutcome
+import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
@@ -27,7 +29,7 @@ import kotlinx.coroutines.test.runTest
  * Stands in for a browser by walking the redirect chain the stub IdP produces. The stub
  * auto-approves, so every hop is a 302 until the backend relays to the custom scheme.
  */
-private class RedirectFollowingLauncher : OidcPlatformLauncher {
+internal class RedirectFollowingLauncher : OidcPlatformLauncher {
 
     override suspend fun openSession(
         configuredRelayTo: String,
@@ -121,6 +123,23 @@ class OidcE2ETest {
 
         client.authState.value shouldBe OidcAuthState.SignedOut
         api.oidcCheckAuth() shouldBe false
+    }
+
+    @Test
+    fun restoreFollowsTheSessionCookie() = runTest {
+        if (!hasHeadlessIdp()) {
+            markSkipped(NEEDS_HEADLESS_IDP)
+            return@runTest
+        }
+        val client = oidcClient()
+        val user = client.signIn(OidcAuthApi.GetClient.Provider.Google)
+
+        // A second client on the same Blocks instance shares its cookie jar, as a relaunch does.
+        val restored = oidcClient().restore()
+        restored.shouldNotBeNull().userId shouldBe user.userId
+
+        client.signOut().shouldNotBeNull() // the stub IdP has a logout URL
+        oidcClient().restore().shouldBeNull()
     }
 
     private companion object {

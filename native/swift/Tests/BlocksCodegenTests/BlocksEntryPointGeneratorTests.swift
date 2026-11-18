@@ -213,7 +213,9 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
     // A namespace class named like any type the generated files name unqualified would shadow it.
     func testReservedClassNamesCoverEveryTypeGeneratedCodeNamesUnqualified() throws {
         let fixtures = swiftPackageURL.deletingLastPathComponent().appendingPathComponent("codegen-fixtures")
+        // A fixture whose Swift golden is a codegen error (a transferable parameter) generates no code to scan.
         let specs = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
+            .filter { !FileManager.default.fileExists(atPath: $0.appendingPathComponent("swift/codegen-error.txt").path) }
             .map { $0.appendingPathComponent("spec.json") }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
             .map { try String(contentsOf: $0) }

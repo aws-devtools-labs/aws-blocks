@@ -607,7 +607,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(output.warnings.isEmpty, "a nested transferable must not emit a diagnostic, got: \(output.warnings)")
     }
 
-    func testTransferableParameterStaysUntypedWithNoFallback() throws {
+    func testUnboundTransferableParameterIsRefused() throws {
         let json = """
         {
             "openrpc": "1.3.2",
@@ -620,10 +620,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: json)
-        let output = try generator.generate(from: model)
-        XCTAssertTrue(output.api.contains("link: JSONValue"), "an unbound transferable parameter keeps its prior JSONValue type, got:\n\(output.api)")
-        XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable parameter is out of scope, got:\n\(output.api)")
-        XCTAssertTrue(output.warnings.isEmpty, "a transferable parameter must not emit a diagnostic, got: \(output.warnings)")
+        // A tag no binding declares is still a transferable, and still read-only.
+        XCTAssertThrowsError(try generator.generate(from: model)) { error in
+            XCTAssertEqual("\(error)", "Transferable types (example-iot/device-link) cannot be serialized — they are read-only")
+        }
     }
 
     func testTransferableInRecordFieldStaysUntypedWithNoFallback() throws {
@@ -1088,8 +1088,9 @@ final class SwiftCodeGeneratorTests: XCTestCase {
     }
 
     func testProviderRenameEndsForAParameterWithNoNamePart() throws {
-        // A param named only by separators PascalCases to "", which can't prefix a clashing name.
-        let output = try generate(from: oidcSpec("""
+        // A param named only by separators PascalCases to "", which can't prefix a clashing name. The builder
+        // still names (and ends renaming) the client's provider enum; the generator then refuses the parameter.
+        let model = try build(from: oidcSpec("""
             { "name": "auth.getClient", "params": [
                 { "name": "provider", "required": true, "schema": { "type": "string", "enum": ["a", "b"] } },
                 { "name": ".", "required": true, "schema": {
@@ -1098,7 +1099,12 @@ final class SwiftCodeGeneratorTests: XCTestCase {
                 }}
             ], "result": { "name": "R", "schema": { "type": "string" } } }
         """))
-        XCTAssertTrue(output.api.contains("public func getClient("), "got:\n\(output.api)")
+        let parameter = try XCTUnwrap(model.apiNamespaces.first?.operations.first?.parameters.last)
+        guard case .transferable("oidc/client", let typeArgs) = parameter.type, case .enum(let name, _)? = typeArgs.first else {
+            return XCTFail("expected an oidc/client parameter typed by a provider enum, got \(parameter.type)")
+        }
+        XCTAssertEqual(name, "_UnnamedProvider")
+        XCTAssertThrowsError(try generator.generate(from: model))
     }
 
     func testTypedOIDCClientInAModelHasNoProviderEnum() throws {

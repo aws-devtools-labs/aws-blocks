@@ -156,7 +156,9 @@ describe('parity: user attributes', () => {
 		// verifies the email and the phone stays unverified.
 		const claims = { ...contact, email_verified: true, phone_number_verified: false };
 		await signInAs(h, awsBrowser, 'alice', h.idp.authResult('alice', { claims }));
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice', { claims }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult('alice', { claims }),
+		}));
 
 		for (const [label, browser, auth] of [
 			['mock', mockBrowser, mockAuth],
@@ -789,9 +791,9 @@ describe('parity: displayName honours the ID token’s `*_verified` flags', () =
 		await signInAs(h, browser, generated, result(claims));
 		const api = h.auth.createApi();
 		const state = () => browser.request((ctx) => bindAuthApi(api, ctx).getAuthState());
-		/** What the next refresh (`InitiateAuth` REFRESH_TOKEN_AUTH) answers. */
+		/** What the next refresh (`GetTokensFromRefreshToken`) answers. */
 		const refreshesTo = (c: Record<string, unknown>) =>
-			h.on('InitiateAuthCommand', () => ({ AuthenticationResult: result(c) }));
+			h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: result(c) }));
 		return { h, auth: h.auth, browser, state, refreshesTo };
 	}
 
@@ -855,7 +857,9 @@ describe('parity: ID-token claims Cognito types as non-strings — `updated_at`,
 			updated_at: Number(profile.updated_at),
 		};
 		await signInAs(h, awsBrowser, 'alice', h.idp.authResult('alice', { claims }));
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice', { claims }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult('alice', { claims }),
+		}));
 
 		for (const [label, browser, auth] of [
 			['mock', mockBrowser, mockAuth],
@@ -950,6 +954,9 @@ describe('parity: confirmSignUp verifies only the contact the code was sent to',
 			return {};
 		});
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult(username, { claims: claims() }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult(username, { claims: claims() }),
+		}));
 		h.on('GetUserCommand', () => ({
 			Username: username,
 			UserAttributes: Object.entries({ sub, ...attributes }).map(([Name, Value]) => ({ Name, Value })),

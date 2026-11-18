@@ -404,11 +404,12 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
-  it('AGENTS.md names the cdk-blocks db and cdk-blocks vendorize commands of the scaffolded app', () => {
+  it('AGENTS.md names where SQL migrations live and the cdk-blocks vendorize command of the scaffolded app', () => {
     const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
-    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations')), 'the sql template keeps aws-blocks/migrations');
-    assert.match(guide, /`npx --no -- cdk-blocks db migrate aws-blocks\/migrations`/);
-    assert.match(guide, /`npx --no -- cdk-blocks db status aws-blocks\/migrations`/);
+    // The Database block reads aws-blocks/migrations/<block id>/; the sql template's block id is 'main'.
+    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations', 'main')), 'the sql template keeps aws-blocks/migrations/main');
+    assert.match(guide, /`aws-blocks\/migrations\/<block id>\/`/);
+    assert.doesNotMatch(guide, /cdk-blocks db /, 'cdk-blocks db is for an existing database, which the templates do not have');
     assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
   });
 

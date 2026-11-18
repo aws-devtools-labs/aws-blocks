@@ -1,7 +1,6 @@
 ---
 "@aws-blocks/core": patch
 "@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-data": patch
 "@aws-blocks/bb-database": patch
 "@aws-blocks/bb-file-bucket": patch
 "@aws-blocks/bb-knowledge-base": patch

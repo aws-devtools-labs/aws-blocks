@@ -131,6 +131,40 @@ The actions follow the options, in the frontend too: with MFA off, `setUpTotp` i
 
 Locally the user pool accepts any 6-digit code unless you opt in to real verification with `totpVerification: 'rfc6238'`; deployed, Cognito always verifies it (see [Local development](#local-development)).
 
+**`mfa` and Cognito's threat protection.** `mfa` adds a second factor; it does not detect stolen passwords. Cognito's compromised-credential detection and adaptive authentication belong to the `'plus'` feature plan. The default, `featurePlan: 'essentials'`, does not include them, and this block does not turn them on for you: set `featurePlan: 'plus'` (see [the sign-in methods](#the-sign-in-methods) for the price) and configure threat protection on the user pool yourself if you need them.
+
+### Session lifetime and refresh tokens
+
+A signed-in user holds a session row in the block's table and the Cognito tokens inside it. Four options under `session` set how long each lives:
+
+```ts
+// aws-blocks/index.ts
+import { Auth, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  session: {
+    ttlSeconds: 30 * 86_400,              // idle limit: the row and cookie, slid forward on every refresh
+    refreshTokenValiditySeconds: 30 * 86_400, // absolute limit: counted from sign-in, never extended
+    accessTokenValiditySeconds: 3_600,    // Cognito access token (5 minutes to 1 day)
+    idTokenValiditySeconds: 3_600,        // Cognito ID token (5 minutes to 1 day)
+    refreshTokenRotation: true,           // a new refresh token on every refresh
+  },
+});
+export const authApi = auth.createApi();
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `ttlSeconds` | 30 days (was 400 days) | How long a session may sit unused before its row and cookie expire. |
+| `refreshTokenValiditySeconds` | `ttlSeconds` | When the Cognito refresh token ends the session, counted from sign-in. Neither a refresh nor rotation extends it, so the user signs in again after this long however active they were. Whole minutes, 3600 to 315,360,000. |
+| `accessTokenValiditySeconds`, `idTokenValiditySeconds` | 1 hour | How long a token works before the block refreshes it. Whole minutes, 300 to 86,400, and not above the refresh token's lifetime. |
+| `refreshTokenRotation` | `true` | Cognito issues a new refresh token on each refresh and revokes the old one, after a 10-second grace period that lets a concurrent request retry. |
+
+The two limits work together: the session ends at the earlier of `ttlSeconds` without use and `refreshTokenValiditySeconds` since sign-in. Cognito's own default refresh token lifetime is 30 days, so a deployment that never set these options already ended sessions after 30 days; the 400-day row only outlived the token it held. Both app clients (`client` and the hosted-UI client) get the same settings. Changing them updates the clients in place; it does not replace a client or sign anyone out. Tokens already issued keep the lifetime they were issued with.
+
+**Rotation and other clients.** Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with rotation on, so the block removes `ALLOW_REFRESH_TOKEN_AUTH` from its clients and refreshes with `GetTokensFromRefreshToken` (which also accepts the refresh tokens of sessions that exist before the upgrade). If another app refreshes against the same client with `REFRESH_TOKEN_AUTH`, move it to `GetTokensFromRefreshToken` or set `refreshTokenRotation: false`. With `userPool` the block does not create the app client, so set these on your own client; the options other than `ttlSeconds` are refused there.
+
 ### Roles and an admin-only user list
 
 Declare the groups, opt in to `auth.admin`, and gate the method with `requireRole`:

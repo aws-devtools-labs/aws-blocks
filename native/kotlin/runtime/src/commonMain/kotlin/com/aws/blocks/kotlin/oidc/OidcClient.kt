@@ -6,6 +6,7 @@ package com.aws.blocks.kotlin.oidc
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksServer
 import com.aws.blocks.kotlin.CLOSED_MESSAGE
+import com.aws.blocks.kotlin.CookieJarKey
 import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.exceptions.BlocksException
@@ -13,16 +14,22 @@ import com.aws.blocks.kotlin.exceptions.ClientClosedException
 import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.Cookie
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
+import io.ktor.http.appendEncodedPathSegments
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import io.ktor.util.date.GMTDate
 import kotlin.io.encoding.Base64
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +63,10 @@ import kotlinx.serialization.modules.plus
  * string literals generates an [OidcProvider] enum for them, so `signIn` takes only those
  * providers; one that doesn't leaves the client an `OidcClient<AnyProvider>`, whose `signIn`
  * takes any provider name.
+ *
+ * Hold one client per `Auth` block for the app's lifetime. Each `getClient()` call hydrates a new
+ * client with its own [authState], so a client fetched again starts out
+ * [OidcAuthState.Loading] and does not see a sign-in made through another one.
  */
 class OidcClient<P : OidcProvider> internal constructor(
     internal val config: OidcClientConfig,
@@ -63,6 +74,18 @@ class OidcClient<P : OidcProvider> internal constructor(
     internal val server: BlocksServer,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
+
+    /**
+     * Counts the sign-ins and sign-outs that have settled [authState]. [restore] applies its answer
+     * only if this has not moved while it waited, so a slow session read cannot undo either.
+     */
+    private val generation = atomic(0)
+
+    /**
+     * Whether this client has a signed-in user. It is [OidcAuthState.Loading] until [restore],
+     * [signIn] or [signOut] first settles it, so call [restore] on launch to pick up a session
+     * from an earlier one.
+     */
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
 
     val providers: List<String> = config.providers
@@ -140,10 +163,13 @@ class OidcClient<P : OidcProvider> internal constructor(
             // a callback carrying a `code` still fails if the state or CSRF value does not
             // match, or if the exchange is rejected. They report separately, so the browser
             // is told which of the two it was.
-            val callback = reportingFailure(session, resultUri, INVALID_CALLBACK) {
+            // The state whose callback may repeat the provider's error: the issued one, once its
+            // CSRF value is ours.
+            val trustedState = params.state.takeIf { runCatching { verifyCsrf(it, csrf) }.isSuccess }
+            val callback = reportingFailure(session, resultUri, trustedState, INVALID_CALLBACK) {
                 validateCallback(resultUri, params, csrf)
             }
-            val user = reportingFailure(session, resultUri, EXCHANGE_FAILED) {
+            val user = reportingFailure(session, resultUri, trustedState, EXCHANGE_FAILED) {
                 // Step 6: Exchange the code for tokens.
                 exchange(
                     code = callback.code,
@@ -170,8 +196,20 @@ class OidcClient<P : OidcProvider> internal constructor(
         params: AuthorizeParamsResponse,
         csrf: String,
     ): ValidatedCallback {
-        // Step 4: Validate the callback.
+        // Step 4: Validate the callback. The state and its CSRF value are checked before
+        // anything else the callback says, an error included: any page can reach the relay
+        // target, and only a callback carrying the state this attempt was issued came from the
+        // backend.
         val resultParams = Url(resultUri).parameters
+
+        val returnedState = resultParams["state"]
+            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
+        if (returnedState != params.state) {
+            throw OidcCallbackException("State mismatch in callback")
+        }
+
+        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
+        verifyCsrf(returnedState, csrf)
 
         val error = resultParams["error"]
         if (error != null) {
@@ -181,15 +219,6 @@ class OidcClient<P : OidcProvider> internal constructor(
 
         val code = resultParams["code"]
             ?: throw OidcCallbackException("Callback URI missing 'code' parameter")
-        val returnedState = resultParams["state"]
-            ?: throw OidcCallbackException("Callback URI missing 'state' parameter")
-
-        if (returnedState != params.state) {
-            throw OidcCallbackException("State mismatch in callback")
-        }
-
-        // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
-        verifyCsrf(returnedState, csrf)
 
         return ValidatedCallback(code, resultParams["iss"])
     }
@@ -206,6 +235,7 @@ class OidcClient<P : OidcProvider> internal constructor(
     private suspend fun <T> reportingFailure(
         session: OidcRedirectSession,
         resultUri: String,
+        issuedState: String?,
         code: String,
         block: suspend () -> T,
     ): T = try {
@@ -216,7 +246,7 @@ class OidcClient<P : OidcProvider> internal constructor(
         }
         throw cancellation
     } catch (failure: Throwable) {
-        session.reportOutcome(failureOutcome(failure, resultUri, code))
+        session.reportOutcome(failureOutcome(failure, resultUri, issuedState, code))
         throw failure
     }
 
@@ -232,10 +262,14 @@ class OidcClient<P : OidcProvider> internal constructor(
     private fun failureOutcome(
         failure: Throwable,
         resultUri: String,
+        issuedState: String?,
         code: String,
     ): OidcSignInOutcome.Failed {
         val resultParams = runCatching { Url(resultUri).parameters }.getOrNull()
-        val idpError = resultParams?.get("error")
+        // A callback without the issued state, or one whose state carries another CSRF value,
+        // did not come from this attempt, so what it says the provider reported is not repeated
+        // to the user.
+        val idpError = resultParams?.takeIf { issuedState != null && it["state"] == issuedState }?.get("error")
         return if (idpError != null) {
             OidcSignInOutcome.Failed(idpError, resultParams["error_description"])
         } else {
@@ -266,6 +300,8 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("provider", name)
             put("callbackUrl", callbackUrl)
             if (iss != null) put("iss", iss)
+            // The session cookie authenticates this client, so it asks the backend for no tokens.
+            put("tokens", false)
         }
 
         val exchangeUrl = server.rawRoute(config.exchangePath)
@@ -307,6 +343,7 @@ class OidcClient<P : OidcProvider> internal constructor(
                 TransportException(e.message ?: "Reading the response failed", response.status.value, e),
             )
         }
+        generation.incrementAndGet()
         _authState.value = OidcAuthState.SignedIn(user)
         return user
     }
@@ -349,7 +386,11 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("relayTo", relayTo)
         }
 
-        val authorizeUrl = server.rawRoute(config.authorizeParamsBasePath, provider)
+        // The backend mounts each provider at encodeURIComponent(id), which escapes more than a
+        // path segment needs to (`+`, `:`, `@`, `/` and others), so the id is encoded the same way.
+        val authorizeUrl = URLBuilder(server.rawRoute(config.authorizeParamsBasePath))
+            .appendEncodedPathSegments(encodeUriComponent(provider))
+            .buildString()
         val response = try {
             httpClient.post(authorizeUrl) {
                 contentType(ContentType.Application.Json)
@@ -412,28 +453,148 @@ class OidcClient<P : OidcProvider> internal constructor(
     }
 
     /**
-     * Signs out on the backend and moves [authState] to [OidcAuthState.SignedOut]. The order of
-     * the local sign-out relative to a failure is owned by a separate change (#1477) and is
-     * deliberately unspecified here.
+     * Reads the session the backend holds for this client's cookie, so an app that launches
+     * signed in reports it before any sign-in of its own. Call it once on launch:
      *
-     * @throws TransportException if the request never completed.
+     * ```kotlin
+     * val user = oidc.restore() // null when there is no session
+     * ```
+     *
+     * The user is the one the backend reports, including its `userId`.
+     *
+     * A sign-in or sign-out that finishes while the session read is still waiting wins: [restore]
+     * then still returns what the backend answered, but leaves [authState] as that call set it.
+     *
+     * Every failure leaves [authState] as it was.
+     *
+     * @return the signed-in user, which also becomes the value of [authState], or `null` when the
+     *   backend has no session for this client (a 401), which sets [authState] to signed out.
+     * @throws ApiException if the backend refused with any other status and said why: its
+     *   `status` and `name` are the backend's.
+     * @throws TransportException if the request never completed, the backend serves no session
+     *   route (status 404, as for an `Auth` block with no federated providers), it refused
+     *   without saying why (a gateway's own page), or it answered 2xx with a body that holds no
+     *   user.
      * @throws ClientClosedException if the Blocks instance this client came from has been closed.
      */
-    suspend fun signOut() {
+    suspend fun restore(): OidcUser? {
         ensureOpen()
-        val signOutUrl = server.rawRoute(config.signOutPath)
-        // A request that never completed is reported as a TransportException, not a raw Ktor
-        // exception. What happens to the local state around a failure is #1477's to define.
-        try {
-            httpClient.post(signOutUrl) {
-                contentType(ContentType.Application.Json)
-            }
+        val started = generation.value
+        val response = try {
+            httpClient.get(server.rawRoute(sessionPath))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             throw TransportException(e.message ?: "The request failed", null, e)
         }
+        val status = response.status.value
+        if (response.status == HttpStatusCode.Unauthorized) {
+            settleIfUnchanged(started, OidcAuthState.SignedOut)
+            return null
+        }
+        if (response.status == HttpStatusCode.NotFound) {
+            throw TransportException(
+                "The backend serves no session route at $sessionPath. An Auth block serves one only " +
+                    "when it has federated providers; check the block's providers and callbackPath.",
+                status,
+            )
+        }
+        if (!response.status.isSuccess()) throw refusalCause(status, readBodyOrNull(response))
+        val user = try {
+            val userElement = Json.parseToJsonElement(response.bodyAsText()).jsonObject["user"]
+                ?: throw TransportException("Session response holds no user", status)
+            BlocksJson.decodeFromJsonElement<OidcUser>(userElement)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TransportException) {
+            throw e
+        } catch (e: Exception) {
+            throw TransportException("Session response was not understood", status, e)
+        }
+        settleIfUnchanged(started, OidcAuthState.SignedIn(user))
+        return user
+    }
+
+    /** Sets [authState] to [state] unless a sign-in or sign-out has settled it since [started]. */
+    private fun settleIfUnchanged(started: Int, state: OidcAuthState) {
+        if (generation.value == started) _authState.value = state
+    }
+
+    /**
+     * The descriptor's `sessionPath` when it carries one. Otherwise the session read is in the
+     * directory of the callback, beside `exchange`, as an `Auth` block serves it.
+     */
+    private val sessionPath: String
+        get() = config.sessionPath ?: (config.callbackPath.substringBeforeLast('/') + "/session")
+
+    /**
+     * Signs the user out of the backend, which ends its session and clears its session cookie.
+     *
+     * ```kotlin
+     * val logoutUrl = oidc.signOut()
+     * // Open logoutUrl, if any, to end the identity provider's session too.
+     * ```
+     *
+     * [authState] is set to signed out whenever the request is made, even if it fails, so the app
+     * never shows a user who asked to sign out as still signed in; a failure is thrown after that.
+     * A cancelled call that never got a response changes nothing.
+     *
+     * Only this block's session cookie is removed: the backend's `Set-Cookie` clears it, and the
+     * client removes it as well when the descriptor names it (`sessionCookieName`), so a sign-out
+     * whose response never arrived still drops it. The cookies of any other `Auth` block sharing
+     * the cookie jar are left in place.
+     *
+     * @return the identity provider's logout URL, or `null` when the provider has none. The client
+     *   does not open it; an app that wants the provider's own session ended opens it itself, or
+     *   the provider can sign the user straight back in.
+     * @throws ApiException if the backend refused and said why. A 503 named
+     *   `SignOutIncompleteException` (`e.isBlocksError("SignOutIncompleteException")`) means the
+     *   cookie was cleared but the backend could not remove its session.
+     * @throws TransportException if the request never completed, or the backend refused without
+     *   saying why (a gateway's own page).
+     * @throws ClientClosedException if the Blocks instance this client came from has been closed.
+     */
+    suspend fun signOut(): String? {
+        ensureOpen()
+        val signOutUrl = URLBuilder(server.rawRoute(config.signOutPath)).apply {
+            parameters.append("format", "json")
+        }.buildString()
+        val response = try {
+            httpClient.post(signOutUrl) {
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            signOutLocally()
+            throw TransportException(e.message ?: "The request failed", null, e)
+        }
+        signOutLocally()
+        val body = readBodyOrNull(response)
+        if (!response.status.isSuccess()) throw refusalCause(response.status.value, body)
+        val json = try {
+            body?.let { Json.parseToJsonElement(it) } as? JsonObject
+        } catch (_: Exception) {
+            null
+        }
+        return (json?.get("logoutUrl") as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }
+
+    /**
+     * Settles [authState] as signed out, ahead of any [restore] still waiting, and removes this
+     * block's session cookie when the descriptor names it. Only that cookie goes, so another
+     * `Auth` block sharing the jar stays signed in.
+     */
+    private suspend fun signOutLocally() {
+        generation.incrementAndGet()
         _authState.value = OidcAuthState.SignedOut
+        val name = config.sessionCookieName ?: return
+        val jar = httpClient.attributes.getOrNull(CookieJarKey) ?: return
+        jar.addCookie(
+            Url(server.rawRoute("/")),
+            Cookie(name, "", path = "/", expires = GMTDate(0), maxAge = 0),
+        )
     }
 
     companion object {
@@ -446,6 +607,9 @@ class OidcClient<P : OidcProvider> internal constructor(
         /**
          * The client for a `getClient` descriptor. [P] comes from the call site: the enum
          * generated for a spec that named its providers, or [AnyProvider] for one that didn't.
+         *
+         * Each call builds a new client with its own sign-in state, as each generated
+         * `getClient()` does, so keep the one an app signs in with rather than fetching another.
          */
         fun <P : OidcProvider> fromJson(
             element: JsonElement,
@@ -552,3 +716,18 @@ suspend fun OidcClient<AnyProvider>.exchange(
     callbackUrl: String,
     iss: String? = null,
 ): OidcUser = exchange(code, verifier, state, nonce, AnyProvider(provider), callbackUrl, iss)
+
+/** [value] percent-encoded as JavaScript's `encodeURIComponent` does: UTF-8, keeping only `A-Za-z0-9-_.!~*'()`. */
+internal fun encodeUriComponent(value: String): String = buildString {
+    for (byte in value.encodeToByteArray()) {
+        val c = byte.toInt() and 0xFF
+        val char = c.toChar()
+        if (char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' || char in "-_.!~*'()") {
+            append(char)
+        } else {
+            append('%')
+            append("0123456789ABCDEF"[c shr 4])
+            append("0123456789ABCDEF"[c and 0xF])
+        }
+    }
+}

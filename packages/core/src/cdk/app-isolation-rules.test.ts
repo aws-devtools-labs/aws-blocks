@@ -9,7 +9,9 @@ import {
 	RESERVED_APP_ID_PREFIXES,
 	RESERVED_APP_IDS,
 	checkApiChild,
+	checkPhysicalName,
 	checkResourcePolicy,
+	checkResourcePolicyPrincipals,
 	checkRole,
 	checkStackName,
 	checkStatement,
@@ -154,6 +156,31 @@ describe('app-isolation rules — statements fail closed', () => {
 		}
 	});
 
+	test("named grants on layers, RDS (and its Data API) and S3 Vectors: another app's are outside, the app's own are inside", () => {
+		const grant = (action: string, resource: string) => rules(checkStatement({ Effect: 'Allow', Action: action, Resource: resource }, 'appa', 'p'));
+		const arn = (service: string, rest: string) => `arn:aws:${service}:us-east-1:111111111111:${rest}`;
+		const cases: [string, (app: string) => string][] = [
+			['lambda:GetLayerVersion', (a) => arn('lambda', `layer:${a}-deps:3`)],
+			['rds:DescribeDBClusters', (a) => arn('rds', `cluster:${a}-db`)],
+			['rds:DescribeDBInstances', (a) => arn('rds', `db:${a}-db-1`)],
+			['rds-data:ExecuteStatement', (a) => arn('rds', `cluster:${a}-db`)],
+			['s3vectors:QueryVectors', (a) => arn('s3vectors', `bucket/${a}-vectors`)],
+			['s3vectors:QueryVectors', (a) => arn('s3vectors', `bucket/${a}-vectors/index/docs`)],
+		];
+		for (const [action, resource] of cases) {
+			assert.deepStrictEqual(grant(action, resource('appb')), ['grant-outside-app'], resource('appb'));
+			assert.deepStrictEqual(grant(action, resource('appa')), [], resource('appa'));
+		}
+		// A bare wildcard on these services is still a wildcard grant.
+		for (const [action, resource] of [
+			['s3vectors:QueryVectors', arn('s3vectors', '*')],
+			['lambda:GetLayerVersion', arn('lambda', '*')],
+			['rds:DescribeDBClusters', arn('rds', '*')],
+		]) {
+			assert.deepStrictEqual(grant(action, resource), ['wildcard-data-grant'], resource);
+		}
+	});
+
 	test("another app's CDK asset bucket is outside; the app's own is inside", () => {
 		const read = (bucket: string) => ({ Effect: 'Allow', Action: 's3:GetObject', Resource: `arn:aws:s3:::${bucket}/*` });
 		assert.deepStrictEqual(checkStatement(read('cdk-appa-assets-111111111111-us-east-1'), 'appa', 'p'), []);
@@ -289,6 +316,161 @@ describe('app-isolation rules — resource policies and trust', () => {
 		assert.deepStrictEqual(rules(checkRole(role({ AWS: 'arn:aws:iam::222222222222:root' }), 'appa', 'p', false)), ['role-trust-not-service']);
 		assert.deepStrictEqual(rules(checkRole(role('*'), 'appa', 'p', false)), ['role-trust-not-service']);
 		assert.deepStrictEqual(checkRole(role({ Service: 'lambda.amazonaws.com' }), 'appa', 'p', false), []);
+	});
+});
+
+describe('app-isolation rules — names the app gives its own resources', () => {
+	const check = (type: string, props: Record<string, unknown>) => rules(checkPhysicalName(type, props, 'appa', 'p'));
+
+	test("a literal name outside the prefix on a name-fenced type is flagged; the app's own, or a generated one, is not", () => {
+		const cases: [string, string, string, string][] = [
+			['AWS::DynamoDB::Table', 'TableName', 'appb-items', 'appa-items'],
+			['AWS::SQS::Queue', 'QueueName', 'appb-jobs', 'appa-jobs'],
+			['AWS::S3::Bucket', 'BucketName', 'appb-files', 'appa-files'],
+			['AWS::Lambda::Function', 'FunctionName', 'appb-handler', 'appa-handler'],
+			['AWS::Lambda::LayerVersion', 'LayerName', 'appb-deps', 'appa-deps'],
+			['AWS::SSM::Parameter', 'Name', '/appb-setting', '/appa/setting'],
+			['AWS::Logs::LogGroup', 'LogGroupName', '/aws/lambda/appb-handler', '/aws/lambda/appa-handler'],
+			['AWS::RDS::DBCluster', 'DBClusterIdentifier', 'appb-db', 'appa-db'],
+			['AWS::RDS::DBInstance', 'DBInstanceIdentifier', 'appb-db-1', 'appa-db-1'],
+			['AWS::Events::Rule', 'Name', 'appb-nightly', 'appa-nightly'],
+			['AWS::Scheduler::Schedule', 'Name', 'appb-report', 'appa-report'],
+			['AWS::SecretsManager::Secret', 'Name', 'appb-api-key', 'appa-api-key'],
+			['AWS::StepFunctions::StateMachine', 'StateMachineName', 'appb-flow', 'appa-flow'],
+		];
+		for (const [type, prop, outside, own] of cases) {
+			assert.deepStrictEqual(check(type, { [prop]: outside }), ['scope-outside-app'], `${type} ${outside}`);
+			assert.deepStrictEqual(check(type, { [prop]: own }), [], `${type} ${own}`);
+			assert.deepStrictEqual(check(type, {}), [], `${type} with a generated name`);
+		}
+	});
+
+	test('a table named <id> without the hyphen is outside (only SSM takes the bare id); a name with a reference is not judged', () => {
+		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: 'appa' }), ['scope-outside-app']);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: 'appa' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/blocks/appa/config/x' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/cdk/EdgeFunctionArn/eu-west-1/appa/Fn' }), []);
+		assert.deepStrictEqual(check('AWS::SSM::Parameter', { Name: '/cdk/EdgeFunctionArn/eu-west-1/appb/Fn' }), ['scope-outside-app']);
+		assert.deepStrictEqual(check('AWS::Logs::LogGroup', { LogGroupName: '/aws/rds/cluster/appa-db/postgresql' }), []);
+		assert.deepStrictEqual(check('AWS::RDS::DBCluster', { DBClusterIdentifier: 'APPA-DB' }), [], 'RDS lowercases identifiers');
+		const withRef = { 'Fn::Join': ['-', [{ Ref: 'AWS::StackName' }, 'items']] };
+		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: withRef }), []);
+		assert.deepStrictEqual(check('AWS::Kinesis::Stream', { Name: 'appb-events' }), [], 'not a name-fenced type');
+	});
+});
+
+describe('app-isolation rules — who a resource policy lets in', () => {
+	const ACCOUNT = '111111111111';
+	const check = (type: string, props: Record<string, unknown>) =>
+		rules(checkResourcePolicyPrincipals(type, props, 'appa', 'p', new Set(), ACCOUNT));
+	const doc = (statement: Record<string, unknown>) => ({ PolicyDocument: { Statement: [{ Effect: 'Allow', Action: 's3:GetObject', Resource: '*', ...statement }] } });
+	const bucket = (statement: Record<string, unknown>) => check('AWS::S3::BucketPolicy', doc(statement));
+	const role = (name: string, account = ACCOUNT) => `arn:aws:iam::${account}:role/${name}`;
+
+	test('a Lambda permission: everyone, another account or a public function URL is flagged; a service, the account or an IAM-authorized URL is not', () => {
+		const permission = (props: Record<string, unknown>) => check('AWS::Lambda::Permission', { Action: 'lambda:InvokeFunction', FunctionName: { Ref: 'Fn' }, ...props });
+		assert.deepStrictEqual(permission({ Principal: '*' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(permission({ Principal: '*', FunctionUrlAuthType: 'NONE' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(permission({ Principal: '222222222222' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(permission({ Principal: role('appb-Caller') }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(permission({ Principal: '*', FunctionUrlAuthType: 'AWS_IAM' }), []);
+		assert.deepStrictEqual(permission({ Principal: 'apigateway.amazonaws.com', SourceArn: { 'Fn::GetAtt': ['Api', 'Arn'] } }), []);
+		assert.deepStrictEqual(permission({ Principal: ACCOUNT }), []);
+		assert.deepStrictEqual(permission({ Principal: role('appa-Caller') }), []);
+	});
+
+	test("a policy document: everyone, another account, another app's role or NotPrincipal is flagged", () => {
+		assert.deepStrictEqual(bucket({ Principal: '*' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: '*' } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: 'arn:aws:iam::222222222222:root' } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: role('appb-Handler') } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: [role('appa-Handler'), role('appb-Handler')] } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ NotPrincipal: { AWS: role('appa-Handler') } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { Federated: 'cognito-identity.amazonaws.com' } }), ['resource-policy-outside-app']);
+	});
+
+	test("a policy document: a service, the app's own role, a role named <id>-… or this account's root is fine; a Deny is never flagged", () => {
+		assert.deepStrictEqual(bucket({ Principal: { Service: 'cloudfront.amazonaws.com' } }), []);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: { 'Fn::GetAtt': ['HandlerRole', 'Arn'] } } }), []);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: role('appa-Handler') } }), []);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: role('service-role/appa-Handler') } }), []);
+		const accountRoot = { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':iam::', { Ref: 'AWS::AccountId' }, ':root']] };
+		assert.deepStrictEqual(bucket({ Principal: { AWS: accountRoot } }), []);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: { Ref: 'AWS::AccountId' } } }), []);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: `arn:aws:iam::${ACCOUNT}:root` } }), []);
+		assert.deepStrictEqual(check('AWS::S3::BucketPolicy', { PolicyDocument: { Statement: [{ Effect: 'Deny', Principal: '*', Action: 's3:*', Resource: '*' }] } }), []);
+	});
+
+	test("everyone is fine only when a condition pins it to this app: its own ARNs here, or its app tag with this account; the account alone isn't enough", () => {
+		const scoped = (condition: Record<string, unknown>) => bucket({ Principal: { AWS: '*' }, Condition: condition });
+		assert.deepStrictEqual(scoped({ ArnLike: { 'aws:PrincipalArn': role('appa-*') } }), []);
+		const pseudoRole = { 'Fn::Join': ['', ['arn:aws:iam::', { Ref: 'AWS::AccountId' }, ':role/appa-*']] };
+		assert.deepStrictEqual(scoped({ ArnLike: { 'aws:PrincipalArn': pseudoRole } }), []);
+		assert.deepStrictEqual(scoped({ ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': ['Distribution', 'Arn'] } } }), []);
+		assert.deepStrictEqual(
+			scoped({ StringEquals: { 'aws:PrincipalTag/app': 'appa', 'aws:PrincipalAccount': { Ref: 'AWS::AccountId' } } }),
+			[],
+		);
+		assert.deepStrictEqual(scoped({ StringEquals: { 'aws:PrincipalTag/app': 'appa', 'aws:PrincipalAccount': ACCOUNT } }), []);
+		// The tag alone: the caller's own account sets it, so another account can tag its role app=appa.
+		assert.deepStrictEqual(scoped({ StringEquals: { 'aws:PrincipalTag/app': 'appa' } }), ['resource-policy-outside-app']);
+		// The app's role name in another account, or in every account (a literal `*`).
+		assert.deepStrictEqual(scoped({ ArnLike: { 'aws:PrincipalArn': role('appa-*', '999999999999') } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(scoped({ ArnLike: { 'aws:PrincipalArn': 'arn:aws:iam::*:role/appa-*' } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(scoped({ ArnLike: { 'aws:PrincipalArn': role('appb-*') } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(scoped({ StringEquals: { 'aws:PrincipalTag/app': 'appb' } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(scoped({ StringEquals: { 'aws:SourceAccount': ACCOUNT } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(scoped({ StringEquals: { 'aws:PrincipalAccount': ACCOUNT } }), ['resource-policy-outside-app']);
+	});
+
+	test('a condition pin lets in only everyone (*), never a named principal from another account or app', () => {
+		const tagPin = { StringEquals: { 'aws:PrincipalTag/app': 'appa', 'aws:PrincipalAccount': ACCOUNT } };
+		// aws:PrincipalTag is set by the caller's own account, so another account can tag its role app=appa.
+		assert.deepStrictEqual(bucket({ Principal: { AWS: 'arn:aws:iam::999999999999:role/evil' }, Condition: tagPin }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: role('appb-Handler') }, Condition: tagPin }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { Federated: 'cognito-identity.amazonaws.com' }, Condition: tagPin }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(bucket({ Principal: { AWS: '*' }, Condition: tagPin }), []);
+		assert.deepStrictEqual(bucket({ Principal: '*', Condition: tagPin }), []);
+	});
+
+	test('EventBridge bus policies and KMS replica keys are read too', () => {
+		const outsider = { Effect: 'Allow', Principal: { AWS: '222222222222' }, Action: 'events:PutEvents', Resource: '*' };
+		assert.deepStrictEqual(check('AWS::Events::EventBus', { Name: 'appa-bus', Policy: { Statement: [outsider] } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::KMS::ReplicaKey', { KeyPolicy: { Statement: [outsider] } }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::Events::EventBusPolicy', { StatementId: 's', Statement: outsider }), ['resource-policy-outside-app']);
+		// The legacy form names the principal (an account id or *) directly.
+		assert.deepStrictEqual(check('AWS::Events::EventBusPolicy', { StatementId: 's', Action: 'events:PutEvents', Principal: '222222222222' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::Events::EventBusPolicy', { StatementId: 's', Action: 'events:PutEvents', Principal: '*' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::Events::EventBusPolicy', { StatementId: 's', Action: 'events:PutEvents', Principal: ACCOUNT }), []);
+		assert.deepStrictEqual(check('AWS::Events::EventBus', { Name: 'appa-bus' }), [], 'no policy');
+	});
+
+	test("a policy the check can't read (an intrinsic, a string) fails closed", () => {
+		const conditional = { 'Fn::If': ['IsProd', { Statement: [] }, { Statement: [] }] };
+		assert.deepStrictEqual(check('AWS::S3::BucketPolicy', { PolicyDocument: conditional }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::KMS::Key', { KeyPolicy: '{"Statement":[]}' }), ['resource-policy-outside-app']);
+		assert.deepStrictEqual(check('AWS::Events::EventBusPolicy', { StatementId: 's', Statement: conditional }), ['resource-policy-outside-app']);
+		// A single statement object (not in a list) is valid IAM and is read.
+		assert.deepStrictEqual(check('AWS::S3::BucketPolicy', { PolicyDocument: { Statement: { Effect: 'Allow', Principal: { Service: 'cloudfront.amazonaws.com' }, Action: 's3:GetObject', Resource: '*' } } }), []);
+	});
+
+	test("a KMS key policy, a queue, topic or secret policy and an API's resource policy are read the same way", () => {
+		const statement = { Effect: 'Allow', Principal: { AWS: role('appb-Handler') }, Action: '*', Resource: '*' };
+		for (const [type, key] of [
+			['AWS::KMS::Key', 'KeyPolicy'],
+			['AWS::SQS::QueuePolicy', 'PolicyDocument'],
+			['AWS::SNS::TopicPolicy', 'PolicyDocument'],
+			['AWS::SecretsManager::ResourcePolicy', 'ResourcePolicy'],
+			['AWS::ApiGateway::RestApi', 'Policy'],
+		]) {
+			assert.deepStrictEqual(check(type, { [key]: { Statement: [statement] } }), ['resource-policy-outside-app'], type);
+			assert.deepStrictEqual(check(type, { [key]: { Statement: [{ ...statement, Principal: { AWS: role('appa-Handler') } }] } }), [], type);
+		}
+		assert.deepStrictEqual(check('AWS::DynamoDB::Table', { TableName: 'x' }), [], 'not a resource policy');
+		// A public REST API (Hosting's origin-verify policy) lets in everyone, and denies requests without its secret header.
+		const publicApi = { Statement: [{ Effect: 'Allow', Principal: '*', Action: 'execute-api:Invoke', Resource: 'execute-api:/*' }] };
+		assert.deepStrictEqual(check('AWS::ApiGateway::RestApi', { Policy: publicApi }), []);
+		assert.deepStrictEqual(check('AWS::ApiGateway::RestApi', { Policy: { Statement: [{ ...publicApi.Statement[0], Principal: { AWS: '*' } }] } }), []);
 	});
 });
 

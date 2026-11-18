@@ -44,8 +44,7 @@ const repoRoot = join(__dirname, '..');
 /** Package name (minus the @aws-blocks/bb- prefix) -> BlockCategory. */
 const CATEGORY_BY_PACKAGE = {
 	'kv-store': 'data',
-	data: 'data',
-	'distributed-data': 'data',
+	database: 'data',
 	'file-bucket': 'storage',
 	realtime: 'messaging',
 	'email-client': 'messaging',
@@ -83,7 +82,7 @@ export const DESCRIPTION_WARN_LENGTH = 200;
 
 /**
  * A README blurb is markdown; a nav card is plain text. Strip the inline markup
- * that actually occurs in these READMEs (bb-data's blurb ends in
+ * that actually occurs in these READMEs (inline code such as
  * `` `fromExisting()` ``) and collapse whitespace.
  *
  * Single-underscore emphasis is deliberately NOT stripped: `_foo_` and an

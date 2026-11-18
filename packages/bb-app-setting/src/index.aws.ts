@@ -64,7 +64,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
 export class AppSetting<T = string> extends Scope {
 	/**
 	 * Reference an SSM parameter created and owned **outside this stack** (e.g. a
-	 * connection string seeded by `ensureSecrets` before deploy). At runtime this
+	 * connection string stored by `cdk-blocks db connect --stage`). At runtime this
 	 * reads the value like any other setting; the construct-time behavior (no
 	 * create/seed/tag/delete, read-only grant) is applied by the CDK variant. The
 	 * factory exists on every variant so app code uses one API across dev/deploy.

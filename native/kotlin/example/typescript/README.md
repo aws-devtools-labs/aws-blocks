@@ -31,7 +31,7 @@ To switch the apps between local and sandbox, regenerate the spec the other way.
 
 ### Inside the AWS Blocks repository
 
-`npm install` fetches `@aws-blocks/blocks` from npm. To run this backend against the packages in your checkout instead (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+`npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../aws-blocks node_modules/aws-blocks
@@ -66,7 +66,7 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`: it carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`). They keep the session cookie the exchange sets. `allowBearerAuth: true` additionally lets a native client that holds the provider's access token call the API with `Authorization: Bearer <token>` and renew it at `/aws-blocks/auth/exchange/refresh`, as the Swift and Dart SDKs do.
+The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`: it carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`). They keep the session cookie the exchange sets, and that cookie is what keeps them signed in: the Kotlin client asks the exchange for no bearer tokens. `allowBearerAuth: true` only matters to a client that holds the provider's access token itself and calls the API with `Authorization: Bearer <token>`.
 
 Sign-in talks to real Google in every environment, including `npm run dev` — there is no fake-user fallback. Until both values are set, Google rejects the sign-in. Setting them is a two-part job: create an OAuth client at Google, then provide its two values.
 

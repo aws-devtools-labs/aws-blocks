@@ -108,8 +108,11 @@ class OidcClientAuthDescriptorTest {
     }
 
     /** Relays the issued state straight back, as the backend's callback would. */
-    private class RelayingLauncher : OidcPlatformLauncher {
+    private class RelayingLauncher(private val query: String = "code=the-code") : OidcPlatformLauncher {
         var authorizeUrl: String? = null
+            private set
+
+        var reportedOutcome: OidcSignInOutcome? = null
             private set
 
         override suspend fun openSession(
@@ -122,10 +125,12 @@ class OidcClientAuthDescriptorTest {
                 override suspend fun awaitRedirect(authorizeUrl: String): String {
                     this@RelayingLauncher.authorizeUrl = authorizeUrl
                     val state = Url(authorizeUrl).parameters["state"]
-                    return "$configuredRelayTo?code=the-code&state=$state"
+                    return "$configuredRelayTo?$query&state=$state"
                 }
 
-                override suspend fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+                override suspend fun reportOutcome(outcome: OidcSignInOutcome) {
+                    reportedOutcome = outcome
+                }
 
                 override fun close() = Unit
             }
@@ -199,6 +204,7 @@ class OidcClientAuthDescriptorTest {
         exchange["provider"]!!.jsonPrimitive.content shouldBe "google"
         exchange["code"]!!.jsonPrimitive.content shouldBe "the-code"
         exchange["callbackUrl"]!!.jsonPrimitive.content shouldBe "http://localhost:3001/aws-blocks/auth/callback"
+        exchange["tokens"]!!.jsonPrimitive.content shouldBe "false"
     }
 
     @Test
@@ -220,11 +226,127 @@ class OidcClientAuthDescriptorTest {
     }
 
     @Test
+    fun `a callback the backend names other than callback is used exactly`() = runTest {
+        var exchangeBody: String? = null
+        val recording = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requests += "${request.method.value} ${request.url.encodedPath}"
+                    val text = (request.body as? TextContent)?.text
+                    val body = if (request.url.encodedPath.endsWith("/exchange")) {
+                        exchangeBody = text
+                        """{"user":{"userId":"u","username":"alice"}}"""
+                    } else {
+                        val csrf = Json.parseToJsonElement(text!!).jsonObject["csrf"]!!.jsonPrimitive.content
+                        val state = Base64.UrlSafe.encode("""{"v":1,"csrf":"$csrf"}""".encodeToByteArray()).trimEnd('=')
+                        """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                            """"scopes":["openid"],"kind":"oidc","state":"$state.sig"}"""
+                    }
+                    respond(ByteReadChannel(body), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+            }
+        }
+        val launcher = RelayingLauncher()
+        val client = OidcClient.fromJson<AnyProvider>(
+            authBlockDescriptor(listOf("corp"), base = "/aws-blocks/auth/sso", callbackPath = "/aws-blocks/auth/sso/return"),
+            recording, fixtureServer, "myapp://auth",
+        ).also { it.platformLauncher = launcher }
+
+        client.signIn("corp")
+
+        requests shouldBe listOf(
+            "POST /aws-blocks/auth/sso/authorize-params/corp",
+            "POST /aws-blocks/auth/sso/exchange",
+        )
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe "http://localhost:3001/aws-blocks/auth/sso/return"
+        Json.parseToJsonElement(exchangeBody!!).jsonObject["callbackUrl"]!!.jsonPrimitive.content shouldBe
+            "http://localhost:3001/aws-blocks/auth/sso/return"
+    }
+
+    @Test
+    fun `signIn encodes the provider id as the backend mounts it`() = runTest {
+        val client = authClient(backend(), listOf("corp+eu", "a/b"))
+            .also { it.platformLauncher = RelayingLauncher() }
+
+        client.signIn("corp+eu")
+        requests.first() shouldBe "POST /aws-blocks/auth/authorize-params/corp%2Beu"
+
+        requests.clear()
+        client.signIn("a/b")
+        requests.first() shouldBe "POST /aws-blocks/auth/authorize-params/a%2Fb"
+    }
+
+    @Test
+    fun `encodeUriComponent matches encodeURIComponent`() {
+        encodeUriComponent("google") shouldBe "google"
+        encodeUriComponent("corp+eu") shouldBe "corp%2Beu"
+        encodeUriComponent("a:b@c,d;e=f\$g&h") shouldBe "a%3Ab%40c%2Cd%3Be%3Df%24g%26h"
+        encodeUriComponent("-_.!~*'()") shouldBe "-_.!~*'()"
+        encodeUriComponent("a b/é") shouldBe "a%20b%2F%C3%A9"
+    }
+
+    @Test
     fun `rejects a provider the block does not serve`() = runTest {
         val client = authClient(backend(), listOf("google"))
             .also { it.platformLauncher = RelayingLauncher() }
 
         shouldThrow<OidcUnknownProviderException> { client.signIn("github") }.provider shouldBe "github"
         requests shouldBe emptyList()
+    }
+
+    @Test
+    fun `signIn checks the envelope's CSRF value before an error the callback carries`() = runTest {
+        // The relayed state is the issued one, but its envelope carries another attempt's CSRF.
+        val foreign = Base64.UrlSafe.encode("""{"v":1,"csrf":"another-attempt"}""".encodeToByteArray()).trimEnd('=')
+        val backend = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    respond(
+                        ByteReadChannel(
+                            """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                                """"scopes":["openid"],"kind":"oidc","state":"$foreign.sig"}""",
+                        ),
+                        HttpStatusCode.OK,
+                        headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+        }
+        val launcher = RelayingLauncher(query = "error=access_denied&error_description=Call+this+number")
+        val client = authClient(backend, listOf("google"))
+            .also { it.platformLauncher = launcher }
+
+        shouldThrow<OidcCallbackException> { client.signIn("google") }.message shouldBe
+            "CSRF mismatch in state envelope"
+        launcher.reportedOutcome shouldBe
+            OidcSignInOutcome.Failed("invalid_callback", "CSRF mismatch in state envelope")
+    }
+
+    @Test
+    fun `signIn fails closed on a state envelope it cannot read`() = runTest {
+        // None of these payloads decodes to a state: the first is not base64url, the second is
+        // base64url of "not-json", and the third is base64url of {"v":1}, which has no csrf.
+        for (unreadable in listOf("!!!.sig", "bm90LWpzb24.sig", "eyJ2IjoxfQ.sig")) {
+            val launcher = RelayingLauncher()
+            val backend = HttpClient(MockEngine) {
+                engine {
+                    addHandler { request ->
+                        val body = if (request.url.encodedPath.contains("/authorize-params/")) {
+                            """{"authorizeUrl":"https://idp.example.com/authorize","clientId":"cid",""" +
+                                """"scopes":["openid"],"kind":"oidc","state":"$unreadable"}"""
+                        } else {
+                            """{"user":{"userId":"u","username":"alice"}}"""
+                        }
+                        respond(ByteReadChannel(body), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                }
+            }
+            val client = authClient(backend, listOf("google"))
+                .also { it.platformLauncher = launcher }
+
+            shouldThrow<OidcCallbackException> { client.signIn("google") }.message shouldBe
+                "State envelope could not be read"
+            client.authState.value shouldBe OidcAuthState.Loading
+        }
     }
 }
