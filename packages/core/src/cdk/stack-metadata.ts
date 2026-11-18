@@ -11,7 +11,7 @@ const TOOLS_METRICS_METADATA_KEY = 'AWSToolsMetrics';
 const BLOCKS_TOOLS_METRICS_KEY = 'AWSBlocks';
 const BLOCKS_TOOLS_METRICS_FORMAT_VERSION = 1;
 const BUILDING_BLOCK_CENSUS_KEY = Symbol.for('BLOCKS_BUILDING_BLOCK_CENSUS');
-const TEMPLATE_METADATA_DISABLE_ENV = 'AWS_BLOCKS_DISABLE_TEMPLATE_METADATA';
+const TEMPLATE_METADATA_DISABLE_ENV = 'CDK_BLOCKS_DISABLE_TEMPLATE_METADATA';
 const TEMPLATE_METADATA_CONTEXT_KEY = 'blocks:template-metadata';
 const CDK_VERSION_REPORTING_CONTEXT_KEY = 'aws:cdk:version-reporting';
 // Set by the CDK CLI instead of `aws:cdk:version-reporting` when version reporting is off.
@@ -59,7 +59,7 @@ export function isSandboxContext(scope: IConstruct): boolean {
  *
  * The `AWSBlocks` entry is enabled by default. It is omitted entirely, leaving any existing
  * `AWSToolsMetrics` value untouched, in any of these cases:
- * - the env var `AWS_BLOCKS_DISABLE_TEMPLATE_METADATA` is `1`, `true` or `yes`
+ * - the env var `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA` is `1`, `true` or `yes`
  *   (case-insensitive, trimmed);
  * - the CDK context key `blocks:template-metadata` is `false` or `"false"`;
  * - CDK version reporting is turned off (`cdk --no-version-reporting`, `"versionReporting": false`

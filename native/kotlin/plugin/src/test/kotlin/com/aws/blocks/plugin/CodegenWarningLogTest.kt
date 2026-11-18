@@ -36,7 +36,7 @@ class CodegenWarningLogTest : FunSpec({
                 id("org.jetbrains.kotlin.plugin.serialization")
                 id("com.aws.blocks.kotlin")
             }
-            awsBlocks {
+            cdkBlocks {
                 apiSpec.set(file("blocks.spec.json"))
                 packageName.set("com.example.app")
             }
@@ -46,7 +46,7 @@ class CodegenWarningLogTest : FunSpec({
         val result = GradleRunner.create()
             .withProjectDir(root)
             .withPluginClasspath(injectedClasspath())
-            .withArguments("awsBlocksCodegen", "--offline")
+            .withArguments("blocksCodegen", "--offline")
             .build()
 
         // The `w: ` prefix is the task's own forwarding, so this pins the log hop too.

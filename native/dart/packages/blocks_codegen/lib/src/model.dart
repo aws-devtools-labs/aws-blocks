@@ -129,7 +129,11 @@ class UnionLiteralRef extends TypeRef {
   /// In spec order, which fixes the generated enum's member order.
   final List<String> values;
 
-  const UnionLiteralRef(this.values);
+  /// Whether the schema says `"type": "string"`. Without it, the values may
+  /// be numbers or other JSON values, read as their `toString()`.
+  final bool isString;
+
+  const UnionLiteralRef(this.values, {this.isString = false});
 }
 
 /// A `oneOf` whose arms are objects sharing a single-value enum field. Becomes

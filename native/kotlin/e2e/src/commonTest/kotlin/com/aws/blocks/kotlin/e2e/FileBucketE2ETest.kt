@@ -3,7 +3,10 @@
 
 package com.aws.blocks.kotlin.e2e
 
+import com.aws.blocks.kotlin.exceptions.FileTransferException
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.ints.shouldBeInRange
 import io.kotest.matchers.collections.shouldHaveAtLeastSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -74,5 +77,17 @@ class FileBucketE2ETest {
         val download = api.fileGetHandle("$prefix/large.bin")
         val bytes = download.download()
         bytes.size shouldBe 100_000
+    }
+
+    /**
+     * A handle for a key that was never written points at an object the store refuses to serve
+     * (the dev server and S3 answer 404, or 403 where the role can't list), and the failure
+     * reaches the caller as a FileTransferException carrying that status.
+     */
+    @Test
+    fun downloadOfMissingKeyReportsTheHttpStatus() = runTest {
+        val handle = api.fileGetHandle("$prefix/never-written.txt")
+        val failure = shouldThrow<FileTransferException> { handle.download() }
+        failure.statusCode.shouldNotBeNull() shouldBeInRange 400..499
     }
 }

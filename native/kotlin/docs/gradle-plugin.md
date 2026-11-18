@@ -1,10 +1,10 @@
 # Gradle plugin reference
 
 The `com.aws.blocks.kotlin` plugin parses your AWS Blocks spec at build time and generates the
-client. This is the full `awsBlocks { }` surface; the [README](../README.md) covers the two
+client. This is the full `cdkBlocks { }` surface; the [README](../README.md) covers the two
 properties most projects set.
 
-## The `awsBlocks` block
+## The `cdkBlocks` block
 
 Every property is optional. Override one in your app module's `build.gradle.kts` when the default
 does not fit:
@@ -12,7 +12,7 @@ does not fit:
 ```kotlin
 import com.aws.blocks.plugin.GeneratedVisibility
 
-awsBlocks {
+cdkBlocks {
     // Path to the generated spec file (defaults to rootProject.file("blocks.spec.json"))
     apiSpec = rootProject.file("path/to/your/blocks.spec.json")
 
@@ -57,10 +57,7 @@ every call through it, including `Blocks()` when that is the spec's first server
 from the local dev server, `HTTP 403` from a deployed API Gateway).
 
 Code generation rejects an override that does not parse, has no `http://` or `https://` scheme or
-no host, or carries a query or fragment, and one that has no RPC path (nothing but slashes and dot
-segments) unless the spec declares a non-empty `x-blocks-endpoint`, in which case the endpoint is
-joined to the URL with one `/`. A spec whose RPC is served at the origin itself declares
-`"x-blocks-endpoint": "/"`; an empty value counts as none.
+no host, carries a query or fragment, or has no RPC path (nothing but slashes and dot segments).
 
 The spec carries the dev server's `local` by default (`sandbox` while `npm run sandbox` proxies
 through it), or the deployed `sandbox`/`production` server when the spec is generated with
@@ -89,12 +86,12 @@ including the iOS `Info.plist` entry, is in [OIDC](oidc.md#registering-the-relay
 
 | Task | Description |
 |------|-------------|
-| `awsBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `awsBlocksCodegenDebug`) |
-| `awsBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `awsBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
+| `blocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `blocksCodegenDebug`) |
+| `blocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
+| `blocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
 
 Codegen runs automatically as a dependency of compilation, so a normal build does not need to
-invoke these directly. `awsBlocksDumpModel` is the one to reach for when the generated API does not
+invoke these directly. `blocksDumpModel` is the one to reach for when the generated API does not
 match what you expected from the spec.
 
 ## One spec per compilation scope

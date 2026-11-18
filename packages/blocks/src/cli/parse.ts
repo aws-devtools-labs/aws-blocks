@@ -188,6 +188,11 @@ function applyOption(token: OptionToken, arg: string, scope: OptionScope, values
 	} else if (spec.type === 'optional-string') {
 		value = token.inlineValue && token.value !== undefined ? token.value : true;
 	} else {
+		// `ApiError --section` at the end of the line: the option's bare meaning (the headings), not an error.
+		if (token.value === undefined && spec.bare) {
+			values[spec.bare] = true;
+			return;
+		}
 		// A negative number is a value, not an option: `--port -1`.
 		if (token.value === undefined || (!token.inlineValue && isOption(token.value) && !/^-\d/.test(token.value))) {
 			throw new UsageError(`option --${spec.name} needs a value.`, { hint });
@@ -272,19 +277,56 @@ function parseCommandArgs(
 	const positionals: string[] = [];
 	const passthrough: string[] = [];
 	let terminated = false;
-	for (const token of tokenize(tokens, scope.specs)) {
+	// An option of `grepHabits` whose value parsed as grep's own flag (`--search -i term`): the next positional, in
+	// argv order, is its value.
+	let pending: OptionToken | undefined;
+	// An option with a bare meaning followed by another option (`docs core --section --search withAuth`): parseArgs
+	// takes `--search` as its value. It has no value: drop it, record its bare meaning, and read the rest again. Only
+	// the commands that declare such an option (docs) read their arguments more than once.
+	let args = [...tokens];
+	const bareSpecs = scope.specs.filter((s) => s.bare !== undefined);
+	while (bareSpecs.length) {
+		const bare = tokenize(args, scope.specs).find(
+			(t): t is OptionToken =>
+				t.kind === 'option' &&
+				!t.inlineValue &&
+				t.value !== undefined &&
+				isOption(t.value) &&
+				!/^-\d/.test(t.value) &&
+				bareSpecs.some((s) => s.name === t.name),
+		);
+		const spec = bare && bareSpecs.find((s) => s.name === bare.name);
+		if (!bare || !spec?.bare) break;
+		values[spec.bare] = true;
+		args = args.filter((_, i) => i !== bare.index);
+	}
+	for (const token of tokenize(args, scope.specs)) {
 		if (token.kind === 'option-terminator') {
 			terminated = true;
 			continue;
 		}
 		if (token.kind === 'positional') {
+			if (pending) {
+				applyOption({ ...pending, value: token.value, inlineValue: false }, args[pending.index], scope, values);
+				pending = undefined;
+				continue;
+			}
 			(terminated ? passthrough : positionals).push(token.value);
 			continue;
 		}
-		applyOption(token, tokens[token.index], scope, values);
+		const spec = scope.specs.find((s) => s.name === token.name);
+		if (spec?.grepHabits && !token.inlineValue && token.value !== undefined && GREP_FLAG.test(token.value)) {
+			pending = token;
+			continue;
+		}
+		applyOption(token, args[token.index], scope, values);
 	}
+	if (pending) applyOption(pending, args[pending.index], scope, values);
 	return { positionals, passthrough };
 }
+
+/** grep's own flags people type after a search option (`-i`, `-in`, `-F`, `-E`, `-w`), and `--`. */
+const GREP_FLAG = /^(?:-[iFEwnrRl]+|--)$/;
 
 function checkPositionals(command: CommandSpec, positionals: string[]): void {
 	const name = `cdk-blocks ${command.path.join(' ')}`;
@@ -310,7 +352,8 @@ function checkPositionals(command: CommandSpec, positionals: string[]): void {
 		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: runnable(`${name} --help`) });
 	}
 	const missing = args.find((a, i) => a.required && positionals[i] === undefined);
-	if (missing) throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: runnable(`${name} --help`) });
+	if (missing)
+		throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: runnable(`${name} --help`) });
 }
 
 /** A command path word, and its argv index. */
@@ -400,7 +443,11 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				swallowed
 					? `no command given: --${swallowed} took "${values[swallowed]}" as its value.`
 					: `no command given for --${given[0]}.`,
-				{ hint: swallowed ? blocksCommand(`--${swallowed}`, `<${swallowed}>`, String(values[swallowed])) : blocksCommand('--help') },
+				{
+					hint: swallowed
+						? blocksCommand(`--${swallowed}`, `<${swallowed}>`, String(values[swallowed]))
+						: blocksCommand('--help'),
+				},
 			);
 		}
 		return { globals, flags: values, positionals: [], passthrough: [] };
@@ -466,7 +513,11 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 			helpVerb: help ? tail.find((token) => command.verbs?.includes(token)) : undefined,
 		};
 	} else {
-		const { positionals, passthrough } = parseCommandArgs(command, tail, values);
+		const args = parseCommandArgs(command, tail, values);
+		const positionals = command.operandsAfterDashDash
+			? [...args.positionals, ...args.passthrough]
+			: args.positionals;
+		const passthrough = command.operandsAfterDashDash ? [] : args.passthrough;
 		parsed = { command, alias: aliasName, globals: toGlobals(values), flags: values, positionals, passthrough };
 		// `cdk-blocks dev --port 4000 stop -h`: help for the subcommand the run would name, not for `cdk-blocks dev`.
 		const subcommand =

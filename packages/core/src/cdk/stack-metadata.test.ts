@@ -12,7 +12,7 @@ import { CORE_VERSION } from '../version.js';
 import { Scope } from './index.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 
-before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+before(() => delete process.env.CDK_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
 function blocksValue(stack: cdk.Stack): string {
 	return Template.fromStack(stack).toJSON().Metadata.AWSToolsMetrics.AWSBlocks;
@@ -272,7 +272,7 @@ describe('addBlocksStackMetadata', () => {
 	});
 });
 
-const DISABLE_ENV = 'AWS_BLOCKS_DISABLE_TEMPLATE_METADATA';
+const DISABLE_ENV = 'CDK_BLOCKS_DISABLE_TEMPLATE_METADATA';
 
 function withEnv(values: Record<string, string | undefined>, fn: () => void): void {
 	const saved = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));

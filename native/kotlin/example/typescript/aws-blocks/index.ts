@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -115,6 +115,8 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+// The native OIDC client (`getClient()`), typed by the providers above in the generated Kotlin client.
+export const oidcAuthApi = auth.createOidcApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getCursorChannel(): Promise<RealtimeChannel<Cursor>> {

@@ -26,8 +26,16 @@ import {
 
 const ALLOWLIST = [
 	{
-		at: 'packages/blocks/src/cli/config.ts:228',
+		at: 'packages/blocks/src/cli/config.ts:242',
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
+	},
+	{
+		at: 'packages/blocks/src/cli/docs.ts:2227',
+		reason: 'sectionMentioning(): `alternatives` is `words.map(escapeRegExp).join(\'|\')`, so each word is escaped; the scan does not follow `.map(escapeRegExp)`.',
+	},
+	{
+		at: 'packages/blocks/src/cli/docs.ts:2238',
+		reason: 'sectionMentioning(): the same escaped `alternatives` as the line above, followed by a call\'s `(`.',
 	},
 	{
 		at: 'packages/core/src/cors.ts:166',

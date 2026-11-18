@@ -32,8 +32,8 @@
  * `TypeError`.
  */
 
-import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { KVStore } from '@aws-blocks/bb-kv-store';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import {
 	ApiNamespace,
@@ -504,6 +504,11 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 */
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
+	}
+
+	/** Synth-time stand-in for the runtime `createOidcApi()`, like {@link createApi}. */
+	createOidcApi() {
+		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'oidc' });
 	}
 
 	/**

@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func listTags() async throws -> [String] {
         let request = BlocksRequest(method: "api.listTags", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.listTags") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.listTags") }
         return try JSONDecoder().decode([String].self, from: result)
     }
 
@@ -25,13 +25,13 @@ public final nonisolated class Api: Sendable {
     public func listItems() async throws -> [ListItems.Result] {
         let request = BlocksRequest(method: "api.listItems", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.listItems") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.listItems") }
         return try JSONDecoder().decode([ListItems.Result].self, from: result)
     }
 
     public enum ListItems {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let id: String
             public let name: String
 

@@ -7,7 +7,7 @@ Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM
 frontend.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template auth`
-> (`--template auth-cognito`, this template's former name, still works).
+> (`--template auth-cognito` is an alias for `auth`).
 
 ## Getting Started
 
@@ -64,7 +64,7 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
 
 ⚠️ Decide `users.signInWith`, `users.caseSensitive`, required attributes and custom attributes before
 your first deploy: Cognito can't change them on an existing user pool. Full
-`Auth` docs: `node_modules/@aws-blocks/bb-auth/README.md`.
+`Auth` docs: `npx --no -- cdk-blocks docs Auth`.
 
 ## Commands
 
@@ -99,7 +99,7 @@ and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
 
 ## For Agents
 
-Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more). `AGENTS.md` explains the rest.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS

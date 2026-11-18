@@ -28,6 +28,7 @@
  * `@astrojs/node`, the bridge is skipped.
  */
 import { spawn } from './spawn.js';
+import { appBuildEnv } from './shared/app_build_env.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { emitTrailingSlashRedirects } from './shared/trailing_slash.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
@@ -630,6 +631,7 @@ const runAstroBuild = (
     spawn.sync(bin!, args, {
       cwd: projectDir,
       stdio: 'inherit',
+      env: appBuildEnv(),
     });
   } catch (error) {
     throw new HostingError(

@@ -1,4 +1,4 @@
-# Upgrading an app from an older template
+# Upgrading an older app
 
 An app keeps the `aws-blocks/index.cdk.ts` that `create-blocks-app` copied into it when it was scaffolded. Upgrading `@aws-blocks/blocks` doesn't change that file. Templates declare `"@aws-blocks/blocks": "*"`, so a fresh install of an old app pulls the current release, and an `index.cdk.ts` written for an older release can stop synthesizing.
 
@@ -9,6 +9,8 @@ Find your app's shape below and apply the edits. Every other file is unchanged.
 | 0.1.0 to 0.1.19 | `BlocksStack.create() requires a \`defaults\` field` (older releases: `TypeError: Cannot read properties of undefined (reading 'vpc')`) |
 | 0.1.20 to 0.2.0 | `error TS2339: Property 'handler' does not exist on type 'BlocksStack'` |
 | 0.3.0 and later | Nothing to change |
+
+A deploy can fail with `CloudFormation cannot update a stack when a custom-named resource requires replacing` on the table of a `KVStore`. The cause is then the `KVStore` release, not the template. See [A `KVStore` from release 0.4.0 or earlier](#a-kvstore-from-release-040-or-earlier-custom-named-resource-requires-replacing).
 
 ## 0.1.0 to 0.1.19: add `defaults`, drop the sandbox overrides
 
@@ -69,6 +71,38 @@ If your own code uses `blocksStack.handler`, use the stack-wide equivalents, whi
 | `blocksStack.handler.addToRolePolicy(statement)` | `blocksStack.executionRole.addToPrincipalPolicy(statement)` |
 
 `registerConfig` is exported from `@aws-blocks/blocks/cdk`. Values it registers are loaded into `process.env` on every compute at cold start, but a real environment variable of the same name wins.
+
+## A `KVStore` from release 0.4.0 or earlier: `custom-named resource requires replacing`
+
+This section is for an app that deployed a `KVStore` with `@aws-blocks/bb-kv-store` 0.4.0 or earlier and now deploys on a later release. The cause is the Building Block, not the template. The deploy fails on the table of that store:
+
+```text
+CloudFormation cannot update a stack when a custom-named resource requires replacing. Rename <table name> and update the stack again.
+```
+
+The stack rolls back, and the table keeps its items.
+
+Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. Later releases key the table by another attribute and keep one attribute for each field. DynamoDB cannot change the key of a table, and CloudFormation does not replace a table that has a fixed name. So the new `KVStore` cannot take over the old table. Don't rename or delete the table to get past the error: your items are in it.
+
+Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` with a new id:
+
+1. In `aws-blocks/index.ts`, change the class on the line of the old store to `LegacyKVStore`. Keep its id and every option it had. Add a `KVStore` with a new id next to it:
+
+   ```ts
+   import { KVStore, LegacyKVStore } from '@aws-blocks/blocks';
+
+   // Before: const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
+   const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
+   const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
+   ```
+
+   Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete`, and `scan` of release 0.4.0, so code that still calls the old store keeps working.
+
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` does not copy the items. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) lists the tools for a copy and steps that are suitable for some migrations.
+
+3. When the data is in the new store, remove the `LegacyKVStore` line and any read of the old store, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A retained table, which is the default of the production preset, stays in your account until you delete it.
+
+`LegacyKVStore` is deprecated and frozen. It exists only for this upgrade, it has the methods of release 0.4.0, and it gets no new features. Use `KVStore` for anything new. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) has the options to keep and what to know before you start. For example, the table name changes with the id.
 
 ## Keep Node types out of the frontend
 

@@ -72,8 +72,8 @@ export type BlocksContext = {
 
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = (context: BlocksContext) => T;
 
-// Map all methods to return Promises
-type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
+/** The type of an `ApiNamespace` instance: each method of `T`, returning a `Promise` of its result. */
+export type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
   [K in keyof T]: T[K] extends (...args: infer Args) => infer R
     ? (...args: Args) => Promise<Awaited<R>>
     : never;

@@ -31,7 +31,7 @@ dependencies {
 ### 3. Point at your spec
 
 ```kotlin
-awsBlocks {
+cdkBlocks {
     apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
     packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
@@ -79,7 +79,7 @@ Generated names follow the spec, and the wire keeps the spec's names. A property
 
 | Guide | Covers |
 |---|---|
-| [Gradle plugin](docs/gradle-plugin.md) | the full `awsBlocks { }` block, tasks, and multi-module setups |
+| [Gradle plugin](docs/gradle-plugin.md) | the full `cdkBlocks { }` block, tasks, and multi-module setups |
 | [Runtime configuration](docs/runtime-configuration.md) | `BlocksConfig`, per-target configuration, where the session is stored, signing out |
 | [OIDC](docs/oidc.md) | sign-in, relay scheme registration, JVM landing pages, typed providers |
 | [Transferables](docs/transferables.md) | results that are live objects rather than data |
@@ -94,7 +94,7 @@ iOS and desktop.
 
 | Platform | Engine | Cookie Storage                                                                                                          |
 |----------|--------|-------------------------------------------------------------------------------------------------------------------------|
-| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| Android | OkHttp | Android Keystore AES-256-GCM key over SharedPreferences, in the app's sandbox                                            |
 | iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
 | JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#what-desktop-storage-protects), with the key held by the OS — in memory if no id is set |
 

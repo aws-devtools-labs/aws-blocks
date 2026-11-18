@@ -538,7 +538,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "unbound tag should hydrate via fromJSON with the declared tag, got:\n\(output.api)"
         )
         XCTAssertTrue(
-            output.api.contains("guard let result else { throw RPCError(message: \"Unexpected null result for api.connectDevice\") }"),
+            output.api.contains("guard let result else { throw TransportError(message: \"Unexpected null result for api.connectDevice\") }"),
             "a required (non-optional) result must throw on a null body, got:\n\(output.api)"
         )
         // The emitted code must declare the type the diagnostic names (Api.ConnectDevice.ResultMessage),
@@ -1019,7 +1019,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
                 ]}}
             ], "result": { "name": "R", "schema": \(typedClient) } }
         """))
-        XCTAssertTrue(variants.api.contains("public struct Provider: Codable {"), "got:\n\(variants.api)")
+        XCTAssertTrue(variants.api.contains("public struct Provider: Codable, Sendable {"), "got:\n\(variants.api)")
         XCTAssertTrue(
             variants.api.contains("public nonisolated enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
             "got:\n\(variants.api)"
@@ -1057,7 +1057,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
         XCTAssertTrue(unshadowed.api.contains("-> OIDCClient<GetClient.Provider> {"), "got:\n\(unshadowed.api)")
-        XCTAssertTrue(unshadowed.models.contains("public nonisolated struct Provider: Codable {"), "got:\n\(unshadowed.models)")
+        XCTAssertTrue(unshadowed.models.contains("public nonisolated struct Provider: Codable, Sendable {"), "got:\n\(unshadowed.models)")
         XCTAssertEqual(unshadowed.warnings, [])
     }
 

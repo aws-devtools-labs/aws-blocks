@@ -173,6 +173,7 @@ createServer((request, response) => {
     assert.strictEqual(payload.jsonrpc, '2.0');
     assert.strictEqual(payload.id, 1);
     assert.ok(!('error' in payload), `Unexpected RPC error: ${JSON.stringify(payload.error)}`);
+    assert.strictEqual(payload.result, null, 'a void handler answers "result": null');
 
     const logDeadline = Date.now() + 1_000;
     while (!output.stdout.includes('[rpc-ok] testApi.pingVoid') && Date.now() < logDeadline) {

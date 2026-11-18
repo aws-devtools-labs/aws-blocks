@@ -4,7 +4,7 @@
 package com.aws.blocks.kotlin.filebucket
 
 import com.aws.blocks.kotlin.defaultHttpClient
-import com.aws.blocks.kotlin.exceptions.TransferableIOException
+import com.aws.blocks.kotlin.exceptions.FileTransferException
 import io.ktor.client.HttpClient
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -13,14 +13,12 @@ import io.ktor.http.content.ChannelWriterContent
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.writeFully
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.io.Buffer
 import kotlinx.io.RawSource
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 
 class FileUploadHandle(
     val url: String,
@@ -38,17 +36,6 @@ class FileUploadHandle(
         }
     }
 
-    /**
-     * This handle's descriptor, as the server's `toJSON()` sends it and [fromJson] reads it:
-     * `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`. A generated client sends a
-     * handle parameter this way.
-     */
-    fun toJson(): JsonObject = buildJsonObject {
-        put("__blocks", "file-bucket/upload")
-        put("url", url)
-        fileContentType?.let { put("contentType", it) }
-    }
-
     suspend fun upload(body: ByteArray) {
         try {
             val response = httpClient.put(url) {
@@ -56,14 +43,17 @@ class FileUploadHandle(
                 setBody(body)
             }
             if (!response.status.isSuccess()) {
-                throw TransferableIOException(
-                    "Upload failed: HTTP ${response.status.value}"
+                throw FileTransferException(
+                    "Upload failed: HTTP ${response.status.value}",
+                    response.status.value,
                 )
             }
-        } catch (e: TransferableIOException) {
+        } catch (e: FileTransferException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw TransferableIOException("Upload failed: ${e.message}", e)
+            throw FileTransferException("Upload failed: ${e.message}", null, e)
         }
     }
 
@@ -78,7 +68,7 @@ class FileUploadHandle(
      *
      * @param source The bytes to upload.
      * @param contentLength The body size in bytes, or `null` to stream without one.
-     * @throws TransferableIOException On an HTTP error or a network failure.
+     * @throws FileTransferException On an HTTP error or a network failure.
      */
     suspend fun uploadFrom(source: RawSource, contentLength: Long? = null) {
         try {
@@ -101,14 +91,17 @@ class FileUploadHandle(
                 setBody(body)
             }
             if (!response.status.isSuccess()) {
-                throw TransferableIOException(
-                    "Upload failed: HTTP ${response.status.value}"
+                throw FileTransferException(
+                    "Upload failed: HTTP ${response.status.value}",
+                    response.status.value,
                 )
             }
-        } catch (e: TransferableIOException) {
+        } catch (e: FileTransferException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw TransferableIOException("Upload failed: ${e.message}", e)
+            throw FileTransferException("Upload failed: ${e.message}", null, e)
         }
     }
 }

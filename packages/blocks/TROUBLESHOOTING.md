@@ -102,6 +102,12 @@ The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `t
 
 ## Server won't start
 
+| Message | Cause | Fix |
+|---------|-------|-----|
+| `❌ a dev server of this app is already running on :3000 (pid …).` `Not starting a second one.` | Another dev server for this app is running (or still `starting`), on any port | Use the running one, or stop it with the command the message prints (`npx --no -- cdk-blocks dev stop`, plus `--port <port>` when it isn't on 3000), then start again |
+| `❌ port 3000 is in use by …` | A process that is not this app's dev server holds the port (or the frontend port), so the dev server doesn't start | Run the `kill …` the message prints (or find the holder with `lsof -i :3000`), or choose another port with `--port` (`--frontend-port` for the frontend port) |
+| `⚠️  Port 3000 is still in use after N attempts to bind it.`, then `❌ port 3000 is still in use.` | Something took the port between the startup check and the bind, and kept it through the retries | As above: stop the process the message names, or choose another port with `--port` |
+
 ```bash
 # Check if port is already in use:
 lsof -i :3000
@@ -109,6 +115,27 @@ lsof -i :3000
 # Kill stale processes:
 pkill -f "tsx watch"
 ```
+
+## `Frontend server unavailable` (502)
+
+The dev server listens on one port (3000 by default). It answers the API (`POST /aws-blocks/api`), your `RawRoute`s and `/.blocks-sandbox/config.json` itself, and proxies every other request to the frontend dev server (Next.js or Vite) on the frontend port, 3100 by default (`package.json#blocks.dev.frontendPort`, or `--frontend-port`). The body `Frontend server unavailable` with status **502** means that proxy could not reach anything on the frontend port. The API is unaffected.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Startup log `Frontend did not start: Frontend server on port 3100 did not start within 30000ms`, then `(API only — frontend unavailable)` | The frontend command failed or is still starting, or it listens on a different port | Read the frontend's error output above that line and fix it; the proxy reaches the frontend as soon as it listens on the frontend port |
+| `Frontend dev server exited (…) and exceeded 5 restarts within 10s — leaving it down.` | The frontend crashes on start (a build or config error) | Fix the error printed above it, then restart `npm run dev` |
+| Warning `the frontend command "…" does not contain the frontend port 3100` | A custom `blocks.dev.frontendCommand` starts the frontend on its own port, which `--frontend-port` does not change | Put the frontend port in the command, or remove `frontendCommand` so `cdk-blocks dev` detects Next.js or Vite and starts it on that port |
+
+Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` dependency) there is no proxy: those requests get an empty 404 instead.
+
+## Other dev-server responses
+
+| Response | Cause | Fix |
+|----------|-------|-----|
+| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-blocks/core` README, "Local Development") |
+| 404 `The AWS Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
+| 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-blocks/core` README, "Local Development", for the allowed origins |
+| 415 `Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
 
 ## Auth cookies not persisting
 

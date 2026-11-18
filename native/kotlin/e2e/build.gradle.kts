@@ -5,6 +5,7 @@ import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTes
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.android.kotlin.multiplatform)
     alias(libs.plugins.kotlinx.serialization)
     id("com.aws.blocks.kotlin")
 }
@@ -18,6 +19,33 @@ kotlin {
     }
 
     jvm()
+
+    android {
+        namespace = "com.aws.blocks.kotlin.e2e"
+        compileSdk = 36
+        minSdk = 23
+
+        // sourceSetTreeName = "test" puts androidDeviceTest in the test tree, so the whole
+        // commonTest suite compiles into the instrumented APK instead of only android-specific
+        // sources. The suite reads BLOCKS_URL and RUN_OIDC from the instrumentation arguments
+        // (see TestEnv.android.kt); Gradle has no environment to hand an on-device process.
+        withDeviceTestBuilder {
+            sourceSetTreeName = "test"
+        }.configure {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+            animationsDisabled = true
+
+            val url = providers.systemProperty("BLOCKS_URL").orElse(
+                providers.environmentVariable("BLOCKS_URL")
+            ).getOrElse("")
+            if (url.isNotEmpty()) {
+                instrumentationRunnerArguments["BLOCKS_URL"] = url
+            }
+            providers.environmentVariable("RUN_OIDC").orNull?.let {
+                instrumentationRunnerArguments["RUN_OIDC"] = it
+            }
+        }
+    }
 
     iosSimulatorArm64 {
         // PersistentCookiesStorage on iOS is Keychain-backed. The bare Kotlin/Native
@@ -45,6 +73,11 @@ kotlin {
 
         jvmTest.dependencies {
             implementation(libs.kotest.runner.junit5)
+            implementation(libs.ktor.client.okhttp)
+        }
+
+        getByName("androidDeviceTest").dependencies {
+            implementation(libs.androidx.test.runner)
             implementation(libs.ktor.client.okhttp)
         }
 
@@ -107,7 +140,7 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     providers.environmentVariable("RUN_OIDC").orNull?.let { environment("SIMCTL_CHILD_RUN_OIDC", it) }
 }
 
-awsBlocks {
+cdkBlocks {
     apiSpec = file("blocks.spec.json")
     packageName = "blocks.e2e"
     oidc {

@@ -71,11 +71,9 @@ class CodegenModelBuilder {
         val apiGroups = groupMethods(model.methods, collector)
 
         val servers = if (model.servers.isEmpty()) {
-            // The generator appends x-blocks-endpoint to every server URL, so the RPC path is only
-            // added here when the spec declares no endpoint of its own (or an empty one). Without
-            // it the fallback points at the origin, where the backend serves no RPC.
-            val path = if (model.endpoint.isNullOrEmpty()) DEFAULT_RPC_PATH else ""
-            listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + path))
+            // A spec's server URLs already carry the RPC path, so the fallback has to add it
+            // itself. Without it the fallback points at the origin, where the backend serves no RPC.
+            listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + DEFAULT_RPC_PATH))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }
@@ -84,7 +82,6 @@ class CodegenModelBuilder {
             apiNamespaces = apiGroups,
             typeDefinitions = collector.typeDefinitions(),
             servers = servers,
-            endpoint = model.endpoint,
             nativeCatalogs = model.nativeCatalogs,
         )
     }

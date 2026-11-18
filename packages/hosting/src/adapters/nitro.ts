@@ -18,6 +18,7 @@
  * only sees compute resources, route patterns, and a static-assets dir.
  */
 import { spawn } from './spawn.js';
+import { appBuildEnv } from './shared/app_build_env.js';
 import { validateCacheControl } from './shared/cache_control.js';
 import {
   warnIfVercelCron,
@@ -56,8 +57,11 @@ export type NitroAdapterOptions = {
    * Defaults to `'aws-lambda'` which produces an AWS Lambda handler.
    * To enable response streaming, set `nitro.awsLambda.streaming: true`
    * in the user's `nuxt.config.ts` (the adapter reads this from
-   * `.output/nitro.json`). `'node-server'` produces a plain Node HTTP
-   * server (run via the Lambda Web Adapter).
+   * `.output/nitro.json`). The CloudFront door and the API Gateway REST door
+   * invoke the handler to match: with response streaming when it is on, with
+   * a plain (buffered) invoke when it is off, which sends the response whole
+   * and limits it to 6 MB. `'node-server'` produces a
+   * plain Node HTTP server (run via the Lambda Web Adapter).
    *
    * When the run targets Lambda Web Functions (`compute.type:
    * 'web-function'`, see `withComputeTarget`) the default is
@@ -428,7 +432,11 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   };
 
   const resolvedPreset = nitroInfo.preset ?? effectivePreset;
-  const awsLambdaStreaming = nitroInfo.config?.awsLambda?.streaming === true;
+  // A build that reports the `aws-lambda-streaming` preset (accepted by
+  // `validateNitroPreset`) is a streaming handler too. The door integrates the
+  // server by this flag, so it must not say buffered for a handler that streams.
+  const awsLambdaStreaming =
+    nitroInfo.config?.awsLambda?.streaming === true || resolvedPreset === 'aws-lambda-streaming';
   validateNitroPreset(resolvedPreset);
   warnNitroUnsupportedFeatures(nitroInfo);
   // Nuxt/Nitro projects can also carry a vercel.json with crons (e.g. set up
@@ -515,6 +523,8 @@ const cleanNitroBuildCaches = (projectDir: string): void => {
  * TanStack Start, and standalone Nitro apps because each one wires its
  * own `build` script. We pass NITRO_PRESET via env so any Nitro-backed
  * framework targets the right runtime without per-framework branching.
+ * The build runs without the synth's `cdk` export condition (see
+ * `appBuildEnv`).
  */
 const runNitroBuild = (
   projectDir: string,
@@ -533,7 +543,7 @@ const runNitroBuild = (
     spawn.sync(bin!, args, {
       cwd: projectDir,
       stdio: 'inherit',
-      env: { ...process.env, NITRO_PRESET: preset },
+      env: appBuildEnv({ NITRO_PRESET: preset }),
     });
   } catch (error) {
     throw new HostingError(

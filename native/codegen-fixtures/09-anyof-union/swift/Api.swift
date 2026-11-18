@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func search(query: Search.Query) async throws -> Search.Result {
         let request = BlocksRequest(method: "api.search", params: [query], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.search") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.search") }
         return try JSONDecoder().decode(Search.Result.self, from: result)
     }
 
@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Search {
 
-        public struct Query_Variant1: Codable {
+        public struct Query_Variant1: Codable, Sendable {
             public let fuzzy: Bool?
             public let text: String
 
@@ -52,7 +52,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Query: Codable {
+        public enum Query: Codable, Sendable {
             case query_Variant0(String)
             case query_Variant1(Query_Variant1)
 
@@ -82,7 +82,7 @@ public final nonisolated class Api: Sendable {
             private enum EmptyKey: CodingKey {}
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let count: Int
 
             public init(count: Int) {

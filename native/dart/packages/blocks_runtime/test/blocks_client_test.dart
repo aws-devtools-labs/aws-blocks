@@ -230,7 +230,7 @@ void main() {
       final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
       await client.call('test', {});
       expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
-    }, testOn: 'vm'); // Web omits the header by design.
+    });
 
     test('throws BlocksRpcException on error response', () async {
       final mockClient = MockClient(

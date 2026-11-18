@@ -296,7 +296,7 @@ describe('create-blocks-app template metadata', () => {
   it('every frontend template starts its frontend dev server on the --frontend-port it is given', async () => {
     // A hard-coded `frontendCommand` would keep its own `--port 3100`, so the dev server
     // would proxy to the requested port while the frontend listened on another one.
-    const vite = (port: number) => `npx vite --port ${port} --strictPort`;
+    const vite = (port: number) => `npx vite --host 127.0.0.1 --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
       nextjs: next, auth: vite, 'auth-oidc': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
@@ -869,7 +869,7 @@ describe('create-blocks-app auto-detection', () => {
     // copied: a Next.js project with the default (Vite) template still runs `next dev`.
     const projects: Record<string, { deps: Record<string, unknown>; command: string }> = {
       next: { deps: { dependencies: { next: '*' } }, command: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100' },
-      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --port 3100 --strictPort' },
+      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --host 127.0.0.1 --port 3100 --strictPort' },
     };
     for (const template of ['default', 'nextjs']) {
       for (const [framework, { deps, command }] of Object.entries(projects)) {

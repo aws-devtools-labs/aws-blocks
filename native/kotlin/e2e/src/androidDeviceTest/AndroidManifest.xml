@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The local leg runs against the native-bindings dev server over plain HTTP, which the
+         platform blocks by default from API 28 on. A deployed backend is HTTPS either way. -->
+    <application android:usesCleartextTraffic="true" />
+
+</manifest>

@@ -61,14 +61,14 @@ The frontend calls every method, public and protected, like any other namespace:
 
 ```ts
 // src/main.ts
-import { AuthErrors, isAuthError } from '@aws-blocks/blocks';
+import { isBlocksError } from '@aws-blocks/blocks/client';
 import { notesApi } from 'aws-blocks';
 
 await notesApi.health(); // works signed out
 try {
   await notesApi.addNote('hello');
 } catch (e) {
-  if (isAuthError(e, AuthErrors.NotAuthenticated)) {
+  if (isBlocksError(e, 'NotAuthenticatedException')) {
     // signed out: show the sign-in UI
   }
 }
@@ -316,6 +316,40 @@ test('each user reads only their own note', async () => {
 - Run the test from the directory the dev server runs in (the project root), under `tsx -C browser` so `import('aws-blocks')` is the generated client, as the scaffolded `npm run test:e2e` does.
 - `createTestClient(app)` returns the clients typed as passed. One user's clients share a jar, so a session `authApi` starts is sent by `api` too; the shared jar `installCookieJar()` installs is never involved.
 
+### Tell the user what a password needs
+
+Set the policy, and branch on the error the client receives:
+
+```ts
+// aws-blocks/index.ts
+import { Auth, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  emailPassword: { passwordPolicy: { minLength: 12, requireSymbols: false } },
+});
+export const authApi = auth.createApi();
+```
+
+```ts
+// src/main.ts
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
+
+const next = await submitAuthAction(authApi, {
+  action: 'signUp',
+  username: 'alice',
+  email: 'alice@example.com',
+  password: 'short',
+});
+if (hasAuthError(next, 'InvalidPasswordException')) {
+  // next.error says what a password needs; show it next to the password field.
+}
+```
+
+For what the policy covers and what the message says, see [Password policy](#password-policy).
+
 ## Which option and why
 
 ### Where do your users live?
@@ -343,7 +377,7 @@ Choose the store before the first deploy. Switching a deployed block from the de
 
 Every sign-in provider goes in one `providers` map, keyed by the provider id you use on the client (`getSignInUrl(context, '<id>')`, the `signIn:<id>` UI action), and tagged with its `type`.
 
-**One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. An app that wants both uses two `Auth` blocks, each with its own session cookie and its own `createApi()`, and the frontend picks one per sign-in. The same person signing in both ways was always two users (there is no account linking), so nothing is lost:
+**One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. An app that wants both uses two `Auth` blocks, each with its own session cookie and its own `createApi()`, and the frontend picks one per sign-in. The same person signing in both ways is two users either way (there is no account linking), so nothing is lost:
 
 ```typescript
 // aws-blocks/index.ts
@@ -442,7 +476,7 @@ const sso = new Auth(scope, 'sso', {
 - On AWS, email + password runs against Amazon Cognito: sign-up and confirmation (with automatic sign-in after the emailed code), sign-in with every challenge `AuthCognito` supports (MFA, new-password-required, `USER_AUTH` choice-based and passwordless sign-in, passkey sign-in), password reset and change, token refresh, live group reads for `requireRole`, global sign-out and passkey management, user attributes, `deleteUser`, authenticator-app (TOTP) setup and MFA preferences, devices, and the opt-in `auth.admin` surface. `rememberDevice` throws a `501` on AWS, as it did in `AuthCognito` ([why](./DESIGN.md#known-gaps-documented-not-built)).
 - Directly federated sign-in (a `store: 'builtin'` block) works, locally and deployed: any `type: 'oidc'` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives a block with no password users an offline sign-in.
 - On AWS, the `providers` of a default-store block (social, SAML and `type: 'oidc'`) sign in through Cognito managed login: the sign-in button goes straight to the provider (PKCE, Cognito-issued tokens verified against your user pool), and the user becomes an ordinary user-pool user — `requireRole()` reads their Cognito groups and `auth.admin` manages them like email + password users. Sign-out also ends the managed-login session, so the next sign-in asks the provider again. MFA for these users is the provider's: Cognito never challenges a federated user, so enforce MFA at your IdP. Locally (`npm run dev`) these providers answer sign-in with an actionable `501` — managed login needs a deployed user pool; use a `store: 'builtin'` block (a `type: 'oidc'` provider or `stubIdp()`) for offline sign-in. `getAuthState()` marks their `signIn:<id>` actions `unavailable` there, so the `Authenticator` renders those buttons disabled with that hint, and a browser that reaches the sign-in route gets an explanatory page.
-- Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`, as with `AuthOIDC`: on a `store: 'builtin'` block the guards accept the provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews), and on the default store a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }` (default store only), access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth--bearerts).
+- Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`: on a `store: 'builtin'` block the guards accept the provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews), and on the default store a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }` (default store only), access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth--bearerts).
 - The CDK layer provisions the same resources as `AuthCognito` (same construct ids for the user pool, the app client and the session secret, so an `AuthCognito` app that switches keeps its user pool and users; the session store is a new table, so each user signs in once, see [MIGRATION.md](./MIGRATION.md#the-session-store); under `BlocksPresets.production` the session secret also moves to Secrets Manager, see [MIGRATION.md](./MIGRATION.md#the-session-secret-moves-to-secrets-manager)), creates no Cognito resources for a `store: 'builtin'` block, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For `providers` entries of a default-store block (social, SAML, `type: 'oidc'`) it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
 - The CDK layer refuses user-pool changes Cognito cannot apply to an existing pool (sign-in attributes, username case sensitivity, required attributes, changing or removing a custom attribute): at synth, against a baseline file it writes to `aws-blocks/baselines/` (commit that file), and again at deploy, before the pool is updated. The synth check also refuses a change that would remove the pool — including renaming or deleting the `Auth` block, which would make CloudFormation delete the pool and every user in it ([details](./DESIGN.md#renaming-or-removing-an-auth-block)) — once a committed baseline records the pool. A block's first synth has nothing to compare against: if it records no pool, synth only warns. Moving from `AuthCognito`? Deploy the codemod's output unchanged first ([MIGRATION.md](./MIGRATION.md#before-every-deploy-the-checklist)). Re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<block fullId>`. The baseline advances when you synthesize, not when you deploy, so reverting a change you synthesized but never deployed is refused too; the error then gives the re-baseline command for that case. See [DESIGN.md](./DESIGN.md#immutability-guard).
 
@@ -480,6 +514,7 @@ The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) on
 
 **The stub in local dev and sandbox, the real provider in production.** Keep one provider id and pick its entry from `getDeploymentType()`. The client code (`signIn:corp`) is the same everywhere:
 
+<!-- doc-snippet: fragment — uses the app's scope -->
 ```typescript
 // aws-blocks/index.ts
 import { Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
@@ -497,7 +532,7 @@ const auth = new Auth(scope, 'auth', {
 
 You may not need the stub at all: email + password already runs offline, and a `type: 'oidc'` entry of a `store: 'builtin'` block works in `npm run dev` too if you register `http://localhost:<port>/aws-blocks/auth/callback` as a redirect URI with it.
 
-**The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP. The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups. Synth succeeds with a `@aws-blocks/bb-auth:StubIdpDeployed` warning. Deployed, the stub's issuer is the API Gateway URL (`https://<api-id>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/auth/idp/<id>`) and its signing keys are derived from the block's session secret, so every Lambda instance serves the same keys. The Lambda serves the stub only when its deployed config says the deployment is a sandbox; after upgrading, restart `npm run sandbox` once, because a `cdk watch` hotswap alone does not write that config.
+**The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP. The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups. Synth succeeds with a `@aws-blocks/bb-auth:StubIdpDeployed` warning. Deployed, the stub's issuer is the API Gateway URL (`https://<api-id>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/auth/idp/<id>`) and its signing keys are derived from the block's session secret, so every Lambda instance serves the same keys. The Lambda serves the stub only when its deployed config says the deployment is a sandbox, and a `cdk watch` hotswap alone does not write that config: if the stub answers `501` on a sandbox, restart `npm run sandbox` once.
 
 A `store: 'builtin'` user's `userId` is `` `${issuer}:${sub}` `` (the same as `AuthOIDC`), and `requireRole()` reads their groups from the provider's `groupsClaim`. Register `<your origin>/aws-blocks/auth/callback` as the redirect URI with the IdP, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
 
@@ -526,7 +561,28 @@ const auth = new Auth(scope, 'auth', {
 - **It also unlocks the email factors:** email MFA (`mfa: { types: ['EMAIL', …] }`) and `users.preferredChallenge: 'EMAIL_OTP'` need an SES sender, and synth refuses them on a pool this block creates without one.
 - **Safe to add later:** it updates the pool in place, and no user, session or token is affected. On that first deploy Cognito creates its email service-linked role, so the deploying role needs `iam:CreateServiceLinkedRole` (CDK's default deployment role has it).
 - Only for a pool this block creates. With `userPool: Auth.fromExisting(…)`, configure SES on that pool yourself.
-- Locally (`npm run dev`) nothing changes: codes are delivered as before (`codeDelivery`), without SES.
+- Locally (`npm run dev`) `email` has no effect: codes go to `codeDelivery`, without SES.
+
+## Password policy
+
+`emailPassword.passwordPolicy` sets what a password needs. Every field is optional, and a field you leave out keeps its default:
+
+| Field | Default | A password needs |
+|---|---|---|
+| `minLength` | `8` | at least this many characters |
+| `requireUppercase` | `true` | an uppercase letter |
+| `requireLowercase` | `true` | a lowercase letter |
+| `requireDigits` | `true` | a digit |
+| `requireSymbols` | `true` | a symbol |
+
+With no `passwordPolicy`, a password needs 8 characters and all four kinds of character. Set a `require*` field to `false` to drop that requirement. The recipe [Tell the user what a password needs](#tell-the-user-what-a-password-needs) sets `{ minLength: 12, requireSymbols: false }` and shows the error on sign-up.
+
+- **The range of `minLength`:** 6 to 99, as Cognito accepts. The block does not check it, and the local user pool enforces any number. So `minLength: 3` works under `npm run dev`, and the synth for a deploy fails with `minLength for password must be between 6 and 99`.
+- **Where it is enforced:** every call that sets a password. That is `signUp`, the new-password answer to `confirmSignIn` (`CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`, which an administrator-created user's first sign-in asks for), `confirmResetPassword`, `updatePassword`, the `temporaryPassword` of `auth.admin.createUser`, and `auth.admin.setUserPassword`. The `setAuthState` actions that call them (`signUp`, `confirmSignIn`, `confirmResetPassword`) are covered too. On AWS, the user pool the block creates enforces the policy. The block passes the fields you set to the CDK `UserPool` construct; with no `passwordPolicy` it passes none, and the pool gets the construct's default policy, which is the defaults in the table. Locally (`npm run dev` and tests), the local user pool checks the same rules, with the two differences below.
+- **A generated temporary password, locally:** `auth.admin.createUser` without `temporaryPassword` gets a generated 16-character password, and the local user pool checks it against the policy too. With `minLength` above 16, that call throws `InvalidPasswordException` locally, while Cognito generates a password that fits. Pass a `temporaryPassword` that fits the policy.
+- **What the client receives:** a password that breaks the policy is rejected with `InvalidPasswordException` (`AuthErrors.InvalidPassword`) and status 400. The message describes the whole policy rather than the rule the password broke, and it is the same locally and on AWS. For the recipe's policy it is `Password must be at least 12 characters and include an uppercase letter, a lowercase letter and a number.`
+- **How to branch on it:** a thrown error, from a direct call or from your own API method that makes one, matches `isAuthError(e, AuthErrors.InvalidPassword)`. Through `setAuthState` the error is retriable. The returned state carries `retriable: true`, `errorName: 'InvalidPasswordException'` and the message as `error`, so the form stays on the current step. Branch on that state with `hasAuthError`, as the recipe does.
+- **An imported pool:** with `userPool: Auth.fromExisting(…)`, the block doesn't create the pool, so the pool's own policy applies on AWS. The local user pool still checks `emailPassword.passwordPolicy` (or the defaults), so a password can pass under `npm run dev` and fail on AWS, or the reverse. Set `passwordPolicy` to the policy of the imported pool to make them agree. The message is the fixed `Password does not meet the password policy`, locally and on AWS.
 
 ## One sign-up and sign-in policy: `validateUser`
 
@@ -598,6 +654,31 @@ const auth = new Auth(scope, 'auth', options);
 `mfa` (other than `'off'`), `passkeys` and `users.deviceTracking` apply only to email + password users, so combining any of them with `emailPassword: false` is an error at construction (in `npm run dev`, at synth and in Lambda) that names both options (with `store: 'builtin'` they are compile errors too, see [Where do your users live?](#where-do-your-users-live)); federated users get MFA and passkeys from their identity provider.
 
 An option `Auth` does not recognise is an error at construction, in `npm run dev`, at synth and in Lambda alike, so a misspelled or misplaced setting can't be silently ignored. The error names each unknown option's path with a suggestion (`` `preferredChallenge`: it is not an option here; did you mean `users.preferredChallenge`? ``). The compiler alone doesn't catch these: TypeScript does no excess-property check on the inferred options type ([why](./DESIGN.md#unknown-options)). A boolean option must be `true` or `false` (or left out): a value such as `selfSignUp: 0` or `passkeys: 'false'` from untyped code is an error too, rather than turning the setting on or off by accident.
+
+## Audit records
+
+Set `audit: true` to write one log line for each session lifecycle event, so you can see and alarm on auth activity. It is off by default.
+
+```typescript
+const auth = new Auth(scope, 'auth', { audit: true });
+```
+
+| `event` | Written when |
+|---|---|
+| `auth.session.issued` | A session is issued, for any sign-in method |
+| `auth.signin.failed` | An email + password sign-in or a challenge answer (an MFA, email or SMS code) fails, a provider's callback fails, `validateUser` / `onSignIn` rejects the sign-in, or the sign-in is refused because the session cookie could not be sent securely |
+| `auth.signout` | `signOut` ends a session |
+| `auth.sessions.revoked` | A password reset or `admin.revokeUserSessions` ends all the user's sessions, or `deleteUser` ends the current one (the user's other sessions end on their next request, without a record) |
+
+Each line is the record's `event` as the message plus the fields of `AuthAuditRecord`: `block`, `provider`, `sub`, `outcome`, and on some events `username`, `reason` and the error name. `outcome` is `success`, `failure` (a refused sign-in) or `incomplete` (a sign-out or revocation that failed part-way, so some sessions may still be valid). No line ever holds a password, code, token, session id, email or error message.
+
+Users are identified by `sub`. On the default Cognito store that is the id CloudTrail records for Cognito calls, so the two can be joined. A directly federated session's `sub` is `<issuer>:<sub>`, which CloudTrail never sees, and a password-reset record carries the pool `username` instead.
+
+`audit: true` writes through its own `info`-level logger, so the lines appear in the function's CloudWatch log group however quiet `logger` is. Pass a logger instead (`audit: myLogger`) to send them somewhere else; it must accept `info`, or every record is dropped without an error.
+
+To alarm on failed sign-ins, create a CloudWatch metric filter on the log group with the pattern `{ $.event = "auth.signin.failed" }`, or `{ $.event = "auth.signin.failed" && $.block = "<fullId>" }` to count one block of several. Alarm on the metric's `Sum` over a period (for example 100 in 5 minutes) with `treatMissingData: notBreaching`: the filter has no data points while nothing fails, so without it the alarm sits in `INSUFFICIENT_DATA` on a quiet day.
+
+Records come from this block, so they don't include failed attempts on Cognito's managed login page or calls a client makes to Cognito directly; CloudTrail has those. Design details: [DESIGN.md](./DESIGN.md#audit-records-audit).
 
 ## Local development
 
@@ -762,6 +843,38 @@ new Auth(scope, 'auth', {
 - **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
 - **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). Note that `user.userId` is the block's id; Amplify's `getCurrentUser().userId` is the Cognito `sub`, which is `user.userSub` here.
 
+## Native apps (Swift, Kotlin, Dart)
+
+A native app signs in with a federated provider through the SDK's OIDC client, which uses the block's relay routes. Export the client next to `createApi()`:
+
+```typescript
+import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+  redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] }, // the app's return URL
+});
+
+export const authApi = auth.createApi();         // the sign-in state machine
+export const oidcAuthApi = auth.createOidcApi(); // the native SDKs' OIDC client
+```
+
+`oidcAuthApi.getClient()` returns an `oidc/client` transferable: the block's routes and the providers available in this runtime. The generated native client turns it into the SDK's OIDC client, and its `signIn` takes only the block's provider ids:
+
+```swift
+let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
+let user = try await oidc.signIn(provider: .okta, relayTo: "myapp://auth", launcher: launcher)
+```
+
+- **Return URL.** List the app's scheme in `redirects.allowedRelayOrigins`. Desktop loopback (`http://127.0.0.1:<port>`) is always allowed.
+- **Several blocks.** Each block's client carries that block's own paths, so a second federated block with its own `redirects.callbackPath` and `signOutPath` gets a working client too.
+- **Availability.** A provider that can't sign in here (managed login under `npm run dev`), or whose discovery fails, is left out of `providers` at runtime, so the others stay usable.
+- **Restore on launch.** The client also carries the block's `sessionPath` (`GET` answers `{ user }` for a valid session cookie, 401 otherwise).
+- **Web.** A browser receives the plain descriptor. A web frontend uses the `signIn:<id>` actions of `createApi()`, or `createAuthClient()` on another origin ([above](#frontend-on-a-different-origin)).
+
 ## Planning to use Amplify client libraries?
 
 `Auth` signs users in on your backend: the browser talks to your API, and the session lives in an `HttpOnly` cookie. The Amplify client libraries (JavaScript, Swift, Android, Flutter) do the opposite: the app signs in directly against Amazon Cognito and holds the tokens itself. Both can share one user pool, so you can start with `Auth` and add an Amplify frontend later. A few choices decide whether that stays possible, and some of them are permanent:
@@ -805,6 +918,7 @@ new Auth(scope, 'auth', {
 
   **A client of the block's own pool** is created after the block, so its id can't be passed to the constructor as a token. Add it in `aws-blocks/index.cdk.ts`, then list the id the first deploy printed:
 
+  <!-- doc-snippet: fragment — continues the CDK entry file after its `blocksStack` is created -->
   ```typescript
   // aws-blocks/index.cdk.ts — after `const blocksStack = await BlocksStack.create(...)`
   import * as cdk from 'aws-cdk-lib';

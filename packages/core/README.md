@@ -27,6 +27,34 @@ warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
 synth`); rename one of the scopes. A future release will reject the collision.
 Constructing the same path again is accepted.
 
+Use lowercase letters, digits and hyphens in scope and block ids. An id is part
+of the name of each resource created under it, unescaped, and every service
+accepts those characters. The rest depends on the resource:
+
+| Named from the id | Block | Characters its name accepts |
+|---|---|---|
+| DynamoDB table | `KVStore`, `DistributedTable` | letters, digits, `_`, `.`, `-` |
+| SQS queue | `AsyncJob` | letters, digits, `_`, `-` |
+| EventBridge Scheduler schedule | `CronJob` | letters, digits, `_`, `.`, `-` |
+| S3 bucket | `FileBucket` | lowercase letters, digits, `.`, `-` |
+| Cognito user pool | `Auth` | letters, digits, spaces, `_`, `+`, `=`, `,`, `.`, `@`, `-` |
+| Systems Manager parameter | `AppSetting` | letters, digits, `_`, `.`, `-`, `/` |
+| Secrets Manager secret | `Secret` | letters, digits, `/`, `_`, `+`, `=`, `.`, `@`, `-` |
+| Bedrock knowledge base and data source | `KnowledgeBase` | letters, digits, `_`, `-` |
+
+An id is not rejected when the scope is constructed, because whether it deploys
+depends on the blocks under it: `new Scope('@acme/shop')` runs locally, and is
+valid with only an `ApiNamespace` under it (which names nothing from the id) or
+a `Secret` (Secrets Manager accepts `@` and `/`). `cdk synth` fails once a block
+under it names a resource that does not accept the id, for example a `KVStore`,
+whose table name cannot contain `@` or `/`. The error names the id, the
+characters and what the service accepts. This covers the DynamoDB, SQS,
+Scheduler, Cognito, Secrets Manager and Bedrock names above when they are
+literal strings at synth; `FileBucket` checks its bucket name itself, and
+`aws-cdk-lib` checks the parameter name of an `AppSetting` that is not a
+secret. Renaming an id renames every resource under it, which replaces those
+already deployed.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
@@ -199,7 +227,7 @@ An app deployed with an older version still has the deploy's URL in `config.json
 
 Two things about that path burn time when debugging:
 
-- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route and never was: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
+- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
 - `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
 
 What you should see instead, per environment:
@@ -420,7 +448,7 @@ new RawRoute(scope, 'user', {
 // GET /users/42?q=hello → {"id":"42","q":"hello"}
 ```
 
-Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key. `npm run dev` and the deployed Lambda match routes and fill `params` with the same code, so a route behaves the same locally.
 
 To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
@@ -510,7 +538,7 @@ The stacked door's edge → router hop is HTTPS on port 443 with a router `certi
 
 Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
 
-The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
+The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as one that sets them in `frontDoor.features`. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
 #### Preview mode and `HostingPresets`
@@ -574,10 +602,12 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 
 Lives in the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS Blocks API calls — `withAuth` reads them and forwards them to every AWS Blocks API call made inside the callback.
 
+**Next.js** detection is built in: `withAuth` reads the request's cookies through `cookies()` from `next/headers`, so with no second argument it works anywhere that call does — server components, route handlers and server actions. **Nuxt** is also detected (reads the active Nitro request; requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`). Any other framework passes the request's `Cookie` header explicitly, or registers a provider once:
+
 ```typescript
 import { withAuth } from '@aws-blocks/blocks/server';
 
-// Auto-detects cookies (Next.js detection is built in)
+// Next.js server component or route handler: cookies come from next/headers' cookies()
 const posts = await withAuth(() => api.listMyPosts());
 
 // Other frameworks: pass cookies explicitly as the 2nd arg…
@@ -624,7 +654,7 @@ The lifecycle scripts in `@aws-blocks/core/scripts` (`deploy`, `destroy`, `start
 
 | `BLOCKS_LOG_LEVEL` | What prints |
 |---|---|
-| unset (or any other value) | Everything, exactly as before this variable existed. |
+| unset (or any other value) | Everything: every progress step and the raw CDK output, as at `verbose`, plus the dev server's RPC error stack traces. |
 | `quiet` | Errors and final results only. CDK output is hidden while it runs. |
 | `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen. |
 | `verbose` | The same lines as unset: every progress step plus the raw CDK output (the dev server leaves out RPC error stack traces, see below). |

@@ -5,30 +5,33 @@ package com.aws.blocks.kotlin.exceptions
 
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.contract
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Thrown when the server returns a JSON-RPC error response (HTTP 200 with an `error` field).
+ * Thrown when the server answers with a JSON-RPC error: the request reached the server
+ * and was rejected (authentication required, validation failed, a conflict).
  *
- * This represents an application-level failure — the request reached the server and was
- * rejected (e.g. authentication required, validation failed, method not found).
- *
- * @property code The JSON-RPC error code returned by the server.
- * @property data The optional arbitrary JSON object from the `error.data` field.
- * @property name Convenience accessor for `data["name"]` — the server's error name
- *   (e.g. "NotAuthenticatedError"), or null if not present.
+ * @property status The HTTP status the server rejected with. JSON-RPC's reserved codes
+ *   have no HTTP meaning and are reported as 500.
+ * @property name The server's error name, or null when it sent none. Errors cross the
+ *   wire by name, so match on this rather than on [message] or [status] — a named error
+ *   thrown without a status arrives as a 500 with its name intact.
+ * @property retriable Whether the same action can be retried without restarting the
+ *   wider flow. Meaningful for multi-step flows such as an auth challenge, where a
+ *   wrong code can be re-entered against the same session but an expired session
+ *   cannot. Defaults to false.
  */
 class ApiException(
     message: String,
-    val code: Int,
-    val data: JsonObject? = null,
+    val status: Int,
+    val name: String? = null,
+    val retriable: Boolean = false,
     cause: Throwable? = null
-) : BlocksException(message, cause) {
-    val name: String?
-        get() = data?.get("name")?.jsonPrimitive?.content
-}
+) : BlocksException(message, cause)
 
+/**
+ * True when [this] is an [ApiException] whose [ApiException.name] is [name]. Errors
+ * cross the wire by name, so match with this rather than on a message or a status.
+ */
 @OptIn(ExperimentalContracts::class)
 fun Throwable.isBlocksError(name: String): Boolean {
     contract {

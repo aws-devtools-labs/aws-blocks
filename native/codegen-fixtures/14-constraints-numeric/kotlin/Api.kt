@@ -3,11 +3,13 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.Double
 import kotlin.Int
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -17,6 +19,7 @@ public class Api(
   public suspend fun setScore(input: SetScore.Input): SetScore.Result {
     val request = BlocksRequest(method = "api.setScore", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.setScore")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

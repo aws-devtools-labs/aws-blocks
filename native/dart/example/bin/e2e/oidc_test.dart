@@ -37,7 +37,8 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:http/http.dart' as http;
 import 'harness.dart';
 
-const _provider = 'google';
+// The generated enum of the providers `oidcAuthApi.getClient()` names.
+const _provider = OidcAuthApiApiGetClientProvider.google;
 const _relayTo = 'nativebindings://auth';
 
 /// HTTP-driven [BrowserLauncher] standing in for a real browser.
@@ -126,7 +127,7 @@ void main() async {
   print('=== OIDC relay validation (headless) — native-bindings ===');
   print('RPC base   : $rpcUrl');
   print('OIDC base  : $oidcBase');
-  print('provider   : $_provider');
+  print('provider   : ${_provider.providerName}');
   print('relayTo    : $_relayTo');
 
   if (!isLocalEndpoint() && Platform.environment['RUN_OIDC'] != '1') {
@@ -149,21 +150,11 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client is built from the `Auth` block's fixed routes
-  // (packages/bb-auth DESIGN.md → Routes), with no server-supplied descriptor.
-  // The authorize-params and callback paths are left to OidcClient's defaults,
-  // which name exactly those routes.
-  final oidc = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
-    providers: const [_provider],
-    providerConfigs: const {},
-    baseUrl: oidcBase,
-    tokenStore: tokenStore,
-    sessionStore: session,
-    httpClient: httpClient,
-  );
+  // The client apps get: `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
+  // hydrated by the generated client, which shares its session store, so the
+  // session cookie the exchange sets lands in [session].
+  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
+  final oidc = await discovery.oidcAuthApi.getClient();
 
   final launcher = HttpRelayLauncher(httpClient);
 
@@ -173,7 +164,9 @@ void main() async {
   try {
     final csrf = OidcClient.generateRandom();
     final resp = await httpClient.post(
-      Uri.parse('$oidcBase${oidc.authorizeParamsBasePath}/$_provider'),
+      Uri.parse(
+        '$oidcBase${oidc.authorizeParamsBasePath}/${_provider.providerName}',
+      ),
       headers: const {'content-type': 'application/json'},
       body: jsonEncode({'csrf': csrf, 'relayTo': _relayTo}),
     );

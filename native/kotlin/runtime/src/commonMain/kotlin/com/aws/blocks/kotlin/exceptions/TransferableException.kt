@@ -23,10 +23,3 @@ class UnknownTransferableTypeException(val blocksType: String) :
  */
 class InvalidDescriptorException(val blocksType: String, val missingField: String) :
     TransferableException("Descriptor '$blocksType' is missing required field: $missingField")
-
-/**
- * Thrown when an I/O operation on a transferable handle fails (e.g. a file upload
- * or download encounters a network error after the handle was successfully created).
- */
-class TransferableIOException(message: String, cause: Throwable? = null) :
-    TransferableException(message, cause)

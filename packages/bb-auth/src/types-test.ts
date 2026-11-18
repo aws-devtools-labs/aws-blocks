@@ -182,6 +182,9 @@ async function federationGateOff() {
 	await groupsOnly.getSignInUrl(context, noProvider, { redirectPath: '/' });
 
 	type _noProviders = Expect<Equal<ProviderIdOf<OptionsOf<typeof groupsOnly>>, never>>;
+	type _noOidcProviders = Expect<
+		Equal<Awaited<ReturnType<ReturnType<typeof groupsOnly.createOidcApi>['getClient']>>['providers'], never[]>
+	>;
 	type _closed = Expect<Equal<FederationGate<{ emailPassword: true }, [x?: 1]>, FederationOff>>;
 }
 
@@ -203,6 +206,10 @@ async function providerIdNarrowing() {
 	await auth.getSignInUrl(context, 'partner');
 	// @ts-expect-error — 'github' is not a configured provider.
 	await auth.getSignInUrl(context, 'github');
+	// createOidcApi(): the native client's providers are the same ids, so the
+	// generated Swift/Kotlin/Dart `signIn` takes only these.
+	type OidcProviders = Awaited<ReturnType<ReturnType<typeof auth.createOidcApi>['getClient']>>['providers'];
+	type _oidcProviders = Expect<Equal<OidcProviders, ('google' | 'okta' | 'entra' | 'partner')[]>>;
 
 	type _ids = Expect<Equal<ProviderIdOf<OptionsOf<typeof auth>>, 'google' | 'okta' | 'entra' | 'partner'>>;
 	const user = await auth.requireAuth(context);
