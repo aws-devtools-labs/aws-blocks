@@ -22,13 +22,11 @@ import { pathToFileURL } from 'node:url';
 // still runs. Refresh when the shards drift apart by more than a minute.
 const WEIGHTS = {
 	'packages/bb-auth': 1469,
-	'packages/bb-data': 96,
 	'packages/core': 79,
 	'packages/blocks': 68,
 	'packages/hosting': 49,
 	'packages/bb-compute': 43,
 	'test-apps/pipeline': 33,
-	'packages/bb-distributed-data': 21,
 	'packages/bb-kv-store': 12,
 	'packages/bb-lambda-compute': 12,
 	'packages/bb-agent': 11,
@@ -36,7 +34,6 @@ const WEIGHTS = {
 	'packages/create-blocks-app': 9,
 	'packages/bb-container-compute': 7,
 	'test-apps/auth-cognito-passkeys': 6,
-	'test-apps/db-pull-typecheck': 6,
 	'packages/pipeline': 5,
 	'packages/bb-realtime': 5,
 	'packages/bb-dashboard': 5,

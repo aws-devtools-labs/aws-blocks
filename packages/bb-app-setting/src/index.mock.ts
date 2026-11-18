@@ -84,8 +84,8 @@ export class AppSetting<T = string> extends Scope {
 	 * factory exists so app code uses the same API in dev and deploy.
 	 *
 	 * Note: like any mock secret with no value, `get()` returns a random placeholder
-	 * unless `.bb-data/settings.json` was already seeded for this `fullId` (e.g. by
-	 * `db pull`). Local dev still depends on whatever seeds that value.
+	 * unless `.bb-data/settings.json` was already seeded for this `fullId`. Local
+	 * dev still depends on whatever seeds that value.
 	 */
 	static fromExisting<T = string>(
 		scope: ScopeParent,

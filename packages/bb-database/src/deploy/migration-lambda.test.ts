@@ -72,6 +72,23 @@ describe('isRetryableMigrationError', () => {
 		assert.ok(!isRetryableMigrationError(new Error('syntax error at or near "CREAT"')));
 	});
 
+	test('a server that is full or still starting, and a name that did not resolve yet, are retried', () => {
+		for (const code of ['53300', '57P03', 'EAI_AGAIN', 'ETIMEDOUT']) {
+			const driver = Object.assign(new Error('refused for now'), { code });
+			const wrapped = new Error('Migration 001 failed', {
+				cause: new Error('The database connection failed', { cause: driver }),
+			});
+			assert.ok(isRetryableMigrationError(wrapped), code);
+		}
+	});
+
+	test('a refused login, a missing database and a certificate that does not verify are not retried', () => {
+		for (const code of ['28P01', '3D000', 'ECONNREFUSED', 'SELF_SIGNED_CERT_IN_CHAIN']) {
+			const driver = Object.assign(new Error('refused'), { code });
+			assert.ok(!isRetryableMigrationError(new Error('The database connection failed', { cause: driver })), code);
+		}
+	});
+
 	test('a dead socket or a connect timeout is retried, however deeply the runner and engine wrapped it', () => {
 		const socket = new Error('Connection terminated unexpectedly');
 		const wrapped = new Error('Migration 001 failed', {

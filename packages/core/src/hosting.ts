@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
+  appBuildEnv,
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
@@ -1211,21 +1212,16 @@ export class Hosting extends Construct {
     if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
-      // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
-      // from breaking frontend builds (e.g., Next.js webpack module resolution).
-      const nodeOptions = (process.env.NODE_OPTIONS || '')
-        .split(/\s+/)
-        .filter((opt) => opt !== '--conditions=cdk')
-        .join(' ');
-      const buildEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
+      // Remove the synth's `cdk` export condition from NODE_OPTIONS: a build
+      // that inherits it resolves `@aws-blocks/*` to their CDK constructs (and
+      // breaks e.g. Next.js webpack module resolution). The framework adapter's
+      // own build of the app gets the same environment (see `appBuildEnv`).
+      const buildEnv = appBuildEnv(apiUrl ? { BLOCKS_API_URL: apiUrl } : {});
       try {
         execSync(props.buildCommand, {
           cwd: root,
           stdio: 'inherit',
-          env: {
-            ...buildEnv,
-            ...(apiUrl ? { BLOCKS_API_URL: apiUrl } : {}),
-          },
+          env: buildEnv,
         });
       } catch (error) {
         throw new Error(

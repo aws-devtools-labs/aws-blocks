@@ -388,6 +388,10 @@ const SESSION = {
 	ttlSeconds: 'value',
 	crossDomain: 'boolean',
 	freshAgeSeconds: 'value',
+	accessTokenValiditySeconds: 'value',
+	idTokenValiditySeconds: 'value',
+	refreshTokenValiditySeconds: 'value',
+	refreshTokenRotation: 'boolean',
 } as const satisfies ShapeOf<SessionOptions>;
 
 const REDIRECTS = {

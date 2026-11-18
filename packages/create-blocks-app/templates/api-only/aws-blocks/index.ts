@@ -14,8 +14,8 @@
  * Use Building Blocks for cloud persistence and other common cloud abstractions.
  * They work locally with automatic mocks and deploy to AWS with zero configuration.
  *
- * For the full list of blocks and how to use them, see:
- *   node_modules/@aws-blocks/blocks/README.md
+ * Building Block docs: npx --no -- cdk-blocks docs lists the blocks;
+ * npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { ApiNamespace, ApiError, Scope, Auth, KVStore, FileBucket, RawRoute } from '@aws-blocks/blocks';
@@ -24,7 +24,7 @@ import { z } from 'zod';
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Email + password sign-in (npx --no -- cdk-blocks docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the caller
 // submits it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {
@@ -80,8 +80,8 @@ const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(
 // ─── Health probe ────────────────────────────────────────────────────────────
 // Public — no auth. Load balancers and uptime monitors send a plain `GET` and
 // can't speak JSON-RPC, so the probe is a RawRoute (full HTTP control) rather
-// than an API method. It touches no data. See RawRoute in
-// node_modules/@aws-blocks/blocks/README.md for path parameters and wildcards.
+// than an API method. It touches no data. `npx --no -- cdk-blocks docs RawRoute`
+// prints its docs, with path parameters and wildcards.
 // RawRoute responses are JSON and `no-store` by default, so a probe never sees a cached "ok".
 new RawRoute(scope, 'healthz', {
   method: 'GET',

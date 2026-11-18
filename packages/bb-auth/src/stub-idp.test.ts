@@ -988,7 +988,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 		const pwUser = await auth.requireAuth(pw.context(server.origin));
 		assert.strictEqual(pwUser.username, 'pat');
 		assert.strictEqual(pwUser.signInProvider, 'password');
-		assert.strictEqual(pwUser.claims, undefined, 'a user-pool user has no claims (RLS keeps seeing userId)');
+		assert.strictEqual(pwUser.claims, undefined, 'a user-pool user has no claims');
 		await assert.rejects(
 			auth.requireAuth(fed.context(server.origin)),
 			{ status: 401 },
