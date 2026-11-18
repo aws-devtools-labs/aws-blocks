@@ -58,7 +58,7 @@ Both runtimes derive the expression and the `retriable` flag from `putCondition`
 
 `appendToList(key, field, items)` is one DynamoDB `UpdateItem`: `SET #f = list_append(if_not_exists(#f, :empty), :items)` with the condition `attribute_exists(#pk) AND attribute_not_exists(#v)`, where `#v` is `_bkv_value`. The condition requires a stored object value. `ReturnValuesOnConditionCheckFailure: 'ALL_OLD'` tells the two failures apart: with the item returned, the value is not an object (`ValidationFailed`); with no item, the key has no value (a 409 `ConditionalCheckFailed`, not retriable). DynamoDB's `ValidationException` for an operand of the wrong type means the field is not a list, and maps to `ValidationFailed`. `ReturnValues: 'UPDATED_NEW'` returns the new list.
 
-The checks, the update, and the error mapping are in `src/append-to-list.ts`, shared by both runtimes. The call is checked before any read or write: the key, the field (not a key field, an indexed field, the `ttl` field, a `_bkv_` field, or `__proto__`), the items (an array, with `undefined` elements left out as the document client leaves them out, and no `__proto__` field at any depth), and the schema of the field. The schema validates an object with the key fields and the field set to the items, and only an issue at the path of the field fails the call. The mock applies the same change to its stored item with no `await` between the read and the write, then runs its 400 KB check on the new item. D-KV-21 has the reasons.
+The checks, the update, and the error mapping are in `src/append-to-list.ts`, shared by both runtimes. The call is checked before any read or write: the key, the field (not a key field, an indexed field, the `ttl` field, a `_bkv_` field, or `__proto__`), the items (an array, with `undefined` elements left out as the document client leaves them out, and no `__proto__` field at any depth), and the schema of the field. The schema validates an object with the key fields and the field set to the items, and only an issue at the path of the field fails the call. The mock applies the same change to its stored item with no `await` between the read and the write, then runs its 400 KB check on the new item. D-KV-22 has the reasons.
 
 ## Reads
 
@@ -408,7 +408,7 @@ The value checks are excluded because they guard a write. `get` returns `null` f
 
 **The cost:** the app writes the copy, and until the copy is done its data is in two stores. A read by key can fall back to the old store. A `scan` or a `query` of the new store cannot. A delete can lose a race with a copy that holds the item at that moment. A value that the app writes to the old store after the copy passed its key stays in the old store. The block does not prescribe the migration. The README section "Upgrade from release 0.4.0 or earlier" has steps that are suitable for some migrations, and these limits.
 
-### D-KV-21: `appendToList` updates a stored object value and does not create one
+### D-KV-22: `appendToList` updates a stored object value and does not create one
 
 **Decision:** `appendToList(key, field, items)` appends to one top-level list field in one atomic step, and returns the new list. The key must hold an object value. A key with no value throws a 409 `ConditionalCheckFailed` that is not retriable. The items are checked against the schema of the field on their own, before the call.
 
