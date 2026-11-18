@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,9 +6,23 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
-export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        OidcClient,
+        OidcAuthState,
+        OidcSignedIn,
+        OidcSignedOut,
+        OidcLoading,
+        OidcUser,
+        TokenStore,
+        InMemoryTokenStore,
+        AuthProvider,
+        BrowserLauncher,
+        ProviderConfig;
 
 // --- Models ---
 
@@ -15,31 +30,20 @@ class Note {
   final String id;
   final String text;
 
-  const Note({
-    required this.id,
-    required this.text,
-  });
+  const Note({required this.id, required this.text});
 
   factory Note.fromJson(Map<String, dynamic> json) {
-    return Note(
-      id: json['id'] as String,
-      text: json['text'] as String,
-    );
+    return Note(id: json['id'] as String, text: json['text'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'text': text,
-    };
+    return {'id': id, 'text': text};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Note &&
-          id == other.id &&
-          text == other.text;
+      other is Note && id == other.id && text == other.text;
 
   @override
   int get hashCode => Object.hash(id, text);
@@ -47,7 +51,6 @@ class Note {
   @override
   String toString() => 'Note(id: $id, text: $text)';
 }
-
 
 class Attachment {
   final String name;
@@ -64,16 +67,14 @@ class Attachment {
     return Attachment(
       name: json['name'] as String,
       file: FileDownloadHandle.fromJson(json['file'] as Map<String, dynamic>),
-      previews: (json['previews'] as List<dynamic>).map((e) => FileDownloadHandle.fromJson(e as Map<String, dynamic>)).toList(),
+      previews: (json['previews'] as List<dynamic>)
+          .map((e) => FileDownloadHandle.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'file': file,
-      'previews': previews,
-    };
+    return {'name': name, 'file': file, 'previews': previews};
   }
 
   @override
@@ -88,39 +89,39 @@ class Attachment {
   int get hashCode => Object.hash(name, file, blocksDeepHash(previews));
 
   @override
-  String toString() => 'Attachment(name: $name, file: $file, previews: $previews)';
+  String toString() =>
+      'Attachment(name: $name, file: $file, previews: $previews)';
 }
-
 
 class SignInOption {
   final String label;
   final OidcClient client;
 
-  const SignInOption({
-    required this.label,
-    required this.client,
-  });
+  const SignInOption({required this.label, required this.client});
 
-  factory SignInOption.fromJson(Map<String, dynamic> json, BlocksClient client) {
+  factory SignInOption.fromJson(
+    Map<String, dynamic> json,
+    BlocksClient client,
+  ) {
     return SignInOption(
       label: json['label'] as String,
-      client: OidcClient.fromJson(json['client'] as Map<String, dynamic>, baseUrl: client.baseUrl, tokenStore: client.tokenStore, sessionStore: client.sessionStore),
+      client: OidcClient.fromJson(
+        json['client'] as Map<String, dynamic>,
+        baseUrl: client.baseUrl,
+        tokenStore: client.tokenStore,
+        sessionStore: client.sessionStore,
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'label': label,
-      'client': client,
-    };
+    return {'label': label, 'client': client};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SignInOption &&
-          label == other.label &&
-          client == other.client;
+      other is SignInOption && label == other.label && client == other.client;
 
   @override
   int get hashCode => Object.hash(label, client);
@@ -129,31 +130,23 @@ class SignInOption {
   String toString() => 'SignInOption(label: $label, client: $client)';
 }
 
-
 class GetChatFeedResultChannelMessage {
   final String text;
 
-  const GetChatFeedResultChannelMessage({
-    required this.text,
-  });
+  const GetChatFeedResultChannelMessage({required this.text});
 
   factory GetChatFeedResultChannelMessage.fromJson(Map<String, dynamic> json) {
-    return GetChatFeedResultChannelMessage(
-      text: json['text'] as String,
-    );
+    return GetChatFeedResultChannelMessage(text: json['text'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'text': text,
-    };
+    return {'text': text};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetChatFeedResultChannelMessage &&
-          text == other.text;
+      other is GetChatFeedResultChannelMessage && text == other.text;
 
   @override
   int get hashCode => text.hashCode;
@@ -162,31 +155,25 @@ class GetChatFeedResultChannelMessage {
   String toString() => 'GetChatFeedResultChannelMessage(text: $text)';
 }
 
-
 class GetCounterFeedResultChannelMessage {
   final num count;
 
-  const GetCounterFeedResultChannelMessage({
-    required this.count,
-  });
+  const GetCounterFeedResultChannelMessage({required this.count});
 
-  factory GetCounterFeedResultChannelMessage.fromJson(Map<String, dynamic> json) {
-    return GetCounterFeedResultChannelMessage(
-      count: json['count'] as num,
-    );
+  factory GetCounterFeedResultChannelMessage.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return GetCounterFeedResultChannelMessage(count: json['count'] as num);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'count': count,
-    };
+    return {'count': count};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetCounterFeedResultChannelMessage &&
-          count == other.count;
+      other is GetCounterFeedResultChannelMessage && count == other.count;
 
   @override
   int get hashCode => count.hashCode;
@@ -194,7 +181,6 @@ class GetCounterFeedResultChannelMessage {
   @override
   String toString() => 'GetCounterFeedResultChannelMessage(count: $count)';
 }
-
 
 // --- API Namespaces ---
 
@@ -211,9 +197,42 @@ class Lobby {
 
   factory Lobby.fromJson(Map<String, dynamic> json) {
     return Lobby(
-      rooms: RealtimeChannel.fromJsonValue(json['rooms'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).map((e1) => RealtimeChannel.fromJson(e1 as Map<String, dynamic>, (json) => Note.fromJson(json))).toList()),
-      roomGroups: (json['roomGroups'] as List<dynamic>).map((e) => RealtimeChannel.fromJsonValue(e as Map<String, dynamic>, (payload) => (payload as List<dynamic>).map((e2) => RealtimeChannel.fromJson(e2 as Map<String, dynamic>, (json) => Note.fromJson(json))).toList())).toList(),
-      uploadsByRoom: (json['uploadsByRoom'] as Map<String, dynamic>).map((k, v) => MapEntry(k, RealtimeChannel.fromJsonValue(v as Map<String, dynamic>, (payload) => FileUploadHandle.fromJson(payload as Map<String, dynamic>)))),
+      rooms: RealtimeChannel.fromJsonValue(
+        json['rooms'] as Map<String, dynamic>,
+        (payload) => (payload as List<dynamic>)
+            .map(
+              (e1) => RealtimeChannel.fromJson(
+                e1 as Map<String, dynamic>,
+                (json) => Note.fromJson(json),
+              ),
+            )
+            .toList(),
+      ),
+      roomGroups: (json['roomGroups'] as List<dynamic>)
+          .map(
+            (e) => RealtimeChannel.fromJsonValue(
+              e as Map<String, dynamic>,
+              (payload) => (payload as List<dynamic>)
+                  .map(
+                    (e2) => RealtimeChannel.fromJson(
+                      e2 as Map<String, dynamic>,
+                      (json) => Note.fromJson(json),
+                    ),
+                  )
+                  .toList(),
+            ),
+          )
+          .toList(),
+      uploadsByRoom: (json['uploadsByRoom'] as Map<String, dynamic>).map(
+        (k, v) => MapEntry(
+          k,
+          RealtimeChannel.fromJsonValue(
+            v as Map<String, dynamic>,
+            (payload) =>
+                FileUploadHandle.fromJson(payload as Map<String, dynamic>),
+          ),
+        ),
+      ),
     );
   }
 
@@ -234,34 +253,56 @@ class Lobby {
           blocksDeepEquals(uploadsByRoom, other.uploadsByRoom);
 
   @override
-  int get hashCode => Object.hash(rooms, blocksDeepHash(roomGroups), blocksDeepHash(uploadsByRoom));
+  int get hashCode => Object.hash(
+    rooms,
+    blocksDeepHash(roomGroups),
+    blocksDeepHash(uploadsByRoom),
+  );
 
   @override
-  String toString() => 'Lobby(rooms: $rooms, roomGroups: $roomGroups, uploadsByRoom: $uploadsByRoom)';
+  String toString() =>
+      'Lobby(rooms: $rooms, roomGroups: $roomGroups, uploadsByRoom: $uploadsByRoom)';
 }
-
 
 class SignInBoard {
   final List<RealtimeChannel<SignInOption>> feeds;
   final Map<String, RealtimeChannel<List<OidcClient>>> clientsByTenant;
 
-  const SignInBoard({
-    required this.feeds,
-    required this.clientsByTenant,
-  });
+  const SignInBoard({required this.feeds, required this.clientsByTenant});
 
   factory SignInBoard.fromJson(Map<String, dynamic> json, BlocksClient client) {
     return SignInBoard(
-      feeds: (json['feeds'] as List<dynamic>).map((e) => RealtimeChannel.fromJson(e as Map<String, dynamic>, (json) => SignInOption.fromJson(json, client))).toList(),
-      clientsByTenant: (json['clientsByTenant'] as Map<String, dynamic>).map((k, v) => MapEntry(k, RealtimeChannel.fromJsonValue(v as Map<String, dynamic>, (payload) => (payload as List<dynamic>).map((e2) => OidcClient.fromJson(e2 as Map<String, dynamic>, baseUrl: client.baseUrl, tokenStore: client.tokenStore, sessionStore: client.sessionStore)).toList()))),
+      feeds: (json['feeds'] as List<dynamic>)
+          .map(
+            (e) => RealtimeChannel.fromJson(
+              e as Map<String, dynamic>,
+              (json) => SignInOption.fromJson(json, client),
+            ),
+          )
+          .toList(),
+      clientsByTenant: (json['clientsByTenant'] as Map<String, dynamic>).map(
+        (k, v) => MapEntry(
+          k,
+          RealtimeChannel.fromJsonValue(
+            v as Map<String, dynamic>,
+            (payload) => (payload as List<dynamic>)
+                .map(
+                  (e2) => OidcClient.fromJson(
+                    e2 as Map<String, dynamic>,
+                    baseUrl: client.baseUrl,
+                    tokenStore: client.tokenStore,
+                    sessionStore: client.sessionStore,
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'feeds': feeds,
-      'clientsByTenant': clientsByTenant,
-    };
+    return {'feeds': feeds, 'clientsByTenant': clientsByTenant};
   }
 
   @override
@@ -272,12 +313,13 @@ class SignInBoard {
           blocksDeepEquals(clientsByTenant, other.clientsByTenant);
 
   @override
-  int get hashCode => Object.hash(blocksDeepHash(feeds), blocksDeepHash(clientsByTenant));
+  int get hashCode =>
+      Object.hash(blocksDeepHash(feeds), blocksDeepHash(clientsByTenant));
 
   @override
-  String toString() => 'SignInBoard(feeds: $feeds, clientsByTenant: $clientsByTenant)';
+  String toString() =>
+      'SignInBoard(feeds: $feeds, clientsByTenant: $clientsByTenant)';
 }
-
 
 class ProviderDirectory {
   final String title;
@@ -288,13 +330,27 @@ class ProviderDirectory {
     this.additionalProperties = const {},
   });
 
-  factory ProviderDirectory.fromJson(Map<String, dynamic> json, BlocksClient client) {
+  factory ProviderDirectory.fromJson(
+    Map<String, dynamic> json,
+    BlocksClient client,
+  ) {
     const knownKeys = {'title'};
     return ProviderDirectory(
       title: json['title'] as String,
       additionalProperties: Map.fromEntries(
-        json.entries.where((e) => !knownKeys.contains(e.key))
-            .map((e) => MapEntry(e.key, OidcClient.fromJson(e.value as Map<String, dynamic>, baseUrl: client.baseUrl, tokenStore: client.tokenStore, sessionStore: client.sessionStore))),
+        json.entries
+            .where((e) => !knownKeys.contains(e.key))
+            .map(
+              (e) => MapEntry(
+                e.key,
+                OidcClient.fromJson(
+                  e.value as Map<String, dynamic>,
+                  baseUrl: client.baseUrl,
+                  tokenStore: client.tokenStore,
+                  sessionStore: client.sessionStore,
+                ),
+              ),
+            ),
       ),
     );
   }
@@ -318,34 +374,32 @@ class ProviderDirectory {
   int get hashCode => Object.hash(title, blocksDeepHash(additionalProperties));
 
   @override
-  String toString() => 'ProviderDirectory(title: $title, additionalProperties: $additionalProperties)';
+  String toString() =>
+      'ProviderDirectory(title: $title, additionalProperties: $additionalProperties)';
 }
-
 
 class GetChatFeedResult {
   final RealtimeChannel<GetChatFeedResultChannelMessage> channel;
 
-  const GetChatFeedResult({
-    required this.channel,
-  });
+  const GetChatFeedResult({required this.channel});
 
   factory GetChatFeedResult.fromJson(Map<String, dynamic> json) {
     return GetChatFeedResult(
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => GetChatFeedResultChannelMessage.fromJson(json)),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => GetChatFeedResultChannelMessage.fromJson(json),
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'channel': channel,
-    };
+    return {'channel': channel};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetChatFeedResult &&
-          channel == other.channel;
+      other is GetChatFeedResult && channel == other.channel;
 
   @override
   int get hashCode => channel.hashCode;
@@ -354,31 +408,28 @@ class GetChatFeedResult {
   String toString() => 'GetChatFeedResult(channel: $channel)';
 }
 
-
 class GetCounterFeedResult {
   final RealtimeChannel<GetCounterFeedResultChannelMessage> channel;
 
-  const GetCounterFeedResult({
-    required this.channel,
-  });
+  const GetCounterFeedResult({required this.channel});
 
   factory GetCounterFeedResult.fromJson(Map<String, dynamic> json) {
     return GetCounterFeedResult(
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => GetCounterFeedResultChannelMessage.fromJson(json)),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => GetCounterFeedResultChannelMessage.fromJson(json),
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'channel': channel,
-    };
+    return {'channel': channel};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetCounterFeedResult &&
-          channel == other.channel;
+      other is GetCounterFeedResult && channel == other.channel;
 
   @override
   int get hashCode => channel.hashCode;
@@ -387,19 +438,29 @@ class GetCounterFeedResult {
   String toString() => 'GetCounterFeedResult(channel: $channel)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<RealtimeChannel<Attachment>> getAttachmentFeed() async {
-    final result = await _client.call('api.getAttachmentFeed', const <dynamic>[]);
-    return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => Attachment.fromJson(json));
+    final result = await _client.call(
+      'api.getAttachmentFeed',
+      const <dynamic>[],
+    );
+    return RealtimeChannel.fromJson(
+      result as Map<String, dynamic>,
+      (json) => Attachment.fromJson(json),
+    );
   }
 
   Future<RealtimeChannel<List<FileDownloadHandle>>> getDownloadFeed() async {
     final result = await _client.call('api.getDownloadFeed', const <dynamic>[]);
-    return RealtimeChannel.fromJsonValue(result as Map<String, dynamic>, (payload) => (payload as List<dynamic>).map((e1) => FileDownloadHandle.fromJson(e1 as Map<String, dynamic>)).toList());
+    return RealtimeChannel.fromJsonValue(
+      result as Map<String, dynamic>,
+      (payload) => (payload as List<dynamic>)
+          .map((e1) => FileDownloadHandle.fromJson(e1 as Map<String, dynamic>))
+          .toList(),
+    );
   }
 
   Future<GetChatFeedResult> getChatFeed() async {
@@ -419,7 +480,10 @@ class Api {
 
   Future<RealtimeChannel<SignInOption>> getSignInFeed() async {
     final result = await _client.call('api.getSignInFeed', const <dynamic>[]);
-    return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => SignInOption.fromJson(json, _client));
+    return RealtimeChannel.fromJson(
+      result as Map<String, dynamic>,
+      (json) => SignInOption.fromJson(json, _client),
+    );
   }
 
   Future<SignInBoard> getSignInBoard() async {
@@ -428,11 +492,13 @@ class Api {
   }
 
   Future<ProviderDirectory> getProviderDirectory() async {
-    final result = await _client.call('api.getProviderDirectory', const <dynamic>[]);
+    final result = await _client.call(
+      'api.getProviderDirectory',
+      const <dynamic>[],
+    );
     return ProviderDirectory.fromJson(result as Map<String, dynamic>, _client);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -444,4 +510,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

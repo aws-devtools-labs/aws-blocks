@@ -1,8 +1,10 @@
-import 'builder.dart';
-import 'dart_source.dart';
-import 'diagnostics.dart';
-import 'identifiers.dart';
-import 'model.dart';
+import 'package:blocks_codegen/src/builder.dart';
+import 'package:blocks_codegen/src/dart_source.dart';
+import 'package:blocks_codegen/src/diagnostics.dart';
+import 'package:blocks_codegen/src/identifiers.dart';
+import 'package:blocks_codegen/src/model.dart';
+import 'package:dart_style/dart_style.dart';
+import 'package:pub_semver/pub_semver.dart';
 
 /// The oldest `blocks_runtime` that has every API generated code calls
 /// (`blocksDeepEquals`, `RealtimeChannel.fromJsonValue`, a list-typed
@@ -17,9 +19,12 @@ class DartCodeGenerator {
 
   /// Emits the complete contents of one generated `.blocks.dart` library.
   ///
-  /// Output is deterministic for a given [model], so it is safe to check in
-  /// and diff.
-  String generate(CodegenModel model) {
+  /// Output is formatted at 80 columns and deterministic for a given [model]
+  /// and [languageVersion], so it is safe to check in and diff.
+  ///
+  /// Pass the target package's [languageVersion] when known. When omitted,
+  /// Dart 3.11 is used, matching this package's minimum SDK version.
+  String generate(CodegenModel model, {Version? languageVersion}) {
     _checkNoTransferableParams(model);
     final buf = StringBuffer();
     buf.writeln('// GENERATED CODE — DO NOT MODIFY BY HAND');
@@ -168,9 +173,11 @@ class DartCodeGenerator {
       _emitBlocksFacade(model.namespaces, apiClasses, model.servers, declared),
     );
 
-    final output = buf.toString();
-    _checkBoundTypesNotShadowed(model, output);
-    return output;
+    final rawOutput = buf.toString();
+    _checkBoundTypesNotShadowed(model, rawOutput);
+    return DartFormatter(
+      languageVersion: languageVersion ?? Version(3, 11, 0),
+    ).format('// dart format width=80\n$rawOutput');
   }
 
   String _emitType(

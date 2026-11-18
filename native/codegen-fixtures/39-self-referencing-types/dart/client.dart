@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -13,15 +15,14 @@ class Product {
   final String sku;
   final List<Category> categories;
 
-  const Product({
-    required this.sku,
-    required this.categories,
-  });
+  const Product({required this.sku, required this.categories});
 
   factory Product.fromJson(Map<String, dynamic> json) {
     return Product(
       sku: json['sku'] as String,
-      categories: (json['categories'] as List<dynamic>).map((e) => Category.fromJson(e as Map<String, dynamic>)).toList(),
+      categories: (json['categories'] as List<dynamic>)
+          .map((e) => Category.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 
@@ -46,7 +47,6 @@ class Product {
   String toString() => 'Product(sku: $sku, categories: $categories)';
 }
 
-
 // --- API Namespaces ---
 
 class TreeNode {
@@ -54,17 +54,17 @@ class TreeNode {
   final List<TreeNode> children;
   final Map<String, TreeNode>? byName;
 
-  const TreeNode({
-    required this.label,
-    required this.children,
-    this.byName,
-  });
+  const TreeNode({required this.label, required this.children, this.byName});
 
   factory TreeNode.fromJson(Map<String, dynamic> json) {
     return TreeNode(
       label: json['label'] as String,
-      children: (json['children'] as List<dynamic>).map((e) => TreeNode.fromJson(e as Map<String, dynamic>)).toList(),
-      byName: (json['byName'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, TreeNode.fromJson(v as Map<String, dynamic>))),
+      children: (json['children'] as List<dynamic>)
+          .map((e) => TreeNode.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      byName: (json['byName'] as Map<String, dynamic>?)?.map(
+        (k, v) => MapEntry(k, TreeNode.fromJson(v as Map<String, dynamic>)),
+      ),
     );
   }
 
@@ -72,7 +72,8 @@ class TreeNode {
     return {
       'label': label,
       'children': children.map((e) => e.toJson()).toList(),
-      if (byName != null) 'byName': byName?.map((k, v) => MapEntry(k, v.toJson())),
+      if (byName != null)
+        'byName': byName?.map((k, v) => MapEntry(k, v.toJson())),
     };
   }
 
@@ -85,34 +86,31 @@ class TreeNode {
           blocksDeepEquals(byName, other.byName);
 
   @override
-  int get hashCode => Object.hash(label, blocksDeepHash(children), blocksDeepHash(byName));
+  int get hashCode =>
+      Object.hash(label, blocksDeepHash(children), blocksDeepHash(byName));
 
   @override
-  String toString() => 'TreeNode(label: $label, children: $children, byName: $byName)';
+  String toString() =>
+      'TreeNode(label: $label, children: $children, byName: $byName)';
 }
-
 
 class Comment {
   final String text;
   final List<Comment>? replies;
 
-  const Comment({
-    required this.text,
-    required this.replies,
-  });
+  const Comment({required this.text, required this.replies});
 
   factory Comment.fromJson(Map<String, dynamic> json) {
     return Comment(
       text: json['text'] as String,
-      replies: (json['replies'] as List<dynamic>?)?.map((e) => Comment.fromJson(e as Map<String, dynamic>)).toList(),
+      replies: (json['replies'] as List<dynamic>?)
+          ?.map((e) => Comment.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'text': text,
-      'replies': replies?.map((e) => e.toJson()).toList(),
-    };
+    return {'text': text, 'replies': replies?.map((e) => e.toJson()).toList()};
   }
 
   @override
@@ -129,28 +127,23 @@ class Comment {
   String toString() => 'Comment(text: $text, replies: $replies)';
 }
 
-
 class Category {
   final String name;
   final List<Product> products;
 
-  const Category({
-    required this.name,
-    required this.products,
-  });
+  const Category({required this.name, required this.products});
 
   factory Category.fromJson(Map<String, dynamic> json) {
     return Category(
       name: json['name'] as String,
-      products: (json['products'] as List<dynamic>).map((e) => Product.fromJson(e as Map<String, dynamic>)).toList(),
+      products: (json['products'] as List<dynamic>)
+          .map((e) => Product.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'products': products.map((e) => e.toJson()).toList(),
-    };
+    return {'name': name, 'products': products.map((e) => e.toJson()).toList()};
   }
 
   @override
@@ -167,15 +160,12 @@ class Category {
   String toString() => 'Category(name: $name, products: $products)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<TreeNode> getTree({required TreeNode root}) async {
-    final params = <dynamic>[
-      root.toJson(),
-    ];
+    final params = <dynamic>[root.toJson()];
     final result = await _client.call('api.getTree', params);
     return TreeNode.fromJson(result as Map<String, dynamic>);
   }
@@ -187,10 +177,11 @@ class Api {
 
   Future<Category?> getCategory() async {
     final result = await _client.call('api.getCategory', const <dynamic>[]);
-    return result == null ? null : Category.fromJson(result as Map<String, dynamic>);
+    return result == null
+        ? null
+        : Category.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -202,4 +193,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

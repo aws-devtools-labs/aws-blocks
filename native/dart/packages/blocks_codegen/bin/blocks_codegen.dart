@@ -1,11 +1,15 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:blocks_codegen/src/parser.dart';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
+import 'package:blocks_codegen/src/language_version.dart';
+import 'package:blocks_codegen/src/parser.dart';
+import 'package:dart_style/dart_style.dart';
+import 'package:package_config/package_config.dart';
+import 'package:pub_semver/pub_semver.dart';
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final parser = ArgParser()
     ..addOption('spec', abbr: 's', help: 'Path to the OpenRPC spec file')
     ..addOption(
@@ -84,6 +88,7 @@ void main(List<String> args) {
   }
   final String output;
   try {
+    final languageVersion = await _resolveTargetLanguageVersion(outputPath);
     final rpcModel = const OpenRpcParser().parse(contents);
     final codegenModel = CodegenModelBuilder(
       failOnCollision: failOnCollision,
@@ -92,7 +97,13 @@ void main(List<String> args) {
     for (final w in codegenModel.warnings) {
       stderr.writeln('Warning: $w');
     }
-    output = const DartCodeGenerator().generate(codegenModel);
+    output = const DartCodeGenerator().generate(
+      codegenModel,
+      languageVersion: languageVersion,
+    );
+  } on FormatterException catch (e) {
+    stderr.writeln('Error: ${e.message(color: false)}');
+    exit(1);
   } on FormatException catch (e) {
     stderr.writeln('Error: ${e.message}');
     exit(1);
@@ -109,4 +120,39 @@ void main(List<String> args) {
   } else {
     stdout.write(output);
   }
+}
+
+Future<Version?> _resolveTargetLanguageVersion(String? outputPath) async {
+  if (outputPath == null) {
+    final packageConfig = await findPackageConfig(Directory.current);
+    if (packageConfig == null) return null;
+    return languageVersionForUri(
+      packageConfig,
+      Directory.current.absolute.uri,
+    ).version;
+  }
+
+  final outputFile = File(outputPath).absolute;
+  final outputConfig = await findPackageConfig(
+    _nearestExistingDirectory(outputFile.parent),
+  );
+  if (outputConfig != null) {
+    final target = languageVersionForUri(outputConfig, outputFile.uri);
+    if (target.found) return target.version;
+  }
+
+  final cwdConfig = await findPackageConfig(Directory.current);
+  if (cwdConfig == null) return null;
+  final target = languageVersionForUri(cwdConfig, outputFile.uri);
+  return target.found ? target.version : null;
+}
+
+Directory _nearestExistingDirectory(Directory directory) {
+  var current = directory.absolute;
+  while (!current.existsSync()) {
+    final parent = current.parent;
+    if (parent.path == current.path) return current;
+    current = parent;
+  }
+  return current;
 }

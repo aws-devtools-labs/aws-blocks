@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -77,12 +79,22 @@ class Doc {
           level == other.level;
 
   @override
-  int get hashCode => Object.hash($id, $$v, toJson$, fromJson$, hashCode$, toString$, int$, String$, level);
+  int get hashCode => Object.hash(
+    $id,
+    $$v,
+    toJson$,
+    fromJson$,
+    hashCode$,
+    toString$,
+    int$,
+    String$,
+    level,
+  );
 
   @override
-  String toString() => 'Doc(\$id: ${$id}, \$\$v: ${$$v}, toJson\$: ${toJson$}, fromJson\$: ${fromJson$}, hashCode\$: ${hashCode$}, toString\$: ${toString$}, int\$: ${int$}, String\$: ${String$}, level: $level)';
+  String toString() =>
+      'Doc(\$id: ${$id}, \$\$v: ${$$v}, toJson\$: ${toJson$}, fromJson\$: ${fromJson$}, hashCode\$: ${hashCode$}, toString\$: ${toString$}, int\$: ${int$}, String\$: ${String$}, level: $level)';
 }
-
 
 class Extras {
   final String additionalProperties$;
@@ -101,7 +113,8 @@ class Extras {
       additionalProperties$: json['additionalProperties'] as String,
       id: json['id'] as String,
       additionalProperties: Map.fromEntries(
-        json.entries.where((e) => !knownKeys.contains(e.key))
+        json.entries
+            .where((e) => !knownKeys.contains(e.key))
             .map((e) => MapEntry(e.key, e.value as int)),
       ),
     );
@@ -112,7 +125,8 @@ class Extras {
       'additionalProperties': additionalProperties$,
       'id': id,
       for (final e in additionalProperties.entries)
-        if (!const {'additionalProperties', 'id'}.contains(e.key)) e.key: e.value,
+        if (!const {'additionalProperties', 'id'}.contains(e.key))
+          e.key: e.value,
     };
   }
 
@@ -125,20 +139,23 @@ class Extras {
           blocksDeepEquals(additionalProperties, other.additionalProperties);
 
   @override
-  int get hashCode => Object.hash(additionalProperties$, id, blocksDeepHash(additionalProperties));
+  int get hashCode => Object.hash(
+    additionalProperties$,
+    id,
+    blocksDeepHash(additionalProperties),
+  );
 
   @override
-  String toString() => 'Extras(additionalProperties\$: ${additionalProperties$}, id: $id, additionalProperties: $additionalProperties)';
+  String toString() =>
+      'Extras(additionalProperties\$: ${additionalProperties$}, id: $id, additionalProperties: $additionalProperties)';
 }
-
 
 enum Level {
   values$,
   index$,
   name$,
   $hidden,
-  ok
-;
+  ok;
 
   static const _jsonMap = <String, Level>{
     'values': values$,
@@ -158,24 +175,18 @@ enum Level {
   static Level fromJson(String json) => _jsonMap[json]!;
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<Doc> getDoc({required String $id, int? int$}) async {
-    final params = <dynamic>[
-      $id,
-      if (int$ != null) int$,
-    ];
+    final params = <dynamic>[$id, if (int$ != null) int$];
     final result = await _client.call('api.getDoc', params);
     return Doc.fromJson(result as Map<String, dynamic>);
   }
 
   Future<Extras> putExtras({required Extras extras}) async {
-    final params = <dynamic>[
-      extras.toJson(),
-    ];
+    final params = <dynamic>[extras.toJson()];
     final result = await _client.call('api.putExtras', params);
     return Extras.fromJson(result as Map<String, dynamic>);
   }
@@ -185,7 +196,6 @@ class Api {
     return Level.fromJson(result as String);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -197,4 +207,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

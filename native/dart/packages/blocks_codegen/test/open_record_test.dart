@@ -4,7 +4,9 @@ import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/model.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // An open record is an object schema with `properties` and
 // `additionalProperties` (TS `T & Record<string, V>`). Its extra keys sit flat
@@ -247,7 +249,7 @@ void main() {
         notes,
         contains(
           '.map((e) => MapEntry(e.key, '
-          'Note.fromJson(e.value as Map<String, dynamic>))),',
+          'Note.fromJson(e.value as Map<String, dynamic>)))',
         ),
       );
       expect(notes, contains('.contains(e.key)) e.key: e.value.toJson(),'));

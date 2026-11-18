@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -34,12 +36,7 @@ class Todo {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'title': title,
-      'done': done,
-      'priority': priority,
-    };
+    return {'id': id, 'title': title, 'done': done, 'priority': priority};
   }
 
   @override
@@ -55,18 +52,15 @@ class Todo {
   int get hashCode => Object.hash(id, title, done, priority);
 
   @override
-  String toString() => 'Todo(id: $id, title: $title, done: $done, priority: $priority)';
+  String toString() =>
+      'Todo(id: $id, title: $title, done: $done, priority: $priority)';
 }
-
 
 class ApiCreateTodoInput {
   final String title;
   final int priority;
 
-  const ApiCreateTodoInput({
-    required this.title,
-    required this.priority,
-  });
+  const ApiCreateTodoInput({required this.title, required this.priority});
 
   factory ApiCreateTodoInput.fromJson(Map<String, dynamic> json) {
     return ApiCreateTodoInput(
@@ -76,10 +70,7 @@ class ApiCreateTodoInput {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'title': title,
-      'priority': priority,
-    };
+    return {'title': title, 'priority': priority};
   }
 
   @override
@@ -96,28 +87,22 @@ class ApiCreateTodoInput {
   String toString() => 'ApiCreateTodoInput(title: $title, priority: $priority)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<Todo> getTodo({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getTodo', params);
     return Todo.fromJson(result as Map<String, dynamic>);
   }
 
   Future<Todo> createTodo({required ApiCreateTodoInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('api.createTodo', params);
     return Todo.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -129,4 +114,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

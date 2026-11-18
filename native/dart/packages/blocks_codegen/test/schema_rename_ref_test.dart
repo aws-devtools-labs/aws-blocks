@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // The builder renames types after it resolves them: a schema whose one field
 // has a generic shape (`{value}`) takes a generic name (`ValueResult`), Pass 3
@@ -158,9 +160,12 @@ List<SchemaReference> _refs(CodegenModel model) {
 }
 
 String _signature(String output) {
-  final i = output.indexOf('Future<MakeResult> make(');
-  expect(i, isNot(-1));
-  return output.substring(i, output.indexOf('\n', i));
+  final start = output.indexOf('Future<MakeResult> make(');
+  expect(start, isNot(-1));
+  const suffix = ') async {';
+  final end = output.indexOf(suffix, start);
+  expect(end, isNot(-1));
+  return output.substring(start, end + suffix.length);
 }
 
 void main() {

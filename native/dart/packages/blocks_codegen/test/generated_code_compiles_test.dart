@@ -140,6 +140,18 @@ dependencies:
     if (scratch.existsSync()) scratch.deleteSync(recursive: true);
   });
 
+  test('generated clients are already formatted', () async {
+    _expectSuccess(
+      await _dart([
+        'format',
+        '--output=none',
+        '--set-exit-if-changed',
+        'lib',
+      ], scratch.path),
+      'dart format',
+    );
+  });
+
   test('generated clients analyze without errors or warnings', () async {
     _expectSuccess(
       await _dart(['analyze', '--fatal-warnings', 'lib', 'bin'], scratch.path),

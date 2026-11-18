@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,35 +6,30 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
 
 // --- Models ---
 
 class GetSessionResultChannelMessage {
   final String text;
 
-  const GetSessionResultChannelMessage({
-    required this.text,
-  });
+  const GetSessionResultChannelMessage({required this.text});
 
   factory GetSessionResultChannelMessage.fromJson(Map<String, dynamic> json) {
-    return GetSessionResultChannelMessage(
-      text: json['text'] as String,
-    );
+    return GetSessionResultChannelMessage(text: json['text'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'text': text,
-    };
+    return {'text': text};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetSessionResultChannelMessage &&
-          text == other.text;
+      other is GetSessionResultChannelMessage && text == other.text;
 
   @override
   int get hashCode => text.hashCode;
@@ -42,31 +38,22 @@ class GetSessionResultChannelMessage {
   String toString() => 'GetSessionResultChannelMessage(text: $text)';
 }
 
-
 class CountResult {
   final int count;
 
-  const CountResult({
-    required this.count,
-  });
+  const CountResult({required this.count});
 
   factory CountResult.fromJson(Map<String, dynamic> json) {
-    return CountResult(
-      count: (json['count'] as num).toInt(),
-    );
+    return CountResult(count: (json['count'] as num).toInt());
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'count': count,
-    };
+    return {'count': count};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CountResult &&
-          count == other.count;
+      identical(this, other) || other is CountResult && count == other.count;
 
   @override
   int get hashCode => count.hashCode;
@@ -75,57 +62,51 @@ class CountResult {
   String toString() => 'CountResult(count: $count)';
 }
 
-
 class MessageGetSessionResultEventChannelMessage {
   final String body;
 
-  const MessageGetSessionResultEventChannelMessage({
-    required this.body,
-  });
+  const MessageGetSessionResultEventChannelMessage({required this.body});
 
-  factory MessageGetSessionResultEventChannelMessage.fromJson(Map<String, dynamic> json) {
+  factory MessageGetSessionResultEventChannelMessage.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return MessageGetSessionResultEventChannelMessage(
       body: json['body'] as String,
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'body': body,
-    };
+    return {'body': body};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is MessageGetSessionResultEventChannelMessage &&
-          body == other.body;
+      other is MessageGetSessionResultEventChannelMessage && body == other.body;
 
   @override
   int get hashCode => body.hashCode;
 
   @override
-  String toString() => 'MessageGetSessionResultEventChannelMessage(body: $body)';
+  String toString() =>
+      'MessageGetSessionResultEventChannelMessage(body: $body)';
 }
-
 
 class PresenceGetSessionResultEventChannelMessage {
   final bool online;
 
-  const PresenceGetSessionResultEventChannelMessage({
-    required this.online,
-  });
+  const PresenceGetSessionResultEventChannelMessage({required this.online});
 
-  factory PresenceGetSessionResultEventChannelMessage.fromJson(Map<String, dynamic> json) {
+  factory PresenceGetSessionResultEventChannelMessage.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return PresenceGetSessionResultEventChannelMessage(
       online: json['online'] as bool,
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'online': online,
-    };
+    return {'online': online};
   }
 
   @override
@@ -138,18 +119,21 @@ class PresenceGetSessionResultEventChannelMessage {
   int get hashCode => online.hashCode;
 
   @override
-  String toString() => 'PresenceGetSessionResultEventChannelMessage(online: $online)';
+  String toString() =>
+      'PresenceGetSessionResultEventChannelMessage(online: $online)';
 }
-
 
 sealed class GetSessionResultEvent {
   const GetSessionResultEvent();
   Map<String, dynamic> toJson();
   static GetSessionResultEvent fromJson(Map<String, dynamic> json) {
     switch (json['kind'] as String) {
-      case 'message': return MessageGetSessionResultEvent.fromJson(json);
-      case 'presence': return PresenceGetSessionResultEvent.fromJson(json);
-      default: throw ArgumentError('Unknown kind: ${json['kind']}');
+      case 'message':
+        return MessageGetSessionResultEvent.fromJson(json);
+      case 'presence':
+        return PresenceGetSessionResultEvent.fromJson(json);
+      default:
+        throw ArgumentError('Unknown kind: ${json['kind']}');
     }
   }
 }
@@ -157,29 +141,26 @@ sealed class GetSessionResultEvent {
 class MessageGetSessionResultEvent extends GetSessionResultEvent {
   final RealtimeChannel<MessageGetSessionResultEventChannelMessage> channel;
 
-  const MessageGetSessionResultEvent({
-    required this.channel,
-  });
+  const MessageGetSessionResultEvent({required this.channel});
 
   factory MessageGetSessionResultEvent.fromJson(Map<String, dynamic> json) {
     return MessageGetSessionResultEvent(
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => MessageGetSessionResultEventChannelMessage.fromJson(json)),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => MessageGetSessionResultEventChannelMessage.fromJson(json),
+      ),
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'message',
-      'channel': channel,
-    };
+    return {'kind': 'message', 'channel': channel};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is MessageGetSessionResultEvent &&
-          channel == other.channel;
+      other is MessageGetSessionResultEvent && channel == other.channel;
 
   @override
   int get hashCode => channel.hashCode;
@@ -191,29 +172,26 @@ class MessageGetSessionResultEvent extends GetSessionResultEvent {
 class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   final RealtimeChannel<PresenceGetSessionResultEventChannelMessage> channel;
 
-  const PresenceGetSessionResultEvent({
-    required this.channel,
-  });
+  const PresenceGetSessionResultEvent({required this.channel});
 
   factory PresenceGetSessionResultEvent.fromJson(Map<String, dynamic> json) {
     return PresenceGetSessionResultEvent(
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => PresenceGetSessionResultEventChannelMessage.fromJson(json)),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => PresenceGetSessionResultEventChannelMessage.fromJson(json),
+      ),
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'presence',
-      'channel': channel,
-    };
+    return {'kind': 'presence', 'channel': channel};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PresenceGetSessionResultEvent &&
-          channel == other.channel;
+      other is PresenceGetSessionResultEvent && channel == other.channel;
 
   @override
   int get hashCode => channel.hashCode;
@@ -222,34 +200,30 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   String toString() => 'PresenceGetSessionResultEvent(channel: $channel)';
 }
 
-
-
 // --- API Namespaces ---
 
 class GetSessionResultInner {
   final RealtimeChannel<CountResult> channel;
 
-  const GetSessionResultInner({
-    required this.channel,
-  });
+  const GetSessionResultInner({required this.channel});
 
   factory GetSessionResultInner.fromJson(Map<String, dynamic> json) {
     return GetSessionResultInner(
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => CountResult.fromJson(json)),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => CountResult.fromJson(json),
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'channel': channel,
-    };
+    return {'channel': channel};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetSessionResultInner &&
-          channel == other.channel;
+      other is GetSessionResultInner && channel == other.channel;
 
   @override
   int get hashCode => channel.hashCode;
@@ -257,7 +231,6 @@ class GetSessionResultInner {
   @override
   String toString() => 'GetSessionResultInner(channel: $channel)';
 }
-
 
 class GetSessionResult {
   final String sessionId;
@@ -279,11 +252,24 @@ class GetSessionResult {
   factory GetSessionResult.fromJson(Map<String, dynamic> json) {
     return GetSessionResult(
       sessionId: json['sessionId'] as String,
-      channel: RealtimeChannel.fromJson(json['channel'] as Map<String, dynamic>, (json) => GetSessionResultChannelMessage.fromJson(json)),
-      inner: GetSessionResultInner.fromJson(json['inner'] as Map<String, dynamic>),
-      event: GetSessionResultEvent.fromJson(json['event'] as Map<String, dynamic>),
-      stringValues: RealtimeChannel.fromJsonValue(json['stringValues'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<String>()),
-      integerValues: RealtimeChannel.fromJsonValue(json['integerValues'] as Map<String, dynamic>, (payload) => (payload as List<dynamic>).cast<int>()),
+      channel: RealtimeChannel.fromJson(
+        json['channel'] as Map<String, dynamic>,
+        (json) => GetSessionResultChannelMessage.fromJson(json),
+      ),
+      inner: GetSessionResultInner.fromJson(
+        json['inner'] as Map<String, dynamic>,
+      ),
+      event: GetSessionResultEvent.fromJson(
+        json['event'] as Map<String, dynamic>,
+      ),
+      stringValues: RealtimeChannel.fromJsonValue(
+        json['stringValues'] as Map<String, dynamic>,
+        (payload) => (payload as List<dynamic>).cast<String>(),
+      ),
+      integerValues: RealtimeChannel.fromJsonValue(
+        json['integerValues'] as Map<String, dynamic>,
+        (payload) => (payload as List<dynamic>).cast<int>(),
+      ),
     );
   }
 
@@ -310,12 +296,19 @@ class GetSessionResult {
           integerValues == other.integerValues;
 
   @override
-  int get hashCode => Object.hash(sessionId, channel, inner, event, stringValues, integerValues);
+  int get hashCode => Object.hash(
+    sessionId,
+    channel,
+    inner,
+    event,
+    stringValues,
+    integerValues,
+  );
 
   @override
-  String toString() => 'GetSessionResult(sessionId: $sessionId, channel: $channel, inner: $inner, event: $event, stringValues: $stringValues, integerValues: $integerValues)';
+  String toString() =>
+      'GetSessionResult(sessionId: $sessionId, channel: $channel, inner: $inner, event: $event, stringValues: $stringValues, integerValues: $integerValues)';
 }
-
 
 class Api {
   final BlocksClient _client;
@@ -332,7 +325,6 @@ class Api {
   }
 }
 
-
 // --- Blocks Client ---
 
 class Blocks {
@@ -343,4 +335,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

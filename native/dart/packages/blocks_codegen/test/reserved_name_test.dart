@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A name from the spec becomes a Dart identifier: a field, a named parameter,
 // a method, a `Blocks` field, an enum value or a `Servers` constant. Some
@@ -158,15 +160,7 @@ void main() {
         ),
       );
       // Params are positional, so the wire name isn't sent.
-      expect(
-        output,
-        contains(
-          r'      $id,'
-          '\n'
-          r'      $$v,'
-          '\n      name,\n',
-        ),
-      );
+      expect(output, contains(r'final params = <dynamic>[$id, $$v, name];'));
     });
 
     test('is a public method that calls the original operation', () {
@@ -370,7 +364,7 @@ void main() {
       );
       expect(level, contains('  aB\$,\n  aB\n;'));
       expect(level, contains(r"    'a-b': aB$,"));
-      expect(level, contains("    'aB': aB,"));
+      expect(level, contains("    'aB': aB"));
     });
   });
 
@@ -437,14 +431,7 @@ void main() {
       expect(
         output,
         contains(
-          r'      String$,'
-          '\n'
-          r'      int$,'
-          '\n'
-          r'      Map$,'
-          '\n'
-          r'      Doc$.toJson(),'
-          '\n',
+          r'final params = <dynamic>[String$, int$, Map$, Doc$.toJson()];',
         ),
       );
     });
@@ -575,14 +562,7 @@ void main() {
           r'required int $result}) async {',
         ),
       );
-      expect(
-        output,
-        contains(
-          '      result,\n'
-          r'      $result,'
-          '\n',
-        ),
-      );
+      expect(output, contains(r'final params = <dynamic>[result, $result];'));
       expect(output, contains(r'    final $result2 = await _client.call('));
       expect(output, contains(r'    return $result2 as String;'));
     });

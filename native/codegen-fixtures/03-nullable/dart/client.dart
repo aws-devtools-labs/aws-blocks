@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -16,11 +18,7 @@ class GetProfileResult {
   final String? bio;
   final int? age;
 
-  const GetProfileResult({
-    required this.name,
-    this.bio,
-    this.age,
-  });
+  const GetProfileResult({required this.name, this.bio, this.age});
 
   factory GetProfileResult.fromJson(Map<String, dynamic> json) {
     return GetProfileResult(
@@ -53,20 +51,16 @@ class GetProfileResult {
   String toString() => 'GetProfileResult(name: $name, bio: $bio, age: $age)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<GetProfileResult> getProfile({required String userId}) async {
-    final params = <dynamic>[
-      userId,
-    ];
+    final params = <dynamic>[userId];
     final result = await _client.call('api.getProfile', params);
     return GetProfileResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -78,4 +72,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

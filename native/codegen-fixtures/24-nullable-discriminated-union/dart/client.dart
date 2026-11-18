@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -13,10 +15,7 @@ class IsUpdatedFalseNextStep {
   final String name;
   final String destination;
 
-  const IsUpdatedFalseNextStep({
-    required this.name,
-    required this.destination,
-  });
+  const IsUpdatedFalseNextStep({required this.name, required this.destination});
 
   factory IsUpdatedFalseNextStep.fromJson(Map<String, dynamic> json) {
     return IsUpdatedFalseNextStep(
@@ -26,10 +25,7 @@ class IsUpdatedFalseNextStep {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'destination': destination,
-    };
+    return {'name': name, 'destination': destination};
   }
 
   @override
@@ -43,9 +39,9 @@ class IsUpdatedFalseNextStep {
   int get hashCode => Object.hash(name, destination);
 
   @override
-  String toString() => 'IsUpdatedFalseNextStep(name: $name, destination: $destination)';
+  String toString() =>
+      'IsUpdatedFalseNextStep(name: $name, destination: $destination)';
 }
-
 
 // --- API Namespaces ---
 
@@ -54,32 +50,29 @@ sealed class UpdateAttributesResult {
   Map<String, dynamic> toJson();
   static UpdateAttributesResult fromJson(Map<String, dynamic> json) {
     switch (json['isUpdated'] as bool) {
-      case true: return IsUpdatedTrue.fromJson(json);
-      case false: return IsUpdatedFalse.fromJson(json);
+      case true:
+        return IsUpdatedTrue.fromJson(json);
+      case false:
+        return IsUpdatedFalse.fromJson(json);
     }
   }
 }
 
 class IsUpdatedTrue extends UpdateAttributesResult {
-
   const IsUpdatedTrue();
 
   factory IsUpdatedTrue.fromJson(Map<String, dynamic> json) {
-    return IsUpdatedTrue(
-    );
+    return IsUpdatedTrue();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'isUpdated': true,
-    };
+    return {'isUpdated': true};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is IsUpdatedTrue;
+      identical(this, other) || other is IsUpdatedTrue;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -91,29 +84,25 @@ class IsUpdatedTrue extends UpdateAttributesResult {
 class IsUpdatedFalse extends UpdateAttributesResult {
   final IsUpdatedFalseNextStep nextStep;
 
-  const IsUpdatedFalse({
-    required this.nextStep,
-  });
+  const IsUpdatedFalse({required this.nextStep});
 
   factory IsUpdatedFalse.fromJson(Map<String, dynamic> json) {
     return IsUpdatedFalse(
-      nextStep: IsUpdatedFalseNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
+      nextStep: IsUpdatedFalseNextStep.fromJson(
+        json['nextStep'] as Map<String, dynamic>,
+      ),
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'isUpdated': false,
-      'nextStep': nextStep.toJson(),
-    };
+    return {'isUpdated': false, 'nextStep': nextStep.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is IsUpdatedFalse &&
-          nextStep == other.nextStep;
+      other is IsUpdatedFalse && nextStep == other.nextStep;
 
   @override
   int get hashCode => nextStep.hashCode;
@@ -122,16 +111,17 @@ class IsUpdatedFalse extends UpdateAttributesResult {
   String toString() => 'IsUpdatedFalse(nextStep: $nextStep)';
 }
 
-
-
 sealed class GetNotificationResult {
   const GetNotificationResult();
   Map<String, dynamic> toJson();
   static GetNotificationResult fromJson(Map<String, dynamic> json) {
     switch (json['type'] as String) {
-      case 'email': return EmailGetNotificationResult.fromJson(json);
-      case 'sms': return SmsGetNotificationResult.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      case 'email':
+        return EmailGetNotificationResult.fromJson(json);
+      case 'sms':
+        return SmsGetNotificationResult.fromJson(json);
+      default:
+        throw ArgumentError('Unknown type: ${json['type']}');
     }
   }
 }
@@ -140,10 +130,7 @@ class EmailGetNotificationResult extends GetNotificationResult {
   final String subject;
   final String body;
 
-  const EmailGetNotificationResult({
-    required this.subject,
-    required this.body,
-  });
+  const EmailGetNotificationResult({required this.subject, required this.body});
 
   factory EmailGetNotificationResult.fromJson(Map<String, dynamic> json) {
     return EmailGetNotificationResult(
@@ -154,11 +141,7 @@ class EmailGetNotificationResult extends GetNotificationResult {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'type': 'email',
-      'subject': subject,
-      'body': body,
-    };
+    return {'type': 'email', 'subject': subject, 'body': body};
   }
 
   @override
@@ -172,35 +155,28 @@ class EmailGetNotificationResult extends GetNotificationResult {
   int get hashCode => Object.hash(subject, body);
 
   @override
-  String toString() => 'EmailGetNotificationResult(subject: $subject, body: $body)';
+  String toString() =>
+      'EmailGetNotificationResult(subject: $subject, body: $body)';
 }
 
 class SmsGetNotificationResult extends GetNotificationResult {
   final String message;
 
-  const SmsGetNotificationResult({
-    required this.message,
-  });
+  const SmsGetNotificationResult({required this.message});
 
   factory SmsGetNotificationResult.fromJson(Map<String, dynamic> json) {
-    return SmsGetNotificationResult(
-      message: json['message'] as String,
-    );
+    return SmsGetNotificationResult(message: json['message'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'type': 'sms',
-      'message': message,
-    };
+    return {'type': 'sms', 'message': message};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SmsGetNotificationResult &&
-          message == other.message;
+      other is SmsGetNotificationResult && message == other.message;
 
   @override
   int get hashCode => message.hashCode;
@@ -209,29 +185,33 @@ class SmsGetNotificationResult extends GetNotificationResult {
   String toString() => 'SmsGetNotificationResult(message: $message)';
 }
 
-
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
-  Future<Map<String, UpdateAttributesResult?>> updateAttributes({required Map<String, String> attributes}) async {
-    final params = <dynamic>[
-      attributes,
-    ];
+  Future<Map<String, UpdateAttributesResult?>> updateAttributes({
+    required Map<String, String> attributes,
+  }) async {
+    final params = <dynamic>[attributes];
     final result = await _client.call('api.updateAttributes', params);
-    return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v == null ? null : UpdateAttributesResult.fromJson(v as Map<String, dynamic>)));
+    return (result as Map<String, dynamic>).map(
+      (k, v) => MapEntry(
+        k,
+        v == null
+            ? null
+            : UpdateAttributesResult.fromJson(v as Map<String, dynamic>),
+      ),
+    );
   }
 
   Future<GetNotificationResult?> getNotification({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getNotification', params);
-    return result == null ? null : GetNotificationResult.fromJson(result as Map<String, dynamic>);
+    return result == null
+        ? null
+        : GetNotificationResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -243,4 +223,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

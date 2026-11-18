@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -20,10 +22,7 @@ class Api {
   }
 
   Future<void> remember({required String note, String? tag}) async {
-    final params = <dynamic>[
-      note,
-      if (tag != null) tag,
-    ];
+    final params = <dynamic>[note, if (tag != null) tag];
     await _client.call('api.remember', params);
   }
 
@@ -32,7 +31,6 @@ class Api {
     return (result as num).toInt();
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -44,4 +42,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

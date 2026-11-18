@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,34 +6,28 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
 class ProfileUser_name {
   final String first;
 
-  const ProfileUser_name({
-    required this.first,
-  });
+  const ProfileUser_name({required this.first});
 
   factory ProfileUser_name.fromJson(Map<String, dynamic> json) {
-    return ProfileUser_name(
-      first: json['first'] as String,
-    );
+    return ProfileUser_name(first: json['first'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'first': first,
-    };
+    return {'first': first};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ProfileUser_name &&
-          first == other.first;
+      other is ProfileUser_name && first == other.first;
 
   @override
   int get hashCode => first.hashCode;
@@ -41,31 +36,22 @@ class ProfileUser_name {
   String toString() => 'ProfileUser_name(first: $first)';
 }
 
-
 class ProfileUserName {
   final String last;
 
-  const ProfileUserName({
-    required this.last,
-  });
+  const ProfileUserName({required this.last});
 
   factory ProfileUserName.fromJson(Map<String, dynamic> json) {
-    return ProfileUserName(
-      last: json['last'] as String,
-    );
+    return ProfileUserName(last: json['last'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'last': last,
-    };
+    return {'last': last};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ProfileUserName &&
-          last == other.last;
+      identical(this, other) || other is ProfileUserName && last == other.last;
 
   @override
   int get hashCode => last.hashCode;
@@ -74,31 +60,22 @@ class ProfileUserName {
   String toString() => 'ProfileUserName(last: $last)';
 }
 
-
 class ProfileMeta {
   final String x;
 
-  const ProfileMeta({
-    required this.x,
-  });
+  const ProfileMeta({required this.x});
 
   factory ProfileMeta.fromJson(Map<String, dynamic> json) {
-    return ProfileMeta(
-      x: json['x'] as String,
-    );
+    return ProfileMeta(x: json['x'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'x': x,
-    };
+    return {'x': x};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ProfileMeta &&
-          x == other.x;
+      identical(this, other) || other is ProfileMeta && x == other.x;
 
   @override
   int get hashCode => x.hashCode;
@@ -107,11 +84,9 @@ class ProfileMeta {
   String toString() => 'ProfileMeta(x: $x)';
 }
 
-
 enum ProfileState {
   inProgress,
-  in_progress
-;
+  in_progress;
 
   static const _jsonMap = <String, ProfileState>{
     'in-progress': inProgress,
@@ -124,7 +99,6 @@ enum ProfileState {
   String toJson() => _toJsonMap[this]!;
   static ProfileState fromJson(String json) => _jsonMap[json]!;
 }
-
 
 // --- API Namespaces ---
 
@@ -143,8 +117,12 @@ class Profile {
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
-      user_name: ProfileUser_name.fromJson(json['user_name'] as Map<String, dynamic>),
-      userName: ProfileUserName.fromJson(json['userName'] as Map<String, dynamic>),
+      user_name: ProfileUser_name.fromJson(
+        json['user_name'] as Map<String, dynamic>,
+      ),
+      userName: ProfileUserName.fromJson(
+        json['userName'] as Map<String, dynamic>,
+      ),
       Meta: ProfileMeta.fromJson(json['Meta'] as Map<String, dynamic>),
       state: ProfileState.fromJson(json['state'] as String),
     );
@@ -172,25 +150,23 @@ class Profile {
   int get hashCode => Object.hash(user_name, userName, Meta, state);
 
   @override
-  String toString() => 'Profile(user_name: $user_name, userName: $userName, Meta: $Meta, state: $state)';
+  String toString() =>
+      'Profile(user_name: $user_name, userName: $userName, Meta: $Meta, state: $state)';
 }
-
 
 class Bag {
   final String attributes;
   final Map<String, String> additionalProperties;
 
-  const Bag({
-    required this.attributes,
-    this.additionalProperties = const {},
-  });
+  const Bag({required this.attributes, this.additionalProperties = const {}});
 
   factory Bag.fromJson(Map<String, dynamic> json) {
     const knownKeys = {'attributes'};
     return Bag(
       attributes: json['attributes'] as String,
       additionalProperties: Map.fromEntries(
-        json.entries.where((e) => !knownKeys.contains(e.key))
+        json.entries
+            .where((e) => !knownKeys.contains(e.key))
             .map((e) => MapEntry(e.key, e.value as String)),
       ),
     );
@@ -212,37 +188,30 @@ class Bag {
           blocksDeepEquals(additionalProperties, other.additionalProperties);
 
   @override
-  int get hashCode => Object.hash(attributes, blocksDeepHash(additionalProperties));
+  int get hashCode =>
+      Object.hash(attributes, blocksDeepHash(additionalProperties));
 
   @override
-  String toString() => 'Bag(attributes: $attributes, additionalProperties: $additionalProperties)';
+  String toString() =>
+      'Bag(attributes: $attributes, additionalProperties: $additionalProperties)';
 }
-
 
 class Weird {
   final String backSlash;
 
-  const Weird({
-    required this.backSlash,
-  });
+  const Weird({required this.backSlash});
 
   factory Weird.fromJson(Map<String, dynamic> json) {
-    return Weird(
-      backSlash: json['back\\slash'] as String,
-    );
+    return Weird(backSlash: json['back\\slash'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'back\\slash': backSlash,
-    };
+    return {'back\\slash': backSlash};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Weird &&
-          backSlash == other.backSlash;
+      identical(this, other) || other is Weird && backSlash == other.backSlash;
 
   @override
   int get hashCode => backSlash.hashCode;
@@ -251,31 +220,22 @@ class Weird {
   String toString() => 'Weird(backSlash: $backSlash)';
 }
 
-
 class ApiSendResult {
   final String sent;
 
-  const ApiSendResult({
-    required this.sent,
-  });
+  const ApiSendResult({required this.sent});
 
   factory ApiSendResult.fromJson(Map<String, dynamic> json) {
-    return ApiSendResult(
-      sent: json['sent'] as String,
-    );
+    return ApiSendResult(sent: json['sent'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'sent': sent,
-    };
+    return {'sent': sent};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ApiSendResult &&
-          sent == other.sent;
+      identical(this, other) || other is ApiSendResult && sent == other.sent;
 
   @override
   int get hashCode => sent.hashCode;
@@ -284,31 +244,22 @@ class ApiSendResult {
   String toString() => 'ApiSendResult(sent: $sent)';
 }
 
-
 class Same {
   final String a;
 
-  const Same({
-    required this.a,
-  });
+  const Same({required this.a});
 
   factory Same.fromJson(Map<String, dynamic> json) {
-    return Same(
-      a: json['a'] as String,
-    );
+    return Same(a: json['a'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'a': a,
-    };
+    return {'a': a};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Same &&
-          a == other.a;
+      identical(this, other) || other is Same && a == other.a;
 
   @override
   int get hashCode => a.hashCode;
@@ -317,31 +268,22 @@ class Same {
   String toString() => 'Same(a: $a)';
 }
 
-
 class Same2 {
   final num b;
 
-  const Same2({
-    required this.b,
-  });
+  const Same2({required this.b});
 
   factory Same2.fromJson(Map<String, dynamic> json) {
-    return Same2(
-      b: json['b'] as num,
-    );
+    return Same2(b: json['b'] as num);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'b': b,
-    };
+    return {'b': b};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Same2 &&
-          b == other.b;
+      identical(this, other) || other is Same2 && b == other.b;
 
   @override
   int get hashCode => b.hashCode;
@@ -350,12 +292,16 @@ class Same2 {
   String toString() => 'Same2(b: $b)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
-  Future<ApiSendResult> send({required String request, required String class$, String? args, String? json}) async {
+  Future<ApiSendResult> send({
+    required String request,
+    required String class$,
+    String? args,
+    String? json,
+  }) async {
     final params = <dynamic>[
       request,
       class$,
@@ -367,9 +313,7 @@ class Api {
   }
 
   Future<Profile> getProfile({required Profile profile}) async {
-    final params = <dynamic>[
-      profile.toJson(),
-    ];
+    final params = <dynamic>[profile.toJson()];
     final result = await _client.call('api.getProfile', params);
     return Profile.fromJson(result as Map<String, dynamic>);
   }
@@ -385,30 +329,23 @@ class Api {
   }
 
   Future<String> relay({required String client}) async {
-    final params = <dynamic>[
-      client,
-    ];
+    final params = <dynamic>[client];
     final result = await _client.call('api.relay', params);
     return result as String;
   }
 
   Future<Bag> putBag({required Bag bag}) async {
-    final params = <dynamic>[
-      bag.toJson(),
-    ];
+    final params = <dynamic>[bag.toJson()];
     final result = await _client.call('api.putBag', params);
     return Bag.fromJson(result as Map<String, dynamic>);
   }
 
   Future<Weird> getWeird({required Weird weird}) async {
-    final params = <dynamic>[
-      weird.toJson(),
-    ];
+    final params = <dynamic>[weird.toJson()];
     final result = await _client.call('api.getWeird', params);
     return Weird.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 class ABApi {
   final BlocksClient _client;
@@ -419,7 +356,6 @@ class ABApi {
     return result as String;
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -433,4 +369,3 @@ class Blocks {
     aB = ABApi(client);
   }
 }
-

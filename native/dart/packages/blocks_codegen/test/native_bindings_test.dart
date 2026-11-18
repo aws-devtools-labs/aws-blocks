@@ -5,7 +5,9 @@ import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/dart_source.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 /// The third-party tag the probes bind. A built-in tag short-circuits binding
 /// resolution, so a probe using one cannot reach the rule under test.
@@ -62,10 +64,7 @@ void main() {
 
     test('the runtime import is kept and declared imports are sorted', () {
       final output = _generate(_build(_specJson(extras: _catalogs())));
-      final directives = const LineSplitter()
-          .convert(output)
-          .where((l) => l.startsWith('import ') || l.startsWith('export '))
-          .toList();
+      final directives = _allDirectives(output);
 
       expect(directives, [
         "import 'package:blocks_runtime/blocks_runtime.dart';",
@@ -250,9 +249,17 @@ void main() {
           .replaceAll(RegExp(r"'(?:[^'\\\n]|\\.)*'"), "''")
           .replaceAll(RegExp(r'"(?:[^"\\\n]|\\.)*"'), "''");
 
-      final shown = RegExp(r"^import '[^']+' show ([^;]+);", multiLine: true)
-          .allMatches(output)
-          .expand((m) => m.group(1)!.split(',').map((n) => n.trim()))
+      final shown = _allDirectives(output)
+          .where((directive) => directive.startsWith('import '))
+          .where((directive) => directive.contains(' show '))
+          .expand(
+            (directive) => directive
+                .split(' show ')
+                .last
+                .replaceFirst(RegExp(r';$'), '')
+                .split(',')
+                .map((name) => name.trim()),
+          )
           .toSet();
       // Every position a type can occupy: call, generic open, member access,
       // generic close, generic comma, statement end, index close, nullable,
@@ -1017,7 +1024,7 @@ void main() {
           }),
         ),
       );
-      final header = const LineSplitter().convert(output)[2];
+      final header = const LineSplitter().convert(output)[3];
 
       expect(header, startsWith('// Source: '));
       expect(header, contains(r'\nvoid pwnedViaTitle() {}'));
@@ -1406,8 +1413,16 @@ void main() {
   });
 }
 
+List<String> _allDirectives(String output) =>
+    RegExp(
+      r'^(?:import|export) [^;]+;',
+      multiLine: true,
+    ).allMatches(output).map((match) {
+      return match.group(0)!.replaceAll(RegExp(r'\s+'), ' ');
+    }).toList();
+
 List<String> _directives(String output) =>
-    output.split('\n').where((line) => line.startsWith('import ')).toList();
+    _allDirectives(output).where((line) => line.startsWith('import ')).toList();
 
 /// A spec whose arity-one type-arg `$ref` target is renamed by the collision
 /// pass, so the decoder it named no longer exists under that name.

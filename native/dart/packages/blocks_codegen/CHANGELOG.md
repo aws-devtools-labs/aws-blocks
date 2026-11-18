@@ -62,6 +62,9 @@
 
 ### Other changes
 
+- Format every generated Dart client at width 80, using the target package's
+  Dart language version when available, so output passes `dart format` without
+  a separate consumer-side formatting step.
 - **Requires the `blocks_runtime` release with this change.**
 - A spec that names no providers, and an OIDC client inside a model, list,
   map or parameter, are still a plain `OidcClient`, unchanged.

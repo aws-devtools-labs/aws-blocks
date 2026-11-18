@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -92,12 +94,25 @@ class GetClassResult {
           super$ == other.super$;
 
   @override
-  int get hashCode => Object.hash(type, class$, default$, in$, is$, return$, var$, val, when, switch$, self, super$);
+  int get hashCode => Object.hash(
+    type,
+    class$,
+    default$,
+    in$,
+    is$,
+    return$,
+    var$,
+    val,
+    when,
+    switch$,
+    self,
+    super$,
+  );
 
   @override
-  String toString() => 'GetClassResult(type: $type, class\$: ${class$}, default\$: ${default$}, in\$: ${in$}, is\$: ${is$}, return\$: ${return$}, var\$: ${var$}, val: $val, when: $when, switch\$: ${switch$}, self: $self, super\$: ${super$})';
+  String toString() =>
+      'GetClassResult(type: $type, class\$: ${class$}, default\$: ${default$}, in\$: ${in$}, is\$: ${is$}, return\$: ${return$}, var\$: ${var$}, val: $val, when: $when, switch\$: ${switch$}, self: $self, super\$: ${super$})';
 }
-
 
 class ApiImportInput {
   final String for$;
@@ -160,37 +175,30 @@ class ApiImportInput {
           abstract$ == other.abstract$;
 
   @override
-  int get hashCode => Object.hash(for$, while$, do$, else$, enum$, extends$, final$, abstract$);
+  int get hashCode =>
+      Object.hash(for$, while$, do$, else$, enum$, extends$, final$, abstract$);
 
   @override
-  String toString() => 'ApiImportInput(for\$: ${for$}, while\$: ${while$}, do\$: ${do$}, else\$: ${else$}, enum\$: ${enum$}, extends\$: ${extends$}, final\$: ${final$}, abstract\$: ${abstract$})';
+  String toString() =>
+      'ApiImportInput(for\$: ${for$}, while\$: ${while$}, do\$: ${do$}, else\$: ${else$}, enum\$: ${enum$}, extends\$: ${extends$}, final\$: ${final$}, abstract\$: ${abstract$})';
 }
-
 
 class ImportResult {
   final bool ok;
 
-  const ImportResult({
-    required this.ok,
-  });
+  const ImportResult({required this.ok});
 
   factory ImportResult.fromJson(Map<String, dynamic> json) {
-    return ImportResult(
-      ok: json['ok'] as bool,
-    );
+    return ImportResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ImportResult &&
-          ok == other.ok;
+      identical(this, other) || other is ImportResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -198,7 +206,6 @@ class ImportResult {
   @override
   String toString() => 'ImportResult(ok: $ok)';
 }
-
 
 class ExportResult {
   final String object;
@@ -266,29 +273,35 @@ class ExportResult {
           null$ == other.null$;
 
   @override
-  int get hashCode => Object.hash(object, package, internal, operator$, this$, throw$, true$, false$, null$);
+  int get hashCode => Object.hash(
+    object,
+    package,
+    internal,
+    operator$,
+    this$,
+    throw$,
+    true$,
+    false$,
+    null$,
+  );
 
   @override
-  String toString() => 'ExportResult(object: $object, package: $package, internal: $internal, operator\$: ${operator$}, this\$: ${this$}, throw\$: ${throw$}, true\$: ${true$}, false\$: ${false$}, null\$: ${null$})';
+  String toString() =>
+      'ExportResult(object: $object, package: $package, internal: $internal, operator\$: ${operator$}, this\$: ${this$}, throw\$: ${throw$}, true\$: ${true$}, false\$: ${false$}, null\$: ${null$})';
 }
-
 
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<GetClassResult> getClass({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getClass', params);
     return GetClassResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<ImportResult> import$({required ApiImportInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('api.import', params);
     return ImportResult.fromJson(result as Map<String, dynamic>);
   }
@@ -298,7 +311,6 @@ class Api {
     return ExportResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -310,4 +322,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 void main() {
   const gen = DartCodeGenerator();
@@ -831,7 +833,9 @@ void main() {
       // `_client.call('<fullName>', ...)` that precedes the return.
       final rawOps = <String>{};
       final allOps = <String>{};
-      final re = RegExp(r"_client\.call\('([^']+)'[^;]*\);\s*return ([^\n]*);");
+      final re = RegExp(
+        r"_client\.call\('([^']+)'[^;]*\);\s*return ([\s\S]*?);",
+      );
       for (final m in re.allMatches(output)) {
         final fullName = m.group(1)!;
         allOps.add(fullName);
@@ -1753,10 +1757,8 @@ void main() {
     test('inline enum values decode through fromJson', () {
       expect(
         output,
-        matches(
-          RegExp(
-            r"      moods: \(json\['moods'\] as Map<String, dynamic>\)\.map\(\(k, v\) => MapEntry\(k, \w+\.fromJson\(v as String\)\)\),",
-          ),
+        contains(
+          "moods: (json['moods'] as Map<String, dynamic>).map((k, v) => MapEntry(k, HolderMoods.fromJson(v as String)))",
         ),
       );
     });

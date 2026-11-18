@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // Containers (lists, maps, nullables, tuples, and any nesting of them) whose
 // elements need converting used to decode with a bare cast: `v as List<Note>`,
@@ -288,7 +290,7 @@ void main() {
       expect(
         output,
         contains(
-          '            .map((e) => MapEntry(e.key, Note.fromJson(e.value as Map<String, dynamic>))),',
+          '            .map((e) => MapEntry(e.key, Note.fromJson(e.value as Map<String, dynamic>)))',
         ),
       );
     });
@@ -340,7 +342,7 @@ void main() {
       expect(
         output,
         contains(
-          "      client: OidcClient.fromJson(json['client'] as Map<String, dynamic>, baseUrl: client.baseUrl, tokenStore: client.tokenStore, sessionStore: client.sessionStore),",
+          "      client: OidcClient.fromJson(json['client'] as Map<String, dynamic>, baseUrl: client.baseUrl, tokenStore: client.tokenStore, sessionStore: client.sessionStore)",
         ),
       );
     });
@@ -504,7 +506,7 @@ void main() {
       expect(
         output,
         contains(
-          "      if (pair != null) 'pair': switch (pair) { final value? => [value.\$1, value.\$2.toJson()], _ => null },",
+          "      if (pair != null) 'pair': switch (pair) { final value? => [value.\$1, value.\$2.toJson()], _ => null }",
         ),
       );
     });

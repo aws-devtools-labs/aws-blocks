@@ -1,6 +1,8 @@
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 /// The generated code declares its own names next to user-chosen ones: an
 /// operation's `params` array and `result`, the `==` parameter `other`, the
@@ -77,7 +79,7 @@ void main() {
     test('a parameter named `result` keeps its name; the local yields', () {
       final body = runBody(gen.generate(model(params: [param('result')])));
       expect(body, contains('Future<String> run({required String result})'));
-      expect(body, contains('      result,\n'));
+      expect(body, contains('final params = <dynamic>[result];'));
       expect(
         body,
         contains(r"    final $result = await _client.call('api.run', params);"),
@@ -90,7 +92,7 @@ void main() {
       final body = runBody(gen.generate(model(params: [param('params')])));
       expect(body, contains('Future<String> run({required String params})'));
       expect(body, contains(r'    final $params = <dynamic>['));
-      expect(body, contains('      params,\n'));
+      expect(body, contains(r'final $params = <dynamic>[params];'));
       expect(body, contains(r"await _client.call('api.run', $params);"));
       expect(body, contains('    return result as String;'));
     });
@@ -134,14 +136,7 @@ void main() {
       final body = runBody(
         gen.generate(model(params: [param('result'), param(r'$result')])),
       );
-      expect(
-        body,
-        contains(
-          '      result,\n'
-          r'      $result,'
-          '\n',
-        ),
-      );
+      expect(body, contains(r'final params = <dynamic>[result, $result];'));
       expect(body, contains(r'    final $result2 = await _client.call('));
       expect(body, contains(r'    return $result2 as String;'));
     });
@@ -196,10 +191,7 @@ void main() {
       expect(
         body,
         '  Future<String> run({required String id, required String name}) async {\n'
-        '    final params = <dynamic>[\n'
-        '      id,\n'
-        '      name,\n'
-        '    ];\n'
+        '    final params = <dynamic>[id, name];\n'
         "    final result = await _client.call('api.run', params);\n"
         '    return result as String;',
       );

@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,19 +6,19 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
 enum ShipmentDestinationGeoAccuracySource {
   gps,
-  cell
-;
+  cell;
 
   String toJson() => name;
-  static ShipmentDestinationGeoAccuracySource fromJson(String json) => values.byName(json);
+  static ShipmentDestinationGeoAccuracySource fromJson(String json) =>
+      values.byName(json);
 }
-
 
 class ShipmentDestinationGeoAccuracy {
   final num meters;
@@ -31,15 +32,14 @@ class ShipmentDestinationGeoAccuracy {
   factory ShipmentDestinationGeoAccuracy.fromJson(Map<String, dynamic> json) {
     return ShipmentDestinationGeoAccuracy(
       meters: json['meters'] as num,
-      source: ShipmentDestinationGeoAccuracySource.fromJson(json['source'] as String),
+      source: ShipmentDestinationGeoAccuracySource.fromJson(
+        json['source'] as String,
+      ),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'meters': meters,
-      'source': source.toJson(),
-    };
+    return {'meters': meters, 'source': source.toJson()};
   }
 
   @override
@@ -53,9 +53,9 @@ class ShipmentDestinationGeoAccuracy {
   int get hashCode => Object.hash(meters, source);
 
   @override
-  String toString() => 'ShipmentDestinationGeoAccuracy(meters: $meters, source: $source)';
+  String toString() =>
+      'ShipmentDestinationGeoAccuracy(meters: $meters, source: $source)';
 }
-
 
 class ShipmentDestinationGeo {
   final num lat;
@@ -72,7 +72,11 @@ class ShipmentDestinationGeo {
     return ShipmentDestinationGeo(
       lat: json['lat'] as num,
       lng: json['lng'] as num,
-      accuracy: json['accuracy'] != null ? ShipmentDestinationGeoAccuracy.fromJson(json['accuracy'] as Map<String, dynamic>) : null,
+      accuracy: json['accuracy'] != null
+          ? ShipmentDestinationGeoAccuracy.fromJson(
+              json['accuracy'] as Map<String, dynamic>,
+            )
+          : null,
     );
   }
 
@@ -96,18 +100,15 @@ class ShipmentDestinationGeo {
   int get hashCode => Object.hash(lat, lng, accuracy);
 
   @override
-  String toString() => 'ShipmentDestinationGeo(lat: $lat, lng: $lng, accuracy: $accuracy)';
+  String toString() =>
+      'ShipmentDestinationGeo(lat: $lat, lng: $lng, accuracy: $accuracy)';
 }
-
 
 class ShipmentDestination {
   final String city;
   final ShipmentDestinationGeo geo;
 
-  const ShipmentDestination({
-    required this.city,
-    required this.geo,
-  });
+  const ShipmentDestination({required this.city, required this.geo});
 
   factory ShipmentDestination.fromJson(Map<String, dynamic> json) {
     return ShipmentDestination(
@@ -117,18 +118,13 @@ class ShipmentDestination {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'city': city,
-      'geo': geo.toJson(),
-    };
+    return {'city': city, 'geo': geo.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ShipmentDestination &&
-          city == other.city &&
-          geo == other.geo;
+      other is ShipmentDestination && city == other.city && geo == other.geo;
 
   @override
   int get hashCode => Object.hash(city, geo);
@@ -137,15 +133,11 @@ class ShipmentDestination {
   String toString() => 'ShipmentDestination(city: $city, geo: $geo)';
 }
 
-
 class ShipmentInsurance {
   final String provider;
   final num? amount;
 
-  const ShipmentInsurance({
-    required this.provider,
-    this.amount,
-  });
+  const ShipmentInsurance({required this.provider, this.amount});
 
   factory ShipmentInsurance.fromJson(Map<String, dynamic> json) {
     return ShipmentInsurance(
@@ -155,10 +147,7 @@ class ShipmentInsurance {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'provider': provider,
-      if (amount != null) 'amount': amount,
-    };
+    return {'provider': provider, if (amount != null) 'amount': amount};
   }
 
   @override
@@ -172,18 +161,15 @@ class ShipmentInsurance {
   int get hashCode => Object.hash(provider, amount);
 
   @override
-  String toString() => 'ShipmentInsurance(provider: $provider, amount: $amount)';
+  String toString() =>
+      'ShipmentInsurance(provider: $provider, amount: $amount)';
 }
-
 
 class ShipmentSignature {
   final String signedBy;
   final String signedAt;
 
-  const ShipmentSignature({
-    required this.signedBy,
-    required this.signedAt,
-  });
+  const ShipmentSignature({required this.signedBy, required this.signedAt});
 
   factory ShipmentSignature.fromJson(Map<String, dynamic> json) {
     return ShipmentSignature(
@@ -193,10 +179,7 @@ class ShipmentSignature {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'signedBy': signedBy,
-      'signedAt': signedAt,
-    };
+    return {'signedBy': signedBy, 'signedAt': signedAt};
   }
 
   @override
@@ -210,18 +193,15 @@ class ShipmentSignature {
   int get hashCode => Object.hash(signedBy, signedAt);
 
   @override
-  String toString() => 'ShipmentSignature(signedBy: $signedBy, signedAt: $signedAt)';
+  String toString() =>
+      'ShipmentSignature(signedBy: $signedBy, signedAt: $signedAt)';
 }
-
 
 class ShipmentParcels {
   final String sku;
   final num weightKg;
 
-  const ShipmentParcels({
-    required this.sku,
-    required this.weightKg,
-  });
+  const ShipmentParcels({required this.sku, required this.weightKg});
 
   factory ShipmentParcels.fromJson(Map<String, dynamic> json) {
     return ShipmentParcels(
@@ -231,10 +211,7 @@ class ShipmentParcels {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'sku': sku,
-      'weightKg': weightKg,
-    };
+    return {'sku': sku, 'weightKg': weightKg};
   }
 
   @override
@@ -251,15 +228,11 @@ class ShipmentParcels {
   String toString() => 'ShipmentParcels(sku: $sku, weightKg: $weightKg)';
 }
 
-
 class ShipmentCustoms {
   final String code;
   final num value;
 
-  const ShipmentCustoms({
-    required this.code,
-    required this.value,
-  });
+  const ShipmentCustoms({required this.code, required this.value});
 
   factory ShipmentCustoms.fromJson(Map<String, dynamic> json) {
     return ShipmentCustoms(
@@ -269,18 +242,13 @@ class ShipmentCustoms {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'code': code,
-      'value': value,
-    };
+    return {'code': code, 'value': value};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ShipmentCustoms &&
-          code == other.code &&
-          value == other.value;
+      other is ShipmentCustoms && code == other.code && value == other.value;
 
   @override
   int get hashCode => Object.hash(code, value);
@@ -289,31 +257,22 @@ class ShipmentCustoms {
   String toString() => 'ShipmentCustoms(code: $code, value: $value)';
 }
 
-
 class ValueResult {
   final int value;
 
-  const ValueResult({
-    required this.value,
-  });
+  const ValueResult({required this.value});
 
   factory ValueResult.fromJson(Map<String, dynamic> json) {
-    return ValueResult(
-      value: (json['value'] as num).toInt(),
-    );
+    return ValueResult(value: (json['value'] as num).toInt());
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'value': value,
-    };
+    return {'value': value};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ValueResult &&
-          value == other.value;
+      identical(this, other) || other is ValueResult && value == other.value;
 
   @override
   int get hashCode => value.hashCode;
@@ -322,31 +281,22 @@ class ValueResult {
   String toString() => 'ValueResult(value: $value)';
 }
 
-
 class ReceiptMeta {
   final String value;
 
-  const ReceiptMeta({
-    required this.value,
-  });
+  const ReceiptMeta({required this.value});
 
   factory ReceiptMeta.fromJson(Map<String, dynamic> json) {
-    return ReceiptMeta(
-      value: json['value'] as String,
-    );
+    return ReceiptMeta(value: json['value'] as String);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'value': value,
-    };
+    return {'value': value};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ReceiptMeta &&
-          value == other.value;
+      identical(this, other) || other is ReceiptMeta && value == other.value;
 
   @override
   int get hashCode => value.hashCode;
@@ -354,7 +304,6 @@ class ReceiptMeta {
   @override
   String toString() => 'ReceiptMeta(value: $value)';
 }
-
 
 // --- API Namespaces ---
 
@@ -378,11 +327,26 @@ class Shipment {
   factory Shipment.fromJson(Map<String, dynamic> json) {
     return Shipment(
       id: json['id'] as String,
-      destination: ShipmentDestination.fromJson(json['destination'] as Map<String, dynamic>),
-      insurance: json['insurance'] != null ? ShipmentInsurance.fromJson(json['insurance'] as Map<String, dynamic>) : null,
-      signature: json['signature'] != null ? ShipmentSignature.fromJson(json['signature'] as Map<String, dynamic>) : null,
-      parcels: (json['parcels'] as List<dynamic>).map((e) => ShipmentParcels.fromJson(e as Map<String, dynamic>)).toList(),
-      customs: (json['customs'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, ShipmentCustoms.fromJson(v as Map<String, dynamic>))),
+      destination: ShipmentDestination.fromJson(
+        json['destination'] as Map<String, dynamic>,
+      ),
+      insurance: json['insurance'] != null
+          ? ShipmentInsurance.fromJson(
+              json['insurance'] as Map<String, dynamic>,
+            )
+          : null,
+      signature: json['signature'] != null
+          ? ShipmentSignature.fromJson(
+              json['signature'] as Map<String, dynamic>,
+            )
+          : null,
+      parcels: (json['parcels'] as List<dynamic>)
+          .map((e) => ShipmentParcels.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      customs: (json['customs'] as Map<String, dynamic>?)?.map(
+        (k, v) =>
+            MapEntry(k, ShipmentCustoms.fromJson(v as Map<String, dynamic>)),
+      ),
     );
   }
 
@@ -393,7 +357,8 @@ class Shipment {
       if (insurance != null) 'insurance': insurance?.toJson(),
       'signature': signature?.toJson(),
       'parcels': parcels.map((e) => e.toJson()).toList(),
-      if (customs != null) 'customs': customs?.map((k, v) => MapEntry(k, v.toJson())),
+      if (customs != null)
+        'customs': customs?.map((k, v) => MapEntry(k, v.toJson())),
     };
   }
 
@@ -409,21 +374,25 @@ class Shipment {
           blocksDeepEquals(customs, other.customs);
 
   @override
-  int get hashCode => Object.hash(id, destination, insurance, signature, blocksDeepHash(parcels), blocksDeepHash(customs));
+  int get hashCode => Object.hash(
+    id,
+    destination,
+    insurance,
+    signature,
+    blocksDeepHash(parcels),
+    blocksDeepHash(customs),
+  );
 
   @override
-  String toString() => 'Shipment(id: $id, destination: $destination, insurance: $insurance, signature: $signature, parcels: $parcels, customs: $customs)';
+  String toString() =>
+      'Shipment(id: $id, destination: $destination, insurance: $insurance, signature: $signature, parcels: $parcels, customs: $customs)';
 }
-
 
 class Invoice {
   final String id;
   final ValueResult meta;
 
-  const Invoice({
-    required this.id,
-    required this.meta,
-  });
+  const Invoice({required this.id, required this.meta});
 
   factory Invoice.fromJson(Map<String, dynamic> json) {
     return Invoice(
@@ -433,18 +402,13 @@ class Invoice {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'meta': meta.toJson(),
-    };
+    return {'id': id, 'meta': meta.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Invoice &&
-          id == other.id &&
-          meta == other.meta;
+      other is Invoice && id == other.id && meta == other.meta;
 
   @override
   int get hashCode => Object.hash(id, meta);
@@ -453,15 +417,11 @@ class Invoice {
   String toString() => 'Invoice(id: $id, meta: $meta)';
 }
 
-
 class Receipt {
   final String id;
   final ReceiptMeta meta;
 
-  const Receipt({
-    required this.id,
-    required this.meta,
-  });
+  const Receipt({required this.id, required this.meta});
 
   factory Receipt.fromJson(Map<String, dynamic> json) {
     return Receipt(
@@ -471,18 +431,13 @@ class Receipt {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'meta': meta.toJson(),
-    };
+    return {'id': id, 'meta': meta.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Receipt &&
-          id == other.id &&
-          meta == other.meta;
+      other is Receipt && id == other.id && meta == other.meta;
 
   @override
   int get hashCode => Object.hash(id, meta);
@@ -491,23 +446,18 @@ class Receipt {
   String toString() => 'Receipt(id: $id, meta: $meta)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<Shipment> getShipment({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getShipment', params);
     return Shipment.fromJson(result as Map<String, dynamic>);
   }
 
   Future<Shipment> saveShipment({required Shipment shipment}) async {
-    final params = <dynamic>[
-      shipment.toJson(),
-    ];
+    final params = <dynamic>[shipment.toJson()];
     final result = await _client.call('api.saveShipment', params);
     return Shipment.fromJson(result as Map<String, dynamic>);
   }
@@ -523,7 +473,6 @@ class Api {
   }
 }
 
-
 // --- Blocks Client ---
 
 class Blocks {
@@ -534,4 +483,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

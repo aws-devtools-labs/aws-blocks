@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -16,11 +18,7 @@ class User {
   final String name;
   final String email;
 
-  const User({
-    required this.id,
-    required this.name,
-    required this.email,
-  });
+  const User({required this.id, required this.name, required this.email});
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
@@ -31,11 +29,7 @@ class User {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'email': email,
-    };
+    return {'id': id, 'name': name, 'email': email};
   }
 
   @override
@@ -53,15 +47,11 @@ class User {
   String toString() => 'User(id: $id, name: $name, email: $email)';
 }
 
-
 class UsersCreateInput {
   final String name;
   final String email;
 
-  const UsersCreateInput({
-    required this.name,
-    required this.email,
-  });
+  const UsersCreateInput({required this.name, required this.email});
 
   factory UsersCreateInput.fromJson(Map<String, dynamic> json) {
     return UsersCreateInput(
@@ -71,18 +61,13 @@ class UsersCreateInput {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'email': email,
-    };
+    return {'name': name, 'email': email};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UsersCreateInput &&
-          name == other.name &&
-          email == other.email;
+      other is UsersCreateInput && name == other.name && email == other.email;
 
   @override
   int get hashCode => Object.hash(name, email);
@@ -91,33 +76,29 @@ class UsersCreateInput {
   String toString() => 'UsersCreateInput(name: $name, email: $email)';
 }
 
-
 class UsersApi {
   final BlocksClient _client;
   UsersApi(this._client);
 
   Future<User> get$({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('users.get', params);
     return User.fromJson(result as Map<String, dynamic>);
   }
 
   Future<List<User>> list() async {
     final result = await _client.call('users.list', const <dynamic>[]);
-    return (result as List<dynamic>).map((e) => User.fromJson(e as Map<String, dynamic>)).toList();
+    return (result as List<dynamic>)
+        .map((e) => User.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<User> create({required UsersCreateInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('users.create', params);
     return User.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 class PostsListResult {
   final String id;
@@ -139,11 +120,7 @@ class PostsListResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'title': title,
-      'authorId': authorId,
-    };
+    return {'id': id, 'title': title, 'authorId': authorId};
   }
 
   @override
@@ -158,9 +135,9 @@ class PostsListResult {
   int get hashCode => Object.hash(id, title, authorId);
 
   @override
-  String toString() => 'PostsListResult(id: $id, title: $title, authorId: $authorId)';
+  String toString() =>
+      'PostsListResult(id: $id, title: $title, authorId: $authorId)';
 }
-
 
 class PostsCreateInput {
   final String title;
@@ -182,11 +159,7 @@ class PostsCreateInput {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'title': title,
-      'body': body,
-      'authorId': authorId,
-    };
+    return {'title': title, 'body': body, 'authorId': authorId};
   }
 
   @override
@@ -201,34 +174,26 @@ class PostsCreateInput {
   int get hashCode => Object.hash(title, body, authorId);
 
   @override
-  String toString() => 'PostsCreateInput(title: $title, body: $body, authorId: $authorId)';
+  String toString() =>
+      'PostsCreateInput(title: $title, body: $body, authorId: $authorId)';
 }
-
 
 class PostsDeleteResult {
   final bool ok;
 
-  const PostsDeleteResult({
-    required this.ok,
-  });
+  const PostsDeleteResult({required this.ok});
 
   factory PostsDeleteResult.fromJson(Map<String, dynamic> json) {
-    return PostsDeleteResult(
-      ok: json['ok'] as bool,
-    );
+    return PostsDeleteResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is PostsDeleteResult &&
-          ok == other.ok;
+      identical(this, other) || other is PostsDeleteResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -237,36 +202,30 @@ class PostsDeleteResult {
   String toString() => 'PostsDeleteResult(ok: $ok)';
 }
 
-
 class PostsApi {
   final BlocksClient _client;
   PostsApi(this._client);
 
   Future<List<PostsListResult>> list({required String authorId}) async {
-    final params = <dynamic>[
-      authorId,
-    ];
+    final params = <dynamic>[authorId];
     final result = await _client.call('posts.list', params);
-    return (result as List<dynamic>).map((e) => PostsListResult.fromJson(e as Map<String, dynamic>)).toList();
+    return (result as List<dynamic>)
+        .map((e) => PostsListResult.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<PostsListResult> create({required PostsCreateInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('posts.create', params);
     return PostsListResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<PostsDeleteResult> delete({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('posts.delete', params);
     return PostsDeleteResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -280,4 +239,3 @@ class Blocks {
     posts = PostsApi(client);
   }
 }
-

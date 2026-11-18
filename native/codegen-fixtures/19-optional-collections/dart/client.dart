@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,8 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 
 // --- Models ---
 
@@ -30,8 +32,12 @@ class GetUserResult {
     return GetUserResult(
       name: json['name'] as String,
       tags: (json['tags'] as List<dynamic>).cast<String>(),
-      scores: (json['scores'] as List<dynamic>?)?.map((e) => (e as num).toInt()).toList(),
-      metadata: (json['metadata'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as String)),
+      scores: (json['scores'] as List<dynamic>?)
+          ?.map((e) => (e as num).toInt())
+          .toList(),
+      metadata: (json['metadata'] as Map<String, dynamic>?)?.map(
+        (k, v) => MapEntry(k, v as String),
+      ),
       nicknames: (json['nicknames'] as List<dynamic>?)?.cast<String?>(),
     );
   }
@@ -57,29 +63,33 @@ class GetUserResult {
           blocksDeepEquals(nicknames, other.nicknames);
 
   @override
-  int get hashCode => Object.hash(name, blocksDeepHash(tags), blocksDeepHash(scores), blocksDeepHash(metadata), blocksDeepHash(nicknames));
+  int get hashCode => Object.hash(
+    name,
+    blocksDeepHash(tags),
+    blocksDeepHash(scores),
+    blocksDeepHash(metadata),
+    blocksDeepHash(nicknames),
+  );
 
   @override
-  String toString() => 'GetUserResult(name: $name, tags: $tags, scores: $scores, metadata: $metadata, nicknames: $nicknames)';
+  String toString() =>
+      'GetUserResult(name: $name, tags: $tags, scores: $scores, metadata: $metadata, nicknames: $nicknames)';
 }
-
 
 class ApiUpdateUserInput {
   final String id;
   final List<String>? tags;
   final Map<String, String>? metadata;
 
-  const ApiUpdateUserInput({
-    required this.id,
-    this.tags,
-    this.metadata,
-  });
+  const ApiUpdateUserInput({required this.id, this.tags, this.metadata});
 
   factory ApiUpdateUserInput.fromJson(Map<String, dynamic> json) {
     return ApiUpdateUserInput(
       id: json['id'] as String,
       tags: (json['tags'] as List<dynamic>?)?.cast<String>(),
-      metadata: (json['metadata'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as String)),
+      metadata: (json['metadata'] as Map<String, dynamic>?)?.map(
+        (k, v) => MapEntry(k, v as String),
+      ),
     );
   }
 
@@ -100,37 +110,30 @@ class ApiUpdateUserInput {
           blocksDeepEquals(metadata, other.metadata);
 
   @override
-  int get hashCode => Object.hash(id, blocksDeepHash(tags), blocksDeepHash(metadata));
+  int get hashCode =>
+      Object.hash(id, blocksDeepHash(tags), blocksDeepHash(metadata));
 
   @override
-  String toString() => 'ApiUpdateUserInput(id: $id, tags: $tags, metadata: $metadata)';
+  String toString() =>
+      'ApiUpdateUserInput(id: $id, tags: $tags, metadata: $metadata)';
 }
-
 
 class UpdateUserResult {
   final bool ok;
 
-  const UpdateUserResult({
-    required this.ok,
-  });
+  const UpdateUserResult({required this.ok});
 
   factory UpdateUserResult.fromJson(Map<String, dynamic> json) {
-    return UpdateUserResult(
-      ok: json['ok'] as bool,
-    );
+    return UpdateUserResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is UpdateUserResult &&
-          ok == other.ok;
+      identical(this, other) || other is UpdateUserResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -139,28 +142,24 @@ class UpdateUserResult {
   String toString() => 'UpdateUserResult(ok: $ok)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<GetUserResult> getUser({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getUser', params);
     return GetUserResult.fromJson(result as Map<String, dynamic>);
   }
 
-  Future<UpdateUserResult> updateUser({required ApiUpdateUserInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+  Future<UpdateUserResult> updateUser({
+    required ApiUpdateUserInput input,
+  }) async {
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('api.updateUser', params);
     return UpdateUserResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -172,4 +171,3 @@ class Blocks {
     api = Api(client);
   }
 }
-

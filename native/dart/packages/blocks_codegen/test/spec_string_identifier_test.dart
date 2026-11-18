@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // Names and values from the spec reach the generated library in two forms:
 //
@@ -142,10 +144,7 @@ void main() {
       // Params are positional, so the spec name isn't sent.
       expect(
         output,
-        contains(
-          r'      a$b,'
-          '\n      itS,\n      backSlash,\n',
-        ),
+        contains(r'final params = <dynamic>[a$b, itS, backSlash];'),
       );
       expect(
         output,
@@ -264,7 +263,7 @@ void main() {
 
     test('writes the escaped discriminant and value', () {
       expect(_decl(output, 'ItSEvent'), contains(r"      'k\$ind': 'it\'s',"));
-      expect(_decl(output, r'A$bEvent'), contains(r"      'k\$ind': 'a\$b',"));
+      expect(_decl(output, r'A$bEvent'), contains(r"      'k\$ind': 'a\$b'"));
     });
 
     test("prints a variant whose class name holds `\$`", () {
@@ -338,7 +337,7 @@ void main() {
     test('keeps a newline in the title out of the header comment', () {
       // Escaped (`\n` shown literally), so the header stays one comment line.
       expect(output, contains(r'// Source: My\nAPI v1'));
-      expect(output, isNot(contains('\nAPI v1')));
+      expect(output.contains('\nAPI v1'), isFalse);
     });
   });
 
@@ -411,7 +410,7 @@ void main() {
           'required String xYZ}) async {',
         ),
       );
-      expect(output, contains('      contentType,\n      xYZ,\n'));
+      expect(output, contains('final params = <dynamic>[contentType, xYZ];'));
     });
 
     test('a dotted namespace is a camel-cased field of a valid class', () {
@@ -562,7 +561,7 @@ void main() {
       expect(output, contains(r'  final $Doc d;'));
       expect(
         output,
-        contains(r"      d: $Doc.fromJson(json['d'] as Map<String, dynamic>),"),
+        contains(r"      d: $Doc.fromJson(json['d'] as Map<String, dynamic>)"),
       );
       expect(
         output,
@@ -685,7 +684,7 @@ void main() {
     test('is escaped in the literal; the identifier is camel-cased', () {
       final doc = _decl(output, 'Doc');
       expect(doc, contains(r"      aB: json['a\tb'] as String,"));
-      expect(doc, contains(r"      'c\u{1}d': cD,"));
+      expect(doc, contains(r"      'c\u{1}d': cD"));
       expect(output, isNot(contains('\t')));
       expect(output, isNot(contains('\u0001')));
     });
