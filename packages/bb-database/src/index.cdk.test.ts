@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { isDeepStrictEqual } from 'node:util';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
@@ -460,7 +461,10 @@ describe('Database on an existing database (CDK)', () => {
 		assert.ok(
 			statements.some(
 				(s) =>
-					s.Action === 'kms:Decrypt' && JSON.stringify(s.Condition).includes('ssm.us-east-1.amazonaws.com'),
+					s.Action === 'kms:Decrypt' &&
+					isDeepStrictEqual(s.Condition, {
+						StringEquals: { 'kms:ViaService': 'ssm.us-east-1.amazonaws.com' },
+					}),
 			),
 			'and decrypt it through SSM only',
 		);
