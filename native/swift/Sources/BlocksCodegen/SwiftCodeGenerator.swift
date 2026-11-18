@@ -418,15 +418,17 @@ public struct SwiftCodeGenerator {
     ) {
         let memberIndent = sharedTopLevel ? indent + "    " : indent
         var memberLines: [String] = []
-        // Variant structs
-        for variant in variants where declaresVariantStruct(variant) {
-            emitNestedRecordStruct(
-                name: variant.name, fields: variant.fields,
-                additionalPropertiesType: variant.additionalPropertiesType,
-                embeddedUnion: variant.embeddedUnion,
-                children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                indent: memberIndent, lines: &memberLines
-            )
+        // Variant structs. Without a discriminator the arms are tried in turn, so their types are closed.
+        openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+            for variant in variants where declaresVariantStruct(variant) {
+                emitNestedRecordStruct(
+                    name: variant.name, fields: variant.fields,
+                    additionalPropertiesType: variant.additionalPropertiesType,
+                    embeddedUnion: variant.embeddedUnion,
+                    children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                    indent: memberIndent, lines: &memberLines
+                )
+            }
         }
 
         // A value arm's own types (the element of `[{…}]`, an enum arm) are declared beside the enum, like the
@@ -782,41 +784,45 @@ public struct SwiftCodeGenerator {
             // the variant name is already a known type (because the spec
             // referenced an existing component schema for that variant), we
             // reuse that type directly instead of synthesizing a new one.
-            for variant in variants {
-                // A variant needs a synthesized struct when it has fields,
-                // additionalProperties, OR an embeddedUnion (regrouped arm
-                // with an inner discriminated alternative).
-                guard !variant.fields.isEmpty
-                        || variant.additionalPropertiesType != nil
-                        || variant.embeddedUnion != nil else { continue }
-                if variant.payloadTypeName != nil { continue }
-                if emitted.contains(variant.name) { continue }
-                for field in variant.fields {
-                    emitDependentTypes(field.type, emitted: &emitted, lines: &lines)
+            // Without a discriminator the arms are tried in turn, so their types are closed.
+            openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+                for variant in variants {
+                    // A variant needs a synthesized struct when it has fields,
+                    // additionalProperties, OR an embeddedUnion (regrouped arm
+                    // with an inner discriminated alternative).
+                    guard !variant.fields.isEmpty
+                            || variant.additionalPropertiesType != nil
+                            || variant.embeddedUnion != nil else { continue }
+                    if variant.payloadTypeName != nil { continue }
+                    if emitted.contains(variant.name) { continue }
+                    for field in variant.fields {
+                        emitDependentTypes(field.type, emitted: &emitted, lines: &lines)
+                    }
+                    if let addPropsType = variant.additionalPropertiesType {
+                        emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
+                    }
+                    if let embedded = variant.embeddedUnion {
+                        emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                    }
+                    emitted.insert(variant.name)
+                    emitRecordStruct(
+                        name: variant.name,
+                        fields: variant.fields,
+                        additionalPropertiesType: variant.additionalPropertiesType,
+                        embeddedUnion: variant.embeddedUnion,
+                        children: variant.nestedTypes,
+                        excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                        lines: &lines
+                    )
                 }
-                if let addPropsType = variant.additionalPropertiesType {
-                    emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
-                }
-                if let embedded = variant.embeddedUnion {
-                    emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
-                }
-                emitted.insert(variant.name)
-                emitRecordStruct(
-                    name: variant.name,
-                    fields: variant.fields,
-                    additionalPropertiesType: variant.additionalPropertiesType,
-                    embeddedUnion: variant.embeddedUnion,
-                    children: variant.nestedTypes,
-                    excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                    lines: &lines
-                )
-            }
-            // A value arm's own types (the element of `[{…}]`) are declared beside the enum, like the variant structs.
-            for variant in variants {
-                guard let valueType = variant.valueType else { continue }
-                emitDependentTypes(valueType, emitted: &emitted, lines: &lines)
-                for node in variant.nestedTypes {
-                    emitSchemaNestedType(node, indent: "", lines: &lines)
+                // A value arm's own types (the element of `[{…}]`) are declared beside the enum, like the variant
+                // structs.
+                for variant in variants {
+                    guard let valueType = variant.valueType else { continue }
+                    emitDependentTypes(valueType, emitted: &emitted, lines: &lines)
+                    for node in variant.nestedTypes {
+                        emitSchemaNestedType(node, indent: "", lines: &lines)
+                    }
                 }
             }
             var body: [String] = []
@@ -1625,17 +1631,20 @@ private extension SwiftCodeGenerator {
                 embeddedUnion: embeddedUnion, children: node.children, indent: indent, lines: &lines
             )
         case .union(_, let variants, let discriminator):
-            for variant in variants {
-                guard !variant.fields.isEmpty
-                        || variant.additionalPropertiesType != nil
-                        || variant.embeddedUnion != nil else { continue }
-                if variant.payloadTypeName != nil { continue }
-                emitRecordStruct(
-                    name: variant.name, fields: variant.fields,
-                    additionalPropertiesType: variant.additionalPropertiesType, embeddedUnion: variant.embeddedUnion,
-                    children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                    indent: indent, lines: &lines
-                )
+            // Without a discriminator the arms are tried in turn, so their types are closed.
+            openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+                for variant in variants {
+                    guard !variant.fields.isEmpty
+                            || variant.additionalPropertiesType != nil
+                            || variant.embeddedUnion != nil else { continue }
+                    if variant.payloadTypeName != nil { continue }
+                    emitRecordStruct(
+                        name: variant.name, fields: variant.fields,
+                        additionalPropertiesType: variant.additionalPropertiesType, embeddedUnion: variant.embeddedUnion,
+                        children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                        indent: indent, lines: &lines
+                    )
+                }
             }
             // A value arm's own types (the element of `[{…}]`, an enum arm's enum) are declared beside the enum,
             // like the variant structs.

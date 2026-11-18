@@ -161,6 +161,18 @@ public sealed class Status {
 }
 
 @Serializable
+public data class Failed(
+  public val state: State,
+  public val message: String,
+) {
+  @Serializable
+  public enum class State {
+    @SerialName("error")
+    Error,
+  }
+}
+
+@Serializable
 public data class Labels(
   public val kind: Kind,
   public val spelling: Spelling,
@@ -358,6 +370,28 @@ public data class Node(
 
       override fun deserialize(decoder: Decoder): Kind = fromValue(decoder.decodeString())
     }
+  }
+}
+
+@Serializable
+public data class Pending(
+  public val state: State,
+  public val steps: List<Steps>? = null,
+) {
+  @Serializable
+  public enum class State {
+    @SerialName("idle")
+    Idle,
+    @SerialName("loading")
+    Loading,
+  }
+
+  @Serializable
+  public enum class Steps {
+    @SerialName("fetch")
+    Fetch,
+    @SerialName("parse")
+    Parse,
   }
 }
 

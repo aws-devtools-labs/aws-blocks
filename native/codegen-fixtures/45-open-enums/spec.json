@@ -277,6 +277,23 @@
           "$ref": "#/components/schemas/Labels"
         }
       }
+    },
+    {
+      "name": "api.getJob",
+      "params": [],
+      "result": {
+        "name": "GetJobResult",
+        "schema": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/Pending"
+            },
+            {
+              "$ref": "#/components/schemas/Failed"
+            }
+          ]
+        }
+      }
     }
   ],
   "components": {
@@ -445,6 +462,49 @@
           "case",
           "fallback",
           "maybe"
+        ]
+      },
+      "Pending": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "loading"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "fetch",
+                "parse"
+              ]
+            }
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "Failed": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "message"
         ]
       }
     }

@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin.generator
 
 import com.aws.blocks.kotlin.model.ResolvedType
+import com.aws.blocks.kotlin.model.UnionVariant
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -182,49 +183,66 @@ internal object OpenEnumGenerator {
      * arguments (except an `oidc/client`'s).
      */
     fun reachableNames(results: List<ResolvedType>, definitions: Map<String, ResolvedType>): Set<String> {
-        val names = mutableSetOf<String>()
-        val followed = mutableSetOf<String>()
-        // An inline type counts only when it is the definition of its name, not one nested in an
-        // operation or another schema that shares the name (a result's inline `mode` enum beside a
-        // component `Mode` only a parameter uses).
-        fun record(name: String, type: ResolvedType) {
-            if (definitions[name] == type) names.add(name)
-        }
-        fun walk(type: ResolvedType) {
+        val open = mutableSetOf<String>()
+        val closed = mutableSetOf<String>()
+        val followedOpen = mutableSetOf<String>()
+        val followedClosed = mutableSetOf<String>()
+        fun walk(type: ResolvedType, isClosed: Boolean) {
+            val names = if (isClosed) closed else open
+            // An inline type counts only when it is the definition of its name, not one nested in an
+            // operation or another schema that shares the name (a result's inline `mode` enum beside a
+            // component `Mode` only a parameter uses).
+            fun record(name: String, type: ResolvedType) {
+                if (definitions[name] == type) names.add(name)
+            }
+            fun next(type: ResolvedType) = walk(type, isClosed)
             when (type) {
                 is ResolvedType.Record -> {
                     record(type.name, type)
-                    type.fields.forEach { walk(it.type) }
-                    type.additionalPropertiesType?.let(::walk)
+                    type.fields.forEach { next(it.type) }
+                    type.additionalPropertiesType?.let(::next)
                 }
                 is ResolvedType.Enum -> record(type.name, type)
                 is ResolvedType.Union -> {
                     record(type.name, type)
                     for (variant in type.variants) {
-                        variant.fields.forEach { walk(it.type) }
-                        variant.additionalPropertiesType?.let(::walk)
-                        variant.embeddedUnion?.let(::walk)
-                        variant.valueType?.let(::walk)
-                        variant.payloadTypeName?.let { walk(ResolvedType.TypeReference(it)) }
+                        // Without a discriminator the arms are tried in turn, so an open enum inside an
+                        // arm would let the first arm with matching keys take an object meant for a later
+                        // one: everything such an arm reaches is closed, wherever else it appears.
+                        val armClosed = isClosed ||
+                            (type.discriminator == null && !isEnumSchemaArm(variant, definitions))
+                        fun arm(type: ResolvedType) = walk(type, armClosed)
+                        variant.fields.forEach { arm(it.type) }
+                        variant.additionalPropertiesType?.let(::arm)
+                        variant.embeddedUnion?.let(::arm)
+                        variant.valueType?.let(::arm)
+                        variant.payloadTypeName?.let { arm(ResolvedType.TypeReference(it)) }
+                        variant.nestedTypes.forEach { arm(it.type) }
                     }
                 }
                 is ResolvedType.TypeReference -> {
                     names.add(type.name)
-                    if (followed.add(type.name)) definitions[type.name]?.let(::walk)
+                    val followed = if (isClosed) followedClosed else followedOpen
+                    if (followed.add(type.name)) definitions[type.name]?.let(::next)
                 }
                 is ResolvedType.TupleType -> {
                     record(type.name, type)
-                    type.elements.forEach(::walk)
+                    type.elements.forEach(::next)
                 }
-                is ResolvedType.ListType -> walk(type.elementType)
-                is ResolvedType.MapType -> walk(type.valueType)
-                is ResolvedType.Nullable -> walk(type.inner)
+                is ResolvedType.ListType -> next(type.elementType)
+                is ResolvedType.MapType -> next(type.valueType)
+                is ResolvedType.Nullable -> next(type.inner)
                 is ResolvedType.Transferable ->
-                    if (type.transferableName != "oidc/client") type.typeArgs.forEach(::walk)
+                    if (type.transferableName != "oidc/client") type.typeArgs.forEach(::next)
                 is ResolvedType.Primitive, is ResolvedType.FormattedType -> Unit
             }
         }
-        results.forEach(::walk)
-        return names
+        results.forEach { walk(it, false) }
+        return open - closed
     }
+
+    /** An arm that is an enum schema matches by its literal values, so an open one stays safe. */
+    private fun isEnumSchemaArm(variant: UnionVariant, definitions: Map<String, ResolvedType>): Boolean =
+        variant.payloadTypeName?.let { definitions[it] is ResolvedType.Enum } == true
+
 }

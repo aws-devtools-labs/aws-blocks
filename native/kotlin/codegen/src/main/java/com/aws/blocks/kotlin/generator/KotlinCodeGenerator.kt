@@ -1130,15 +1130,18 @@ class KotlinCodeGenerator(
                 }
                 ctx
             } else opContext
-            val variantSpec = generateSealedVariant(
-                name,
-                variant,
-                union.discriminator,
-                index,
-                variantContext,
-                serializerRegistry,
-                serializerContext,
-            )
+            // Without a discriminator the arms are tried in turn, so their types are closed.
+            val variantSpec = withOpenEnums(openEnums && union.discriminator != null) {
+                generateSealedVariant(
+                    name,
+                    variant,
+                    union.discriminator,
+                    index,
+                    variantContext,
+                    serializerRegistry,
+                    serializerContext,
+                )
+            }
             sealedBuilder.addType(variantSpec)
         }
 

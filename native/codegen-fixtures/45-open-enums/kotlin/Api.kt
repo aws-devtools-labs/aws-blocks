@@ -122,6 +122,13 @@ public class Api(
     return BlocksJson.decodeFromJsonElement(result)
   }
 
+  public suspend fun getJob(): GetJob.Result {
+    val request = BlocksRequest(method = "api.getJob", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getJob")
+    return BlocksJson.decodeFromJsonElement(result)
+  }
+
   public object UpdateTask {
     @Serializable
     public data class Result(
@@ -442,6 +449,61 @@ public class Api(
           override fun deserialize(decoder: Decoder): Item1 = fromValue(decoder.decodeString())
         }
       }
+    }
+  }
+
+  public object GetJob {
+    @Serializable(with = Result.ResultSerializer::class)
+    public sealed class Result {
+      /**
+       * Reads and writes [Result] as the bare JSON value of its variant. It has no discriminator, so a
+       * value decodes to the first variant, in spec order, whose JSON shape it has.
+       */
+      public object ResultSerializer : KSerializer<Result> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Result")
+
+        override fun serialize(encoder: Encoder, `value`: Result) {
+          val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
+          val element = when (value) {
+            is Pending -> output.json.encodeToJsonElement(Pending.serializer(), value)
+            is Error -> output.json.encodeToJsonElement(Error.serializer(), value)
+          }
+          output.encodeJsonElement(element)
+        }
+
+        override fun deserialize(decoder: Decoder): Result {
+          val input = decoder as? JsonDecoder ?: throw SerializationException("Result can only be read from JSON")
+          val element = input.decodeJsonElement()
+          var failure: Throwable? = null
+          if (element is JsonObject && "state" in element) {
+            try {
+              return input.json.decodeFromJsonElement(Pending.serializer(), element)
+            } catch (e: IllegalArgumentException) {
+              failure = e
+            }
+          }
+          if (element is JsonObject && "state" in element && "message" in element) {
+            try {
+              return input.json.decodeFromJsonElement(Error.serializer(), element)
+            } catch (e: IllegalArgumentException) {
+              failure = e
+            }
+          }
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"state\"; or an object with \"state\", \"message\"", failure)
+        }
+      }
+
+      @Serializable
+      public data class Pending(
+        public val state: com.example.app.Pending.State,
+        public val steps: List<com.example.app.Pending.Steps>? = null,
+      ) : Result()
+
+      @Serializable
+      public data class Error(
+        public val state: Failed.State,
+        public val message: String,
+      ) : Result()
     }
   }
 }

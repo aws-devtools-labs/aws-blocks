@@ -123,4 +123,26 @@ class OpenEnumTest : FunSpec({
         // 24 has one union discriminated by the string `type` (open) and one by `isUpdated`.
         fixture("24-nullable-discriminated-union").split("return Unknown(element)").size shouldBe 2
     }
+
+    test("enums an arm of a union without a discriminator reaches stay closed, wherever else they appear") {
+        val spec = """
+        { "openrpc": "1.3.2", "info": { "title": "t", "version": "1" },
+          "methods": [
+            { "name": "api.getJob", "params": [], "result": { "name": "R", "schema": { "oneOf": [
+              { "${'$'}ref": "#/components/schemas/Pending" }, { "${'$'}ref": "#/components/schemas/Failed" } ] } } },
+            { "name": "api.getState", "params": [], "result": { "name": "R", "schema": { "${'$'}ref": "#/components/schemas/Level" } } },
+            { "name": "api.getOther", "params": [], "result": { "name": "R", "schema": { "${'$'}ref": "#/components/schemas/Other" } } }
+          ],
+          "components": { "schemas": {
+            "Level": { "type": "string", "enum": ["low", "high"] },
+            "Other": { "type": "string", "enum": ["x", "y"] },
+            "Pending": { "type": "object", "properties": { "level": { "${'$'}ref": "#/components/schemas/Level" } }, "required": ["level"] },
+            "Failed": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] }
+          } } }
+        """.trimIndent()
+        val source = generate(spec)
+        // `Level` is also a direct result, but an arm reaches it, so it is closed.
+        source shouldContain "public enum class Level {"
+        source shouldContain "public sealed class Other {"
+    }
 })

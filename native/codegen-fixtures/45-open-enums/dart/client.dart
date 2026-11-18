@@ -428,6 +428,111 @@ final class LabelsMaybeUnknown implements LabelsMaybe {
 }
 
 
+enum PendingState {
+  idle,
+  loading
+;
+
+  String toJson() => name;
+  static PendingState fromJson(String json) => values.byName(json);
+}
+
+
+enum PendingSteps {
+  fetch,
+  parse
+;
+
+  String toJson() => name;
+  static PendingSteps fromJson(String json) => values.byName(json);
+}
+
+
+class Pending {
+  final PendingState state;
+  final List<PendingSteps>? steps;
+
+  const Pending({
+    required this.state,
+    this.steps,
+  });
+
+  factory Pending.fromJson(Map<String, dynamic> json) {
+    return Pending(
+      state: PendingState.fromJson(json['state'] as String),
+      steps: (json['steps'] as List<dynamic>?)?.map((e) => PendingSteps.fromJson(e as String)).toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'state': state.toJson(),
+      if (steps != null) 'steps': steps?.map((e) => e.toJson()).toList(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Pending &&
+          state == other.state &&
+          blocksDeepEquals(steps, other.steps);
+
+  @override
+  int get hashCode => Object.hash(state, blocksDeepHash(steps));
+
+  @override
+  String toString() => 'Pending(state: $state, steps: $steps)';
+}
+
+
+enum FailedState {
+  error
+;
+
+  String toJson() => name;
+  static FailedState fromJson(String json) => values.byName(json);
+}
+
+
+class Failed {
+  final FailedState state;
+  final String message;
+
+  const Failed({
+    required this.state,
+    required this.message,
+  });
+
+  factory Failed.fromJson(Map<String, dynamic> json) {
+    return Failed(
+      state: FailedState.fromJson(json['state'] as String),
+      message: json['message'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'state': state.toJson(),
+      'message': message,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Failed &&
+          state == other.state &&
+          message == other.message;
+
+  @override
+  int get hashCode => Object.hash(state, message);
+
+  @override
+  String toString() => 'Failed(state: $state, message: $message)';
+}
+
+
 sealed class FlaggedGetEventResultSeverity {
   static const low = FlaggedGetEventResultSeverityKnown.low;
   static const high = FlaggedGetEventResultSeverityKnown.high;
@@ -1211,6 +1316,11 @@ class ApiApi {
   Future<Labels> getLabels() async {
     final result = await _client.call('api.getLabels', const <dynamic>[]);
     return Labels.fromJson(result as Map<String, dynamic>);
+  }
+
+  Future<dynamic> getJob() async {
+    final result = await _client.call('api.getJob', const <dynamic>[]);
+    return result as dynamic;
   }
 }
 

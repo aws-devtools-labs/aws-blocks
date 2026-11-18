@@ -67,6 +67,26 @@ final class OpenEnumTests: XCTestCase {
         XCTAssertTrue(api.contains(#"if let value = try? Size(from: decoder), ["small", "large"].contains(value.rawValue) {"#))
     }
 
+    func testEnumsInsideArmsOfAUnionWithoutDiscriminatorStayClosed() throws {
+        let spec = #"""
+        { "openrpc": "1.3.2", "info": { "title": "t", "version": "1" },
+          "methods": [{ "name": "api.getProgress", "params": [], "result": { "name": "R", "schema": { "oneOf": [
+            { "type": "object", "properties": { "state": { "type": "string", "enum": ["idle", "loading"] } },
+              "required": ["state"] },
+            { "type": "object", "properties": { "state": { "type": "string", "enum": ["error"] },
+              "message": { "type": "string" } }, "required": ["state", "message"] } ] } } }] }
+        """#
+        let output = try SwiftCodeGenerator().generate(
+            from: CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(spec.utf8)))
+        )
+        XCTAssertFalse(output.api.contains("RawRepresentable"), output.api)
+        XCTAssertFalse(output.models.contains("RawRepresentable"), output.models)
+        // Fixture 45's `GetJob.Result` arms are components; their enums stay closed.
+        let fixture = try generate(fixture: "45-open-enums")
+        XCTAssertTrue(fixture.models.contains("public nonisolated enum PendingState: String, Codable, Sendable {"))
+        XCTAssertTrue(fixture.models.contains("public nonisolated enum FailedState: String, Codable, Sendable {"))
+    }
+
     #if os(macOS)
     func testUnknownValuesDecodeAndRoundTrip() throws {
         let output = try generate(fixture: "45-open-enums")
@@ -100,6 +120,21 @@ final class OpenEnumTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys]
         check(String(decoding: try encoder.encode(task), as: UTF8.self) == wire, "round trip")
         check(Status(rawValue: "done") == .done, "known raw value")
+        // `GetJob.Result` is `Pending | Failed` with no discriminator: an object for `Failed` decodes to it.
+        func job(_ text: String) throws -> Api.GetJob.Result {
+            try JSONDecoder().decode(Api.GetJob.Result.self, from: Data(text.utf8))
+        }
+        if case .failed(let failed) = try job(#"{"message":"boom","state":"error"}"#) {
+            check(failed.message == "boom", "failed message")
+        } else {
+            check(false, "failed arm")
+        }
+        if case .pending(let pending) = try job(#"{"state":"loading","steps":["fetch"]}"#) {
+            check(pending.steps == [.fetch], "pending steps")
+        } else {
+            check(false, "pending arm")
+        }
+        check((try? job(#"{"state":"paused"}"#)) == nil, "a value neither arm declares")
         // `Color` is open (a direct result), and also an arm of `getSwatch`'s union without a discriminator:
         // `"small"` is a `Size`, not an unknown `Color`.
         func swatch(_ text: String) throws -> Api.GetSwatch.Result {

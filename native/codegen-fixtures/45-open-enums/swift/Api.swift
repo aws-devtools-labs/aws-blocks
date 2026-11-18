@@ -103,6 +103,14 @@ public final nonisolated class Api: Sendable {
         return try JSONDecoder().decode(Labels.self, from: result)
     }
 
+    /// Calls `api.getJob`.
+    public func getJob() async throws -> GetJob.Result {
+        let request = BlocksRequest(method: "api.getJob", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getJob") }
+        return try JSONDecoder().decode(GetJob.Result.self, from: result)
+    }
+
     public enum UpdateTask {
 
         public enum Sort: String, Codable, Sendable {
@@ -359,6 +367,38 @@ public final nonisolated class Api: Sendable {
                     }
                 }
             }
+        }
+    }
+
+    public enum GetJob {
+
+        public enum Result: Codable, Sendable {
+            case pending(Pending)
+            case failed(Failed)
+
+            public func encode(to encoder: Encoder) throws {
+                switch self {
+                case .pending(let payload):
+                    try payload.encode(to: encoder)
+                case .failed(let payload):
+                    try payload.encode(to: encoder)
+                }
+            }
+
+            public init(from decoder: Decoder) throws {
+                var lastError: Error?
+                do {
+                    self = .pending(try Pending(from: decoder))
+                    return
+                } catch { lastError = error }
+                do {
+                    self = .failed(try Failed(from: decoder))
+                    return
+                } catch { lastError = error }
+                throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Result variant matched"))
+            }
+
+            private enum EmptyKey: CodingKey {}
         }
     }
 }

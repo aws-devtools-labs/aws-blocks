@@ -23,6 +23,20 @@ public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
     }
 }
 
+public nonisolated enum FailedState: String, Codable, Sendable {
+    case error
+}
+
+public nonisolated struct Failed: Codable, Sendable {
+    public let message: String
+    public let state: FailedState
+
+    public init(message: String, state: FailedState) {
+        self.message = message
+        self.state = state
+    }
+}
+
 public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
     case kind
     case other
@@ -212,6 +226,37 @@ public nonisolated struct Node: Codable, Sendable {
     public init(children: [Node], kind: NodeKind) {
         self.children = children
         self.kind = kind
+    }
+}
+
+public nonisolated enum PendingState: String, Codable, Sendable {
+    case idle
+    case loading
+}
+
+public nonisolated enum PendingSteps: String, Codable, Sendable {
+    case fetch
+    case parse
+}
+
+public nonisolated struct Pending: Codable, Sendable {
+    public let state: PendingState
+    public let steps: [PendingSteps]?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case steps
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(self.state, forKey: .state)
+        try c.encodeIfPresent(self.steps, forKey: .steps)
+    }
+
+    public init(state: PendingState, steps: [PendingSteps]? = nil) {
+        self.state = state
+        self.steps = steps
     }
 }
 

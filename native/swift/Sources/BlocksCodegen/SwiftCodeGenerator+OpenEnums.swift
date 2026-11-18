@@ -35,40 +35,59 @@ extension SwiftCodeGenerator {
     /// The component schemas every operation's result reaches, at any depth: through records, union arms, lists,
     /// maps, optionals and a transferable's type arguments. An `oidc/client`'s argument names the providers a
     /// caller may pass, so it isn't a response position.
+    ///
+    /// A union without a discriminator decodes by trying its arms in turn, and an open enum inside an arm would let
+    /// the first arm with matching keys take an object meant for a later one. So every type such an arm reaches is
+    /// closed, wherever else it appears. An arm that is itself an enum schema stays open and accepts only its known
+    /// values (see `openEnumArmValues`).
     func openTypeNames(_ model: CodegenModel) -> Set<String> {
-        var open: Set<String> = []
-        var followed: Set<String> = []
+        let reach = Reachability()
         for namespace in model.apiNamespaces {
             for operation in namespace.operations {
-                collectReachableTypeNames(operation.result.type, into: &open, followed: &followed)
+                collectReachableTypeNames(operation.result.type, closed: false, reach)
             }
         }
-        return open.intersection(model.typeDefinitions.map(\.name))
+        return reach.open.subtracting(reach.closed).intersection(model.typeDefinitions.map(\.name))
     }
 
-    /// `followed` holds the references already walked, so a recursive schema ends.
-    private func collectReachableTypeNames(_ type: ResolvedType, into names: inout Set<String>, followed: inout Set<String>) {
-        func walk(_ type: ResolvedType) { collectReachableTypeNames(type, into: &names, followed: &followed) }
+    /// The names a result reaches, sorted into those that may be open and those an arm of a union without a
+    /// discriminator reaches, with the references already followed in each, so a recursive schema ends.
+    private final class Reachability {
+        var open: Set<String> = []
+        var closed: Set<String> = []
+        var followedOpen: Set<String> = []
+        var followedClosed: Set<String> = []
+    }
+
+    private func collectReachableTypeNames(_ type: ResolvedType, closed: Bool, _ reach: Reachability) {
+        func walk(_ type: ResolvedType) { collectReachableTypeNames(type, closed: closed, reach) }
+        func insert(_ name: String) {
+            if closed { reach.closed.insert(name) } else { reach.open.insert(name) }
+        }
         switch type {
         case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
-            if isDefinition(type, named: name) { names.insert(name) }
+            if isDefinition(type, named: name) { insert(name) }
             fields.forEach { walk($0.type) }
             if let additionalPropertiesType { walk(additionalPropertiesType) }
             if let embeddedUnion { walk(embeddedUnion) }
         case .enum(let name, _):
-            if isDefinition(type, named: name) { names.insert(name) }
-        case .union(let name, let variants, _):
-            if isDefinition(type, named: name) { names.insert(name) }
+            if isDefinition(type, named: name) { insert(name) }
+        case .union(let name, let variants, let discriminator):
+            if isDefinition(type, named: name) { insert(name) }
             for variant in variants {
-                if let payload = variant.payloadTypeName { walk(.typeReference(name: payload)) }
-                variant.fields.forEach { walk($0.type) }
-                if let extras = variant.additionalPropertiesType { walk(extras) }
-                if let embedded = variant.embeddedUnion { walk(embedded) }
-                if let value = variant.valueType { walk(value) }
+                let armClosed = closed || (discriminator == nil && !isEnumSchemaArm(variant))
+                func arm(_ type: ResolvedType) { collectReachableTypeNames(type, closed: armClosed, reach) }
+                if let payload = variant.payloadTypeName { arm(.typeReference(name: payload)) }
+                variant.fields.forEach { arm($0.type) }
+                if let extras = variant.additionalPropertiesType { arm(extras) }
+                if let embedded = variant.embeddedUnion { arm(embedded) }
+                if let value = variant.valueType { arm(value) }
+                variant.nestedTypes.forEach { arm($0.type) }
             }
         case .typeReference(let name):
-            names.insert(name)
-            guard followed.insert(name).inserted, let target = typesByName[name] else { return }
+            insert(name)
+            let isNew = closed ? reach.followedClosed.insert(name).inserted : reach.followedOpen.insert(name).inserted
+            guard isNew, let target = typesByName[name] else { return }
             walk(target)
         case .list(let element, _):
             walk(element)
@@ -98,6 +117,12 @@ extension SwiftCodeGenerator {
         default:
             return false
         }
+    }
+
+    /// Whether `variant` is an arm that is an enum schema (a `$ref` to one).
+    private func isEnumSchemaArm(_ variant: UnionVariant) -> Bool {
+        guard let payload = variant.payloadTypeName, case .enum? = typesByName[payload] else { return false }
+        return true
     }
 
     /// The known values of `variant`'s payload when it is an open enum schema (a `$ref` arm), else nil. A union
