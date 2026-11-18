@@ -66,7 +66,25 @@ export function runCapture(
 export function spawnCommand(
   command: string,
   args: string[],
-  options: SpawnOptions,
+  options: Omit<SpawnOptions, 'shell'>,
 ): ChildProcess {
-  return spawn(command, args, options);
+  // Never a shell: the args reach the command as separate argv entries. A
+  // command line that needs a shell goes through spawnShellCommand instead.
+  return spawn(command, args, { ...options, shell: false });
+}
+
+/**
+ * Spawn a user-configured command line (e.g. the sandbox's dev-server command)
+ * under `shell: true` and return the `ChildProcess`. The whole line goes to the
+ * shell as one string with no separate args: Node 24 emits DEP0190 whenever a
+ * non-empty args array is combined with `shell: true`.
+ *
+ * Only pass a command line the app itself configured (never request input):
+ * the line is interpreted by the shell as-is.
+ */
+export function spawnShellCommand(
+  commandLine: string,
+  options: Omit<SpawnOptions, 'shell'>,
+): ChildProcess {
+  return spawn(commandLine, [], { ...options, shell: true });
 }
