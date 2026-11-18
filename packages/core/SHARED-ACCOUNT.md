@@ -2,7 +2,7 @@
 
 The platform's part of [Running many apps in one AWS account](./README.md#running-many-apps-in-one-aws-account-a-shared-platform): the three shared IAM policies, the pipeline, the project template, and adopting `defaults.appIdentity` in an existing app. What each app sets (`defaults.appIdentity` and `defaults.permissionsBoundary`) is in the README section.
 
-**3–5. The platform's policies.** The platform writes these three policies and owns them: AWS Blocks never creates, changes or reads them. All three are shared: one of each per account, created once, never edited per app. Each one is keyed on the calling role's `app` tag (`${aws:PrincipalTag/app}`, which IAM resolves at request time), so the same document confines every app to its own names and tags:
+**3–5. The platform's policies.** The platform writes these three policies and owns them: AWS CDK Blocks never creates, changes or reads them. All three are shared: one of each per account, created once, never edited per app. Each one is keyed on the calling role's `app` tag (`${aws:PrincipalTag/app}`, which IAM resolves at request time), so the same document confines every app to its own names and tags:
 
 | Policy | Attached to | What it does |
 |---|---|---|
@@ -281,7 +281,7 @@ One managed policy for every app in the account, created once as `apps-boundary`
 
 What each group of statements is for:
 
-- **By name prefix** (`OwnParameters` to `OwnVectorBuckets`): resources named under the app's prefix (`<id>-…`; parameters also `<id>` and `<id>/…`). AWS Blocks guarantees those names under `defaults.appIdentity`.
+- **By name prefix** (`OwnParameters` to `OwnVectorBuckets`): resources named under the app's prefix (`<id>-…`; parameters also `<id>` and `<id>/…`). AWS CDK Blocks guarantees those names under `defaults.appIdentity`.
   - Covered: SSM parameters, DynamoDB tables, SQS queues, S3 buckets, Lambda functions, log groups (including `/aws/lambda/<id>-…` and a Database's `/aws/rds/cluster/<id>-…`), schedules, event rules and buses, RDS clusters and instances, and S3 Vectors buckets and the indexes in them.
   - `OwnStacksRead` lets a table's index manager read its own stack.
   - `OwnParameters` also covers CDK's cross-region references for the app's own stacks (`/cdk/exports/<id>…`), the Lambda@Edge ARNs CDK publishes for Hosting (`/cdk/EdgeFunctionArn/<region>/<id>/…`) and Hosting's `config()` values (`/blocks/<id>/…`).
@@ -467,7 +467,7 @@ Every app's CDK bootstrap execution role (the role CloudFormation deploys the ap
 | `AWS::SNS::Topic`, `TopicPolicy`, `Subscription` | `sns:*` on `arn:aws:sns:*:ACCOUNT:<id>-*` |
 | `AWS::CloudWatch::Alarm` | `PutMetricAlarm`, `DescribeAlarms`, `DeleteAlarms` and the tag actions on `alarm:<id>-*` |
 | `AWS::CloudWatch::Dashboard` | `PutDashboard`, `GetDashboard`, `DeleteDashboards`, `TagResource`, `UntagResource`, `ListTagsForResource` on `dashboard/<id>-*`. Without the tag actions the deploy still succeeds: CloudFormation retries the create without tags (its events say "Retrying request without including tags") and the dashboard has no `app` tag |
-| `AWS::IAM::ManagedPolicy` (AWS Blocks' `BlocksRoleOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
+| `AWS::IAM::ManagedPolicy` (AWS CDK Blocks' `BlocksRoleOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
 | `AWS::ResourceGroups::Group` | `resource-groups:*` on `group/<id>-*`; `cloudformation:DescribeStacks`, `ListStackResources`, `tag:GetResources` on `*` |
 | `AWS::S3Vectors::VectorBucket`, `Index`, `VectorBucketPolicy` | by name, not tag: `s3vectors:*` on `bucket/<id>-*` and `bucket/<id>-*/index/*`, and a deny on every other bucket (`VectorBuckets` and `VectorBucketsOnlyOwn`, below) |
 | `AWS::RDS::DBCluster`, `DBInstance`, `DBSubnetGroup`, `DBClusterParameterGroup`, `DBParameterGroup`, `OptionGroup` | `rds:*` on `cluster:`, `db:`, `subgrp:`, `cluster-pg:`, `pg:`, `og:`, `cluster-snapshot:` and `snapshot:<id>-*`; create and modify against RDS's `default…` parameter and option groups; `ec2:Describe*` on `*` |
@@ -685,7 +685,7 @@ Check every tag-scoped service you add for the same case:
 
 **`AWS::ApiGateway::Account`** is an account-level setting shared by every app in the region; set it from the platform.
 
-**Size.** IAM limits a managed policy to 6,144 characters, not counting white space. With statements for the services a typical AWS Blocks app uses, `apps-exec` goes over the limit.
+**Size.** IAM limits a managed policy to 6,144 characters, not counting white space. With statements for the services a typical AWS CDK Blocks app uses, `apps-exec` goes over the limit.
 
 - Split it, whole statements in order, into several shared policies (for example `apps-exec`, `apps-exec-2` and `apps-exec-3`, the role fence in the first).
 - Staying around 5,000 characters each leaves room to add statements later without another policy, which every app's bootstrap would then need.
@@ -876,7 +876,7 @@ CDK's default bootstrap deploy role may change or delete *any* stack, and CloudF
 
 Attaching it to the existing deploy role (`cdk-<id>-deploy-role-<account>-<region>`) works, but it's drift outside CloudFormation that a re-bootstrap won't restore, and it leaves `sts:TagSession` in place.
 
-**Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.appIdentity` set, AWS Blocks names it `<id>-edge`, so the guard and the execution policy treat it as the app's own. Bootstrap the app in `us-east-1` too (same qualifier, same `app` tag, same execution policy) and attach the guard there.
+**Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.appIdentity` set, AWS CDK Blocks names it `<id>-edge`, so the guard and the execution policy treat it as the app's own. Bootstrap the app in `us-east-1` too (same qualifier, same `app` tag, same execution policy) and attach the guard there.
 
 ## The pipeline
 
@@ -890,7 +890,7 @@ APP_ID=appa NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet   # fails on a
 jq -e -s --arg id "$APP_ID" 'length > 0 and all(.[]; .app.id == $id and .app.reportOnly != true and (.violations | length) == 0)' cdk.out/*.blocks-iam.json
 ```
 
-`APP_ID` comes from the platform, however it manages ids (a registry, picked by hand, generated): to AWS Blocks it's just a string. It never comes from the app's own repository or code.
+`APP_ID` comes from the platform, however it manages ids (a registry, picked by hand, generated): to AWS CDK Blocks it's just a string. It never comes from the app's own repository or code.
 
 This is feedback, not the guarantee. Synth runs the app's own code, so a determined app can write any report it likes. What keeps apps apart is IAM: the boundary on every role, the execution role that only creates bounded roles tagged as the app, and the deploy guard. Run synth in a job that has no AWS credentials and no `id-token` permission, and deploy the synthesized assembly (`cdk deploy --app cdk.out`) from a job that has the credentials and doesn't run the app's code.
 
@@ -915,7 +915,7 @@ The execution policy and the deploy guard enforce both anyway; the check fails t
 **Limits.**
 
 - **It isolates apps from each other, not handlers inside one app.** Every handler in an app still runs as the same role, under the same boundary.
-- **Allow-list coverage.** A service the boundary has no statement for is denied at runtime (`AccessDenied`). Add statements for any service your apps use beyond AWS Blocks' own. A few statements are scoped by resource tag rather than name (Cognito, Step Functions, Secrets Manager, KMS and others); check them on a deployed app.
+- **Allow-list coverage.** A service the boundary has no statement for is denied at runtime (`AccessDenied`). Add statements for any service your apps use beyond AWS CDK Blocks' own. A few statements are scoped by resource tag rather than name (Cognito, Step Functions, Secrets Manager, KMS and others); check them on a deployed app.
 - **Exceptions — cross-app reach the boundary still allows.**
   - `ses:SendEmail` / `SendRawEmail` / `SendBulkEmail` on `*`: App A can send as an identity App B verified. Scope SES by identity if your apps send email.
   - `ec2:DeleteNetworkInterface` on `*` (for VPC Lambdas): App A could delete another app's network interfaces.
@@ -934,20 +934,20 @@ The execution policy and the deploy guard enforce both anyway; the check fails t
 
 ## The app's side: what to put in your project template
 
-Put these files in the platform's own project template (for example a copy of an AWS Blocks starter such as `npm create @aws-blocks/blocks-app@latest my-app -- --template api-only`), so the identity and the boundary are there before anyone writes code. `APP_ID` is the app's id: the pipeline sets it, and a developer exports it for a sandbox (`APP_ID=<id> npm run sandbox`).
+Put these files in the platform's own project template (for example a copy of an AWS CDK Blocks starter such as `npm create @aws-cdk-blocks/blocks-app@latest my-app -- --template api-only`), so the identity and the boundary are there before anyone writes code. `APP_ID` is the app's id: the pipeline sets it, and a developer exports it for a sandbox (`APP_ID=<id> npm run sandbox`).
 
-**`aws-blocks/index.cdk.ts`.** The app id is the bootstrap qualifier and the stack name, and `defaults.appIdentity` sets the identity. Synth validates the id (pattern and reserved ids, with the reason), so the entry only has to check that `APP_ID` is set:
+**`cdk-blocks/index.cdk.ts`.** The app id is the bootstrap qualifier and the stack name, and `defaults.appIdentity` sets the identity. Synth validates the id (pattern and reserved ids, with the reason), so the entry only has to check that `APP_ID` is set:
 
 ```typescript
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { getStackName } from '@aws-blocks/blocks/scripts';
+import { getStackName } from 'aws-cdk-blocks/scripts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Set by the platform's pipeline (to AWS Blocks, just a string), never chosen by this repository.
+// Set by the platform's pipeline (to AWS CDK Blocks, just a string), never chosen by this repository.
 const appId = process.env.APP_ID;
 if (!appId) {
   throw new Error("APP_ID is not set. The platform's pipeline sets it; for a sandbox, export APP_ID=<your app id> first.");
@@ -975,7 +975,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 A sandbox stack is named `<id>-<stackId>-<sandbox id>` (`getStackName({ sandbox: true })` returns `<stackId>-<sandbox id>`).
 
-**`cdk.json`.** AWS Blocks' `npm run deploy` and `npm run sandbox` check the bootstrap with the qualifier in `cdk.json`, and the CDK CLI looks up the app's own toolkit stack. Add both to the starter's `cdk.json`, with the app's id:
+**`cdk.json`.** AWS CDK Blocks' `npm run deploy` and `npm run sandbox` check the bootstrap with the qualifier in `cdk.json`, and the CDK CLI looks up the app's own toolkit stack. Add both to the starter's `cdk.json`, with the app's id:
 
 ```json
 {
@@ -1011,7 +1011,7 @@ This app shares one AWS account with other apps. The platform rejects a deploy t
 
 - Build with Building Blocks only. Don't write IAM policies, roles or grants (`addToPrincipalPolicy`, `grant*` on raw CDK constructs), and don't attach managed policies.
 - Never reference another app's resources. Don't call `fromExisting(...)` with a name or ARN that isn't this app's, and don't name resources yourself: the Building Blocks name them, and every name starts with this app's id.
-- Don't edit the platform's files: `aws-blocks/index.cdk.ts`, `cdk.json`, `.blocks/config.json` and the deploy workflow. They set this app's identity and permissions boundary. Ask a platform reviewer instead.
+- Don't edit the platform's files: `cdk-blocks/index.cdk.ts`, `cdk.json`, `.blocks/config.json` and the deploy workflow. They set this app's identity and permissions boundary. Ask a platform reviewer instead.
 - Check before you push: `APP_ID=<this app's id> npm run check:iam` runs the pipeline's synth, which fails on any IAM violation (don't set `reportOnly`). The report is `cdk.out/<stack>.blocks-iam.json`; its `violations` say what to fix.
 ```
 
@@ -1037,6 +1037,6 @@ The tag-scoped types are the ones marked "tag" in the [per-service rules](#the-s
    Compare with `aws cloudformation list-stack-resources --stack-name "$STACK" --region "$REGION"`, which lists every resource in the stack, and tag any tag-scoped one the first command missed with its service's own tag command. Tag IAM roles with `aws iam tag-role --role-name <role> --tags Key=app,Value=<id>` (the execution policy manages the app's roles by their `<id>-…` name, and the deploy adds the tag, so this is optional).
 3. **Set `stackId` in `.blocks/config.json` to the id**, if it isn't already. Hosting's `secret()` and `config()` values move to `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, so set each value again (`npm run secret -- set …`, `npm run config -- set …`) before deploying; the old ones stay where they were until you delete them. If `index.cdk.ts` builds the stack name from `stackId` (`getStackName()`, `<stackId>-prod`), changing it renames the stack: see step 1.
 4. **Expect replacements on the first deploy.**
-   - AWS Blocks renames the CloudFront Functions and KeyValueStores it creates to `<id>-<region>-…`, and a new name replaces the resource.
+   - AWS CDK Blocks renames the CloudFront Functions and KeyValueStores it creates to `<id>-<region>-…`, and a new name replaces the resource.
    - CloudFormation then tries to delete the old ones. The old Functions fail to delete (`DELETE_FAILED`, skipped; the stack still reaches `UPDATE_COMPLETE`), because their names (`<region>…`) are outside the app's prefix, and so can the old KeyValueStores still associated with them. An admin deletes them once: `aws cloudfront delete-function --name <name> --if-match <ETag from describe-function>`, then `aws cloudfront delete-key-value-store --name <name> --if-match <ETag from describe-key-value-store>`.
    - Hosting's Lambda@Edge stack (Hosting outside `us-east-1`) becomes a new stack, `<id>-edge` (CDK named it `edge-lambda-stack-<hash>`). The app's deploy guard can't touch the old one, so an admin deletes it once the distribution no longer uses its functions (Lambda@Edge replicas can take hours to release).
