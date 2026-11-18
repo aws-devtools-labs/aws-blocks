@@ -2,20 +2,29 @@
 
 Isolated end-to-end tests for the AWS CDK Blocks telemetry system.
 
+## Running
+
+```bash
+# From monorepo root (requires build first):
+npm run build
+npm run test:telemetry
+
+# Directly:
+cd test-apps/telemetry
+npx tsx test/telemetry-e2e.test.ts
+```
+
+The `sandbox`, `deploy` and `destroy` cases need AWS credentials from the
+environment or from `~/.aws` (see [Concurrent groups](#concurrent-groups)).
+
 ## Isolation
 
-This suite runs in a **completely separate environment** from the other e2e
-test apps:
-
-- Its own test application (`test-apps/telemetry`, distinct from
-  `test-apps/comprehensive`).
-- A suite-level `before()` seeds the pinned installation-id in `$HOME/.cdk-blocks/`
-  so telemetry state is deterministic without affecting other suites.
-- Each captured event is written to a unique `--telemetry-file` path, so no test
-  depends on another's file. The reader takes the first element of the array, so a
-  command emitting more than one event is asserted on its first. Multi-event
-  ordering and length are covered by the unit suites (`packages/core/src/telemetry/
-  telemetry.test.ts`, "keeps every event when one run emits several").
+The suite shares no state with the other e2e test apps. Each captured event is
+written to a unique `--telemetry-file` path, so no test depends on another's
+file. The reader takes the first element of the array, so a command emitting
+more than one event is asserted on its first. Multi-event ordering and length
+are covered by the unit suites (`packages/core/src/telemetry/telemetry.test.ts`,
+"keeps every event when one run emits several").
 
 ## Concurrent groups
 
@@ -44,19 +53,24 @@ that reaches AWS starts at least 60 s after the previous one, and every destroy
 60 s after the previous destroy, whichever group runs them. The sandbox group,
 the longer one, takes the first deploy slot.
 
+Two rules follow from how the AWS groups run:
+
+- AWS credentials must come from the environment (as in CI) or from `~/.aws`.
+  A credential helper that keeps its state elsewhere in HOME won't find it.
+- A new top-level entry in this directory fails the run until it is added to
+  `APP_ENTRIES` or `APP_EXCLUDED` in the test.
+
 Each AWS group runs its commands in its own copy of the app under
-`.e2e-groups/<group>/app` (git-ignored, removed at the end) with its own HOME.
-The copy keeps the CLI state that lives in the project root apart: `cdk.out`
-(two cdk processes on one `cdk.out` collide on its lock), `.cdk-blocks-sandbox/`
-and the generated client. The HOME keeps the local group's global-config
-cases from disabling telemetry for a cloud command; it is seeded with the
-pinned installation-id and links to the real `~/.aws`, `~/.npm`, `~/.npmrc`
-and `~/.cdk.json` (whose `profile` and `region` pick the deployment target).
-AWS credentials must therefore come from the environment (as in CI) or from
-`~/.aws`; a credential helper that keeps its state elsewhere in HOME won't
-find it. The copy takes the app entries listed in the test's `APP_ENTRIES`;
-a new top-level entry in this directory fails the run until it is added
-there or to `APP_EXCLUDED`.
+`.e2e-groups/<group>/app` (git-ignored, removed at the end) with its own HOME:
+
+- The copy takes the app entries listed in `APP_ENTRIES`. It keeps the CLI
+  state that lives in the project root apart: `cdk.out` (two cdk processes on
+  one `cdk.out` collide on its lock), `.cdk-blocks-sandbox/` and the generated
+  client.
+- The HOME keeps the local group's global-config cases from disabling
+  telemetry for a cloud command. It is seeded with the pinned installation-id
+  and links to the real `~/.aws`, `~/.npm`, `~/.npmrc` and `~/.cdk.json`
+  (whose `profile` and `region` pick the deployment target).
 
 A suite-level `before()` writes one fresh sandbox id to this directory and to
 both copies. Sandbox and production stack names differ
@@ -90,7 +104,8 @@ random ID, and asserts it was created correctly.
 - **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
   `destroy`, `sandbox:deploy`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
   `create-blocks-app` and `vendorize` document the no-telemetry limitation for
-  their failure paths.
+  their failure paths. FAIL paths clear the credential env vars so CDK fails
+  fast.
 - **Network resilience**: broken endpoint is invisible to users, visible with
   NODE_DEBUG, and does not crash or delay the command.
 - **Disable mechanisms**: env var, global config, project config.
@@ -100,24 +115,9 @@ random ID, and asserts it was created correctly.
 - **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY`, and `cli-telemetry: false` in
   `cdk.context.json`, `cdk.json` or `~/.cdk.json`.
 
-## Running
-
-```bash
-# From monorepo root (requires build first):
-npm run build
-npm run test:telemetry
-
-# Directly:
-cd test-apps/telemetry
-npx tsx test/telemetry-e2e.test.ts
-```
-
 ## Design
 
-Tests exercise real CLI commands. The `dev` server starts without AWS and emits
-`dev/SUCCESS`. Cloud commands (`sandbox`, `deploy`, `destroy`) require valid AWS
-credentials — in CI these are provided by `aws-actions/configure-aws-credentials`.
-FAIL paths are exercised by clearing credential env vars so CDK fails fast.
+Tests exercise real CLI commands.
 
 The `--telemetry-file` flag captures the event payload to disk for structure
 assertions, while `NODE_DEBUG=blocks-telemetry` stderr output verifies actual
