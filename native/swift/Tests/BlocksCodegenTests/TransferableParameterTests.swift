@@ -97,6 +97,30 @@ final class TransferableParameterTests: XCTestCase {
         assertRefused("file-bucket/download", relay(param("files", array(download)), param("byRoom", map(channel))))
     }
 
+    /// `name` taking `params` and returning a string.
+    private func method(_ name: String, _ params: String...) -> String {
+        #"{ "name": "\#(name)", "params": [\#(params.joined(separator: ","))], "result": { "name": "R", "schema": { "type": "string" } } }"#
+    }
+
+    private func assertRefused(_ tag: String, methods: [String], file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try generate(methods: methods), file: file, line: line) { error in
+            XCTAssertEqual("\(error)", "Transferable types (\(tag)) cannot be serialized — they are read-only", file: file, line: line)
+        }
+    }
+
+    /// Kotlin generates namespaces in the order the spec first names them and stops at the first transferable
+    /// parameter, so Swift walks them in that order, not by name, and names the same tag (checked against Kotlin's
+    /// generator on both specs).
+    func testNamespacesAreWalkedInSpecOrderAsInKotlin() {
+        assertRefused("file-bucket/download", methods: [
+            method("zeta.upload", param("file", download)), method("alpha.relay", param("feed", channel))
+        ])
+        // A namespace's operations stay together where the spec first names it, as Kotlin groups them.
+        assertRefused("realtime/channel", methods: [
+            method("alpha.ping"), method("zeta.upload", param("file", download)), method("alpha.relay", param("feed", channel))
+        ])
+    }
+
     // MARK: - Generated, as in Kotlin
 
     func testModelHoldingATransferableGenerates() {
