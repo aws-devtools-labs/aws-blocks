@@ -345,6 +345,25 @@ async function _contract() {
 		{ ifValueEquals: { name: 'A', email: 'a@example.com', version: 1 } },
 	);
 
+	// ── 5b. increment: a number field of the value, other than a key field ──────
+	const total: number = await orders.increment(orderKey, 'total', { by: 2, ifExists: true });
+	void total;
+	await orders.increment(orderKey, 'placedAt');
+	// @ts-expect-error 'note' holds a string
+	await orders.increment(orderKey, 'note');
+	// @ts-expect-error 'tags' holds an array
+	await orders.increment(orderKey, 'tags');
+	// @ts-expect-error 'userId' is a key field
+	await orders.increment(orderKey, 'userId');
+	// @ts-expect-error by is a number
+	await orders.increment(orderKey, 'total', { by: '1' });
+	const views = new KVStore<{ count: number; title: string }>(scope, 'views');
+	await views.increment('page', 'count');
+	// @ts-expect-error a string store's value has no fields
+	await cache.increment('greeting', 'length');
+	const _sameIncrement: Same<KVStore<Order>['increment'], AwsKVStore<Order>['increment']> = true;
+	void _sameIncrement;
+
 	// ── 6. LegacyKVStore: the store of a release up to 0.4.0 ────────────────────
 	const oldProfiles = new LegacyKVStore<Profile>(scope, 'old-profiles', { ttl: true, removalPolicy: 'retain' });
 	const oldProfile: Profile | null = await oldProfiles.get('k', { consistentRead: false });

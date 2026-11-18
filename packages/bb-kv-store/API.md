@@ -76,6 +76,15 @@ export interface GetOptions {
 }
 
 // @public
+export type IncrementField<In, Out, K> = Exclude<NumberField<In, Out>, FieldsOf<K>>;
+
+// @public
+export interface IncrementOptions {
+    by?: number;
+    ifExists?: boolean;
+}
+
+// @public
 export interface IndexConfig<In, Out> {
     partitionKey: IndexField<In, Out>;
     sortKey?: IndexField<In, Out>;
@@ -116,6 +125,7 @@ export class KVStore<In = string, Out = In, K extends KeyConfig<In, Out> | undef
     static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     get(key: KeyOf<Out, K>, options?: GetOptions): Promise<Out | null>;
     getBatch(keys: KeyOf<Out, K>[]): Promise<(Out | null)[]>;
+    increment(key: KeyOf<Out, K>, field: IncrementField<In, Out, K>, options?: IncrementOptions): Promise<number>;
     // @internal
     protected log: ChildLogger;
     put(key: KeyOf<Out, K>, value: ValueOf<In, K>, options?: PutOptions<Out>): Promise<void>;

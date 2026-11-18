@@ -169,6 +169,39 @@ export function kvStoreDocumentsTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('increment', () => {
+      test('concurrent increments of a record lose no update, and the index reads the new value', async () => {
+        const api = getApi();
+        const pk = uid();
+        await api.tablePut({ pk, sk: 'sk1' }, { data: 'counter', timestamp: 1000 });
+        const results = await Promise.all(Array.from({ length: 20 }, () => api.tableIncrement({ pk, sk: 'sk1' }, 'timestamp')));
+        assert.deepStrictEqual([...results].sort((a, b) => a - b), Array.from({ length: 20 }, (_, i) => 1001 + i));
+        assert.strictEqual(await api.tableIncrement({ pk, sk: 'sk1' }, 'timestamp', { by: -20 }), 1000);
+        assert.deepStrictEqual(await api.tableGet({ pk, sk: 'sk1' }), { pk, sk: 'sk1', data: 'counter', timestamp: 1000 });
+        const entries = await api.tableQuery({ index: 'byTimestamp', where: { pk: { equals: pk }, timestamp: { equals: 1000 } } });
+        assert.strictEqual(entries.length, 1);
+        await api.tableDelete({ pk, sk: 'sk1' });
+      });
+
+      test('an absent record is not created when the schema needs more fields', async () => {
+        const api = getApi();
+        const pk = uid();
+        const e = await expectError(api.tableIncrement({ pk, sk: 'sk1' }, 'timestamp'), ConditionalCheckFailed);
+        assert.ok(e instanceof ApiError);
+        assert.strictEqual(e.retriable, false);
+        assert.strictEqual(await api.tableGet({ pk, sk: 'sk1' }), null);
+      });
+
+      test('a by that is not a safe integer is rejected', async () => {
+        const api = getApi();
+        const pk = uid();
+        await api.tablePut({ pk, sk: 'sk1' }, { data: 'counter', timestamp: 1 });
+        await expectError(api.tableIncrement({ pk, sk: 'sk1' }, 'timestamp', { by: 1.5 }), InvalidQuery);
+        assert.strictEqual((await api.tableGet({ pk, sk: 'sk1' }))?.timestamp, 1);
+        await api.tableDelete({ pk, sk: 'sk1' });
+      });
+    });
+
     // ── Query: numeric sort key (byTimestamp index) ──────────────────────
     // These tests construct `where` objects directly — the types flow from
     // KVStore through the thin API wrapper to the call site. pk requires

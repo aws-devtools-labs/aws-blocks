@@ -220,6 +220,30 @@ export type ConditionalDeleteOptions<T = unknown> = {
 	ifExists?: boolean;
 } & ValueCheck<T>;
 
+/**
+ * The fields that `increment` can change: the number fields of the value, other
+ * than the fields of the declared key. A store whose value is not an object has
+ * none.
+ */
+export type IncrementField<In, Out, K> = Exclude<NumberField<In, Out>, FieldsOf<K>>;
+
+/** Options accepted by `increment`. */
+export interface IncrementOptions {
+	/**
+	 * The amount to add to the field: a safe integer. A negative amount
+	 * subtracts.
+	 *
+	 * @defaultValue 1
+	 */
+	by?: number;
+	/**
+	 * Only update an item that exists. Throws ConditionalCheckFailedException when
+	 * the key is absent. Without it, `increment` creates an absent item when the
+	 * schema accepts the key fields and the field alone as a value.
+	 */
+	ifExists?: boolean;
+}
+
 /** One entry of a `putBatch`: the key (typed from the output type), the value (the input type), and an optional expiry. */
 export type PutBatchEntry<In, Out, K> = { key: KeyOf<Out, K>; value: ValueOf<In, K> } & Expiry;
 
