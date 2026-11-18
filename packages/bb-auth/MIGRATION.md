@@ -78,6 +78,7 @@ Local development works the same way. The mock keeps the sessions in `.bb-data/<
 
 Your pool and your users survive, **provided the block's id is unchanged**. Their sessions do not: [the session store](#the-session-store) is a new table, so each user signs in once. Under `BlocksPresets.production` the session secret changes too: see ["The session secret moves to Secrets Manager"](#the-session-secret-moves-to-secrets-manager) below.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-cognito -->
 ```ts
 // Before (AuthCognito)
 import { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
@@ -148,6 +149,7 @@ To keep the key across the switch, set `secretsStore: 'ssm'` **before** the firs
 
 Direct providers keep their identity: `userId` is still `` `${iss}:${sub}` ``. Nothing in AWS is destroyed, and no Cognito pool is created. The old session cookie is ignored, so each user signs in once more after the deploy. The session store is a new table, and the old `sessions` table leaves the stack ([The session store](#the-session-store)).
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-oidc -->
 ```ts
 // Before (AuthOIDC)
 import { AuthOIDC, google, github, customOidc, relayOrigin, stubIdp } from '@aws-blocks/bb-auth-oidc';
@@ -202,10 +204,52 @@ What changes:
 - **Secrets are `AppSetting` references,** never strings or functions. The codemod rewrites `() => setting.get()` to `setting`. It leaves a TODO for a literal or any other form. `clientId` is a plain string.
 - **The user object:** `OIDCUser` becomes `AuthenticatedUser`. `user.userId` and `user.username` are unchanged. `email` / `name` are now `user.attributes.email` / `user.attributes.name`, and `provider` is now `user.signInProvider`. `iss` and `sub` are gone: `userId` still carries `` `${iss}:${sub}` ``, `attributes` holds the string claims, and `user.claims` is still there: the provider's verified ID-token claims, so `user.claims.sub` is the raw provider `sub`. It is optional on `AuthenticatedUser` (set for users of a `store: 'builtin'` block, absent for user-pool users), so read it as `user.claims?.sub`. It is server-side only: `getAuthState()` and the sign-in routes don't send it to the browser.
 - **No client handle.** `authApi.getClient()` and the `@aws-blocks/bb-auth-oidc/middleware` (or `/client`) import are gone. Federated sign-in buttons come from `getAuthState()`: each provider is a `signIn:<id>` action that carries a `url`, and the `Authenticator` renders it. `auth.handleCallback*`, `handleExchange`, `getAuthorizeParams` and `refreshBearerTokens` are gone too, because `Auth` serves those routes itself under the same `/aws-blocks/auth/*` paths.
+- **Native apps (Swift, Kotlin, Dart) that called `oidcAuthApi.getClient()`** keep doing so: export `auth.createOidcApi()` under the name the app already uses (`export const oidcAuthApi = auth.createOidcApi();`), next to `auth.createApi()` under another name if the backend also serves the web `Authenticator`. `getClient()` returns the same `oidc/client` descriptor `AuthOIDC` did, built from the block's own routes, so the generated clients and their typed providers work unchanged. Keep the app's scheme in `redirects.allowedRelayOrigins`. The codemod leaves a TODO on a migrated `AuthOIDC` block's `createApi()` saying so. See the README, *Native apps*, and [Native apps (Dart, Swift, Kotlin)](#native-apps-dart-swift-kotlin) below.
 - **A frontend on a different origin than the API** used `getClient()`'s browser PKCE flow, which `AuthOIDC`'s README said was required there. Use `createAuthClient()` from `@aws-blocks/bb-auth/browser-client` (also in `@aws-blocks/blocks/ui`) instead; see the README, *Frontend on a different origin*. The calls map as follows: `getClient().signIn(provider)` → `signInWithRedirect({ provider })`; `handleRedirectCallback()` → `handleSignInRedirect()`; reading the user → `getCurrentUser()` / `fetchAuthSession()`; sign-out → `signOut()`. On the backend, add the frontend's origin to `redirects.allowedRelayOrigins` with `relayOrigin()`. The provider's `redirect_uri` is now the block's own callback, not a page of the frontend, so update it in the provider's console if you had registered the frontend's page.
 - **Redirect options** (`callbackPath`, `signOutPath`, `postSignInPath`, `allowedRelayOrigins`) move under `redirects`. `crossDomain` moves to `session.crossDomain`.
 - **The old cookie secret is deleted.** `AuthOIDC` signed its session cookie with an SSM parameter `/<fullId>-cookie-secret-<id>`. `Auth` doesn't use it, so the first deploy deletes it. It only signed the old cookie, which is already ignored, so users see nothing beyond the one re-login.
 - **`stubIdp()` is local and sandbox only** — as with `AuthOIDC`; see below.
+
+### Native apps (Dart, Swift, Kotlin)
+
+A native app that called `oidcAuthApi.getClient()` keeps that call. The backend exports the block twice, once per job:
+
+```ts
+import { Scope } from '@aws-blocks/blocks';
+import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+
+const auth = new Auth(new Scope('my-app'), 'auth', {
+	store: 'builtin',
+	providers: { google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'google-client-id' } },
+	redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] },
+});
+export const authApi = auth.createApi(); // the sign-in state machine: getAuthState / setAuthState
+export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs' OIDC client for federated sign-in
+```
+
+- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's Blocks client, so it shares that client's HTTP client and cookie store, and types `signIn` by the block's provider ids (a generated enum on Swift, Kotlin and Dart):
+
+  ```kotlin
+  val oidc = blocks.oidcAuthApi.getClient()
+  val user = oidc.signIn(OidcAuthApi.GetClient.Provider.Google)
+  ```
+
+  ```dart
+  final oidc = await blocks.oidcAuthApi.getClient(); // TypedOidcClient<OidcAuthApiApiGetClientProvider>
+  final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.google, launcher: launcher, relayTo: 'myapp://auth');
+  ```
+
+  ```swift
+  let oidc = try await blocks.oidcAuthApi.getClient()
+  let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)
+  ```
+
+- **Federated sign-in buttons come from the client, everything else from the state machine.** Render one button per entry in the `providers` of the client `getClient()` returns, and call `signIn` on it with that provider's generated enum value (the calls above), then `getAuthState()` again. Don't route `getAuthState()`'s `signIn:<id>` actions: their `url` starts a browser-cookie sign-in, which would leave the session cookie in the system browser, not in the app. Every other action (email + password, MFA, reset) goes through `setAuthState`, whose result is the next state: render it as it is. `getAuthState()` only ever reports signed in or signed out, never a step in progress (`confirmingSignUp`, `confirmingSignIn`, `confirmingPasswordReset`), so call it on launch and after a federated sign-in or sign-out, not to continue a flow. A failure the user can retry (`retriable: true`) comes back with `actions: []`: keep the current form and show `error`.
+- **Keep `relayTo` allowed.** The app's `relayTo` (its custom scheme, for example `myapp://auth`) must stay in `redirects.allowedRelayOrigins`, as `relayOrigin('myapp://auth')`. A desktop app's loopback `http://127.0.0.1:<port>` is always allowed.
+- **Users sign in once more** after the upgrade, as on the web: the old session cookie is ignored.
+- **On launch, call `getAuthState()`.** It reports the signed-in user from the session cookie, for every sign-in method. To restore a federated session, a block with providers also serves `GET <base>/session` (default `/aws-blocks/auth/session`): `200 { user }` means signed in, `401` means signed out. A block without providers has no session route. Don't derive the user from a stored token.
+- **Sign out** through `POST <signOutPath>?format=json`, which ends the session and may return the IdP's `logoutUrl`. Open it with the app's browser launcher to end the IdP session too, so the next sign-in asks the provider again.
+- **The session is the cookie.** The OIDC client signs in with the session cookie that `/exchange` sets. It sends `tokens: false`, so `/exchange` returns no tokens to it, even with `allowBearerAuth`.
 
 ### `stubIdp()` is local and sandbox only
 
@@ -325,6 +369,7 @@ Before relying on it, check the username format for one real user in the Cognito
 
 **There is no migration path.** Cognito can't import `AuthBasic`'s bcrypt password hashes, so every existing user must **sign up again** after the switch. The codemod rewrites the code and marks every `AuthBasic` block with a TODO, but the decision to switch is yours.
 
+<!-- doc-snippet: skip — "before" code that imports the removed @aws-blocks/bb-auth-basic -->
 ```ts
 // Before (AuthBasic)
 import { AuthBasic, AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
@@ -504,7 +549,7 @@ These get a TODO (or a compile error) and need a person:
 - **`signUp()` with an `autoSignIn` that differs from the block's (`false` in an app that keeps `Auth`'s default, or a non-literal value), `signIn()` with `cognitoSession`, and `confirmSignIn()` with a computed response.**
 - **Old defaults on options it can't see:** with options passed by variable or spread in, the codemod can't add `emailPassword: { autoSignIn: false }` (`AuthCognito`), or `session: { ttlSeconds: 86_400 }` and the password policy's `false` character classes (`AuthBasic`), so it leaves a TODO to add them.
 - **`AuthBasic` error names as plain strings anywhere:** once any file imports `AuthBasic`, the codemod rewrites every string literal in the project that equals an `AuthBasic` error name (`'InvalidCodeException'`, …), whatever it is compared with. Check that none of them is an unrelated name of your own, such as a custom `InvalidCodeException`.
-- **`AuthOIDC` members with no equivalent:** `getClient()`, the side-effect `/middleware` import, and what `/middleware` and `/client` exported for the client handle (`AuthOIDCClient`, `handle401`, `AuthStateMeta`, …), `handleCallback`, `handleCallbackDispatch`, `handleExchange`, `getAuthorizeParams`, `refreshBearerTokens`, `signInRoutePath`, `signInBasePath`, and the `providers` / `callbackPath` / `signOutPath` / `postSignInPath` / `allowBearerAuth` getters.
+- **`AuthOIDC` members with no equivalent:** `getClient()` on the web (native apps use `createOidcApi()`, above), the side-effect `/middleware` import, and what `/middleware` and `/client` exported for the client handle (`AuthOIDCClient`, `handle401`, `AuthStateMeta`, …), `handleCallback`, `handleCallbackDispatch`, `handleExchange`, `getAuthorizeParams`, `refreshBearerTokens`, `signInRoutePath`, `signInBasePath`, and the `providers` / `callbackPath` / `signOutPath` / `postSignInPath` / `allowBearerAuth` getters.
 - **`OIDCUser` fields** `iss`, `sub`, `provider`, `email` and `name` read in `onSignIn` / `onSignOut` (TODO), or anywhere else (compile error). `claims` is still there but now optional (TODO in `onSignIn` / `onSignOut`).
 - **Exports that are gone:** `makeExternalUserPoolRef` (use `Auth.fromExisting`), `envVarNames`, `isRetriableAuthError`, `AuthFlowType`, `SignInWith`, `ConfirmSignInResponse`, `OIDCClient`, `SessionStore`, `SessionRecord`, and the `@aws-blocks/auth-common` types that `@aws-blocks/bb-auth-basic` re-exported (import them from `@aws-blocks/blocks`).
 - **Method calls it can't trace to an old block:** for example `ctx.auth.fetchDevices()`. In a file that uses an old block, these get a TODO naming the new method.

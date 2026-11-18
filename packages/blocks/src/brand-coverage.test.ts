@@ -59,10 +59,6 @@ const packagesDir = join(fileURLToPath(import.meta.url), '..', '..', '..', '..',
  * entry is a documented exception, not a place to hide a real miss.
  */
 const FILE_ALLOWLIST: Record<string, string> = {
-	// Host-side migration step (D-009): runs as a pre-`cdk deploy` subprocess, its
-	// errors surface to the operator's terminal, never through the RPC serializer,
-	// so the wire-safe brand is irrelevant here.
-	'bb-data/src/migrations/external-migrations.ts': 'host-side migration CLI — errors go to the operator, not the RPC wire',
 	// The `bb-auth` codemod (`npx @aws-blocks/bb-auth migrate`): a CLI that rewrites the
 	// app's source files. Its errors are codemod bugs reported in the terminal, never
 	// thrown from an API method, so they never reach the RPC serializer.

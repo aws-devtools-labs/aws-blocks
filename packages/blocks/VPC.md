@@ -12,16 +12,18 @@ VPC support adds recurring AWS costs. Understand these before enabling:
 
 **Example:** A 2-AZ app using KVStore + Database + AsyncJob + AppSetting:
 - 1 NAT Gateway: ~$32/month
-- 5 interface endpoints × 2 AZs × $7.20: ~$72/month
-  (SQS from AsyncJob, Secrets Manager + RDS Data from Database, SSM from
-  AppSetting, and the always-on CloudWatch Logs that `finalizeVpc` provisions
-  for every VPC-attached deployment)
+- 3 interface endpoints × 2 AZs × $7.20: ~$43/month
+  (SQS from AsyncJob, SSM from AppSetting, and the always-on CloudWatch Logs
+  that `finalizeVpc` provisions for every VPC-attached deployment)
 - 2 gateway endpoints (S3, DynamoDB): $0
-- **Total VPC overhead: ~$104/month**
+- **Total VPC overhead: ~$75/month**
+
+Database adds no endpoint: the app reaches its cluster over the cluster's public
+endpoint, through the NAT gateway (see [Database in a VPC](#database-in-a-vpc)).
 
 Endpoints other than CloudWatch Logs are provisioned only from the requirements
 the BBs in scope declare — an app without AppSetting or an auth BB gets no SSM
-endpoint, dropping this example to ~$97/month. Only CloudWatch Logs (Lambda log
+endpoint, dropping this example to ~$61/month. Only CloudWatch Logs (Lambda log
 delivery) and the free S3 gateway endpoint (config/secrets/migrations at cold
 start) are always added.
 
@@ -36,7 +38,7 @@ start) are always added.
 - You need security group rules to restrict traffic between services
 
 **Don't use a VPC when:**
-- You're building a standard web app with Blocks' built-in data stores (KVStore, DistributedDatabase)
+- You're building a standard web app with Blocks' built-in data stores (KVStore, Database)
 - Your only AWS interactions are through Blocks (they handle connectivity automatically)
 - You want to minimize cost and operational complexity
 - You're prototyping or building an MVP
@@ -61,7 +63,7 @@ await BlocksStack.create(app, stackName, {
 AWS Blocks handles:
 - **Lambda placement** in private subnets (configurable via `subnets`)
 - **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, SQS, Bedrock, etc.)
-- **Security group wiring** (e.g., Blocks Lambda → endpoints on port 443, rotation Lambda → Aurora on port 5432)
+- **Security group wiring** (e.g., Blocks Lambda → endpoints on port 443)
 
 ### Bring Your Own VPC
 
@@ -101,30 +103,14 @@ await BlocksStack.create(app, stackName, {
 ```
 
 Your endpoints' security groups must then admit everything Blocks places in the VPC:
-the Blocks Lambda security group, and any compute a BB provisions itself. Today that
-is the Database rotation Lambda, which reaches the Secrets Manager endpoint from its
-own security group. Synth emits a `blocks:vpc:endpoint-client-unadmitted` warning
-naming that security group by construct path. Blocks cannot tell whether your
-endpoint already admits the group, so it does not fail the synth.
-
-That group is created by the first deploy, so the first rotation always runs before
-you can admit it: it fails, and the deploy waits five minutes for it before carrying
-on. Deploying once with rotation off does not avoid this, because that creates no
-rotation security group to admit. The sequence is:
-
-1. Deploy. The first rotation fails and the deploy takes about five minutes longer.
-   The `RotationFailed` CloudTrail event it leaves is expected at this step.
-2. Read the rotation security group's id from the stack output whose name ends in
-   `RotationSgId`.
-3. Allow inbound 443 from that group on your Secrets Manager endpoint's security
-   group.
-4. Wait. Secrets Manager reattempts the pending rotation and it succeeds once the
-   rule is in place; the secret's last-rotated date advances. Do not call
-   `rotate-secret` to hurry it — while a reattempt is pending that call is refused
-   with "A previous rotation isn't complete".
-
-A rotation that cannot reach Secrets Manager shows up in the rotation Lambda's log
-and as a `RotationFailed` CloudTrail event.
+the Blocks Lambda security group, and the security group of any compute a BB
+provisions itself and registers as an endpoint client (`endpointClientSecurityGroups`
+in its VPC requirements). For each registered group, synth emits a
+`blocks:vpc:endpoint-client-unadmitted` warning naming that security group by
+construct path. Allow inbound 443 from that group on your endpoints' security
+group. Blocks cannot tell whether your endpoint already admits the group, so it
+does not fail the synth. Until the rule exists, that compute cannot reach the
+endpoints.
 
 The warning keeps firing on every synth once you have added the rule, because Blocks
 still cannot see your endpoint's rules. Acknowledge it in your app, which covers
@@ -133,13 +119,23 @@ that scope and every scope under it:
 ```typescript
 Annotations.of(app).acknowledgeWarning(
   'blocks:vpc:endpoint-client-unadmitted',
-  'Secrets Manager endpoint admits the Database rotation security group on 443',
+  'The interface endpoints admit the registered security groups on 443',
 );
 ```
 
 Pass the id exactly as above. The id the CDK CLI prints under the warning is
 prefixed (`Annotation::blocks:vpc:endpoint-client-unadmitted`) and does not match
 here.
+
+### Database in a VPC
+
+`Database` and `DatabaseCluster` create nothing in the VPC and need no VPC
+endpoint. The app reaches the cluster over the cluster's public endpoint, so the
+Blocks runtime must be placed in subnets with an outbound route: the default
+`PRIVATE_WITH_EGRESS` selection, or public subnets. Synth fails when the selected
+subnets have no egress route, and emits a `blocks:vpc:egress-unverified` warning
+when Blocks cannot determine whether they have one (for example, an imported VPC
+whose subnets are not known at synth).
 
 ## Configuration Options
 

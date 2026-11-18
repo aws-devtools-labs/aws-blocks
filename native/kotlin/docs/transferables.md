@@ -15,9 +15,8 @@ that kind needs to reconstitute itself.
 The client reads the tag, builds the matching Kotlin object, and hands you that rather than the
 descriptor. The spec marks the result schema with `x-blocks-transferable` (plus
 `x-blocks-type-args` for generic arguments) so codegen knows to emit `RealtimeChannel<Cursor>`
-where the raw schema would have produced a struct. A transferable is sent back as its
-`{ "__blocks": … }` descriptor (its `toJson()`), so an operation can also take one as a parameter
-(see [Nested transferables](#nested-transferables)).
+where the raw schema would have produced a struct. Transferables travel in the result position
+only — they are what a method hands back, never something you pass in.
 
 ## The built-in bindings
 
@@ -66,11 +65,59 @@ its live object wherever it appears: returned directly, inside a list or map, in
 model, or in the messages of a realtime channel (`RealtimeChannel<List<FileDownloadHandle>>`, or a
 channel whose message model holds one). An OIDC client needs the calling client and the configured
 `oidc { relayTo }`, so a model that holds one decodes through its generated operation; to decode one
-yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`. A
-transferable is sent back as its descriptor, so an operation can take one as a parameter, directly,
-in a list or map, or in a model (a model holding an OIDC client encodes with `OidcClient.json`, as
-the generated operation does). A tag with no binding has to be a direct result to get the
-`UnknownTransferable` fallback.
+yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`.
+Transferables are read-only: an operation that takes one as a parameter fails code generation, and
+encoding a model that holds one throws `UnsupportedOperationException`. A tag with no binding has to
+be a direct result to get the `UnknownTransferable` fallback.
+
+## Realtime subscriptions
+
+`RealtimeChannel.subscribe()` returns a cold `Flow`. Each collection subscribes on the channel's
+shared WebSocket and doesn't wait for the server to confirm, so a message published before the
+server has the subscription can be missed.
+
+The flow completes normally only when you cancel the collection or call `close()`. Every other end
+throws a `RealtimeException`:
+
+| Exception | When | What to do |
+|---|---|---|
+| `RealtimeSubscriptionEndedException` | The server refused the subscribe or ended it. `code` is the server's code: `token_expired`, `access_revoked`, `principal_mismatch`, or `null` when the server refused the subscribe, for example because the token is invalid or expired. | On `token_expired`, call the API method that returned the channel again and subscribe to the new handle. On `null`, do the same if the handle has been held for a while, since its token can expire before the subscribe. On `access_revoked` and `principal_mismatch`, don't retry as the same user. |
+| `RealtimeConnectionException` | The socket couldn't open, failed, or was closed by the server or the gateway. | Get the channel again and subscribe to the new handle. |
+
+A message the deserializer can't decode ends the flow with the deserializer's error.
+
+The client never repeats the API call that returned the channel, and it doesn't reconnect. A
+channel token lasts about an hour, and the server checks it when the client sends its keep-alive
+ping (every 9 minutes per socket), so a subscriber can go up to 9 minutes without messages before
+the `token_expired` error arrives.
+
+```kotlin
+suspend fun followCursors(blocks: Blocks) {
+    var backoff = 1.seconds
+    while (true) {
+        try {
+            blocks.api.realtimeGetChannel("room-1").subscribe().collect { cursor ->
+                backoff = 1.seconds
+                draw(cursor)
+            }
+            return
+        } catch (e: RealtimeSubscriptionEndedException) {
+            // A fresh channel has a fresh token. Any other code means the user lost access.
+            if (e.code != "token_expired" && e.code != null) throw e
+            // A refusal with no code repeats if the new token is refused too, so back off.
+            if (e.code == null) backoff = waitAndGrow(backoff)
+        } catch (e: RealtimeConnectionException) {
+            // The socket dropped, for example when the network did.
+            backoff = waitAndGrow(backoff)
+        }
+    }
+}
+
+suspend fun waitAndGrow(backoff: Duration): Duration {
+    delay(backoff)
+    return (backoff * 2).coerceAtMost(30.seconds)
+}
+```
 
 ## HTTP clients
 

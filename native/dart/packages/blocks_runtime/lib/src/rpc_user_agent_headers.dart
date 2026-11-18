@@ -1,5 +1,7 @@
-import 'rpc_user_agent_headers_web.dart'
-    if (dart.library.io) 'rpc_user_agent_headers_io.dart'
-    as platform;
+import 'user_agent.dart';
 
-Map<String, String> rpcUserAgentHeaders() => platform.rpcUserAgentHeaders();
+/// Sends [blocksUserAgentToken] as `x-blocks-user-agent` on every RPC call so
+/// client traffic metrics can attribute it; the server allows it on preflight.
+Map<String, String> rpcUserAgentHeaders() => const {
+  'x-blocks-user-agent': blocksUserAgentToken,
+};

@@ -8,6 +8,9 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.io.File
 
+/** The golden of a fixture whose spec Kotlin refuses to generate: the [CodegenException] message. */
+private const val CODEGEN_ERROR_GOLDEN = "codegen-error.txt"
+
 class CodegenFixturesTest : FunSpec({
 
     val regenerate = System.getProperty("REGENERATE_FIXTURES") == "1"
@@ -28,8 +31,30 @@ class CodegenFixturesTest : FunSpec({
                     val codegenModel = CodegenModelBuilder().build(rpcModel)
                     // A relay target so a fixture's OIDC operations generate their real client
                     // instead of the stub an unconfigured build gets.
-                    val result = KotlinCodeGenerator("com.example.app", relayTo = "blocks-fixture://auth")
-                        .generate(codegenModel)
+                    val result = try {
+                        KotlinCodeGenerator("com.example.app", relayTo = "blocks-fixture://auth")
+                            .generate(codegenModel)
+                    } catch (e: CodegenException) {
+                        // A spec Kotlin refuses (a transferable parameter): the golden is the error.
+                        val errorGolden = File(goldenDir, CODEGEN_ERROR_GOLDEN)
+                        if (regenerate) {
+                            goldenDir.mkdirs()
+                            goldenDir.listFiles()?.forEach { it.delete() }
+                            errorGolden.writeText("${e.message}\n")
+                            println("  ✓ regenerated ${fixture.name}: codegen error")
+                        } else {
+                            withClue("fixture ${fixture.name} failed to generate; Run: ./gradlew :codegen:regenerateFixtures") {
+                                errorGolden.exists() shouldBe true
+                            }
+                            "${e.message}\n" shouldBe errorGolden.readText()
+                        }
+                        return@test
+                    }
+                    if (!regenerate) {
+                        withClue("fixture ${fixture.name} generates, but its golden is a codegen error") {
+                            File(goldenDir, CODEGEN_ERROR_GOLDEN).exists() shouldBe false
+                        }
+                    }
 
                     val generatedSource = result.files.joinToString("\n") { it.toString() }
                     Regex("@Serializable\\(\\s*with = ([A-Za-z0-9_]+)::class\\s*\\)")

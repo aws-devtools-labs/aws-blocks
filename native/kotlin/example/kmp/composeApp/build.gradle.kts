@@ -67,7 +67,7 @@ extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
     }
 }
 
-awsBlocks {
+cdkBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {

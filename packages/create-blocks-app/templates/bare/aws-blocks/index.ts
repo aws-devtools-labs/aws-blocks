@@ -12,8 +12,8 @@ import { ApiNamespace, Scope } from '@aws-blocks/blocks';
 //   • Realtime         — push updates to connected clients (WebSocket)
 //   • FileBucket       — file uploads and downloads (S3)
 //
-// For the full list of blocks and how to use them, see:
-//   node_modules/@aws-blocks/blocks/README.md
+// Building Block docs: npm run docs lists the blocks;
+// npm run docs <Block>... prints their docs (--help for more)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const scope = new Scope('my-app');
@@ -34,7 +34,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // import { Auth, KVStore, Realtime } from '@aws-blocks/blocks';
 // import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
 //
-// // Auth (see node_modules/@aws-blocks/bb-auth/README.md for full API):
+// // Auth (full API: npm run docs Auth):
 // const auth = new Auth(scope, 'auth', {
 //   // Email sign-in, matched ignoring case (fixed when the user pool is created).
 //   users: { signInWith: ['email'], caseSensitive: false },

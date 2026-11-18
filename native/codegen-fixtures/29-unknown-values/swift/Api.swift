@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func echo(payload: JSONValue) async throws -> JSONValue {
         let request = BlocksRequest(method: "api.echo", params: [payload], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echo") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echo") }
         return try JSONDecoder().decode(JSONValue.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func store(entry: Entry) async throws -> Entry {
         let request = BlocksRequest(method: "api.store", params: [entry], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.store") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.store") }
         return try JSONDecoder().decode(Entry.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
         if let extra { _params.append(extra) }
         let request = BlocksRequest(method: "api.collect", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.collect") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.collect") }
         return try JSONDecoder().decode([JSONValue].self, from: result)
     }
 }

@@ -5,6 +5,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.OptIn
 import kotlin.String
@@ -13,6 +14,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 
@@ -22,12 +24,14 @@ public class Api(
   public suspend fun cognitoConfirmSignIn(session: String, challengeResponse: String): CognitoConfirmSignIn.Result {
     val request = BlocksRequest(method = "api.cognitoConfirmSignIn", params = listOf(JsonPrimitive(session), JsonPrimitive(challengeResponse)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.cognitoConfirmSignIn")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun cognitoSignIn(username: String, password: String): CognitoSignIn.Result {
     val request = BlocksRequest(method = "api.cognitoSignIn", params = listOf(JsonPrimitive(username), JsonPrimitive(password)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.cognitoSignIn")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

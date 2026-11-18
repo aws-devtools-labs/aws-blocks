@@ -71,6 +71,7 @@ import {
 	ForgetDeviceCommand,
 	ForgotPasswordCommand,
 	GetUserAttributeVerificationCodeCommand,
+	GetTokensFromRefreshTokenCommand,
 	GetUserCommand,
 	GlobalSignOutCommand,
 	InitiateAuthCommand,
@@ -159,6 +160,8 @@ const REFRESH_REJECTED_NAMES: ReadonlySet<string> = new Set([
 	AuthErrors.UserNotFound,
 	AuthErrors.PasswordResetRequired,
 	AuthErrors.UserNotConfirmed,
+	// A rotated-out refresh token used again after its grace period: the session is over.
+	'RefreshTokenReuseException',
 ]);
 
 /** A verifier failure that is about *fetching* the JWKS, not about the token. */
@@ -733,11 +736,9 @@ export class NativeCognitoEngine implements NativeEngine {
 		let result: AuthenticationResultType | undefined;
 		try {
 			const resp = await this.client.send(
-				new InitiateAuthCommand({
-					AuthFlow: 'REFRESH_TOKEN_AUTH',
-					ClientId: clientId,
-					AuthParameters: { REFRESH_TOKEN: tokens.refreshToken },
-				}),
+				// Not `InitiateAuth` + `REFRESH_TOKEN_AUTH`: Cognito refuses that flow on a client
+				// with refresh-token rotation, and this call works with rotation on or off.
+				new GetTokensFromRefreshTokenCommand({ ClientId: clientId, RefreshToken: tokens.refreshToken }),
 			);
 			result = resp.AuthenticationResult;
 		} catch (e) {

@@ -231,7 +231,7 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 		const root = makeProject({
 			'aws-blocks/index.ts': source(
 				"import { Scope } from '@aws-blocks/blocks';",
-				"import { DatabaseErrors } from '@aws-blocks/bb-data';",
+				"import { DatabaseErrors } from '@aws-blocks/bb-database';",
 				'',
 				"const scope = new Scope('helpers');",
 				"export const err = new DatabaseErrors('boom');",

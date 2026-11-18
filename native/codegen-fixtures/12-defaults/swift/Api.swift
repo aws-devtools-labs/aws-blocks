@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func createItem() async throws -> CreateItem.Result {
         let request = BlocksRequest(method: "api.createItem", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.createItem") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.createItem") }
         return try JSONDecoder().decode(CreateItem.Result.self, from: result)
     }
 
     public enum CreateItem {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let active: Bool
             public let retries: Int
             public let role: String

@@ -329,9 +329,10 @@ npm install --save-dev @opennextjs/aws@~4.1.14
   Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
   `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
   for the Lambda@Edge function, so bootstrap `us-east-1` too
-  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
-  has more than one stack is tracked in
-  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  (`npx cdk bootstrap aws://<account>/us-east-1`). `npm run sandbox:destroy`
+  deletes every stack the sandbox deploys, the `us-east-1` support stack
+  included. `npm run destroy` passes no stack selection, so the CDK CLI refuses
+  to destroy an app with more than one top-level stack; that is tracked in
   [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
@@ -476,6 +477,16 @@ IPX image optimizer gets a REST API of its own with either compute type, so
 with `compute.type: 'web-function'` everything below, including the
 `serverOrigin` settings, applies to that image REST API.
 
+The REST API invokes the server the way it was built. A streaming server
+(Next.js through OpenNext, Nitro's `aws-lambda` preset with
+`nitro.awsLambda.streaming: true`, any Lambda Web Adapter server) gets a
+response-streaming integration (`ResponseTransferMode: STREAM`). A buffered
+Lambda handler (Nitro's `aws-lambda` preset with `awsLambda.streaming` off,
+which is Nitro's default) gets a plain Lambda proxy integration, which reads
+the `{ statusCode, headers, body }` object the handler returns. A buffered
+response is sent whole once the handler returns, and Lambda limits it to 6 MB;
+turn streaming on for larger responses or to send the page as it renders.
+
 - **Origin-verify secret.** The REST API's resource policy denies any request
   whose `Referer` header is not a secret that CloudFront adds as an origin
   custom header (a viewer's own `Referer` is replaced). The secret is random:
@@ -503,7 +514,7 @@ with `compute.type: 'web-function'` everything below, including the
   rate rule, since they all come from edge IPs and the distribution's own web
   ACL already rate-limits viewers. It follows `waf.enabled` because each web
   ACL costs money: a monthly charge, a charge per request it evaluates (every
-  uncached SSR request is now evaluated by two web ACLs), and the CloudWatch
+  uncached SSR request is evaluated by two web ACLs), and the CloudWatch
   Logs ingestion of the requests it blocks or counts. A `waf.webAclArn` of your
   own adds nothing to the stage.
 - **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
@@ -678,10 +689,12 @@ Some apps need the CloudFront door:
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
 - A streaming server handler answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Behind the HTTP
-  API the Next.js and Nitro adapters build a buffered server instead (see
-  "The server behind the HTTP API"). The ALB door and the stacked door (its
-  router is an ALB) invoke the server without streaming, so with Next.js
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Both also serve a
+  buffered handler (Nitro's `aws-lambda` preset with `awsLambda.streaming`
+  off): they invoke the server with or without streaming, as it was built.
+  Behind the HTTP API the Next.js and Nitro adapters build a buffered server
+  instead (see "The server behind the HTTP API"). The ALB door and the stacked
+  door (its router is an ALB) invoke the server without streaming, so with Next.js
   through OpenNext, or Nitro with `awsLambda.streaming: true` on the
   `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
   instead of deploying an app whose pages never answer. Behind the HTTP API it
@@ -959,7 +972,10 @@ region is pinned to one with a Lambda Web Adapter layer
 (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
 `@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
 Nitro keeps the `aws-lambda` preset, which
-the HTTP API serves while `awsLambda.streaming` is off. A route served by
+the HTTP API serves while `awsLambda.streaming` is off. The CloudFront door
+serves that buffered build too, so a Nuxt app that leaves
+`awsLambda.streaming` off works behind both doors (for example the HTTP API
+for a preview stack and CloudFront for production). A route served by
 a compute other than the server (for example a Next.js `runtime: 'edge'` route
 built as a regional function) gets its own route to that function. A
 Lambda@Edge compute behind any door other than CloudFront fails synth
@@ -1321,7 +1337,7 @@ back, then expired by an S3 lifecycle rule.
 
 > **Cleanup caveat:** a build is tagged superseded only during a normal deploy
 > cutover (an `Update` that flips `meta.b`). Builds that become stale outside
-> that path — every build already present before upgrading to this version, or
+> that path — every build uploaded by a hosting release that didn't tag builds, or
 > builds left by an aborted/rolled-back deploy — are never tagged, so the
 > lifecycle rule never expires them and they accumulate until you remove them
 > manually. This is safe (nothing deletes the live build), just not
@@ -1382,15 +1398,15 @@ new HostingConstruct(stack, 'Hosting', {
 > `LoggingV2RegionUnresolved` warning instead. `skipRegionValidation` skips this
 > check along with the WAF, ACM and Lambda Web Adapter Region checks.
 
-> **Entry point:** `version`, `partitioning` and `format` are available on
-> `HostingConstruct` from `@aws-blocks/hosting`. The `Hosting` block in
-> `@aws-blocks/core` currently accepts only `logging.enabled` and
-> `logging.retentionDays`, so it always uses v1.
+> **Entry point:** `version`, `partitioning` and `format` are set through
+> `frontDoor.features.logging`, on `HostingConstruct` from `@aws-blocks/hosting`
+> and on the `Hosting` block in `@aws-blocks/core`. Core's deprecated top-level
+> `logging` prop accepts only `enabled` and `retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
 
-`frontDoor.features.ssrDefaultTtl` (CloudFront door; formerly
-`cdn.ssrDefaultTtl`) enables CloudFront edge caching of SSR responses that carry
+`frontDoor.features.ssrDefaultTtl` (CloudFront door; `cdn.ssrDefaultTtl` is its
+deprecated alias) enables CloudFront edge caching of SSR responses that carry
 no explicit `Cache-Control` header. Those responses are then shared at the edge,
 and the SSR cache key does **not** include `Authorization` or session cookies by
 default — so one cached entry would answer requests regardless of their
@@ -1612,8 +1628,9 @@ unique when several hosting constructs share a stage) pinned to
 > will never fire if the app deploys outside `us-east-1`. See D-016.
 
 Off-region placement is **always on**; there is no opt-out. The
-CloudFront 5xx alarm is the whole point of `monitoring`, and a
-silently-missing alarm is exactly the bug this fixes (#481).
+CloudFront 5xx alarm is the whole point of `monitoring`, and an alarm
+placed in a region where CloudFront metrics never arrive would silently
+never fire.
 
 Subscribe with endpoint subscriptions (`EmailSubscription` /
 `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):

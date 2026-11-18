@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
     public func count() async throws -> Int {
         let request = BlocksRequest(method: "api.count", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.count") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.count") }
         return try JSONDecoder().decode(Int.self, from: result)
     }
 }

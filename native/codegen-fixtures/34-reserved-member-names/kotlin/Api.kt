@@ -3,11 +3,13 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Int
 import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -19,18 +21,21 @@ public class Api(
     val args: List<JsonElement> = if (int != null) listOf(JsonPrimitive(_id), JsonPrimitive(int)) else listOf(JsonPrimitive(_id))
     val request = BlocksRequest(method = "api.getDoc", params = args, id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getDoc")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun putExtras(extras: Extras): Extras {
     val request = BlocksRequest(method = "api.putExtras", params = listOf(BlocksJson.encodeToJsonElement(extras)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.putExtras")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getLevel(): Level {
     val request = BlocksRequest(method = "api.getLevel", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getLevel")
     return BlocksJson.decodeFromJsonElement(result)
   }
 }

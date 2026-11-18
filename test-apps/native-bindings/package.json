@@ -23,7 +23,7 @@
     "deploy:sandbox": "tsx aws-blocks/scripts/deploy-sandbox.ts",
     "destroy": "npm run sandbox:destroy",
     "seed:cognito": "tsx aws-blocks/scripts/seed-cognito-user.ts",
-    "vendorize": "blocks-vendorize"
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
   "dependencies": {
     "@aws-blocks/bb-auth": "*",

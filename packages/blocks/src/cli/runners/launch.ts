@@ -37,14 +37,14 @@ import { CliError } from '../errors.js';
 export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
 
 /**
- * The environment variable naming the file in which `cdk-blocks dev` learns how its dev server ended.
+ * The environment variable naming the file in which `npm run dev` learns how its dev server ended.
  * The dev server runner writes {@link DEV_STATE}`.running` when it starts and
  * {@link DEV_STATE}`.stopped` when it exits after a start or a reload; a fatal startup
  * failure writes its reason instead (the runner's `exitWithError`, core's dev server).
  * A dev server that started and then exits with a failing code (an uncaught exception
  * outside any request) writes {@link DEV_STATE}`.crashed` and its exit code, and
- * `cdk-blocks dev` restarts it (see {@link devCrashState}).
- * Absent until the first runner starts: `cdk-blocks dev` removes it before each `tsx watch`
+ * `npm run dev` restarts it (see {@link devCrashState}).
+ * Absent until the first runner starts: `npm run dev` removes it before each `tsx watch`
  * session it starts, so the first start of a restarted session is a first start too.
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
@@ -76,7 +76,7 @@ export function devCrashCode(state: string | undefined): number | undefined {
 
 /**
  * The environment variable, `1`, that tells the dev server it runs under `tsx watch`
- * (in `cdk-blocks dev`, and in the sandbox's dev command), so a failed first start ends
+ * (in `npm run dev`, and in the sandbox's dev command), so a failed first start ends
  * that `tsx watch` too. Core reads it as `BLOCKS_DEV_UNDER_WATCH`: on Windows the
  * dev server cannot read its parent's command line to tell.
  */

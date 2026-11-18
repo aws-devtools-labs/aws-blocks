@@ -97,7 +97,7 @@ export type ScopeParent = Scope | { id: string };
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
  * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Key-value and document storage, with optional schemas, keys, indexes, and queries (DynamoDB)
  * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
- * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
+ * - **`Database`** from `@aws-blocks/bb-database` - SQL database on PostgreSQL (Aurora DSQL, or Aurora PostgreSQL Serverless v2)
  * 
  * Read each Building Block's class and method docstrings for detailed documentation.
  * 
@@ -122,9 +122,8 @@ export type ScopeParent = Scope | { id: string };
  * - **`Database`** - SQL database with full relational features
  *   - Use when you need: complex multi-table JOINs, SQL transactions across tables, foreign key constraints
  *   - Avoid when: DynamoDB limitations are acceptable (no ad-hoc queries, eventual consistency on indexes, 400KB item limit)
- *   - Requires migrations folder with .sql files
- *   - Local dev requires manual schema setup (see Database README)
- *   - Higher baseline cost than KVStore
+ *   - Schema lives in ordered .sql files under `aws-blocks/migrations/<id>/`
+ *   - Local dev applies those files to an in-process PostgreSQL (PGlite)
  * 
  * **Rule of thumb:** Use KVStore unless you specifically need SQL JOINs or transactions.
  * 
@@ -133,7 +132,7 @@ export type ScopeParent = Scope | { id: string };
  * - **For KVStore with a `schema`**: Use Zod schemas for runtime validation and type inference. Install: `npm install zod`
  *   - For flexible key-value fields: `z.record(z.string(), z.any())`
  *   - Example: `export const todos = new KVStore(scope, 'todos', { schema, key: { partitionKey: 'userId', sortKey: 'todoId' } })`
- * - **For Database**: Define TypeScript interfaces and create migrations folder with .sql files
+ * - **For Database**: Define TypeScript interfaces and write the schema as .sql migration files
  * - **For KVStore with no options**: Store strings only (serialize objects as JSON, or pass a type argument such as `new KVStore<Todo>(scope, 'x')`)
  * 
  * ## Local Development
@@ -146,7 +145,7 @@ export type ScopeParent = Scope | { id: string };
  * When deployed (`npm run sandbox` or `npm run deploy`), Blocks provisions real AWS resources:
  * - Lambda functions for your APIs
  * - DynamoDB tables for KVStore
- * - Aurora Serverless for Database
+ * - Aurora DSQL for Database (Aurora PostgreSQL Serverless v2 with a `DatabaseCluster` of type `'aurora'`)
  * - S3 buckets for file storage
  * - IAM roles and policies
  * 
@@ -160,6 +159,13 @@ export type ScopeParent = Scope | { id: string };
  * - Scope IDs are joined with '-' into each block's `fullId`, which names its resources. Two scope paths that
  *   join to the same string (`'user-service' > 'sessions'` and `'user' > 'service-sessions'`) share those
  *   resources: constructing the second logs a warning naming both, and a future release will reject it.
+ * - Use lowercase letters, digits and hyphens in scope and block IDs. An ID is part of the name of each
+ *   resource under it, unescaped, and every service accepts those characters. The rest depends on the
+ *   resource: a DynamoDB table name (`KVStore`, `DistributedTable`) also allows uppercase letters, `_` and
+ *   `.`; an SQS queue name (`AsyncJob`) uppercase letters and `_`; an S3 bucket name (`FileBucket`) only `.`.
+ *   An ID such as a scoped package name (`'@acme/shop'`) runs locally, but `cdk synth` fails once a block under
+ *   it names a resource that does not accept `@` or `/`, with an error naming the ID, the characters and what
+ *   the service accepts.
  * - Nest scopes for complex applications using the `parent` option
  * - Always use Building Blocks for storage - never create your own in-memory Maps or custom storage
  */
@@ -214,7 +220,14 @@ export class Scope {
    * would share their resources. A future release will reject this.
    * Constructing the same path again is accepted.
    *
-   * @param id - This scope's id, unique among its siblings.
+   * The characters of `id` are not checked here: which ones deploy depends on
+   * the resources the blocks under the scope create, which only the CDK layer
+   * knows. `cdk synth` fails when a resource name built from the id would be
+   * rejected by its service (see the class documentation).
+   *
+   * @param id - This scope's id, unique among its siblings. Use lowercase
+   *   letters, digits and hyphens: every resource name the id becomes part of
+   *   accepts them.
    * @param options - Parent scope and Building Block metadata.
    */
   constructor(id: string, options?: ScopeOptions) {

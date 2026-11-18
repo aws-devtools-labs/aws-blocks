@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getTodo(id: String) async throws -> Todo {
         let request = BlocksRequest(method: "api.getTodo", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getTodo") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getTodo") }
         return try JSONDecoder().decode(Todo.self, from: result)
     }
 
@@ -25,13 +25,13 @@ public final nonisolated class Api: Sendable {
     public func createTodo(input: CreateTodo.Input) async throws -> Todo {
         let request = BlocksRequest(method: "api.createTodo", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.createTodo") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.createTodo") }
         return try JSONDecoder().decode(Todo.self, from: result)
     }
 
     public enum CreateTodo {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let priority: Int
             public let title: String
 

@@ -65,16 +65,16 @@ extension SwiftCodeGenerator {
     /// `nullResult` is the guard for a null body (`return nil` for a nullable result, else a throw).
     func transferableResultLines(
         _ type: ResolvedType, operation: Operation, names: OperationNames, messageType: String?,
-        nullResult: String, methodLiteral: String
+        nullResult: String
     ) -> [String] {
-        guard case .transferable(let blocksType, let typeArgs) = type else { return [] }
+        guard case .transferable(let blocksType, _) = type else { return [] }
         let result = names.result
         let descriptor = names.descriptor
-        func descriptorLines(_ kind: String) -> [String] {
+        func descriptorLines() -> [String] {
             [
                 "        \(nullResult)",
                 "        guard let \(descriptor) = try JSONSerialization.jsonObject(with: \(result)) as? [String: Any] else {",
-                "            throw \(runtimePrefix)RPCError(message: \"Invalid \(kind) descriptor for \(methodLiteral)\")",
+                "            throw \(runtimePrefix)TransferableError.invalidDescriptor(blocksType: \"\(blocksType)\", missingField: \"__blocks\")",
                 "        }"
             ]
         }
@@ -91,13 +91,13 @@ extension SwiftCodeGenerator {
                     + ".decode(\(runtimePrefix)RealtimeChannel<\(messageType)>.self, from: \(result))"
             )
         case "file-bucket/download":
-            lines.append(contentsOf: descriptorLines("file"))
+            lines.append(contentsOf: descriptorLines())
             lines.append("        return try \(runtimePrefix)FileDownloadHandle.fromJSON(\(descriptor))")
         case "file-bucket/upload":
-            lines.append(contentsOf: descriptorLines("file"))
+            lines.append(contentsOf: descriptorLines())
             lines.append("        return try \(runtimePrefix)FileUploadHandle.fromJSON(\(descriptor))")
         case "oidc/client":
-            lines.append(contentsOf: descriptorLines("OIDC client"))
+            lines.append(contentsOf: descriptorLines())
             let property = "self.\(names.clientProperty)"
             let provider = messageType ?? "String"
             lines.append(
@@ -107,7 +107,7 @@ extension SwiftCodeGenerator {
         default:
             // A tag a block's native package declares hydrates into the declared type; any other tag is the
             // unbound fallback, `UnknownTransferable`.
-            lines.append(contentsOf: descriptorLines("transferable"))
+            lines.append(contentsOf: descriptorLines())
             let hydration = transferableHydrationLines(
                 declared: declaredBindings[blocksType],
                 tagLiteral: "\"\(swiftStringContent(blocksType))\"",
@@ -224,6 +224,47 @@ extension SwiftCodeGenerator {
             return format == .dateTime
         case .primitive, .enum:
             return false
+        }
+    }
+}
+
+// MARK: - Transferable parameters
+
+extension SwiftCodeGenerator {
+    /// Throws `CodegenError.transferableParameter` for the first operation parameter that is a transferable:
+    /// directly, optional or nullable, in an array or a dictionary, or through a `$ref` to one. A transferable is
+    /// read-only (the server hands it out and never re-hydrates one sent back), so a method taking one could only
+    /// fail at call time. This refuses exactly what the Kotlin generator refuses, with its message: a model, an
+    /// inline object or a union that holds a transferable still generates, as it does in Kotlin. Namespaces are
+    /// walked in the order the spec first names them, each one's operations in spec order, as Kotlin generates
+    /// them, so both name the same tag.
+    func rejectTransferableParameters(_ model: CodegenModel) throws {
+        let byName = Dictionary(uniqueKeysWithValues: model.apiNamespaces.map { ($0.name, $0) })
+        for namespace in model.namespaceSpecOrder.compactMap({ byName[$0] }) {
+            for operation in namespace.operations {
+                for parameter in operation.parameters {
+                    var visited: Set<String> = []
+                    if let tag = transferableTag(parameter.type, visited: &visited) {
+                        throw CodegenError.transferableParameter(tag: tag)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The tag of the transferable `type` is, through nullables, arrays, dictionaries and references, or nil.
+    /// Records and unions are not entered. Each reference is followed once, so an alias of itself terminates.
+    private func transferableTag(_ type: ResolvedType, visited: inout Set<String>) -> String? {
+        switch type {
+        case .transferable(let blocksType, _):
+            return blocksType
+        case .nullable(let inner), .list(let inner, _), .map(let inner):
+            return transferableTag(inner, visited: &visited)
+        case .typeReference(let name):
+            guard let referenced = typesByName[name], visited.insert(name).inserted else { return nil }
+            return transferableTag(referenced, visited: &visited)
+        case .record, .union, .primitive, .formattedType, .enum:
+            return nil
         }
     }
 }

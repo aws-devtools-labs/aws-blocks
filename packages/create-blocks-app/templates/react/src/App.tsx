@@ -3,7 +3,7 @@ import { api, authApi } from 'aws-blocks';
 import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from '@aws-blocks/blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.
-// Full docs: node_modules/@aws-blocks/blocks/README.md
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 type Todo = { todoId: string; title: string; completed: boolean; priority: number; version: number };
 // The signed-in user (groups, attributes, userSub), typed by the backend's `authApi`.

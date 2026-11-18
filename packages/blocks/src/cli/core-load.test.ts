@@ -44,8 +44,11 @@ function appWithOldCore(): string {
 }
 
 function blocks(app: string, ...argv: string[]) {
-	const bin = join(app, 'node_modules', '@aws-blocks', 'blocks', 'dist', 'cli', 'bin.js');
-	return spawnSync(process.execPath, [bin, ...argv], { cwd: app, encoding: 'utf-8', env: { ...process.env, CI: '1' } });
+	return spawnSync(process.execPath, ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--', ...argv], {
+		cwd: app,
+		encoding: 'utf-8',
+		env: { ...process.env, CI: '1' },
+	});
 }
 
 describe('an installed @aws-blocks/core that does not match the CLI', () => {

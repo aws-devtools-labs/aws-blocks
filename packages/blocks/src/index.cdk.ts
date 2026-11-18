@@ -115,10 +115,20 @@ export type {
 	MetricsSource,
 } from '@aws-blocks/bb-dashboard';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+export type {
+	ClusterKind,
+	ClusterType,
+	ConnectionStringSource,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ScopedDatabase,
+	SqlQuery,
+	Transaction,
+	TransactionOptions,
+} from '@aws-blocks/bb-database';
+export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -164,6 +174,9 @@ export type {
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreDeleteOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
 	PutBatchEntry,
 	PutOptions as KVPutOptions,
 	QueryOptions,
@@ -174,7 +187,7 @@ export type {
 	ValueOf,
 	Where,
 } from '@aws-blocks/bb-kv-store';
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+export { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {

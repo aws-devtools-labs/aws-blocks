@@ -287,11 +287,6 @@ jobs:
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
 
-      # Fails once the vpc-smoke lane runs its tests again, so the rotation
-      # coverage the comprehensive app carries meanwhile gets handed back.
-      - name: Test that the rotation coverage sits in one test app
-        run: node --test scripts/ci/rotation-coverage-home.test.mjs
-
       # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
       # unblock Amplify sandboxes stuck in DELETE_FAILED.
       - name: Test the stuck Amplify sandbox delete
@@ -583,7 +578,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests
+      - name: Template E2E and docs task upgrade
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   # Same local template suite as e2e-templates, on Windows — the OS where
@@ -627,7 +622,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests (Windows)
+      - name: Template E2E and docs task upgrade (Windows)
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   e2e-sandbox:
@@ -1125,7 +1120,7 @@ jobs:
       # connection in this suite runs verify-full — exercising the TLS verification
       # feature end-to-end instead of connecting unverified. externalDbSsl() reads
       # this; the explicit-engine tests read it too.
-      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
+      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-database/test/fixtures/supabase-ca.crt
     # One Supabase project serves every E2E account, so this group stays global.
     concurrency:
       group: e2e-supabase
@@ -1191,7 +1186,7 @@ jobs:
             | scripts/ci/secret-to-env.sh
 
       - name: Apply test schema
-        run: npx tsx packages/bb-data/test/apply-schema.ts
+        run: npx tsx packages/bb-database/test/apply-schema.ts
 
       - name: E2E Test Supabase
         run: npm run test:e2e:supabase
@@ -1212,13 +1207,14 @@ jobs:
       # API Gateway allows one REST API delete every 30 seconds per account,
       # and CloudFormation fails a REST API delete it can't make in about 4.5
       # minutes (DELETE_FAILED, 429 Too Many Requests). The legs' stacks hold
-      # 14 REST APIs (DefaultCompute/API, plus Cdn/SsrRestApi on the nextjs,
-      # nuxt and sveltekit legs), and other PRs' runs delete theirs in the
-      # same accounts. So each leg uses the account `account-offset` after
-      # the PR's own (see .github/actions/e2e-slot), spreading every run's
-      # deletes over three accounts. The offsets keep the 2-API legs apart and
-      # put the fewest REST APIs (4, against 5 and 5) on offset 0, which also
-      # takes the PR's Sandbox, Production, Telemetry and Compute Smoke stacks.
+      # 16 REST APIs (DefaultCompute/API, plus Cdn/SsrRestApi on the nextjs,
+      # nuxt, nuxt-buffered and sveltekit legs), and other PRs' runs delete
+      # theirs in the same accounts. So each leg uses the account
+      # `account-offset` after the PR's own (see .github/actions/e2e-slot),
+      # spreading every run's deletes over three accounts. The offsets put at
+      # most two 2-API legs on one account, and the fewest REST APIs (4,
+      # against 7 and 5) on offset 0, which also takes the PR's Sandbox,
+      # Production, Telemetry and Compute Smoke stacks.
       # A leg's offset must stay fixed: changing it moves the leg's stack to
       # another account, and the old account's cleanup-stacks.yml leg then
       # has to remove anything left there.
@@ -1284,10 +1280,19 @@ jobs:
             script: test:e2e:hosting-ssr-nuxt
             compute-type: web-function
             account-offset: 1
+          # The nuxt suite with `awsLambda.streaming` left unset (Nitro's
+          # default; the app reads HOSTING_NITRO_STREAMING), so the server is
+          # a buffered handler behind the CloudFront door.
+          - framework: nuxt-buffered
+            app-dir: test-apps/hosting-ssr-nuxt
+            script: test:e2e:hosting-ssr-nuxt
+            nitro-streaming: 'off'
+            account-offset: 1
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
       HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
+      HOSTING_NITRO_STREAMING: ${{ matrix.nitro-streaming || '' }}
       # The suite keeps its sandbox; Destroy sandbox below deletes it (after the
       # Web Function and front-door redeploy checks, which need it).
       BLOCKS_SANDBOX_KEEP: '1'

@@ -772,3 +772,322 @@ describe('a bad order, an unknown index and a bad indexes option fail the same w
 		}
 	});
 });
+
+describe('the mock stores and returns copies that went through the DocumentClient marshaller', () => {
+	const options = { key: { partitionKey: 'pk', sortKey: 'sk' } };
+	const key = { pk: 'a', sk: '1' };
+
+	test('changing a value after put() does not change the stored item', async () => {
+		const store = mockStore('copy-put', options);
+		const value = { ...key, tags: ['x'] };
+		await store.put(key, value);
+		value.tags.push('changed-after-put');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('changing an item returned by get(), getBatch(), query() or scan() does not change the stored item', async () => {
+		const store = mockStore('copy-read', options);
+		await store.put(key, { ...key, tags: ['x'] });
+		(await store.get(key)).tags.push('1');
+		(await store.getBatch([key]))[0].tags.push('2');
+		const [queried]: any[] = await Array.fromAsync(store.query({ where: { pk: { equals: 'a' } } }));
+		queried.value.tags.push('3');
+		const [scanned]: any[] = await Array.fromAsync(store.scan());
+		scanned.value.tags.push('4');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('putBatch() stores a copy too', async () => {
+		const store = mockStore('copy-batch', options);
+		const value = { ...key, tags: ['x'] };
+		await store.putBatch([{ key, value }]);
+		value.tags.push('changed-after-put');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('values the marshaller rejects fail on put() and putBatch(), and nothing is written', async () => {
+		const store = mockStore('reject', options);
+		class Point {
+			x = 1;
+		}
+		const rejected: unknown[] = [
+			new Set(),
+			new Date(0),
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			new Point(),
+			/re/,
+			Number.MAX_SAFE_INTEGER + 1,
+		];
+		for (const data of rejected) {
+			await assert.rejects(store.put(key, { ...key, data }), `put ${String(data)}`);
+			await assert.rejects(store.putBatch([{ key, value: { ...key, data } }]), `putBatch ${String(data)}`);
+		}
+		assert.equal(await store.get(key), null);
+	});
+
+	test('undefined is dropped at any depth, as by the AWS client', async () => {
+		const store = mockStore('undefined', options);
+		await store.put(key, { ...key, data: { a: undefined, b: 1 }, list: [1, undefined, 2] });
+		assert.deepEqual(await store.get(key), { ...key, data: { b: 1 }, list: [1, 2] });
+	});
+
+	test('a rejected put() leaves the existing item unchanged', async () => {
+		const store = mockStore('reject-keeps', options);
+		await store.put(key, { ...key, tags: ['x'] });
+		await assert.rejects(store.put(key, { ...key, data: new Set() }));
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('values the marshaller converts read back converted: Map as an object, -0 as 0, bigint as a number', async () => {
+		const store = mockStore('converted', options);
+		await store.put(key, { ...key, data: { m: new Map([['a', 1]]), z: -0, n: 1n } });
+		const back = (await store.get(key)).data;
+		assert.deepEqual(back, { m: { a: 1 }, z: 0, n: 1 });
+		assert.ok(Object.is(back.z, 0));
+	});
+
+	test('a non-empty Set reads back as a Set, as on AWS', async () => {
+		const store = mockStore('set', options);
+		await store.put(key, { ...key, data: new Set(['a', 'b']) });
+		assert.deepEqual((await store.get(key)).data, new Set(['a', 'b']));
+	});
+
+	test('the 400 KB check counts the elements of a Set', async () => {
+		const store = mockStore('set-size', options);
+		const big = new Set(Array.from({ length: 50 }, (_, i) => `${i}`.padEnd(10_000, 'x')));
+		await assert.rejects(store.put(key, { ...key, data: big }), (e: unknown) =>
+			isBlocksError(e, KVStoreErrors.ItemTooLarge),
+		);
+	});
+
+	test('a plain string value still round-trips', async () => {
+		const store = mockStore('string');
+		await store.put('k', 'v');
+		assert.equal(await store.get('k'), 'v');
+	});
+});
+
+describe('inputs DynamoDB rejects fail the same way on the mock and the AWS runtime, before any request', () => {
+	const options = {
+		key: { partitionKey: 'pk', sortKey: 'sk' },
+		indexes: { byTag: { partitionKey: 'tag', sortKey: 'at' } },
+	};
+	const key = (pk: string, sk = 's') => ({ pk, sk });
+
+	async function failsOnBoth(id: string, name: string, call: (store: any) => unknown): Promise<string> {
+		const aws = awsStore(id, options);
+		const messages: string[] = [];
+		for (const store of [mockStore(id, options), aws.store]) {
+			messages.push((await rejects(() => call(store), name)).message);
+		}
+		assert.equal(messages[0], messages[1], 'mock and AWS must produce the same message');
+		assert.equal(aws.sent.length, 0, 'the AWS runtime must reject before calling DynamoDB');
+		return messages[0];
+	}
+
+	function nestedMaps(levels: number): unknown {
+		let value: unknown = 'leaf';
+		for (let i = 0; i < levels; i++) value = { n: value };
+		return value;
+	}
+
+	/** `levels` lists, each holding the next; the innermost is empty. */
+	function nestedLists(levels: number): unknown {
+		let value: unknown = [];
+		for (let i = 1; i < levels; i++) value = [value];
+		return value;
+	}
+
+	test('putBatch() with two entries sharing a key in one request is rejected and writes nothing', async () => {
+		const entries = [
+			{ key: key('a'), value: { n: 1 } },
+			{ key: key('b'), value: {} },
+			{ key: key('a'), value: { n: 2 } },
+		];
+		assert.match(
+			await failsOnBoth('dup-put', KVStoreErrors.InvalidQuery, (store) => store.putBatch(entries)),
+			/putBatch was given the same key at index 0 and index 2, which fall in the same DynamoDB request; DynamoDB rejects a request that repeats a key$/,
+		);
+		const store = mockStore('dup-put-nothing', options);
+		await assert.rejects(store.putBatch(entries));
+		assert.deepEqual(await Array.fromAsync(store.scan()), []);
+	});
+
+	test('getBatch() and deleteBatch() with the same key twice are rejected', async () => {
+		assert.match(
+			await failsOnBoth('dup-get', KVStoreErrors.InvalidQuery, (store) => store.getBatch([key('a'), key('a')])),
+			/getBatch was given the same key at index 0 and index 1/,
+		);
+		assert.match(
+			await failsOnBoth('dup-delete', KVStoreErrors.InvalidQuery, (store) =>
+				store.deleteBatch([key('a'), key('a')]),
+			),
+			/deleteBatch was given the same key at index 0 and index 1/,
+		);
+	});
+
+	test('keys that differ only in the sort key are not duplicates', async () => {
+		const store = mockStore('dup-distinct', options);
+		await store.putBatch([
+			{ key: key('a', 's1'), value: {} },
+			{ key: key('a', 's2'), value: {} },
+		]);
+		assert.equal((await store.getBatch([key('a', 's1'), key('a', 's2')])).length, 2);
+	});
+
+	test('a key repeated in a later DynamoDB request is allowed, and the later write wins', async () => {
+		// putBatch() sends 25 writes per request and getBatch() 100 keys. DynamoDB
+		// rejects a repeat only within one request.
+		const writes = Array.from({ length: 30 }, (_, i) => ({ key: key(`k${i}`), value: { n: i } }));
+		writes[26] = { key: key('k0'), value: { n: 26 } };
+		const reads = Array.from({ length: 101 }, (_, i) => key(`k${i}`));
+		reads[100] = key('k0');
+
+		const aws = awsStore('dup-next-request', options);
+		await aws.store.putBatch(writes);
+		await aws.store.getBatch(reads);
+		await aws.store.deleteBatch(writes.map((w) => w.key));
+		assert.equal(aws.sent.length, 2 + 2 + 2, 'two requests per batch call');
+
+		const store = mockStore('dup-next-request', options);
+		await store.putBatch(writes);
+		assert.equal((await store.get(key('k0'))).n, 26);
+		assert.equal((await store.getBatch(reads)).length, 101);
+
+		const sameRequest = writes.map((w, i) => (i === 27 ? writes[26] : w));
+		assert.match(
+			await failsOnBoth('dup-same-later-request', KVStoreErrors.InvalidQuery, (s) => s.putBatch(sameRequest)),
+			/same key at index 26 and index 27, which fall in the same DynamoDB request/,
+		);
+	});
+
+	test('a sort key over 1,024 bytes or a partition key over 2,048 bytes is rejected, counted in UTF-8 bytes', async () => {
+		assert.match(
+			await failsOnBoth('long-sk', KVStoreErrors.ValidationFailed, (store) =>
+				store.put(key('a', 's'.repeat(1025)), {}),
+			),
+			/key field 'sk' is 1025 bytes; DynamoDB allows at most 1024 bytes$/,
+		);
+		assert.match(
+			await failsOnBoth('long-sk-utf8', KVStoreErrors.ValidationFailed, (store) =>
+				store.put(key('a', 'é'.repeat(513)), {}),
+			),
+			/key field 'sk' is 1026 bytes/,
+		);
+		assert.match(
+			await failsOnBoth('long-pk', KVStoreErrors.ValidationFailed, (store) => store.get(key('p'.repeat(2049)))),
+			/key field 'pk' is 2049 bytes; DynamoDB allows at most 2048 bytes$/,
+		);
+		assert.match(
+			await failsOnBoth('long-query-sk', KVStoreErrors.ValidationFailed, (store) =>
+				Array.fromAsync(store.query({ where: { pk: { equals: 'a' }, sk: { greaterThan: 's'.repeat(1025) } } })),
+			),
+			/key field 'sk' is 1025 bytes/,
+		);
+
+		const store = mockStore('long-at-limit', options);
+		await store.put(key('p'.repeat(2048), 's'.repeat(1024)), {});
+		const strings = mockStore('long-string-store');
+		await strings.put('p'.repeat(2048), 'v');
+		await assert.rejects(strings.put('p'.repeat(2049), 'v'), (e: unknown) =>
+			isBlocksError(e, KVStoreErrors.ValidationFailed),
+		);
+	});
+
+	test('an indexed field over its key size limit is rejected; a missing indexed field is allowed', async () => {
+		assert.match(
+			await failsOnBoth('long-index-pk', KVStoreErrors.ValidationFailed, (store) =>
+				store.put(key('a'), { tag: 't'.repeat(2049) }),
+			),
+			/indexed field 'tag' \(index 'byTag'\) is 2049 bytes; DynamoDB allows at most 2048 bytes$/,
+		);
+		assert.match(
+			await failsOnBoth('long-index-sk', KVStoreErrors.ValidationFailed, (store) =>
+				store.putBatch([{ key: key('a'), value: { tag: 't', at: 'x'.repeat(1025) } }]),
+			),
+			/indexed field 'at' \(index 'byTag'\) is 1025 bytes; DynamoDB allows at most 1024 bytes$/,
+		);
+		await mockStore('no-index-field', options).put(key('a'), {});
+	});
+
+	test('lists or maps nested 32 levels deep are rejected; 31 levels are accepted', async () => {
+		assert.match(
+			await failsOnBoth('nest-32', KVStoreErrors.ValidationFailed, (store) =>
+				store.put(key('a'), { nested: nestedMaps(32) }),
+			),
+			/a value nests lists or maps more than 32 levels deep, which DynamoDB cannot store$/,
+		);
+		let list: unknown = [];
+		for (let i = 0; i < 31; i++) list = [list];
+		assert.deepEqual(list, nestedLists(32));
+		await failsOnBoth('nest-32-list', KVStoreErrors.ValidationFailed, (store) => store.put(key('a'), { list }));
+		// A string store keeps a non-object value in one attribute, so a list counts from there.
+		await assert.rejects(mockStore('nest-32-string-store').put('k', list), (e: unknown) =>
+			isBlocksError(e, KVStoreErrors.ValidationFailed),
+		);
+		await mockStore('nest-31-string-store').put('k', nestedLists(31));
+
+		await mockStore('nest-31', options).put(key('a'), { nested: nestedMaps(31) });
+	});
+
+	test("a 'between' with the bounds reversed is rejected; equal bounds are allowed", async () => {
+		assert.match(
+			await failsOnBoth('between-reversed', KVStoreErrors.InvalidQuery, (store) =>
+				Array.fromAsync(store.query({ where: { pk: { equals: 'a' }, sk: { between: ['z', 'a'] } } })),
+			),
+			/'between' on 'sk' takes the lower bound first; the first value is greater than the second$/,
+		);
+		const store = mockStore('between-equal', options);
+		await store.put(key('a', 'm'), {});
+		assert.equal(
+			(await Array.fromAsync(store.query({ where: { pk: { equals: 'a' }, sk: { between: ['m', 'm'] } } })))
+				.length,
+			1,
+		);
+	});
+
+	test("sort-key ranges and order follow DynamoDB's UTF-8 byte order", async () => {
+		// '\uFF61' sorts after '\u{1F600}' in UTF-16 but before it in UTF-8, which is DynamoDB's order.
+		const store = mockStore('utf8-order', options);
+		for (const sk of ['\u{1F601}', '\uFF61', '\u{1F600}', '\uFFFD']) await store.put(key('u', sk), {});
+		const sortKeys = (entries: any[]) => entries.map((e) => e.key.sk);
+		assert.deepEqual(sortKeys(await Array.fromAsync(store.query({ where: { pk: { equals: 'u' } } }))), [
+			'\uFF61',
+			'\uFFFD',
+			'\u{1F600}',
+			'\u{1F601}',
+		]);
+		const inRange = store.query({ where: { pk: { equals: 'u' }, sk: { between: ['\uFF61', '\u{1F600}'] } } });
+		assert.deepEqual(sortKeys(await Array.fromAsync(inRange)), ['\uFF61', '\uFFFD', '\u{1F600}']);
+		const above = store.query({ where: { pk: { equals: 'u' }, sk: { greaterThan: '\uFFFD' } } });
+		assert.deepEqual(sortKeys(await Array.fromAsync(above)), ['\u{1F600}', '\u{1F601}']);
+	});
+});
+
+describe('the mock measures item size the way DynamoDB does', () => {
+	const options = { key: { partitionKey: 'id' } };
+
+	test('a list of empty lists over 400 KB by DynamoDB sizing is rejected though its JSON is about 300 KB', async () => {
+		const store = mockStore('size-lists', options);
+		await assert.rejects(
+			store.put({ id: '1' }, { lists: Array.from({ length: 102_400 }, () => []) }),
+			(e: unknown) => isBlocksError(e, KVStoreErrors.ItemTooLarge),
+		);
+	});
+
+	test('an item of exactly 409,600 DynamoDB bytes is accepted, and one byte more is not', async () => {
+		const store = mockStore('size-exact', options);
+		// 'id' + '1' + 'blob' = 7 bytes of names and key value.
+		await store.put({ id: '1' }, { blob: 'x'.repeat(409_600 - 7) });
+		await assert.rejects(store.put({ id: '1' }, { blob: 'x'.repeat(409_600 - 6) }), (e: unknown) =>
+			isBlocksError(e, KVStoreErrors.ItemTooLarge),
+		);
+	});
+
+	test('an attribute set to undefined does not count toward the size, as the AWS client leaves it out', async () => {
+		const store = mockStore('size-undefined', options);
+		// 7 bytes of names and key value, plus 'meta' (4) and an empty map's overhead (3).
+		await store.put({ id: '1' }, { blob: 'x'.repeat(409_600 - 7 - 7), note: undefined, meta: { tag: undefined } });
+	});
+});

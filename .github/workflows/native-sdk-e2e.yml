@@ -37,6 +37,11 @@ jobs:
       swift-changed: ${{ steps.check.outputs.swift-changed }}
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
+      # The sandbox (real-deploy) jobs: the same flags without the Auth block's
+      # code, whose wire contract the local e2e jobs already cover.
+      dart-sandbox: ${{ steps.check.outputs.dart-sandbox }}
+      swift-sandbox: ${{ steps.check.outputs.swift-sandbox }}
+      kotlin-sandbox: ${{ steps.check.outputs.kotlin-sandbox }}
       # The auth-derived codegen fixtures (18, 23) must match the live Auth
       # block's spec; a change to the block, the spec generator or the
       # fixtures re-runs that check (setup job) without the platform suites.
@@ -51,23 +56,36 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             dart=true; swift=true; kotlin=true; fixtures=true
+            dart_sandbox=true; swift_sandbox=true; kotlin_sandbox=true
           else
             CHANGED="$(git diff --name-only origin/main...HEAD)"
             # Shared inputs affect EVERY platform: the test backend that
             # generates the OpenRPC spec all SDKs are code-genned from, and this
-            # workflow file itself. A change here forces all platforms to run.
+            # workflow file itself. A change here forces all platforms to run,
+            # sandbox jobs included.
             shared=false
             if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^\.github/workflows/native-sdk-e2e\.yml$'; then
               shared=true
             fi
+            # The Auth block's code runs the local suites only, not the sandbox
+            # deploys. Its tests, fixtures and codemod don't reach the wire.
+            auth=false
+            if echo "$CHANGED" \
+              | grep -vE '\.test\.ts$|/__fixtures__/|/src/migrate/' \
+              | grep -qE '^packages/(bb-auth|auth-common)/(src/|package\.json$|tsconfig\.json$)'; then
+              auth=true
+            fi
             # Each platform runs when a shared input changed OR its own SDK dir
             # changed — so a Dart-only change no longer triggers Kotlin/Swift.
-            dart=$shared; swift=$shared; kotlin=$shared
-            if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
-            if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
-            if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
+            dart_sandbox=$shared; swift_sandbox=$shared; kotlin_sandbox=$shared
+            if echo "$CHANGED" | grep -qE '^native/dart/';   then dart_sandbox=true;   fi
+            if echo "$CHANGED" | grep -qE '^native/swift/';  then swift_sandbox=true;  fi
+            # The emulator action is used by the Kotlin Android legs only.
+            if echo "$CHANGED" | grep -qE '^native/kotlin/|^\.github/actions/android-emulator/'; then kotlin_sandbox=true; fi
+            dart=$dart_sandbox; swift=$swift_sandbox; kotlin=$kotlin_sandbox
+            if [ "$auth" = true ]; then dart=true; swift=true; kotlin=true; fi
             fixtures=false
-            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/generate-spec|^native/codegen-fixtures/'; then
+            if echo "$CHANGED" | grep -qE '^packages/(bb-auth|auth-common)/|^packages/core/src/scripts/(generate-spec|extract-ts-types|native-catalogs|validate-native-catalogs|read-native-declarations|validate-spec)|^native/codegen-fixtures/'; then
               fixtures=true
             fi
           fi
@@ -79,6 +97,9 @@ jobs:
             echo "dart-changed=$dart"
             echo "swift-changed=$swift"
             echo "kotlin-changed=$kotlin"
+            echo "dart-sandbox=$dart_sandbox"
+            echo "swift-sandbox=$swift_sandbox"
+            echo "kotlin-sandbox=$kotlin_sandbox"
             echo "any-changed=$any"
             echo "auth-fixtures-changed=$fixtures"
           } >> "$GITHUB_OUTPUT"
@@ -239,6 +260,13 @@ jobs:
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
             timeout: 20
+          # The Android leg runs the same commonTest suite on a booted emulator.
+          # 30 covers npm install, the emulator's system-image download and cold
+          # boot, then the suite (~5 min of that).
+          - label: Android
+            runs-on: ubuntu-latest
+            gradle-task: connectedAndroidDeviceTest
+            timeout: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -265,7 +293,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew awsBlocksCodegen
+        run: ./gradlew cdkBlocksCodegen
 
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
@@ -280,14 +308,45 @@ jobs:
           done
 
       - name: Run E2E tests
+        if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
           BLOCKS_URL: http://localhost:3001/aws-blocks/api
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # `adb reverse` forwards the device's own localhost:3001 to the runner's,
+      # so the suite reaches the dev server at the same BLOCKS_URL every other
+      # leg uses. (The emulator's 10.0.2.2 host alias would work for plain RPC,
+      # but the OIDC relay URL is derived from the configured server, and the
+      # examples standardise on forwarding for that reason.) Keeping it inside
+      # the script means a retried attempt re-establishes the forward, which a
+      # device that dropped out of adb's view will have lost.
+      - name: Run E2E tests on an Android emulator
+        if: matrix.label == 'Android'
+        uses: ./.github/actions/android-emulator
+        with:
+          working-directory: native/kotlin/e2e
+          blocks-url: http://localhost:3001/aws-blocks/api
+          script: |
+            adb reverse tcp:3001 tcp:3001
+            ./gradlew ${{ matrix.gradle-task }}
+
       - name: Show native-bindings server log
         if: failure()
         run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
+
+      # The diagnostics directory is where the emulator action's retry wrapper
+      # leaves each attempt's output and the device state it could still read;
+      # the path is that action's `ANDROID_E2E_DIAGNOSTICS_DIR` default.
+      - name: Upload Android test report
+        if: failure() && matrix.label == 'Android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-android-e2e-report
+          path: |
+            native/kotlin/e2e/build/reports/androidTests/
+            ${{ runner.temp }}/android-e2e-diagnostics/
+          if-no-files-found: ignore
 
   swift-e2e:
     name: Swift E2E
@@ -452,7 +511,7 @@ jobs:
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
-      needs.detect-changes.outputs.dart-changed == 'true' &&
+      needs.detect-changes.outputs.dart-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -622,7 +681,7 @@ jobs:
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
-      needs.detect-changes.outputs.swift-changed == 'true' &&
+      needs.detect-changes.outputs.swift-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
@@ -748,7 +807,7 @@ jobs:
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-
-      needs.detect-changes.outputs.kotlin-changed == 'true' &&
+      needs.detect-changes.outputs.kotlin-sandbox == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
@@ -777,6 +836,14 @@ jobs:
             # Drops to 30 after 10 green runs with sandboxMode on, by the rule
             # in #986.
             timeout: 45
+          - label: Android
+            suffix: android
+            runs-on: ubuntu-latest
+            gradle-task: connectedAndroidDeviceTest
+            # The deploy dominates, as on the JVM leg; the emulator adds its
+            # system-image download and boot on top. Drops to 30 after 10 green
+            # runs with sandboxMode on, by the rule in #986.
+            timeout: 45
     env:
       # Unique per run, as in dart-e2e-sandbox: PR number (d<run number> for
       # manual runs, d-prefixed so it can't match a PR number), run number,
@@ -784,7 +851,11 @@ jobs:
       # with the run id the derived bucket name
       # `bb-test-nb-<suffix>-native-bindings-files` would exceed S3's 63-character
       # limit on the Kotlin legs and fall back to FileBucket's hashed short form.
-      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
+      # The leg prefix is `nk-` rather than `native-kotlin-` for the same reason:
+      # that bucket name spends 33 characters either side of the suffix, leaving
+      # it 30. `native-kotlin-android-1497-6440-1` is 33, and `native-kotlin-jvm-`
+      # crosses too once PR numbers reach five digits; every `nk-` leg fits.
+      BLOCKS_STACK_SUFFIX: nk-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
       # Optional real IdP for the OIDC suites — see "Native OIDC sign-in against
       # the sandbox" above. Empty unless the repository sets both variables.
       NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
@@ -793,8 +864,10 @@ jobs:
       # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
-      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native)
-      # hasn't been run against a deployed stub yet, so it keeps the real-IdP gate.
+      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native) and
+      # Android have not been run against a deployed stub yet, so they keep the
+      # real-IdP gate; both drive the flow through the same launcher stand-in the
+      # JVM leg does, so the gate is about evidence, not capability.
       RUN_OIDC: ${{ (matrix.suffix == 'jvm' || (vars.NATIVE_E2E_OIDC_ISSUER != '' && vars.NATIVE_E2E_OIDC_CLIENT_ID != '')) && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -878,13 +951,36 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew awsBlocksCodegen
+        run: ./gradlew cdkBlocksCodegen
 
       - name: Run Kotlin E2E against sandbox
+        if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
+
+      # The sandbox endpoint is reachable from the emulator's own network, so
+      # this leg needs no port forwarding — only the device.
+      - name: Run Kotlin E2E against sandbox on an Android emulator
+        if: matrix.label == 'Android'
+        uses: ./.github/actions/android-emulator
+        with:
+          working-directory: native/kotlin/e2e
+          blocks-url: ${{ steps.url.outputs.blocks_url }}
+          run-oidc: ${{ env.RUN_OIDC }}
+          script: ./gradlew ${{ matrix.gradle-task }}
+
+      # Per-attempt output and device state, as in the local leg above.
+      - name: Upload Android test report
+        if: failure() && matrix.label == 'Android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-android-e2e-sandbox-report
+          path: |
+            native/kotlin/e2e/build/reports/androidTests/
+            ${{ runner.temp }}/android-e2e-diagnostics/
+          if-no-files-found: ignore
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, a deploy:sandbox could otherwise submit its stack after the

@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.Int
@@ -10,6 +11,7 @@ import kotlin.String
 import kotlin.collections.List
 import kotlin.collections.Map
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -20,12 +22,14 @@ public class Api(
   public suspend fun getUser(id: String): GetUser.Result {
     val request = BlocksRequest(method = "api.getUser", params = listOf(JsonPrimitive(id)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getUser")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun updateUser(input: UpdateUser.Input): UpdateUser.Result {
     val request = BlocksRequest(method = "api.updateUser", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.updateUser")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

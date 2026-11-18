@@ -118,11 +118,11 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
   });
 
   it('names the commands the user runs, when the caller passes them, aligned', () => {
-    const named = sandboxFailureRecoveryHint('cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
-    assert.match(named, /If the next `cdk-blocks sandbox deploy` reports/);
-    assert.match(named, /^ {5}cdk-blocks sandbox destroy {3}# tears/m);
-    assert.match(named, /^ {5}cdk-blocks sandbox deploy {4}# redeploy/m);
-    assert.doesNotMatch(named, /npm run/);
+    const named = sandboxFailureRecoveryHint('npm run sandbox:deploy', 'npm run sandbox:destroy');
+    assert.match(named, /If the next `npm run sandbox:deploy` reports/);
+    assert.match(named, /^ {5}npm run sandbox:destroy {3}# tears/m);
+    assert.match(named, /^ {5}npm run sandbox:deploy {4}# redeploy/m);
+    assert.doesNotMatch(named, /`npm run sandbox`/);
   });
 });
 
@@ -370,9 +370,9 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
   });
 
   it('names the command that deploys a preview, when the launcher passes it', () => {
-    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- cdk-blocks sandbox preview');
-    assert.match(warning ?? '', /Run npx --no -- cdk-blocks sandbox preview to keep it/);
-    assert.doesNotMatch(warning ?? '', /npm run/);
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npm run sandbox:preview -- --profile dev');
+    assert.match(warning ?? '', /Run npm run sandbox:preview -- --profile dev to keep it/);
+    assert.doesNotMatch(warning ?? '', /npm run sandbox:preview to keep it/);
   });
 
   it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {
@@ -420,7 +420,7 @@ describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
     assert.strictEqual(watch.env.NODE_OPTIONS, '--conditions=cdk');
   });
 
-  it("watches into the sandbox's own assembly directory, never the ./cdk.out a cdk-blocks deploy uses (JW-02)", () => {
+  it("watches into the sandbox's own assembly directory, never the ./cdk.out a npm run deploy uses (JW-02)", () => {
     const watch = buildSandboxWatchSpawn({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: '/app/aws-blocks/index.cdk.ts' });
     assert.strictEqual(valueAfter(watch.args, '--output'), '.blocks-sandbox/cdk.out');
     assert.strictEqual(valueAfter(buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app' }), '--output'), '.blocks-sandbox/cdk.out');
@@ -428,7 +428,7 @@ describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
 });
 
 describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () => {
-  it('refuses a sandbox deploy or destroy while the app runs cdk-blocks sandbox, naming it and how to stop it', () => {
+  it('refuses a sandbox deploy or destroy while the app runs npm run sandbox, naming it and how to stop it', () => {
     const root = mkdtempSync(join(tmpdir(), 'blocks-running-sandbox-'));
     try {
       mkdirSync(join(root, '.blocks-sandbox'));
@@ -436,13 +436,13 @@ describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () =>
       const record = { pid: process.pid, ppid: 1, port: 41950, command: pidCommand(process.pid), sandbox: { pid: process.pid } };
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify(record));
       assert.throws(
-        () => assertNoRunningSandbox(root, 'npx --no -- cdk-blocks sandbox deploy'),
+        () => assertNoRunningSandbox(root, 'npm run sandbox:deploy'),
         new RegExp(
-          `^Error: A \`cdk-blocks sandbox\` is running in this app \\(pid ${process.pid}, dev server on :41950\\).*` +
-            'npx --no -- cdk-blocks dev stop --port 41950.*re-run `npx --no -- cdk-blocks sandbox deploy`',
+          `^Error: A \`npm run sandbox\` is running in this app \\(pid ${process.pid}, dev server on :41950\\).*` +
+            'npm run dev:stop -- --port 41950.*re-run `npm run sandbox:deploy`',
         ),
       );
-      // A plain cdk-blocks dev, or a session that has ended, is no reason to refuse.
+      // A plain npm run dev, or a session that has ended, is no reason to refuse.
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: undefined }));
       assertNoRunningSandbox(root, 'x');
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: { pid: 4194301 } }));
@@ -453,23 +453,23 @@ describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () =>
   });
 });
 
-describe('assertNoRunningDevServer — a sandbox with a dev server beside cdk-blocks dev', () => {
-  it('refuses before the deploy while a cdk-blocks dev of the app is starting or running, on any port', async () => {
+describe('assertNoRunningDevServer — a sandbox with a dev server beside npm run dev', () => {
+  it('refuses before the deploy while a npm run dev of the app is starting or running, on any port', async () => {
     const root = mkdtempSync(join(tmpdir(), 'blocks-running-dev-'));
     const savedCwd = process.cwd();
-    // A `cdk-blocks dev` CLI that has claimed the app on :41960 and is still starting (this process plays it).
+    // A `npm run dev` launcher that has claimed the app on :41960 and is still starting (this process plays it).
     const session = claimDevSession(root, 41960);
     try {
       assert.ok(session.acquired);
       const refusal = new RegExp(
         `^Error: A dev server of this app is already starting on :41960 \\(pid ${process.pid}\\).*` +
-          'npx --no -- cdk-blocks dev stop --port 41960.*re-run `npx --no -- cdk-blocks sandbox`',
+          'npm run dev:stop -- --port 41960.*re-run `npm run sandbox`',
       );
-      assert.throws(() => assertNoRunningDevServer(root, 'npx --no -- cdk-blocks sandbox'), refusal);
+      assert.throws(() => assertNoRunningDevServer(root, 'npm run sandbox'), refusal);
       // startSandbox refuses first, before the credential check, the synth or any cdk call.
       process.chdir(root);
       await assert.rejects(
-        startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', invocation: 'npx --no -- cdk-blocks sandbox' }),
+        startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', invocation: 'npm run sandbox' }),
         refusal,
       );
       // The record of a session that has ended is no reason to refuse.

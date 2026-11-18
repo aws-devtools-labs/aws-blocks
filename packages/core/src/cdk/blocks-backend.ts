@@ -735,7 +735,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Initialize VPC context before the default compute is created and before
 		// BBs are constructed, so both can discover it: the default compute
 		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
-		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		// the VPC, and BBs read it to co-locate their resources.
 		if (this._vpcOptions) {
 			initializeVpc(this, this._vpcOptions);
 		}
