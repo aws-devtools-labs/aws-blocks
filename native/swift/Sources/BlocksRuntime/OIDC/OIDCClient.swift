@@ -493,8 +493,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// cookie; it doesn't revoke bearer tokens, so the stored ones are only cleared locally.
     ///
     /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
-    ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
-    ///   own session, so the next sign-in asks which account to use.
+    ///   `.signedOut`. The client doesn't open it: open it in the browser, such as with
+    ///   `UIApplication.shared.open`, to end the provider's own session, so the next sign-in asks which
+    ///   account to use. Not in a sign-in sheet: the provider's logout redirects to the backend's
+    ///   post-sign-out page, never to `relayTo`, so a `WebAuthenticationSessionLauncher` sheet would stay
+    ///   open until the user closes it and end in `OIDCError.cancelled`.
     /// - Throws: Any failure, after signing out locally: the stored tokens are cleared and `.signedOut`
     ///   is emitted first. That covers an `ApiError` named `SignOutIncompleteException` (HTTP 503),
     ///   when the server cleared the cookie but could not remove its session, and every other failure
