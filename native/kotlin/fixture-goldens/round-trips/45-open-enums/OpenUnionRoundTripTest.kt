@@ -58,3 +58,23 @@ class OpenUnionRoundTripTest : FunSpec({
         }
     }
 })
+
+/**
+ * Fixture 45: `GetSignal.Result` has an arm tagged `un-known` (`UnKnown`), so the fallback is
+ * `UnknownValue`, a class name that differs from the arm's by more than case.
+ */
+class CaseInsensitiveUnknownArmRoundTripTest : FunSpec({
+
+    val serializer = com.example.app.Api.GetSignal.Result.serializer()
+
+    test("every arm and the fallback load as distinct classes") {
+        val wire = json("""{"kind":"other","x":1}""")
+        val decoded = BlocksJson.decodeFromJsonElement(serializer, wire)
+        decoded shouldBe com.example.app.Api.GetSignal.Result.UnknownValue(wire.jsonObject)
+        BlocksJson.encodeToJsonElement(serializer, decoded) shouldBe wire
+        BlocksJson.decodeFromJsonElement(serializer, json("""{"kind":"un-known","note":"n"}""")) shouldBe
+            com.example.app.Api.GetSignal.Result.UnKnown("n")
+        BlocksJson.decodeFromJsonElement(serializer, json("""{"kind":"on"}""")) shouldBe
+            com.example.app.Api.GetSignal.Result.On
+    }
+})

@@ -304,6 +304,49 @@
           "$ref": "#/components/schemas/AuthStep"
         }
       }
+    },
+    {
+      "name": "api.getSignal",
+      "params": [],
+      "result": {
+        "name": "GetSignalResult",
+        "schema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "un-known"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "note"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "on"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          ]
+        }
+      }
     }
   ],
   "components": {

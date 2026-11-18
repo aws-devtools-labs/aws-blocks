@@ -1434,6 +1434,103 @@ final class GetRangeResultUnknown implements GetRangeResult {
 }
 
 
+sealed class GetSignalResult {
+  const GetSignalResult();
+  Map<String, dynamic> toJson();
+  static GetSignalResult fromJson(Map<String, dynamic> json) {
+    switch (json['kind'] as String) {
+      case 'un-known': return UnKnownGetSignalResult.fromJson(json);
+      case 'on': return OnGetSignalResult.fromJson(json);
+      default: return GetSignalResultUnknown(_blocksFrozenObject(json));
+    }
+  }
+}
+
+class UnKnownGetSignalResult extends GetSignalResult {
+  final String note;
+
+  const UnKnownGetSignalResult({
+    required this.note,
+  });
+
+  factory UnKnownGetSignalResult.fromJson(Map<String, dynamic> json) {
+    return UnKnownGetSignalResult(
+      note: json['note'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'kind': 'un-known',
+      'note': note,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UnKnownGetSignalResult &&
+          note == other.note;
+
+  @override
+  int get hashCode => note.hashCode;
+
+  @override
+  String toString() => 'UnKnownGetSignalResult(note: $note)';
+}
+
+class OnGetSignalResult extends GetSignalResult {
+
+  const OnGetSignalResult();
+
+  factory OnGetSignalResult.fromJson(Map<String, dynamic> json) {
+    return OnGetSignalResult(
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'kind': 'on',
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OnGetSignalResult;
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() => 'OnGetSignalResult()';
+}
+
+final class GetSignalResultUnknown extends GetSignalResult {
+  final Map<String, dynamic> json;
+
+  const GetSignalResultUnknown(this.json);
+
+  String get discriminator => json['kind'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetSignalResultUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'GetSignalResultUnknown' '($json)';
+}
+
+
+
 class ApiApi {
   final BlocksClient _client;
   ApiApi(this._client);
@@ -1512,6 +1609,11 @@ class ApiApi {
   Future<AuthStep> getAuthStep() async {
     final result = await _client.call('api.getAuthStep', const <dynamic>[]);
     return AuthStep.fromJson(result as Map<String, dynamic>);
+  }
+
+  Future<GetSignalResult> getSignal() async {
+    final result = await _client.call('api.getSignal', const <dynamic>[]);
+    return GetSignalResult.fromJson(result as Map<String, dynamic>);
   }
 }
 

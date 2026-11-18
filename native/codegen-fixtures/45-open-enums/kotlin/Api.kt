@@ -138,6 +138,13 @@ public class Api(
     return BlocksJson.decodeFromJsonElement(result)
   }
 
+  public suspend fun getSignal(): GetSignal.Result {
+    val request = BlocksRequest(method = "api.getSignal", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getSignal")
+    return BlocksJson.decodeFromJsonElement(result)
+  }
+
   public object UpdateTask {
     @Serializable
     public data class Result(
@@ -618,6 +625,65 @@ public class Api(
           }
         }
       }
+    }
+  }
+
+  public object GetSignal {
+    @Serializable(with = Result.ResultSerializer::class)
+    public sealed class Result {
+      /**
+       * Reads and writes [Result] with its discriminator `kind` as the JSON value
+       * the spec gives it.
+       */
+      public object ResultSerializer : KSerializer<Result> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Result")
+
+        override fun serialize(encoder: Encoder, `value`: Result) {
+          val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
+          val element = when (value) {
+            is UnKnown -> buildJsonObject {
+              put("kind", JsonPrimitive("un-known"))
+              output.json.encodeToJsonElement(UnKnown.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is On -> buildJsonObject {
+              put("kind", JsonPrimitive("on"))
+            }
+            is UnknownValue -> value.json
+          }
+          output.encodeJsonElement(element)
+        }
+
+        override fun deserialize(decoder: Decoder): Result {
+          val input = decoder as? JsonDecoder ?: throw SerializationException("Result can only be read from JSON")
+          val element = input.decodeJsonElement()
+          if (element is JsonObject) {
+            val fields = JsonObject(element - "kind")
+            when (element["kind"]) {
+              JsonPrimitive("un-known") -> return input.json.decodeFromJsonElement(UnKnown.serializer(), fields)
+              JsonPrimitive("on") -> return On
+              else -> if ((element["kind"] as? JsonPrimitive)?.isString == true) return UnknownValue(element)
+            }
+          }
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"kind\": \"un-known\"; or an object with \"kind\": \"on\"")
+        }
+      }
+
+      public data class UnknownValue(
+        public val json: JsonObject,
+      ) : Result() {
+        public val discriminator: String
+          get() = (json.getValue("kind") as JsonPrimitive).content
+      }
+
+      @Serializable
+      @SerialName("un-known")
+      public data class UnKnown(
+        public val note: String,
+      ) : Result()
+
+      @Serializable
+      @SerialName("on")
+      public data object On : Result()
     }
   }
 }

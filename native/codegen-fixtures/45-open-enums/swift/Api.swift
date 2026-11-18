@@ -119,6 +119,14 @@ public final nonisolated class Api: Sendable {
         return try JSONDecoder().decode(AuthStep.self, from: result)
     }
 
+    /// Calls `api.getSignal`.
+    public func getSignal() async throws -> GetSignal.Result {
+        let request = BlocksRequest(method: "api.getSignal", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSignal") }
+        return try JSONDecoder().decode(GetSignal.Result.self, from: result)
+    }
+
     public enum UpdateTask {
 
         public enum Sort: String, Codable, Sendable {
@@ -483,6 +491,58 @@ public final nonisolated class Api: Sendable {
             }
 
             private enum EmptyKey: CodingKey {}
+        }
+    }
+
+    public enum GetSignal {
+
+        public struct UnKnown: Codable, Sendable {
+            public let note: String
+
+            public init(note: String) {
+                self.note = note
+            }
+        }
+
+        public enum Result: Codable, Sendable {
+            case unKnown(UnKnown)
+            case on
+            case unknown(JSONValue)
+
+            enum CodingKeys: String, CodingKey {
+                case kind
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                switch self {
+                case .unKnown(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("un-known", forKey: .kind)
+                    try params.encode(to: encoder)
+                case .on:
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("on", forKey: .kind)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
+                }
+            }
+
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["kind"] else { return nil }
+                return tag
+            }
+
+            public init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                let disc = try container.decode(String.self, forKey: .kind)
+                switch disc {
+                case "un-known": self = .unKnown(try UnKnown(from: decoder))
+                case "on": self = .on
+                default:
+                    self = .unknown(try JSONValue(from: decoder))
+                }
+            }
         }
     }
 }

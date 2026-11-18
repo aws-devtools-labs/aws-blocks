@@ -145,4 +145,10 @@ class OpenEnumTest : FunSpec({
         source shouldContain "public enum class Level {"
         source shouldContain "public sealed class Other {"
     }
+
+    test("an open union's fallback differs from every arm by more than case") {
+        val source = fixture("45-open-enums")
+        source shouldContain "public data class UnKnown(\n"
+        source shouldContain "return UnknownValue(element)"
+    }
 })

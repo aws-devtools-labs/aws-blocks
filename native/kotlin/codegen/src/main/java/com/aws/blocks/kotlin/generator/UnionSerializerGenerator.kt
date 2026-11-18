@@ -85,12 +85,10 @@ internal object UnionSerializerGenerator {
     fun unknownArmName(union: ResolvedType.Union): String? {
         val discriminator = union.discriminator ?: return null
         if (discriminator.type != DiscriminatorType.STRING || union.variants.any { it.isBare }) return null
-        val taken = union.variants.map { it.name }.toSet()
-        if ("Unknown" !in taken) return "Unknown"
-        var candidate = "UnknownValue"
-        var attempt = 2
-        while (candidate in taken) candidate = "UnknownValue${attempt++}"
-        return candidate
+        // Compared without case: the arms are nested classes, and on a case-insensitive file system
+        // `Unknown` and `UnKnown` would be one class file.
+        val taken = union.variants.map { it.name.lowercase() }.toSet()
+        return if ("unknown" in taken) OpenEnumGenerator.free("UnknownValue", taken) else "Unknown"
     }
 
     /**

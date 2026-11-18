@@ -144,7 +144,7 @@ internal object OpenEnumGenerator {
     }
 
     /** [base], or `base2`, `base3`, … while a name in [taken] (lowercased) has it, ignoring case. */
-    private fun free(base: String, taken: Set<String>): String {
+    fun free(base: String, taken: Set<String>): String {
         if (base.lowercase() !in taken) return base
         var attempt = 2
         while ("$base$attempt".lowercase() in taken) attempt++
