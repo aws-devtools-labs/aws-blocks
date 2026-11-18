@@ -22,36 +22,40 @@ final class FileUploadHandleTests: XCTestCase {
         XCTAssertEqual(handle.getUrl(), "https://example.com/upload")
     }
 
-    func testFromJSONThrowsOnMissingURL() {
-        let json: [String: Any] = ["contentType": "image/png"]
-        XCTAssertThrowsError(try FileUploadHandle.fromJSON(json)) { error in
-            if let bucketError = error as? FileBucketError {
-                if case .invalidURL = bucketError {
-                    // correct
-                } else {
-                    XCTFail("Expected invalidURL error")
-                }
-            } else {
-                XCTFail("Expected FileBucketError")
-            }
+    func testFromJSONThrowsTransferableErrorOnMissingURL() {
+        XCTAssertThrowsError(try FileUploadHandle.fromJSON(["contentType": "image/png"])) { error in
+            XCTAssertTrue(error is TransferableError, "got \(error)")
         }
     }
 
-    func testUploadThrowsOnInvalidURL() async {
+    func testUploadThrowsTransferableErrorOnUnparseableURL() async {
         let handle = FileUploadHandle(url: "")
         do {
             try await handle.upload(data: Data("test".utf8))
             XCTFail("Expected error")
-        } catch let error as FileBucketError {
-            if case .invalidURL = error {
-                // correct
-            } else if case .uploadFailed = error {
-                // also acceptable
-            } else {
-                XCTFail("Expected invalidURL or uploadFailed, got \(error)")
-            }
+        } catch let error as TransferableError {
+            XCTAssertEqual(error.message, "Descriptor 'file-bucket/upload' is missing required field: url")
         } catch {
-            XCTFail("Expected FileBucketError, got \(error)")
+            XCTFail("Expected TransferableError, got \(error)")
+        }
+    }
+
+    func testFailedUploadCarriesItsStatusAsAField() async {
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { MockURLProtocol.handler = nil }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let handle = FileUploadHandle(url: "https://example.com/upload", session: URLSession(configuration: config))
+        do {
+            try await handle.upload(data: Data("test".utf8))
+            XCTFail("Expected error")
+        } catch let error as FileTransferError {
+            XCTAssertEqual(error.statusCode, 403)
+            XCTAssertEqual(error.message, "Upload failed: HTTP 403")
+        } catch {
+            XCTFail("Expected FileTransferError, got \(error)")
         }
     }
 }

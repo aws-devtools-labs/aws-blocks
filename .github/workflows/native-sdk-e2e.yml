@@ -273,7 +273,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew awsBlocksCodegen
+        run: ./gradlew blocksCodegen
 
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
@@ -298,7 +298,9 @@ jobs:
       # so the suite reaches the dev server at the same BLOCKS_URL every other
       # leg uses. (The emulator's 10.0.2.2 host alias would work for plain RPC,
       # but the OIDC relay URL is derived from the configured server, and the
-      # examples standardise on forwarding for that reason.)
+      # examples standardise on forwarding for that reason.) Keeping it inside
+      # the script means a retried attempt re-establishes the forward, which a
+      # device that dropped out of adb's view will have lost.
       - name: Run E2E tests on an Android emulator
         if: matrix.label == 'Android'
         uses: ./.github/actions/android-emulator
@@ -313,12 +315,17 @@ jobs:
         if: failure()
         run: tail -n 400 "$RUNNER_TEMP/native-bindings-server.log" || true
 
+      # The diagnostics directory is where the emulator action's retry wrapper
+      # leaves each attempt's output and the device state it could still read;
+      # the path is that action's `ANDROID_E2E_DIAGNOSTICS_DIR` default.
       - name: Upload Android test report
         if: failure() && matrix.label == 'Android'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kotlin-android-e2e-report
-          path: native/kotlin/e2e/build/reports/androidTests/
+          path: |
+            native/kotlin/e2e/build/reports/androidTests/
+            ${{ runner.temp }}/android-e2e-diagnostics/
           if-no-files-found: ignore
 
   swift-e2e:
@@ -924,7 +931,7 @@ jobs:
 
       - name: Run Kotlin codegen
         working-directory: native/kotlin/e2e
-        run: ./gradlew awsBlocksCodegen
+        run: ./gradlew blocksCodegen
 
       - name: Run Kotlin E2E against sandbox
         if: matrix.label != 'Android'
@@ -944,12 +951,15 @@ jobs:
           run-oidc: ${{ env.RUN_OIDC }}
           script: ./gradlew ${{ matrix.gradle-task }}
 
+      # Per-attempt output and device state, as in the local leg above.
       - name: Upload Android test report
         if: failure() && matrix.label == 'Android'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kotlin-android-e2e-sandbox-report
-          path: native/kotlin/e2e/build/reports/androidTests/
+          path: |
+            native/kotlin/e2e/build/reports/androidTests/
+            ${{ runner.temp }}/android-e2e-diagnostics/
           if-no-files-found: ignore
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a

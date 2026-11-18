@@ -4,8 +4,12 @@ description: >-
   KVM first — without it the emulator falls back to software CPU emulation and
   the boot alone outlasts most job timeouts. Used by the Kotlin Android E2E legs
   (native-sdk-e2e.yml), which need a real device: the Kotlin runtime's Android
-  source set (EncryptedSharedPreferences-backed storage, the cookie jar built on
-  it, androidx.startup context wiring) has no host-JVM equivalent to run on.
+  source set (the Keystore-backed credential store, the cookie jar built on it,
+  androidx.startup context wiring) has no host-JVM equivalent to run on.
+
+  The script runs through run-with-retry.sh, which retries it once when the
+  device leaves adb's view mid-run, and writes device state and both attempts'
+  output to the diagnostics directory below.
 inputs:
   api-level:
     description: >-
@@ -30,9 +34,37 @@ inputs:
     description: RUN_OIDC for the test suite ('1' to run the OIDC suite), exported to the script
     required: false
     default: ''
+outputs:
+  diagnostics-path:
+    description: Directory holding per-attempt output and device state; upload it when the job fails
+    value: ${{ steps.paths.outputs.diagnostics }}
 runs:
   using: composite
   steps:
+    - name: Resolve paths
+      id: paths
+      shell: bash
+      run: |
+        echo "diagnostics=$RUNNER_TEMP/android-e2e-diagnostics" >> "$GITHUB_OUTPUT"
+        echo "script=$RUNNER_TEMP/android-e2e-script.sh" >> "$GITHUB_OUTPUT"
+
+    # The retry wrapper decides whether a failure is the device's fault or the
+    # code's, on a required check. Its tests are a second of CPU and they run
+    # before the emulator, so a broken wrapper fails loudly instead of quietly
+    # retrying everything.
+    - name: Test the retry wrapper
+      shell: bash
+      run: bash "${{ github.action_path }}/run-with-retry.test.sh"
+
+    # Written from an environment variable rather than interpolated into a shell
+    # line, so quoting in the caller's script cannot change what runs.
+    - name: Stage the script
+      shell: bash
+      env:
+        INPUT_SCRIPT: ${{ inputs.script }}
+        SCRIPT_PATH: ${{ steps.paths.outputs.script }}
+      run: printf '%s\n' "$INPUT_SCRIPT" > "$SCRIPT_PATH"
+
     # The udev rule is what the emulator-runner's own README prescribes: the
     # hosted runner ships /dev/kvm owned by a group the job's user is not in.
     - name: Enable KVM
@@ -48,6 +80,7 @@ runs:
       env:
         BLOCKS_URL: ${{ inputs.blocks-url }}
         RUN_OIDC: ${{ inputs.run-oidc }}
+        ANDROID_E2E_DIAGNOSTICS_DIR: ${{ steps.paths.outputs.diagnostics }}
       with:
         api-level: ${{ inputs.api-level }}
         # google_apis images are published for every recent level; the plain
@@ -59,4 +92,4 @@ runs:
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
         disable-animations: true
         working-directory: ${{ inputs.working-directory }}
-        script: ${{ inputs.script }}
+        script: bash "${{ github.action_path }}/run-with-retry.sh" "${{ steps.paths.outputs.script }}"

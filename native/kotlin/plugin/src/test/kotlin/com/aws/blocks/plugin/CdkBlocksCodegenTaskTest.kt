@@ -95,8 +95,8 @@ private class StaleOutput(
 
     fun generatedServers(): String = File(outputDir, "com/example/app/Servers.kt").readText()
 
-    val task: AwsBlocksCodegenTask = project.tasks
-        .register("probe", AwsBlocksCodegenTask::class.java).get().apply {
+    val task: CdkBlocksCodegenTask = project.tasks
+        .register("probe", CdkBlocksCodegenTask::class.java).get().apply {
             openRpcFile.set(File(project.projectDir, "blocks.spec.json").apply { writeText(spec) })
             packageName.set("com.example.app")
             serverOverrides.set(servers)
@@ -107,7 +107,7 @@ private class StaleOutput(
         }
 }
 
-class AwsBlocksCodegenTaskTest : FunSpec({
+class CdkBlocksCodegenTaskTest : FunSpec({
 
     test("a rejected spec leaves previously generated sources in place") {
         val run = StaleOutput(UNSUPPORTED_SCHEMA_VERSION)
@@ -165,7 +165,7 @@ class AwsBlocksCodegenTaskTest : FunSpec({
 
         val error = shouldThrow<GradleException> { run.task.generate() }
 
-        error.message shouldContain "awsBlocks.servers: \"local\" is \"http://10.0.2.2:3001\", which has no RPC path"
+        error.message shouldContain "cdkBlocks.servers: \"local\" is \"http://10.0.2.2:3001\", which has no RPC path"
         error.message shouldContain "for example \"http://10.0.2.2:3001/aws-blocks/api\""
         error.message shouldContain "the spec declares \"local\" as \"http://localhost:3001/aws-blocks/api\""
         run.previous.readText() shouldBe "// from the previous run"
@@ -333,7 +333,7 @@ class AwsBlocksCodegenTaskTest : FunSpec({
         val error = shouldThrow<GradleException> { run.task.generate() }
 
         error.message shouldContain
-            "awsBlocks.servers: \"local\" is \"$withQuery\", which carries a query or fragment"
+            "cdkBlocks.servers: \"local\" is \"$withQuery\", which carries a query or fragment"
         error.message shouldContain "A server URL is the RPC base the client posts to, so give the URL without them"
         error.message shouldContain "(the spec declares \"local\" as \"http://localhost:3001/aws-blocks/api\")"
     }
@@ -345,7 +345,7 @@ class AwsBlocksCodegenTaskTest : FunSpec({
         val error = shouldThrow<GradleException> { run.task.generate() }
 
         error.message shouldContain
-            "awsBlocks.servers: \"local\" is \"$withFragment\", which carries a query or fragment"
+            "cdkBlocks.servers: \"local\" is \"$withFragment\", which carries a query or fragment"
         error.message shouldContain "A server URL is the RPC base the client posts to, so give the URL without them"
         error.message shouldContain "(the spec declares \"local\" as \"http://localhost:3001/aws-blocks/api\")"
     }

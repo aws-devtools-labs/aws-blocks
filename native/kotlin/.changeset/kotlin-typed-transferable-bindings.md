@@ -7,7 +7,7 @@ Generate the declared type and factory call for a bound transferable result
 A direct method result whose tag is bound by `x-blocks-native-bindings` now returns the declared
 package type, hydrated through its `fromBlocksDescriptor` factory after the descriptor is checked
 by the new public `validateTransferableDescriptor`. A bound package with no android field, or one
-listed in the new `awsBlocks { excludeNativePackages }` property, keeps the UnknownTransferable
+listed in the new `cdkBlocks { excludeNativePackages }` property, keeps the UnknownTransferable
 fallback; a binding on a built-in tag is ignored and the runtime type still wins; a declared
 package no binding references reports `AWSBLOCKS-NATIVE-003`.
 

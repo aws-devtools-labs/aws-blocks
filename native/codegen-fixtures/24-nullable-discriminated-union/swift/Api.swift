@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func updateAttributes(attributes: [String: String]) async throws -> [String: UpdateAttributes.ResultValue?] {
         let request = BlocksRequest(method: "api.updateAttributes", params: [attributes], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.updateAttributes") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.updateAttributes") }
         return try JSONDecoder().decode([String: UpdateAttributes.ResultValue?].self, from: result)
     }
 

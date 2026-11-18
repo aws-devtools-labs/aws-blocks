@@ -26,7 +26,7 @@ import java.net.URISyntaxException
  * Gradle task that parses an `blocks.spec.json` file and generates Kotlin source files.
  */
 @CacheableTask
-abstract class AwsBlocksCodegenTask : DefaultTask() {
+abstract class CdkBlocksCodegenTask : DefaultTask() {
 
     /** The OpenRPC JSON file to parse. */
     @get:InputFile
@@ -125,7 +125,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
      * The generated `Servers` constant is a server URL as given, and the client posts
      * to it with `/<namespace>` appended. An override the client could not post RPC to
      * is rejected here, where the spec is known; the rules a user sees are listed on
-     * [AwsBlocksExtension.servers]. The host is read from the raw authority because
+     * [CdkBlocksExtension.servers]. The host is read from the raw authority because
      * `URI.host` is null for a host the RFC rejects but resolvers accept, such as one
      * with an underscore. [specUrl] is the spec's URL for the same server name, the one
      * to point the user at: a stage prefix such as `/prod` cannot be derived from the
@@ -142,26 +142,26 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
             URI(url)
         } catch (cause: URISyntaxException) {
             throw GradleException(
-                "awsBlocks.servers: \"$name\" is \"$url\", which is not a valid URL (${cause.reason}). " +
+                "cdkBlocks.servers: \"$name\" is \"$url\", which is not a valid URL (${cause.reason}). " +
                     "Use the full RPC URL ($fix).",
                 cause,
             )
         }
         if (!uri.scheme.equals("http", ignoreCase = true) && !uri.scheme.equals("https", ignoreCase = true)) {
             throw GradleException(
-                "awsBlocks.servers: \"$name\" is \"$url\", which has no http:// or https:// scheme. " +
+                "cdkBlocks.servers: \"$name\" is \"$url\", which has no http:// or https:// scheme. " +
                     "Use the full RPC URL ($fix).",
             )
         }
         val authority = uri.rawAuthority
         if (authority == null || authority.substringAfterLast('@').substringBefore(':').isEmpty()) {
             throw GradleException(
-                "awsBlocks.servers: \"$name\" is \"$url\", which has no host. Use the full RPC URL ($fix).",
+                "cdkBlocks.servers: \"$name\" is \"$url\", which has no host. Use the full RPC URL ($fix).",
             )
         }
         if (uri.rawQuery != null || uri.rawFragment != null) {
             throw GradleException(
-                "awsBlocks.servers: \"$name\" is \"$url\", which carries a query or fragment. " +
+                "cdkBlocks.servers: \"$name\" is \"$url\", which carries a query or fragment. " +
                     "A server URL is the RPC base the client posts to, so give the URL without them ($fix).",
             )
         }
@@ -170,7 +170,7 @@ abstract class AwsBlocksCodegenTask : DefaultTask() {
         val segments = uri.normalize().path.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }
         if (segments.isNotEmpty()) return
         throw GradleException(
-            "awsBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
+            "cdkBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
                 "under /aws-blocks/api, not at the origin, so every call through this server fails. " +
                 "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/aws-blocks/api\" ($fix).",
         )

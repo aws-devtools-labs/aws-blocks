@@ -51,10 +51,10 @@ public struct SwiftCodeGenerator {
     /// or `CodegenError` (a component schema with a constraint throws it from its init). `ModelsRuntimeImportTests`
     /// checks the list against the runtime's sources.
     static let blocksRuntimeTypeNames: Set<String> = [
-        "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
-        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileBucketError", "FileDownloadHandle", "FileUploadHandle",
+        "ApiError", "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
+        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileDownloadHandle", "FileTransferError", "FileUploadHandle",
         "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
-        "RawRouteError", "RealtimeChannel", "RealtimeError", "RPCError", "TokenStore", "UnknownTransferable",
+        "RealtimeChannel", "RealtimeError", "TokenStore", "TransferableError", "TransportError", "UnknownTransferable",
         "WebSocketConnection", "WebSocketDelegate"
     ]
 
@@ -1375,13 +1375,13 @@ public struct SwiftCodeGenerator {
         // An optional (nullable) transferable result returns nil for a null body; every other result throws.
         let nullResult = transferable?.optional == true
             ? "guard let \(result) else { return nil }"
-            : "guard let \(result) else { throw \(runtimePrefix)RPCError(message: \"Unexpected null result for \(methodLiteral)\") }"
+            : "guard let \(result) else { throw \(runtimePrefix)TransportError(message: \"Unexpected null result for \(methodLiteral)\") }"
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
             if let transferable {
                 lines.append(contentsOf: transferableResultLines(
                     transferable.type, operation: operation, names: names, messageType: messageType,
-                    nullResult: nullResult, methodLiteral: methodLiteral
+                    nullResult: nullResult
                 ))
             }
         } else if discardsResult {
