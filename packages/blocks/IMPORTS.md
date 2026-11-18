@@ -14,9 +14,9 @@ The rule that matters most: **code that runs under the `browser` condition impor
 | `@aws-blocks/blocks/theme` | Browser. | The stylesheet the UI components use. |
 | `@aws-blocks/blocks/server` | Server-side rendering (Node). | Forwarding the browser’s cookies to API calls made during SSR. |
 | `@aws-blocks/blocks/utils` | Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (no `browser` condition, so it resolves the same everywhere). | Test helpers: a cookie jar for `fetch`, per-user test clients, local auth codes, TOTP codes. |
-| `@aws-blocks/blocks/cdk` | CDK synth (`cdk-blocks deploy` / `sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`. | The synth-time build: what the generated `aws-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct. |
+| `@aws-blocks/blocks/cdk` | CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`. | The synth-time build: what the generated `aws-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct. |
 | `@aws-blocks/blocks/lambda-handler` | The deployed Lambda. | `createLambdaHandler`, which the generated `aws-blocks/index.handler.ts` imports. |
-| `@aws-blocks/blocks/scripts` | Node: the `cdk-blocks` CLI, and your CDK entry file. | CLI plumbing (dev server, deploy, sandbox). The generated `aws-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `aws-blocks/scripts/generate-client.ts` imports `generateClientCode`. |
+| `@aws-blocks/blocks/scripts` | Node: the package task runner, and your CDK entry file. | Task plumbing (dev server, deploy, sandbox). The generated `aws-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `aws-blocks/scripts/generate-client.ts` imports `generateClientCode`. |
 
 ## Root values in browser code
 
@@ -107,7 +107,7 @@ Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (n
 
 ## `@aws-blocks/blocks/cdk`
 
-CDK synth (`cdk-blocks deploy` / `sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`.
+CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`.
 
 **Values (126):** `__PIPELINE_STAGE_SCOPE__`, `_resetConfigCache`, `_resetContainerPollers`, `_resetSdkRegistry`, `Agent`, `AgentErrors`, `ApiError`, `ApiNamespace`, `AppSetting`, `AppSettingErrors`, `AsyncJob`, `AsyncJobErrors`, `Auth`, `AuthErrors`, `BedrockModels`, `BLOCKS_AUTH_PREFIX`, `BLOCKS_CONFIG_PARAMETER_PREFIX`, `BLOCKS_RPC_PREFIX`, `BLOCKS_SECRET_PARAMETER_PREFIX`, `BlocksBackend`, `blocksConfigParameterName`, `blocksError`, `blocksNodejsBundling`, `BlocksPresets`, `blocksSecretParameterName`, `BlocksStack`, `brandBlocksError`, `buildingBlockParent`, `BuildingBlockScope`, `clearRouteRegistry`, `Compute`, `computeScopeFullId`, `config`, `CronJob`, `CronJobErrors`, `customOauth2`, `Dashboard`, `DashboardErrors`, `Database`, `DatabaseCluster`, `DatabaseErrors`, `DEFAULT_API_ERROR_NAME`, `DEFAULT_CONFIG_PARAMETER_PREFIX`, `DEFAULT_NODE_RUNTIME`, `DEFAULT_SECRET_PARAMETER_PREFIX`, `DeployStage`, `dispatchJobToWorker`, `EmailClient`, `EmailErrors`, `ensureApiGatewayAccount`, `EventSourceMapping`, `FileBucket`, `FileBucketErrors`, `finalizeConfigRegistry`, `finalizeDashboards`, `finalizeTracing`, `getAllSdkIdentifiers`, `getBlocksRoot`, `getBlocksRootId`, `getCachedConfigValue`, `getConfig`, `getConfigDeployment`, `getConfigLocation`, `getConfigSync`, `getContainerComputeId`, `getDeploymentType`, `getOrCreateOnRoot`, `getRegisteredConfigValue`, `getRegisteredRoutes`, `getSdkIdentifiers`, `getSharedGatewayUrl`, `getVpcContext`, `github`, `hasAuthError`, `Hosting`, `HostingPresets`, `installClientUserAgent`, `isAuthError`, `isBlocksError`, `isConfig`, `isContainerRuntime`, `isJobWorker`, `isManagedValue`, `isSandboxContext`, `isSecret`, `isWireSafeError`, `KnowledgeBase`, `KnowledgeBaseErrors`, `KVStore`, `KVStoreErrors`, `LAMBDA_MAX_TIMEOUT_SECONDS`, `LegacyKVStore`, `loadConfigToProcessEnv`, `lockRouteRegistry`, `Logger`, `LoggingErrors`, `matchRoute`, `Metrics`, `MetricsErrors`, `OllamaModels`, `Pipeline`, `preloadConfig`, `RawRoute`, `RawRouteErrors`, `Realtime`, `registerConfig`, `registerContainerPoller`, `registerDashboardFinalizer`, `registerRoute`, `registerSdkIdentifiers`, `registerTracer`, `relayOrigin`, `resolvePerInstanceConcurrency`, `runContainer`, `runJobWorker`, `SandboxDisableDeletionProtection`, `Scope`, `secret`, `Secret`, `SecretErrors`, `SHARED_HANDLER_TIMEOUT_SECONDS`, `sql`, `stubIdp`, `synthGuard`, `Tracer`, `unlockRouteRegistry`
 
@@ -123,7 +123,7 @@ The deployed Lambda.
 
 ## `@aws-blocks/blocks/scripts`
 
-Node: the `cdk-blocks` CLI, and your CDK entry file.
+Node: the package task runner, and your CDK entry file.
 
 **Values (62):** `appendDeployHistoryRecord`, `BACKEND_OUTPUT_KEY`, `buildAndSendEvent`, `buildDashboardUrl`, `classifyError`, `CLOSED_OUTPUT_CODES`, `createDeployRecorder`, `dashboard`, `DEFAULT_DASHBOARD_PORT`, `deploy`, `DEPLOY_HISTORY_FILE`, `deployedStackExists`, `describeDeploymentCredentials`, `destroy`, `destroySandbox`, `findFreePort`, `generateClientCode`, `generateSpec`, `getGitSha`, `getSandboxId`, `getStackId`, `getStackName`, `ignoreClosedOutput`, `isBlocksProject`, `isPortFree`, `isStopWarning`, `listConfig`, `listSecrets`, `loadEnvFile`, `loadProductionEnv`, `log`, `NativeCatalogError`, `NoFreePortError`, `openConsole`, `OUTPUTS_DIR`, `OUTPUTS_FILE`, `outputsFileIn`, `parseDashboardArgs`, `PREVIEW_MODE_CONTEXT`, `PROJECT_MARKER`, `readAwsIdentity`, `readNativeDeclarations`, `removeConfig`, `removeSecret`, `resolveDeploymentTarget`, `resolveProject`, `runConfigCli`, `runSecretCli`, `runStopCli`, `runTypegenCli`, `setConfig`, `setSecret`, `startDevServer`, `startSandbox`, `stopDevServer`, `stopMessage`, `summarizeError`, `telemetry`, `trackCommand`, `validateSpec`, `writeClientCode`, `writeSpec`
 
@@ -133,5 +133,6 @@ Node: the `cdk-blocks` CLI, and your CDK entry file.
 
 | Entry | What it is |
 |---|---|
-| `@aws-blocks/blocks/vendorize` | the `cdk-blocks vendorize` implementation |
+| `@aws-blocks/blocks/run` | the side-effect entry point invoked by app package scripts |
+| `@aws-blocks/blocks/vendorize` | the `npm run vendorize` implementation |
 | `@aws-blocks/blocks/docs/*` | these docs |

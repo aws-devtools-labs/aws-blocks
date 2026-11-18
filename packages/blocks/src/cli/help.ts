@@ -1,8 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** Grouped root help and per-command help, rendered from the registry. Aliases never appear. */
+/** Grouped root help and per-command help, rendered from the registry. Uses package-manager task names. */
 
+import { blocksCommand } from './errors.js';
 import { COMMANDS, type CommandSpec, type FlagSpec, GLOBAL_FLAGS, GROUPS, subcommandsOf } from './registry.js';
 
 function table(rows: [string, string][], indent = '  '): string[] {
@@ -26,32 +27,39 @@ function usageLine(command: CommandSpec): string {
 		const name = arg.variadic ? `${arg.name}...` : arg.name;
 		return arg.required ? `<${name}>` : `[${name}]`;
 	});
-	const parts = ['cdk-blocks', ...command.path];
-	if (!command.handler) parts.push('<command>');
+	const parts = [blocksCommand(command.path[0], ...command.path.slice(1))];
+	if (!command.handler) return parts[0];
 	parts.push(...args);
-	if (command.flags?.length) parts.push('[options]');
+	if (command.path[0] !== 'help') parts.push('[-- <options>]');
 	return parts.join(' ');
 }
 
 /** The root help: every canonical command, grouped. */
 export function rootHelp(version: string): string {
 	const lines = [
-		`AWS Blocks CLI ${version}`,
+		`AWS Blocks tasks ${version}`,
 		'',
-		'Usage: cdk-blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]',
+		'Usage: npm run <task> [arguments] [-- <options>]',
 	];
 	for (const group of GROUPS) {
 		const commands = COMMANDS.filter((command) => command.group === group && command.handler);
 		if (commands.length === 0) continue;
-		lines.push('', group, ...table(commands.map((command) => [command.path.join(' '), command.summary])));
+		lines.push('', group, ...table(commands.map((command) => [blocksCommand(command.path[0], ...command.path.slice(1)).slice('npm run '.length), command.summary])));
+		if (group === 'Develop') {
+			lines.push(...table([
+				['docs:api', 'Read exact API signatures'],
+				['docs:search', 'Search the AWS Blocks docs'],
+			]));
+		}
 	}
 	lines.push(
 		'',
 		'Global options',
 		...table(GLOBAL_FLAGS.map((flag) => [flagLabel(flag), flag.description])),
+		'JSON results go to stdout; progress goes to stderr. Use npm run -s to suppress npm’s script banners.',
 		'',
 		'Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM.',
-		'Run "cdk-blocks help <command>" or "cdk-blocks <command> --help" for details.',
+		'Run "npm run help" for this list, or "npm run <task> -- --help" for details.',
 	);
 	return `${lines.join('\n')}\n`;
 }
@@ -67,7 +75,7 @@ export function commandHelp(command: CommandSpec): string {
 	}
 	const subcommands = subcommandsOf(command.path);
 	if (subcommands.length > 0) {
-		lines.push('', 'Commands', ...table(subcommands.map((sub) => [sub.path.join(' '), sub.summary])));
+		lines.push('', 'Commands', ...table(subcommands.map((sub) => [blocksCommand(sub.path[0], ...sub.path.slice(1)).slice('npm run '.length), sub.summary])));
 	}
 	if (command.examples?.length) {
 		lines.push(
@@ -82,10 +90,10 @@ export function commandHelp(command: CommandSpec): string {
 	if (command.passthrough) {
 		lines.push(
 			'',
-			`Global options apply anywhere before a "--"; the other tokens after "${command.path[0]}" are forwarded unchanged.`,
+		'After npm’s separator, global options apply before a second "--"; the remaining tokens are forwarded unchanged.',
 		);
 	} else {
-		lines.push('', 'Global options: see "cdk-blocks --help".');
+		lines.push('', 'Global options: see "npm run help".');
 	}
 	return `${lines.join('\n')}\n`;
 }

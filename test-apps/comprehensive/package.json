@@ -23,7 +23,8 @@
     "test:upgrade-in-place": "tsx test/upgrade-in-place.ts",
     "test:upgrade-in-place:dry-run": "tsx test/upgrade-in-place.ts --dry-run",
     "test:upgrade-legacy-kv-store": "tsx test/upgrade-legacy-kv-store.ts",
-    "vendorize": "node ../../packages/blocks/dist/vendorize.js"
+    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "*",

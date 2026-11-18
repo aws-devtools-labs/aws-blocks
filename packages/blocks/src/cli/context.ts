@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The run context of one `cdk-blocks` invocation: project-root detection, the
+ * The run context of one package task invocation: project-root detection, the
  * environment for child processes (`--profile`, `--region`, `BLOCKS_LOG_LEVEL`),
  * the interactive/CI decision and the injectable process seams.
  */
@@ -16,7 +16,7 @@ import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
 import { CliError, UsageError } from './errors.js';
-import { Output, type OutputStream } from './output.js';
+import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
 
 /** The `@aws-blocks/core/scripts` module. Tests replace parts of it. */
@@ -30,7 +30,7 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
-	 * The child runs until it is stopped: `cdk-blocks dev` and `cdk-blocks sandbox` in
+	 * The child runs until it is stopped: `npm run dev` and `npm run sandbox` in
 	 * watch mode. The CLI stops it at once on a SIGTERM or SIGHUP (a supervisor,
 	 * `timeout`, a closed terminal, `kill <pid>`), whether or not the signal also
 	 * reached the child's process group: it sends one SIGTERM, which the
@@ -45,7 +45,7 @@ export interface SpawnSpec {
 	 */
 	longRunning?: boolean;
 	/**
-	 * The child is `tsx watch` (`cdk-blocks dev`). A second SIGTERM makes it SIGKILL
+	 * The child is `tsx watch` (`npm run dev`). A second SIGTERM makes it SIGKILL
 	 * its runner, which then leaves the frontend running, so the CLI never sends
 	 * it one while the runner lives: it SIGTERMs the runner, which the group
 	 * signal may have reached already (the dev server's cleanup is idempotent
@@ -80,7 +80,7 @@ export interface CliDeps {
 	stdinIsTTY: boolean;
 	/**
 	 * The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it
-	 * for the run, and `cdk-blocks whoami` loads `.env.production` into it, as core's deploy does.
+	 * for the run, and `npm run whoami` loads `.env.production` into it, as core's deploy does.
 	 */
 	env: NodeJS.ProcessEnv;
 	cwd: string;
@@ -96,7 +96,7 @@ export interface CliDeps {
 	argv: string[];
 	/**
 	 * Load `@aws-blocks/core/scripts`. A seam rather than a static import, so that
-	 * `cdk-blocks --help` and usage errors do not load core, and tests can replace it.
+	 * `npm run --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
 }
@@ -117,6 +117,20 @@ export function logLevelFor(globals: Globals, env: NodeJS.ProcessEnv): LogLevel 
 /** True when `CI` is set to anything but `false` or `0`. */
 export function isCi(env: NodeJS.ProcessEnv): boolean {
 	return Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0';
+}
+
+/**
+ * The format of the run's result on stdout. An explicit `--output` wins. Without it,
+ * a command with a JSON result prints JSON when stdout is not a terminal (a pipe, a
+ * file, a coding agent's shell) and text on a terminal; every other command, help
+ * and `--version` print text whatever stdout is. `--query` prints its field either
+ * way (see {@link Output}).
+ */
+export function resultFormat(parsed: ParsedInvocation, stdout: OutputStream): OutputFormat {
+	const { globals, command } = parsed;
+	if (globals.output !== undefined) return globals.output;
+	if (globals.help || globals.version || !command?.json) return 'text';
+	return stdout.isTTY === true ? 'text' : 'json';
 }
 
 /** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`, `eusc-de-east-1`. */
@@ -214,7 +228,7 @@ export class Context {
 		this.out = new Output(
 			deps.stdout,
 			deps.stderr,
-			this.globals.output,
+			resultFormat(parsed, deps.stdout),
 			this.logLevel === 'quiet',
 			this.env,
 			// --version prints only the version; it does not query it.
@@ -235,7 +249,7 @@ export class Context {
 		}
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
-		// so a stray one does not stop local commands. Help (`--help`, `cdk-blocks help`) and --version never use it.
+		// so a stray one does not stop local commands. Help (`--help`, `npm run help`) and --version never use it.
 		if (parsed.command && parsed.command.path[0] !== 'help' && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(

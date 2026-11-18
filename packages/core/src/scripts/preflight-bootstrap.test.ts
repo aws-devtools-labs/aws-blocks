@@ -89,7 +89,7 @@ describe('CDK bootstrap check', () => {
 			const { read, calls } = reader(NOT_FOUND);
 			const message = await failure(read, { command });
 			// The same Region, profile and verified credentials as the deploy, and the default qualifier.
-			// The profile is AWS_PROFILE, which `cdk-blocks --profile` sets (PN2): cdk.json selects none here.
+			// The profile is AWS_PROFILE, which `--profile` sets (PN2): cdk.json selects none here.
 			assert.deepEqual(calls, [
 				[
 					{ region: 'eu-south-2', profile: 'starter', credentials: CREDENTIALS },
@@ -106,10 +106,10 @@ describe('CDK bootstrap check', () => {
 	}
 
 	it('names the command the user ran, when the caller passes it', async () => {
-		const message = await failure(reader(NOT_FOUND).read, { invocation: 'cdk-blocks deploy --profile starter' });
-		assert.match(message, /so `cdk-blocks deploy --profile starter` cannot deploy there/);
-		assert.match(message, /Then re-run `cdk-blocks deploy --profile starter`\.$/);
-		assert.doesNotMatch(message, /npm run/);
+		const message = await failure(reader(NOT_FOUND).read, { invocation: 'npm run deploy -- --profile starter' });
+		assert.match(message, /so `npm run deploy -- --profile starter` cannot deploy there/);
+		assert.match(message, /Then re-run `npm run deploy -- --profile starter`\.$/);
+		assert.doesNotMatch(message, /`npm run deploy`/);
 	});
 
 	it('prints no --profile when the deploy uses access keys from the environment', async () => {
@@ -187,7 +187,7 @@ describe('CDK bootstrap check', () => {
 describe('cdkBootstrapFailure', () => {
 	it('passes the profile the deploy used to the printed bootstrap command', async () => {
 		const message = await cdkBootstrapFailure({
-			invocation: 'cdk-blocks deploy --profile starter',
+			invocation: 'npm run deploy -- --profile starter',
 			account: '123456789012',
 			region: 'eu-south-2',
 			profile: 'starter',

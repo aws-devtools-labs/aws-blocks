@@ -19,7 +19,7 @@ interface LocalSchemaOptions {
 /**
  * What a local block does before its first statement, as the cluster admin: apply its migration files (or
  * create its schema when it has none), then give the local app role the grants the deployed app role gets.
- * Returns the files it applied. Used by the local entry and by `cdk-blocks db types --block`.
+ * Returns the files it applied. Used by the local entry and by `npm run db -- types --block`.
  */
 export function prepareLocalSchema(
 	engine: RulesEngine,

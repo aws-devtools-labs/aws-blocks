@@ -17,9 +17,9 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
 // Each export below includes a brief summary of what the Building Block does
 // and when to use it. For full documentation (API reference, examples, best
 // practices, scaling characteristics), print the block's docs bundled in this
-// package with `npx --no -- cdk-blocks docs <package>`, where `<package>` is the
+// package with `npm run docs <package>`, where `<package>` is the
 // name in each JSDoc block without the `@aws-blocks/` scope (e.g.
-// `npx --no -- cdk-blocks docs bb-kv-store`). `npx --no -- cdk-blocks docs` lists them all.
+// `npm run docs bb-kv-store`). `npm run docs` lists them all.
 //
 
 /**
@@ -30,7 +30,7 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
  * `onAuthChange`). Import these when writing provider-agnostic auth code.
  *
  * Package: `@aws-blocks/auth-common`
- * Full docs: `npx --no -- cdk-blocks docs auth-common`.
+ * Full docs: `npm run docs auth-common`.
  */
 export type {
 	AuthAction,
@@ -66,7 +66,7 @@ export type {
  * Set `inferenceOnly: true` for simple prompt→response without persistence.
  *
  * Package: `@aws-blocks/bb-agent`
- * Full docs: `npx --no -- cdk-blocks docs bb-agent`.
+ * Full docs: `npm run docs bb-agent`.
  */
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
@@ -81,7 +81,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * validation for typed objects.
  *
  * Package: `@aws-blocks/bb-app-setting`
- * Full docs: `npx --no -- cdk-blocks docs bb-app-setting`.
+ * Full docs: `npm run docs bb-app-setting`.
  */
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
@@ -106,7 +106,7 @@ export type {
  * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
- * Full docs: `npx --no -- cdk-blocks docs bb-async-job`.
+ * Full docs: `npm run docs bb-async-job`.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 export type * from '@aws-blocks/bb-auth';
@@ -123,7 +123,7 @@ export type * from '@aws-blocks/bb-auth';
  * `AuthOIDC`.
  *
  * Package: `@aws-blocks/bb-auth`
- * Full docs: `npx --no -- cdk-blocks docs bb-auth`.
+ * Full docs: `npm run docs bb-auth`.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
@@ -140,7 +140,7 @@ export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubI
  * the workload uses the app default (serverless).
  *
  * Package: `@aws-blocks/bb-compute`
- * Full docs: `npx --no -- cdk-blocks docs bb-compute`.
+ * Full docs: `npm run docs bb-compute`.
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
 export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
@@ -153,7 +153,7 @@ export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
  * constructor defines the schedule and handler.
  *
  * Package: `@aws-blocks/bb-cron-job`
- * Full docs: `npx --no -- cdk-blocks docs bb-cron-job`.
+ * Full docs: `npm run docs bb-cron-job`.
  */
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {
@@ -172,7 +172,7 @@ export type {
  * `logs` / `traces` options.
  *
  * Package: `@aws-blocks/bb-dashboard`
- * Full docs: `npx --no -- cdk-blocks docs bb-dashboard`.
+ * Full docs: `npm run docs bb-dashboard`.
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type {
@@ -200,7 +200,7 @@ export type {
  * Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
  *
  * Package: `@aws-blocks/bb-database`
- * Full docs: `npx --no -- cdk-blocks docs bb-database`.
+ * Full docs: `npm run docs bb-database`.
  */
 export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
@@ -212,7 +212,7 @@ export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@a
  * batch sending with partial failure handling.
  *
  * Package: `@aws-blocks/bb-email-client`
- * Full docs: `npx --no -- cdk-blocks docs bb-email-client`.
+ * Full docs: `npm run docs bb-email-client`.
  */
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -239,7 +239,7 @@ export type {
  * `KVStore`.
  *
  * Package: `@aws-blocks/bb-file-bucket`
- * Full docs: `npx --no -- cdk-blocks docs bb-file-bucket`.
+ * Full docs: `npm run docs bb-file-bucket`.
  */
 export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
@@ -265,7 +265,7 @@ export type {
  * and indexed via Bedrock with configurable chunking and embedding models.
  *
  * Package: `@aws-blocks/bb-knowledge-base`
- * Full docs: `npx --no -- cdk-blocks docs bb-knowledge-base`.
+ * Full docs: `npm run docs bb-knowledge-base`.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 // A type keeps its own name. It gets the block prefix only when another block
@@ -308,7 +308,7 @@ export type {
  * JOINs or transactions.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `npx --no -- cdk-blocks docs bb-kv-store`.
+ * Full docs: `npm run docs bb-kv-store`.
  */
 /**
  * **The store of `KVStore` release 0.4.0 or earlier, for an upgrade.**
@@ -321,7 +321,7 @@ export type {
  * new data, use `KVStore`.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `npx --no -- cdk-blocks docs bb-kv-store`.
+ * Full docs: `npm run docs bb-kv-store`.
  *
  * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
  *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
@@ -343,7 +343,7 @@ export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-block
  * request tracing, use `Tracing`.
  *
  * Package: `@aws-blocks/bb-logger`
- * Full docs: `npx --no -- cdk-blocks docs bb-logger`.
+ * Full docs: `npm run docs bb-logger`.
  */
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {
@@ -365,7 +365,7 @@ export type {
  * batch emission, and child emitters for scoped dimension inheritance.
  *
  * Package: `@aws-blocks/bb-metrics`
- * Full docs: `npx --no -- cdk-blocks docs bb-metrics`.
+ * Full docs: `npm run docs bb-metrics`.
  */
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type {
@@ -384,7 +384,7 @@ export type {
  * AppSync Events API.
  *
  * Package: `@aws-blocks/bb-realtime`
- * Full docs: `npx --no -- cdk-blocks docs bb-realtime`.
+ * Full docs: `npm run docs bb-realtime`.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
@@ -404,7 +404,7 @@ export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo
  * for a low-value secret (e.g. a prototype).
  *
  * Package: `@aws-blocks/bb-secret`
- * Full docs: `npx --no -- cdk-blocks docs bb-secret`.
+ * Full docs: `npm run docs bb-secret`.
  */
 export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
@@ -417,7 +417,7 @@ export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tra
  * annotations for searchable values and metadata for debugging data.
  *
  * Package: `@aws-blocks/bb-tracer`
- * Full docs: `npx --no -- cdk-blocks docs bb-tracer`.
+ * Full docs: `npm run docs bb-tracer`.
  */
 export { Tracer } from '@aws-blocks/bb-tracer';
 export type {

@@ -3,7 +3,7 @@ import { api, authApi } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 
 // For coding agents: Leave this comment in place for future reference.
-// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 /** Escapes HTML metacharacters to prevent XSS when interpolating into innerHTML. */
 function esc(str: string): string {

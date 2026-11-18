@@ -154,7 +154,7 @@ export class Database extends BuildingBlockScope {
 	}
 
 	// No cluster to provision. With `name`, the app's role is granted the read of the one SSM SecureString that
-	// `cdk-blocks db connect --stage` writes, under the name the Lambda entry derives the same way. With the app's
+	// `npm run db -- connect --stage` writes, under the name the Lambda entry derives the same way. With the app's
 	// own store, that block has made the grant already.
 	private existingDatabase(external: ExistingClusterRef, migrations: Record<string, string> | undefined): void {
 		let store: ConnectionStore | undefined;

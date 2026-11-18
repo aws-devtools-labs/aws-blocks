@@ -71,9 +71,9 @@ describe('parseConnectionString', () => {
 		// What a secret that was never set looks like: a random placeholder.
 		configError(
 			() => parseConnectionString('q8Zb3_placeholder', "The SSM parameter '/stack-db-url'"),
-			/\/stack-db-url/,
+			/\/stack-db-url.*Store one with `npm run db connect`/,
 		);
-		configError(() => parseConnectionString(null, 'The value'), /The value has no value/);
+		configError(() => parseConnectionString(null, 'The value'), /The value has no value\..*`npm run db connect`/);
 		configError(() => parseConnectionString('  ', 'The value'), /The value has no value/);
 		configError(() => parseConnectionString(`mysql://u:${PASSWORD}@h/db`, 'The value'), /postgres:\/\//);
 	});
@@ -492,7 +492,7 @@ describe('a connection string that the application stored itself', () => {
 		assert.strictEqual(parseConnectionString(stored.value, stored.label).host, 'db.example.com');
 	});
 
-	test('a value that `cdk-blocks db connect --stage` stored as it is stays as it is', async () => {
+	test('a value that `npm run db -- connect --stage` stored as it is stays as it is', async () => {
 		const url = `postgresql://app:${PASSWORD}@db.example.com:6543/postgres`;
 		assert.strictEqual((await readSsmConnectionString('/stack-db-url', fake(url))).value, url);
 	});

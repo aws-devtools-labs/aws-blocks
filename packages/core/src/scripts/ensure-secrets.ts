@@ -5,7 +5,7 @@
  * The environment files of the deploy commands, and the cleanup of the database
  * connection string that a sandbox keeps in SSM.
  *
- * Nothing here writes a connection string. `cdk-blocks db connect --stage`
+ * Nothing here writes a connection string. `npm run db -- connect --stage`
  * stores it, as the SSM SecureString `/<stackName>-<name>`, and the `Database`
  * block reads it; the default name gives `/<stackName>-db-url`
  * (`dbConnectionParameterName`). Earlier versions copied a `*_DB_URL` or
@@ -22,7 +22,7 @@ export type DeleteParameterSender = (name: string) => Promise<void>;
 
 /**
  * Delete the SSM parameter that holds a sandbox's database connection string,
- * which is written outside CloudFormation (by `cdk-blocks db connect --stage
+ * which is written outside CloudFormation (by `npm run db -- connect --stage
  * sandbox`, or by a deploy of an earlier version): the sandbox's
  * `/<sandbox stack>-db-url` SecureString. CloudFormation never owned it, so deleting the stack leaves it,
  * with the database password inside. Only the sandbox name is ever derived

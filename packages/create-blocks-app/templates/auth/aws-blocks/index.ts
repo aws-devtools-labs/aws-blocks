@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -11,7 +11,7 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 
 // Auth: email + password sign-in with groups and a custom attribute.
-// Full API: npx --no -- cdk-blocks docs Auth
+// Full API: npm run docs Auth
 //
 // `users.signInWith: ['email']` makes the email address the sign-in name, so
 // users type one identifier on the sign-up and sign-in forms. Sign-up confirms

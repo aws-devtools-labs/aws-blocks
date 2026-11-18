@@ -14,7 +14,7 @@
  * in `scripts/ensure-secrets.ts`). It passes the result of
  * `getStackName({ sandbox: true, projectRoot })` into this function. The
  * `Database` block derives the same string for the default connection name
- * (`/<stackName>-<name>` with the name `db-url`), and `cdk-blocks db connect
+ * (`/<stackName>-<name>` with the name `db-url`), and `npm run db -- connect
  * --stage` writes it. The runtime Lambda does not call this function.
  */
 
@@ -42,7 +42,7 @@ export function extractDbRef(connectionString: string): string {
   throw new Error('Cannot extract database identifier from connection string.');
 }
 
-/** The connection name that `DatabaseCluster.fromExisting()` and `cdk-blocks db` use when none is given. */
+/** The connection name that `DatabaseCluster.fromExisting()` and `npm run db` use when none is given. */
 export const DEFAULT_DB_CONNECTION_NAME = 'db-url';
 
 /**
@@ -54,7 +54,7 @@ export const DEFAULT_DB_CONNECTION_NAME = 'db-url';
  *
  * `name` is the connection's short name; a `Database` on an existing database
  * derives its parameter with the same function, so the name that
- * `cdk-blocks db connect --stage` writes and the name the sandbox cleanup
+ * `npm run db -- connect --stage` writes and the name the sandbox cleanup
  * deletes cannot differ.
  */
 export function dbConnectionParameterName(stackName: string, name: string = DEFAULT_DB_CONNECTION_NAME): string {

@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Argument parsing for the `cdk-blocks` CLI, on `node:util` `parseArgs`.
+ * Argument parsing for the package task runner, on `node:util` `parseArgs`.
  *
- * `cdk-blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]`
+ * `<command> [<subcommand>] [arguments] [-- passthrough]`
  *
  * Global options may come before the command, between the words of its path
- * (`cdk-blocks generate --debug client`) or after it. A passthrough command
- * (`secret`, `config`, `vendorize`) forwards the tokens after its name to its
+ * (`generate --debug client`) or after it. A passthrough command (`db`,
+ * `secret`, `config`, `vendorize`) forwards the tokens after its name to its
  * tool, except the CLI's global options before a `--`: those apply to the run.
  */
 
 import { parseArgs } from 'node:util';
-import { BLOCKS_COMMAND, blocksCommand, UsageError } from './errors.js';
+import { blocksCommand, UsageError } from './errors.js';
 import {
 	ALIASES,
 	type AliasSpec,
@@ -35,7 +35,11 @@ export interface Globals {
 	quiet: boolean;
 	verbose: boolean;
 	debug: boolean;
-	output: 'text' | 'json';
+	/**
+	 * `--output` as given; absent without the flag. The context resolves the
+	 * format of the run from it (see `resultFormat` in `context.ts`).
+	 */
+	output?: 'text' | 'json';
 	yes: boolean;
 	noInput: boolean;
 	profile?: string;
@@ -48,7 +52,7 @@ export interface Globals {
 }
 
 export interface ParsedInvocation {
-	/** Undefined for the root (`cdk-blocks`, `cdk-blocks --help`, `cdk-blocks --version`). */
+	/** Undefined for the root (empty argv, `--help`, `--version`). */
 	command?: CommandSpec;
 	/** The alias the user typed, when it was one. */
 	alias?: string;
@@ -58,7 +62,7 @@ export interface ParsedInvocation {
 	passthrough: string[];
 	/**
 	 * For help on a passthrough command: the verb whose own help to show
-	 * (`remove` in `cdk-blocks secret remove KEY --help`). Only `<verb> --help` is
+	 * (`migrate` in `npm run db -- migrate ./dir --help`). Only `<verb> --help` is
 	 * forwarded to the tool, never the other arguments.
 	 */
 	helpVerb?: string;
@@ -146,13 +150,8 @@ function tokenize(args: readonly string[], specs: readonly FlagSpec[]): ArgToken
 /** Where an option was given: names the command in errors, and the options it accepts. */
 interface OptionScope {
 	specs: readonly FlagSpec[];
-	/** `cdk-blocks deploy`; undefined before the command. */
+	/** `npm run deploy`; undefined before the command. */
 	command?: string;
-}
-
-/** A `blocks …` command line as it runs in an app's shell (see {@link BLOCKS_COMMAND}). */
-function runnable(command: string): string {
-	return command.replace(/^cdk-blocks\b/, BLOCKS_COMMAND);
 }
 
 /**
@@ -164,7 +163,7 @@ function runnable(command: string): string {
  */
 function applyOption(token: OptionToken, arg: string, scope: OptionScope, values: FlagValues): void {
 	const spec = scope.specs.find((s) => s.name === token.name);
-	const hint = runnable(`${scope.command ?? 'cdk-blocks'} --help`);
+	const hint = scope.command ? `${scope.command} -- --help` : blocksCommand('--help');
 	if (!spec) {
 		const candidates = scope.specs.map((s) => `--${s.name}`);
 		const where = scope.command ? ` for "${scope.command}"` : '';
@@ -239,8 +238,8 @@ function liftGlobals(tail: readonly string[], values: FlagValues): string[] {
 }
 
 function toGlobals(values: FlagValues): Globals {
-	const output = values.output ?? 'text';
-	if (output !== 'text' && output !== 'json') {
+	const output = values.output;
+	if (output !== undefined && output !== 'text' && output !== 'json') {
 		throw new UsageError(`option --output must be "text" or "json", not ${JSON.stringify(output)}.`);
 	}
 	const text = (name: string) => (typeof values[name] === 'string' ? (values[name] as string) : undefined);
@@ -272,7 +271,7 @@ function parseCommandArgs(
 ): { positionals: string[]; passthrough: string[] } {
 	const scope: OptionScope = {
 		specs: [...GLOBAL_FLAGS, ...(command.flags ?? [])],
-		command: `cdk-blocks ${command.path.join(' ')}`,
+		command: blocksCommand(...command.path),
 	};
 	const positionals: string[] = [];
 	const passthrough: string[] = [];
@@ -329,7 +328,7 @@ function parseCommandArgs(
 const GREP_FLAG = /^(?:-[iFEwnrRl]+|--)$/;
 
 function checkPositionals(command: CommandSpec, positionals: string[]): void {
-	const name = `cdk-blocks ${command.path.join(' ')}`;
+	const name = blocksCommand(...command.path);
 	const args = command.args ?? [];
 	const variadic = args.some((a) => a.variadic);
 	if (positionals.length > args.length && !variadic) {
@@ -337,23 +336,23 @@ function checkPositionals(command: CommandSpec, positionals: string[]): void {
 		const subcommands = subcommandsOf(command.path);
 		if (subcommands.length > 0 && args.length === 0) {
 			const asked = [...command.path, extra].join(' ');
-			// `cdk-blocks dev --port 4000 stop`: the subcommand is right, the option is in the middle of it.
+			// `npm run dev -- --port 4000 stop`: the subcommand is right, the option is in the middle of it.
 			if (findCommand([...command.path, extra])) {
 				throw new UsageError(
-					`"${extra}" must follow "${name}" directly: put the options of "cdk-blocks ${asked}" after the whole command.`,
-					{ hint: blocksCommand(asked, '--help') },
+					`"${extra}" must follow "${name}" directly: put the options of "${blocksCommand(...command.path, extra)}" after the whole command.`,
+					{ hint: blocksCommand(...command.path, extra, '--help') },
 				);
 			}
 			const candidates = subcommands.map((s) => s.path.join(' '));
 			throw new UsageError(`unknown command "${asked}".${didYouMean(suggest(asked, candidates))}`, {
-				hint: runnable(`${name} --help`),
+				hint: `${name} -- --help`,
 			});
 		}
-		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: runnable(`${name} --help`) });
+		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: `${name} -- --help` });
 	}
 	const missing = args.find((a, i) => a.required && positionals[i] === undefined);
 	if (missing)
-		throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: runnable(`${name} --help`) });
+		throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: `${name} -- --help` });
 }
 
 /** A command path word, and its argv index. */
@@ -387,7 +386,7 @@ function checkQueryPath(path: string, json: JsonObjectShape, name: string): void
 		}
 		if (problem) {
 			throw new UsageError(`no field "${path}" in the result of ${name}. ${problem}`, {
-				hint: runnable(`${name} --output json`),
+				hint: `${name} -- --output json`,
 			});
 		}
 		walked.push(segment);
@@ -434,7 +433,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				{ hint: blocksCommand('--help') },
 			);
 		}
-		// `cdk-blocks --profile deploy`: the option took the command as its value, and nothing would run.
+		// `--profile deploy`: the option took the command as its value, and nothing would run.
 		const given = ['profile', 'region', 'cwd', 'telemetry-file'].filter((name) => typeof values[name] === 'string');
 		if (!globals.help && !globals.version && given.length > 0) {
 			const names = new Set([...nameIndex().keys()].map((key) => key.split(' ')[0]));
@@ -445,7 +444,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 					: `no command given for --${given[0]}.`,
 				{
 					hint: swallowed
-						? blocksCommand(`--${swallowed}`, `<${swallowed}>`, String(values[swallowed]))
+						? blocksCommand(String(values[swallowed]), `--${swallowed}`, `<${swallowed}>`)
 						: blocksCommand('--help'),
 				},
 			);
@@ -499,7 +498,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 	let parsed: ParsedInvocation;
 	if (command.passthrough) {
 		// `-h`/`--help` anywhere after a passthrough command means help, never a run
-		// with the user's arguments: `cdk-blocks config remove KEY --help` must not delete KEY.
+		// with the user's arguments: `npm run config -- remove KEY --help` must not delete KEY.
 		const help = tail.some((token) => token === '-h' || token === '--help');
 		const forwarded = liftGlobals(tail, values);
 		if (help) values.help = true;
@@ -519,7 +518,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 			: args.positionals;
 		const passthrough = command.operandsAfterDashDash ? [] : args.passthrough;
 		parsed = { command, alias: aliasName, globals: toGlobals(values), flags: values, positionals, passthrough };
-		// `cdk-blocks dev --port 4000 stop -h`: help for the subcommand the run would name, not for `cdk-blocks dev`.
+		// `npm run dev -- --port 4000 stop -h`: help for the subcommand the run would name, not for `npm run dev`.
 		const subcommand =
 			parsed.globals.help && !command.args?.length && positionals[0] !== undefined
 				? findCommand([...command.path, positionals[0]])
@@ -542,13 +541,13 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		command.handler &&
 		(globals.output === 'json' || globals.query !== undefined)
 	) {
-		const name = `cdk-blocks ${command.path.join(' ')}`;
+		const name = blocksCommand(...command.path);
 		if (!command.json) {
 			throw new UsageError(
 				globals.query === undefined
 					? `--output json is not supported for "${name}": it prints text only.`
 					: `--query is not supported for "${name}": it has no JSON result.`,
-				{ hint: runnable(`${name} --help`) },
+				{ hint: `${name} -- --help` },
 			);
 		}
 		// Check the whole path before the command runs, so a typo never repeats a deploy.

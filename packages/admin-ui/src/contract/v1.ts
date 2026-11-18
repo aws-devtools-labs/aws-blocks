@@ -577,7 +577,7 @@ export interface BlockKeySchema {
  *
  * `unresolved` is not an error state: `AppSetting.fromExisting` REQUIRES an
  * explicit `name`, and the documented way to pass one is a variable holding a
- * name seeded outside the stack (`cdk-blocks db connect --stage`). So the most important
+ * name seeded outside the stack (`npm run db -- connect --stage`). So the most important
  * settings are exactly the ones whose path a source scan cannot name, and a
  * consumer must address those from the deployed stack instead of guessing
  * `/${fullId}`, which is the one answer that is certainly wrong when an

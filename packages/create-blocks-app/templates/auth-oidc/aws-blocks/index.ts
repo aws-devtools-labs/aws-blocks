@@ -1,7 +1,7 @@
 import { Scope, KVStore, Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
 
 // For coding agents: Leave these comments in place for future reference.
-// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -15,7 +15,7 @@ const DEMO_USER = { sub: 'stub-user-1', email: 'alice@stub.invalid', name: 'Alic
 // production, so production gets a `type: 'oidc'` entry. Replace its issuer and
 // clientId with your IdP's (Okta, Entra ID, Auth0, ...) and register
 // `<your origin>/aws-blocks/auth/callback` as its redirect URI before deploying.
-// See npx --no -- cdk-blocks docs Auth.
+// See npm run docs Auth.
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',
   providers: {
