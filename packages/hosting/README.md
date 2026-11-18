@@ -5,567 +5,72 @@ Low-level CDK L3 constructs for deploying web applications on AWS
 CloudFront by default, an Application Load Balancer, Amazon API Gateway, an S3
 website, or your own (see [Front doors](#front-doors)).
 
-## Overview
-
-This package provides:
-
-1. **`HostingConstruct`** -- a CDK L3 construct that provisions a full hosting
-   stack (a front door — a CloudFront distribution by default —, S3 origin,
-   Lambda compute, optional WAF, monitoring alarms, and DNS records).
-
-2. **Framework adapters** (Next.js, Nuxt, Astro, SPA) that run the framework
-   build, produce a `DeployManifest`, and hand off to the construct for
-   provisioning.
-
-3. **Manifest types** (`DeployManifest`, `RouteBehavior`, `ComputeResource`,
-   etc.) that describe the shape of a deployment.
-
 ## When to use this package directly
 
-Most users should use `Hosting` from `@aws-blocks/core`, which wraps these
+Most apps use `Hosting` from `@aws-blocks/core`, which wraps these
 constructs with the AWS Blocks integration layer (route registry, config.json
-generation, RPC prefix wiring).
+generation, RPC prefix wiring). Use `HostingConstruct` directly for a CDK app
+without an AWS Blocks backend, or to pass a `DeployManifest` you built
+yourself.
 
-Use `HostingConstruct` directly when you need:
+The `frontDoor` prop and its settings (front doors, caching, custom domains,
+logging, monitoring) apply to both `Hosting` and `HostingConstruct`. The
+`stacked` door and `await Hosting.create(...)` exist on `Hosting` only.
 
-- A standalone CDK app without the AWS Blocks layer
-- Fine-grained control over construct props
-- Custom adapters or manifest generation pipelines
+## Quick start
 
-## Main exports
-
-```ts
-// Root entry point: the CDK-free value API (safe to import in SSR/runtime code)
-import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting';
-
-// Sub-path: the construct, manifest types, and the CDK resolution engine
-import {
-  HostingConstruct,
-  HostingConstructProps,
-  HostingDomainConfig,
-  HostingWafConfig,
-  generateBuildId,
-  DeployManifest,
-  RouteBehavior,
-  ComputeResource,
-  FrameworkAdapterFn,
-  HostingError,
-} from '@aws-blocks/hosting/constructs';
-
-// Sub-path: adapters only
-import { nextjsAdapter, nuxtAdapter, astroAdapter, spaAdapter } from '@aws-blocks/hosting/adapters';
-
-// Sub-path: typed errors
-import { HostingError } from '@aws-blocks/hosting/error';
-```
-
-> The value API is on the bare `@aws-blocks/hosting` entry so an SSR/runtime bundle
-> can import `getSecret`/`getConfig` without pulling in CDK. The construct and the
-> resolution engine live on `/constructs`.
-
-## Secrets & config
-
-Keep sensitive and environment-specific values out of source. You declare a value
-by **which function you call** — that choice picks the store, and the framework
-owns everything else (the CLI write, the IAM grant, the runtime read):
-
-| Declare (infra) | Store | Read (runtime) |
-| --- | --- | --- |
-| `secret('KEY')` | AWS **Secrets Manager** (sensitive) | `getSecret('KEY')` |
-| `config('KEY')` | AWS **SSM Parameter Store** (non-sensitive, free tier) | `getConfig('KEY')` |
-
-### Declare — in your hosting infra
+An adapter runs the framework build and returns a `DeployManifest`.
+`HostingConstruct` provisions it.
 
 ```ts
+import { App, Stack } from 'aws-cdk-lib';
+import { nextjsAdapter } from '@aws-blocks/hosting/adapters';
 import { HostingConstruct } from '@aws-blocks/hosting/constructs';
-import { secret, config } from '@aws-blocks/hosting';
 
-new HostingConstruct(stack, 'Web', {
-  manifest, // produced by a framework adapter (see "Main exports")
-  environment: {
-    STRIPE_KEY: secret('STRIPE_KEY'), // → Secrets Manager
-    FEATURE_FLAGS: config('FEATURE_FLAGS'), // → SSM Parameter Store
-  },
-  // Optional per-kind namespace / cache config:
-  secretStore: { prefix: '/myapp/secrets' },
-  configStore: { prefix: '/myapp/config', cacheTtlSeconds: 30 },
-});
+const app = new App();
+const stack = new Stack(app, 'Web');
+
+const manifest = nextjsAdapter({ projectDir: process.cwd() });
+new HostingConstruct(stack, 'Hosting', { manifest });
 ```
 
-The marker is inert (`{ key, kind }`) and safe to commit — only the store
-*locator* is injected (never the value), and the compute role is granted
-least-privilege read on that one resource (`secretsmanager:GetSecretValue` /
-`ssm:GetParameter`, scoped to the exact ARN) plus `kms:Decrypt`.
-
-Markers in `environment` are wired for **runtime** resolution (above), so both
-`secret()` and `config()` are allowed there (only the locator is injected, never
-the value). Resolving a marker to a literal at **synth time** — e.g. for
-`domain.domainName`, which must be a literal before CloudFront/ACM are built —
-**inlines the value into the CloudFormation template**, so those positions accept
-only `config()` (non-sensitive → SSM) or a plain string, never `secret()`. Synth
-resolution needs an async wrapper that does the SDK read during construction; that
-path is provided by the Blocks `Hosting` block (`await Hosting.create(...)`), not
-this leaf construct, whose `domain.domainName` is a plain `string | string[]`.
-
-**Bring your own:** `environment` also accepts an existing CDK `ISecret` /
-`IParameter` handle — the construct grants read via the handle and injects its
-locator, so `getSecret` / `getConfig` resolve it identically (managed
-*provisions*, BYO *references*).
-
-### Read — in your SSR / API / runtime code
-
-```ts
-// The value API is the bare entry (CDK-free), so no CDK is pulled into the runtime bundle:
-import { getSecret, getConfig } from '@aws-blocks/hosting';
-
-const key = await getSecret('STRIPE_KEY'); // Secrets Manager
-const flags = await getConfig('FEATURE_FLAGS'); // SSM
-```
-
-Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
-the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
-and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
-so a value only in `.env` isn't seen there and the getter throws
-`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
-because Next loads it.) On a deployed function it fetches + decrypts from its
-store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
-redeploy).
-
-### Type-safe keys — autocomplete + typo errors, zero code
-
-By default `getSecret` / `getConfig` accept any `string`. Run `hosting-typegen`
-(wire it as `"typegen": "hosting-typegen"` and, ideally, a `"predev"` hook) to make
-them **type-safe with no call-site change**:
-
-```bash
-npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
-npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
-npx hosting-typegen --check   # CI: fail if that file is stale
-```
-
-**In a Blocks app you get this for free** — the Blocks dev server (`npm run dev`)
-auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself,
-so keys update as you type with no second command. (It's a no-op if the app declares
-no secrets, and never blocks the dev server.) For a standalone hosting app, run
-`hosting-typegen --watch` alongside your dev server, or add a `"predev"` hook. Either
-way, add `hosting-typegen --check` in CI to catch a stale committed file.
-
-It statically scans your `secret('...')` / `config('...')` calls (no app execution,
-no AWS credentials) and generates a `.d.ts` that narrows the getters to exactly your
-declared keys — so a typo, or reading a `config` key with `getSecret` (the wrong
-store), is a **compile error**, and your editor autocompletes the valid keys:
-
-```ts
-await getSecret('STRIPE_KEY'); // ✅ declared with secret()
-await getSecret('STRIPE_KYE'); // ❌ compile error — not a declared secret key
-```
-
-Add the generated file to your `tsconfig.json` `include` and let the tool own it
-(it is regenerated, never hand-edited):
-
-```jsonc
-{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
-```
-
-The keys come straight from your `secret()`/`config()` calls — the single source of
-truth — so the types can't drift from what you wired. The file is safe to delete
-(the keys just fall back to `string`) and safe to `.gitignore` and regenerate.
-Because it is derived only from string-literal keys, a `secret(myVar)` with a
-non-literal key is reported and skipped; and a synth-only `domain` / `connectionArn`
-key may appear in autocomplete even though it is not readable at runtime.
-
-### Typed, parsed values with a schema
-
-Pass a schema (Zod, Valibot, ArkType — any Standard Schema) to get a **typed,
-parsed** value instead of a `string`:
-
-```ts
-// declare
-import { z } from 'zod';
-environment: { FEATURE_FLAGS: config('FEATURE_FLAGS', { schema: z.object({ beta: z.boolean() }) }) }
-
-// read — no JSON.parse, no `any`
-const { beta } = await getConfig('FEATURE_FLAGS');   // typed as { beta: boolean }
-```
-
-`typegen` infers the schema's output type (via a TypeScript `Program`) and inlines
-it into the generated `.d.ts`, so `getConfig`/`getSecret` **return that type**. At
-runtime the value is JSON-parsed automatically (a per-key flag is set at synth). The
-schema type is typed as `StandardSchemaV1`, so the library is your choice. Note this
-is parse-to-type: the schema object isn't shipped to the runtime (it can't cross the
-synth→runtime bundle boundary), so it parses to the declared type rather than
-deep-re-validating on read.
-
-### Transport markers across a JSON / build boundary
-
-A marker is branded with a `Symbol` (and may carry a non-serializable `schema`), so
-it does **not** survive a plain `JSON.stringify` → `JSON.parse`: the brand is dropped
-and `isManagedValue()` returns `false` on the far side. If you carry a config object
-containing markers across a JSON boundary — e.g. an orchestrator that serializes
-per-stage config into a build **environment variable** and reads it back in a later
-build phase — use the codec for a lossless round-trip:
-
-```ts
-import {
-  managedValueReplacer,
-  managedValueReviver,
-  encodeManagedValue,
-  decodeManagedValue,
-  isManagedValueJSON,
-  ManagedValueCodecError,
-} from '@aws-blocks/hosting';
-
-// Producer (phase 1): stringify with the replacer, stash in an env var.
-process.env.STAGE_CONFIG = JSON.stringify({ domain: config('DOMAIN'), apiKey: secret('API_KEY') }, managedValueReplacer);
-
-// Consumer (phase 2, possibly a different process): parse with the reviver.
-const cfg = JSON.parse(process.env.STAGE_CONFIG, managedValueReviver);
-isSecret(cfg.apiKey); // true — brand restored
-```
-
-`encodeManagedValue` / `decodeManagedValue` are the single-value primitives; the
-`managedValueReplacer` / `managedValueReviver` are drop-in `JSON.stringify` /
-`JSON.parse` hooks that apply them across a whole (possibly nested) object.
-
-Contract of the wire form (it is a **published, cross-build compatibility boundary**):
-
-- **Versioned.** Every encoded value carries a protocol version
-  (`MANAGED_VALUE_JSON_VERSION`). A decoder rejects a version it does not understand
-  instead of guessing, so producer and consumer on different package versions fail
-  predictably rather than silently misreading each other.
-- **Malformed input.** `decodeManagedValue(v: unknown)` validates exhaustively and
-  throws a typed `ManagedValueCodecError` on an unsupported version, unknown kind,
-  invalid key, or any other malformed shape. The `managedValueReviver`, by contrast,
-  **never throws**: anything that is not an exact wire value is left untouched, so a
-  stray or future-versioned tagged object passes through as ordinary data.
-- **No collisions.** Only an object whose *sole* property is the codec tag is revived
-  into a marker. An ordinary object that merely also happens to carry the tag (plus
-  other fields) is **not** treated as a wire value, so no sibling data is silently
-  dropped.
-- **Schema.** A marker's `schema` object is not serializable and is **not**
-  transported; what is transported is its operational bit, so the runtime
-  **JSON-parse behavior is preserved** across the boundary (a schema-bearing value
-  still comes back parsed, not raw). Deep re-validation, however, needs the real
-  schema **re-declared on the far side** — the runtime getter is parse-only either
-  way (see "Typed, parsed values with a schema" above).
-
-### Set the values (out of band, never in git)
-
-Standalone hosting apps get two bundled CLIs:
-
-```bash
-# Secrets Manager — a secret value is NEVER taken from argv (it would land in
-# shell history). Omit the value for a hidden prompt, or pipe it via --value-stdin:
-npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
-cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
-npx hosting-secret list --prefix /myapp/secrets
-npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets               # recoverable
-npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # immediate, no recovery
-
-# SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
-npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
-```
-
-`set` is **create-or-update**: the first call creates the entry, and running it
-again overwrites the value in place (no error, no prompt) — that is how you
-rotate a value. A **secret** value is never read from `argv` / shell history:
-`hosting-secret set` takes it from a **hidden prompt** or `--value-stdin`, and
-passing it positionally is a hard error. A **config** value is non-sensitive, so
-`hosting-config set KEY value` positionally is allowed (`--value-stdin` / the
-prompt still work). `list` prints names only, never values.
-
-`remove` on a **secret** is recoverable by default — the value enters Secrets
-Manager's recovery window and can be restored (guards against a typo'd prod key).
-Pass `--force` to delete immediately with no recovery. `--force` always needs
-`--yes` (or `-y`) to confirm, in every stage, and prints a warning naming the stage
-(or saying the un-staged value is shared by every stage, production included)
-before it deletes. (`config` removes are always immediate — SSM Parameter Store has
-no recovery window — so `--force` changes nothing there and needs no `--yes`.)
-
-> **Footguns to know.**
-> 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys
->    to, or the deploy reports the value as "not set".
-> 2. **Account-global prefix.** The default prefixes (`/hosting/secrets`,
->    `/hosting/config`) are account-global — if more than one app deploys to the
->    same account, give each its own `secretStore.prefix` / `configStore.prefix`
->    (and matching CLI `--prefix`), or their same-named values collide.
-> 3. **`stage` is not a security boundary.** An optional `stage` on
->    `secretStore` / `configStore` resolves `<prefix>/<stage>/<key>` and falls
->    back to the shared `<prefix>/<key>`. To make that fallback work the IAM grant
->    is *static*, so a stage's compute has standing read on **both** the stage
->    value and the shared one. Every stage sharing a prefix can read the shared
->    value — put production-only secrets in a stage-scoped slot and keep only a
->    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
->    constructs sharing a prefix are not isolated from each other.
-
-## Next.js: the OpenNext version
-
-The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
-(`@opennextjs/aws`). Declare it in your app so you control its version and the
-build doesn't download it:
-
-```bash
-npm install --save-dev @opennextjs/aws@~4.1.14
-```
-
-- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`.
-  Outside that range the build warns and continues.
-- If the app doesn't declare OpenNext, the adapter builds with
-  `@opennextjs/aws@4.1.14` and prints a warning.
-- OpenNext declares the Next.js versions it supports as a `next` peer range
-  (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
-  it, the build prints a warning. Upgrade `next` within its major version to
-  one that range accepts.
-- A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
-  stack's region at synth time. Set `env` on the stack that holds `Hosting`:
-
-  ```ts
-  const blocksStack = await BlocksStack.create(app, stackName, {
-  	env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
-  	// …
-  });
-  ```
-
-  Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
-  `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
-  for the Lambda@Edge function, so bootstrap `us-east-1` too
-  (`npx cdk bootstrap aws://<account>/us-east-1`). `npm run sandbox:destroy`
-  deletes every stack the sandbox deploys, the `us-east-1` support stack
-  included. `npm run destroy` passes no stack selection, so the CDK CLI refuses
-  to destroy an app with more than one top-level stack; that is tracked in
-  [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│  Framework Adapter (nextjs / nuxt / astro)   │
-│  - runs build                                │
-│  - emits DeployManifest                      │
-└──────────────────┬───────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────┐
-│  HostingConstruct (CDK L3)                   │
-│  - front door (CloudFront by default)        │
-│  - S3 origin (static assets)                 │
-│  - Lambda compute (SSR / API / middleware)   │
-│  - Optional: WAF, DNS, monitoring, warmup    │
-└──────────────────────────────────────────────┘
-```
-
-## SSR compute: Lambda or Lambda Web Functions
-
-By default the SSR server runs on a Lambda function behind an API Gateway REST
-API (`compute.type: 'lambda'`). HTTP-server frameworks run inside it via the
-Lambda Web Adapter. Set `compute.type: 'web-function'` to run it on
-[AWS Lambda Web Functions](https://docs.aws.amazon.com/lambda/latest/dg/web-functions.html)
-instead. The framework's own Node.js server then runs directly on Lambda, and
-CloudFront reaches it through origin access control (OAC):
-
-```ts
-new HostingConstruct(stack, 'Hosting', {
-  manifest,
-  compute: {
-    type: 'web-function',
-    timeout: Duration.seconds(60),
-    webFunction: { maxEnvironments: 20 }, // optional tuning
-  },
-});
-```
-
-```
-CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framework server
-```
-
-| | `'lambda'` (default) | `'web-function'` |
+| Adapter | Arguments | Input |
 |---|---|---|
-| Path | CloudFront → API Gateway → Lambda (+ Lambda Web Adapter) | CloudFront → Web Function endpoint |
-| Requests per environment | 1 | many (dynamic, up to `webFunction.maxConcurrencyPerEnvironment`, 1–128, default 64) |
-| Billing | duration × memory | active CPU + memory over the environment lifetime |
-| Origin auth | shared-secret header checked by API Gateway | IAM: OAC-signed, endpoint grants only this distribution |
-| Warm capacity | `provisionedConcurrency` / `warmup` | automatic headroom (scales to zero when idle) |
-| Regions | all | us-east-1, us-east-2, us-west-2, ap-northeast-1, eu-west-1 |
-| Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
+| `nextjsAdapter` | `{ projectDir, configPath?, skipBuild? }` | A Next.js app, built with OpenNext. `configPath` is a custom `open-next.config.ts`, relative to `projectDir`. |
+| `nuxtAdapter`, `nitroAdapter` | `{ projectDir, preset?, buildCommand?, skipBuild? }` | A Nuxt app, or another Nitro app. `preset` overrides the Nitro preset. |
+| `astroAdapter` | `{ projectDir, buildCommand?, skipBuild?, bodySizeLimit? }` | An Astro app. `bodySizeLimit` is the largest request body in bytes (default 20 MB). |
+| `sveltekitAdapter` | `{ projectDir, buildCommand?, skipBuild?, bodySizeLimit? }` | A SvelteKit app. `bodySizeLimit` as for Astro. |
+| `spaAdapter` | `projectDir, { buildOutputDir?, spaFallback? }` | An already built single-page app in `dist/`, `build/` or `out/`. `spaFallback: false` declares a multi-page static site. |
 
-**Requirements.**
-- An **HTTP-server build**. With `@aws-blocks/blocks`' `Hosting` every built-in
-  framework works unchanged, because the adapters switch their output when
-  Web Functions are selected:
-  - **Astro** (`@astrojs/node` standalone) and **SvelteKit** (`adapter-node`)
-    already emit an HTTP server.
-  - **Nuxt/Nitro** builds with the `node-server` preset instead of `aws-lambda`.
-  - **Next.js** builds with OpenNext's `node` wrapper/converter as a container
-    origin. A user `open-next.config.ts` must then set `wrapper: 'node'`,
-    `converter: 'node'` and `generateDockerfile: true`.
-- If you run an adapter yourself in front of `HostingConstruct`, wrap the run in
-  `withComputeTarget('web-function', …)` from `@aws-blocks/hosting/adapters` to
-  get the same output.
-- An event-handler build (an OpenNext `aws-lambda` wrapper or a Nitro
-  `aws-lambda` preset) fails synth with `WebFunctionUnsupportedComputeError`.
-- Synth also fails with `WebFunctionUnsupportedRegionError` outside the
-  supported Regions. If Web Functions have since launched in your Region,
-  bypass the check with `skipRegionValidation: true`.
+`skipBuild: true` reuses an existing build output.
 
-**What changes.**
-- **Lambda-only knobs are ignored with a synth warning:** `memorySize`,
-  `reservedConcurrency`, `provisionedConcurrency` and `warmup`. Use
-  `webFunction.maxEnvironments` and `webFunction.rateLimit` to cap scale.
-- **Only the SSR server moves.** Image optimization, ISR revalidation,
-  middleware and edge routes stay on Lambda.
-- **Native modules must be Arm64.** Astro's bundled `sharp` is installed for
-  Arm64 automatically.
-- **The default SSR CloudWatch alarms aren't created** for a Web Function yet.
-- **Separate resources.** The SSR server is exposed as
-  `HostingConstruct.computeWebFunctions`, not in `computeFunctions`. Grant it
-  access to AWS resources through its `grantPrincipal`.
+### Entry points
 
-**Under the hood.**
-- **Code bucket.** Web Functions only read code from a versioned S3 object.
-  Each deploy copies the bundle zip onto one fixed key
-  (`web-function/<fn>/code.zip`) in a versioned code bucket, and pins the new
-  revision to the object version that copy returned. Superseded zips become
-  non-current versions, which a lifecycle rule expires after 30 days.
-- **Revisions.** Every revision property is create-only, so the revision's
-  logical ID is derived from its content, as with `lambda.Version`. A changed
-  bundle or environment variable adds a new revision and re-points the endpoint
-  (weight 100), then CloudFormation deletes the old revision during cleanup.
-  The deploy never needs a replacement update, which matters because sandbox
-  deploys run in Express Mode with rollback disabled, and CloudFormation
-  rejects replacements there.
-- **Header hygiene.** Responses from a Web Function carry `lambda-web-logstream`,
-  which names the internal log stream and revision. Hosting removes it with a
-  response headers policy, which applies to every status code including
-  4xx/5xx. The policy has the same settings as AWS's managed
-  `SecurityHeadersPolicy`, plus `removeHeaders`.
-  - It counts against the account's response headers policy quota (20 by
-    default). That's one policy per Web Function stack.
-  - To share one policy across stacks instead, create it once with
-    `removeHeaders` and pass it as `frontDoor.features.responseHeadersPolicy`
-    in each stack (`cdn.responseHeadersPolicy` is its deprecated alias):
+| Import from | Exports |
+|---|---|
+| `@aws-blocks/hosting` | `secret`, `config`, `getSecret`, `getConfig` and the marker codec. It imports no CDK, so SSR and runtime code can use it. |
+| `@aws-blocks/hosting/constructs` | `HostingConstruct`, `HostingConstructProps`, `HostingDomainConfig`, `HostingWafConfig`, `generateBuildId`, `defineFrontDoor`, the manifest types (`DeployManifest`, `RouteBehavior`, `ComputeResource`), `FrameworkAdapterFn`, `HostingError`. |
+| `@aws-blocks/hosting/adapters` | The adapters, `withComputeTarget`, `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`. |
+| `@aws-blocks/hosting/error` | `HostingError`. |
 
-    ```ts
-    // once, e.g. in a shared-infra stack
-    new ResponseHeadersPolicy(shared, 'WebFunctionHeaders', {
-      securityHeadersBehavior: { /* … */ },
-      removeHeaders: ['lambda-web-logstream'],
-    });
-    // in each hosting stack
-    frontDoor: {
-      features: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) },
-    }
-    ```
+### Props (`HostingConstructProps`)
 
-    A BYO policy gets a synth reminder to include the removal, because
-    Hosting can't inspect or extend it.
-- **Native modules.** Synth warns when the bundle contains x86-64 `.node`
-  binaries. Web Functions run on Arm64, and Lambda doesn't check that the
-  server starts when it activates a revision, so a server that crashes on
-  start would otherwise deploy green.
-- **Entry shim.** An entry shim, `__aws_blocks_web_entry.mjs`, is written into
-  the bundle. It maps the listen address in `AWS_LAMBDA_HTTP_ENDPOINT` onto
-  the framework's `HOST`/`PORT` variables, then imports the server entry.
-- **Resource policy.** CloudFormation has no resource type for a Web Function's
-  resource-based policy. A small custom resource grants the distribution
-  `lambda:InvokeWebFunctionEndpoint`.
-
-### The server origin's REST API (`compute.type: 'lambda'`)
-
-CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
-`execute-api` URL is public, so the API is locked to the distribution. A Nuxt
-IPX image optimizer gets a REST API of its own with either compute type, so
-with `compute.type: 'web-function'` everything below, including the
-`serverOrigin` settings, applies to that image REST API.
-
-The REST API invokes the server the way it was built. A streaming server
-(Next.js through OpenNext, Nitro's `aws-lambda` preset with
-`nitro.awsLambda.streaming: true`, any Lambda Web Adapter server) gets a
-response-streaming integration (`ResponseTransferMode: STREAM`). A buffered
-Lambda handler (Nitro's `aws-lambda` preset with `awsLambda.streaming` off,
-which is Nitro's default) gets a plain Lambda proxy integration, which reads
-the `{ statusCode, headers, body }` object the handler returns. A buffered
-response is sent whole once the handler returns, and Lambda limits it to 6 MB;
-turn streaming on for larger responses or to send the page as it renders.
-
-- **Origin-verify secret.** The REST API's resource policy denies any request
-  whose `Referer` header is not a secret that CloudFront adds as an origin
-  custom header (a viewer's own `Referer` is replaced). The secret is random:
-  Secrets Manager generates it once per stack (a secret in the stack), and
-  both the policy and the CloudFront origin read it through a CloudFormation
-  `{{resolve:secretsmanager:…}}` dynamic reference, so it is in no template or
-  source. It is visible in plain text to anyone who can read the
-  distribution's config (`cloudfront:GetDistributionConfig`) or the API's
-  policy (`apigateway:GET`), and in the Secrets Manager secret. Your SSR app
-  also receives it as the request's `Referer` header, so don't log that
-  header (for example a `combined`-format request logger) or redirect back to
-  it.
-- **A separate image origin.** A Nuxt IPX image optimizer (`imageOptimization.baseURL`)
-  gets its own REST API with its own secret, so neither value reaches the other
-  Lambda.
-- **A web ACL on the stage.** With a Blocks-managed web ACL on the distribution
-  (`waf: { enabled: true }`), each server-origin stage also gets a REGIONAL web
-  ACL with the same rules (AWS managed common and known-bad-inputs rule groups,
-  and the per-IP rate limit at the same `rateLimit`), logged to a CloudWatch log
-  group named `aws-waf-logs-…`. The logs keep only the requests a rule blocked
-  or counted, with the `Referer`, `Cookie` and `Authorization` headers
-  redacted, and the ACL keeps no sampled requests, which AWS WAF doesn't
-  redact. Requests from CloudFront carry an `x-blocks-front-door` marker (the
-  stack's id), with or without a web ACL, that exempts them from the stage's
-  rate rule, since they all come from edge IPs and the distribution's own web
-  ACL already rate-limits viewers. It follows `waf.enabled` because each web
-  ACL costs money: a monthly charge, a charge per request it evaluates (every
-  uncached SSR request is evaluated by two web ACLs), and the CloudWatch
-  Logs ingestion of the requests it blocks or counts. A `waf.webAclArn` of your
-  own adds nothing to the stage.
-- **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
-  access logs (`AccessLogFormat.jsonWithStandardFields()`) from each stage to a
-  CloudWatch log group. REST API access logging needs the account-level API
-  Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), which this then
-  creates once per stack (the same resource `@aws-blocks/core`'s
-  `defaults.accessLogging` uses). That setting is one per account and region:
-  a second stack that also creates it repoints it, and tearing that stack down
-  leaves it pointing at a deleted role. Turn it on in one stack per account and
-  region, or manage that role yourself.
-
-```ts
-frontDoor: {
-  features: {
-    waf: { enabled: true, rateLimit: 2000 }, // also on the server origin's stage
-    serverOrigin: {
-      accessLogging: true,
-      logRetention: RetentionDays.THREE_MONTHS, // default: one month (access and web ACL logs)
-    },
-  },
-}
-```
-
-**Upgrading from the earlier derived secret.** Earlier releases derived the
-header value from the stack name and construct path. The first deploy with the
-random secret updates the REST API policy within seconds, while the
-distribution takes minutes to carry the new header, so the server origin
-answers 403 in between. To upgrade without that window, deploy once with
-`serverOrigin: { acceptLegacyVerifyHeader: true }`, and then deploy again
-without it. For that one deploy:
-
-- the SSR REST API's policy accepts both values;
-- with a Nuxt IPX optimizer, the SSR REST API keeps the image routes it served
-  in earlier releases, for the edges still sending image requests there;
-- the SSR REST API's stage gets no web ACL, because edges on the previous
-  config don't send the `x-blocks-front-door` marker yet and would hit the
-  per-IP rate limit. The ACL is attached on the next deploy.
-
-Synth warns (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`) while the option
-is set.
-
-**Rotating the secret.** Bump `serverOrigin.verifySecretRotation` (`1`, `2`, …)
-and deploy: Secrets Manager generates new values, and the REST API policies and
-the CloudFront origins update in the same deploy. Expect the same short window
-of 403s while the distribution propagates; rotate in a quiet window.
-
-The stacked door's CloudFront edge sends its own origin-verify header to the
-ALB router. It never sends it over plain HTTP to an internet-facing router in
-a production deploy, unless the door sets `allowPlainHttp: true`: see
-[the edge → router hop](#the-stacked-door).
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `manifest` | `DeployManifest` | required | The adapter's output. |
+| `frontDoor` | `'cloudfront'`, `'none'` or `{ kind?, features?, … }` | `'cloudfront'` | The public entry point and its settings. See [Front doors](#front-doors). |
+| `compute` | object | | Overrides for the compute: `type` (`'lambda'` or `'web-function'`, default `'lambda'`), `webFunction`, `memorySize`, `timeout` (a `Duration` or seconds), `reservedConcurrency`, `provisionedConcurrency`, `imageOptimization.reservedConcurrency`, `logRetention`, `environment`, `warmup: { rate }`, `tracing: { otelEndpoint, otelHeaders?, serviceName? }`. |
+| `environment` | `Record<string, string \| ManagedValue \| ISecret \| IParameter>` | | Environment variables for all compute functions. See [Secrets & config](#secrets--config). |
+| `secretStore`, `configStore` | `KindStoreOptions` | | Prefix, stage and cache settings of the two stores. See [Secrets & config](#secrets--config). |
+| `storage` | object | | `encryption` (`'S3_MANAGED'` or `'KMS'`), `encryptionKey`, `retainOnDelete`, `buildRetentionDays` (default 30), `deployIntervalDays`, `inventory: { enabled }`, `deployment: { memoryLimit, ephemeralStorageMiB }` (the asset-upload Lambda, default 1024 MiB each). |
+| `errorPages` | `{ notFound?, serverError? }` | | Paths of the 404 and 500 HTML files, relative to the project root. |
+| `buildCache` | `{ enabled, bucket? }` | | An S3 bucket for framework build caches. Created unless `bucket` is given. |
+| `backendApi` | `{ url, paths? }` | | The backend API a door other than CloudFront and `'none'` proxies on the app's origin. `url` ends in `/aws-blocks/api`; `paths` adds raw routes to `/aws-blocks/*`. |
+| `skipImageOptimization` | `boolean` | `false` | Builds no image-optimization function, even when the manifest declares one. |
+| `inPlaceBuild` | `boolean` | `false` | For a manifest whose `buildId` stays the same while the build is unchanged: the door's cutover does not wait for the uploads. For throwaway environments only. The CloudFront door ignores it. |
+| `skipRegionValidation` | `boolean` | | Skips the Region checks for WAF, ACM, the Lambda Web Adapter, Web Functions and logging v2. |
+| `edgeStackId` | `string` | CDK's `edge-lambda-stack-<hash>` | Construct id of the `us-east-1` stack that holds Lambda@Edge functions when the stack is in another region. |
+| `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `cdn` | | | Deprecated aliases of `frontDoor.features` settings. See [Settings per door kind](#settings-per-door-kind). |
 
 ## Front doors
 
@@ -590,14 +95,13 @@ locked origin requires on every request, so it only answers its own door.
 | Door | Viewer TLS | Origin-hop TLS | Secret header |
 |---|---|---|---|
 | CloudFront (default) | HTTPS (HTTP redirects to HTTPS; TLS 1.2+ with a custom `domain`) | HTTPS: S3 through origin access control, Lambda function URLs through origin access control, and the API Gateway REST APIs in front of the server and the image optimizer | `Referer` carrying a Secrets Manager secret, which each server-origin REST API's resource policy requires (plus the `x-blocks-front-door` marker); over HTTPS only |
-| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox unless `allowPlainHttp: true` | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`), unless the door sets `allowPlainHttp: true` |
-| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80, which with an API is sandbox-only (`PlainHttpFrontDoorError` outside a sandbox) unless `allowPlainHttp: true` | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
+| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`, otherwise plain HTTP :80 (see [the stacked door](#the-stacked-door)) | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires |
+| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443), otherwise plain HTTP :80 | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
 | `apiGateway`, `api: 'http'` | HTTPS only (the `execute-api` endpoint, or a custom `domain`) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `apiGateway`, `api: 'rest'` | HTTPS only, at the required custom `domain` (TLS 1.2) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `'none'` | None: S3 website endpoints are HTTP only | None: the website bucket serves the files itself | None: the bucket is public read |
 
-A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself
-(an `http://` URL with an API is sandbox-only unless `allowPlainHttp: true`).
+A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself.
 
 **Sandbox-only options.** Some plain-HTTP shapes synthesize only in a sandbox
 deploy (the `sandboxMode` context the sandbox scripts pass); a production
@@ -625,10 +129,10 @@ without an API synthesizes in every stage.
 
 ### Running a plain-HTTP door in production
 
-Some deploys legitimately serve plain HTTP in production: an `internal` ALB
-reached only inside a trusted private network, or a door whose TLS is ended
-upstream by a corporate proxy or another load balancer. For those, set
-`allowPlainHttp: true` on the door (default `false`):
+`allowPlainHttp: true` on the door (default `false`) lets a production deploy
+synthesize a shape from the table above. Use it for an `internal` ALB reached
+only inside a trusted private network, or for a door whose TLS is ended
+upstream by a corporate proxy or another load balancer:
 
 ```ts
 import { Annotations } from 'aws-cdk-lib';
@@ -646,77 +150,84 @@ new Hosting(stack, 'Hosting', {
 Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction');
 ```
 
-What it exposes:
+- A production synth with the option warns
+  `@aws-blocks/hosting:PlainHttpAllowedInProduction`. A sandbox deploy behaves
+  as without the option.
+- On the `stacked` door the browser still reaches the edge over HTTPS. Only
+  the edge → router hop is plain HTTP: anyone who reads the
+  `x-blocks-origin-verify` secret there can reach the router directly, past
+  the edge and its web ACL. Prefer `internal: true` (a VPC origin, on the AWS
+  network) or a router `certificate`.
+- A value other than `true` or `false` fails synth with
+  `InvalidFrontDoorOptionError`.
+- The option has no effect on a door that serves HTTPS, or on `'none'`, which
+  takes no options.
 
-- **`alb` and `custom` doors:** the browser reaches the door over plain HTTP, so
-  the pages, sign-in, session cookies and every RPC can be read or altered on
-  the network path. `Hosting` registers `BLOCKS_ALLOW_PLAIN_HTTP` in the
-  backend's config, so `Auth` issues its same-origin session cookie without
-  `Secure` (a browser drops a `Secure` cookie set over HTTP) instead of refusing
-  sign-in with `InsecureTransportException`.
-- **`stacked` door:** the browser still reaches the CloudFront edge over HTTPS,
-  so the session cookie keeps `Secure`. The edge → router hop is plain HTTP to
-  the router's public addresses: the `x-blocks-origin-verify` origin secret
-  crosses it in cleartext, so anyone who reads it there can reach the router
-  directly, past the edge and its web ACL. Prefer `internal: true` (a VPC
-  origin, on the AWS network) or a router `certificate`.
+**`Auth` behind a plain-HTTP door.** A browser discards a `Secure` cookie set
+over plain HTTP.
 
-A production synth with the option emits one warning,
-`@aws-blocks/hosting:PlainHttpAllowedInProduction`, that names what is exposed;
-acknowledge it with
-`Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`.
-A sandbox deploy behaves as without the option. A value other than `true` or
-`false` fails synth with `InvalidFrontDoorOptionError`. The option has no
-effect on a door that serves HTTPS, or on `'none'`, which takes no options.
+- In a sandbox deploy, or with `allowPlainHttp: true`, `Auth` issues its
+  same-origin session cookie without `Secure` behind an `alb` or `custom`
+  door served over HTTP. `Hosting` registers `BLOCKS_ALLOW_PLAIN_HTTP` in the
+  backend's config for the option.
+- Otherwise sign-in fails with `InsecureTransportException`
+  (`AuthErrors.InsecureTransport`, HTTP 500) before any session is stored, and
+  no `Set-Cookie` line is written. Sign-out and account deletion still clear
+  the cookie.
+- Behind the `stacked` door the session cookie keeps `Secure`: the edge is
+  HTTPS.
 
-`frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
-`{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
-shape (`api: 'REST'`, an ARN string as `certificate`) fails with
-`UnsupportedFrontDoorError` or `InvalidFrontDoorOptionError`, and an unknown key
-inside a `features` setting (`waf: { enable: true }`) with
-`InvalidFrontDoorSettingError`.
+### `frontDoor` validation
 
-Some apps need the CloudFront door:
+`frontDoor` is checked at synth:
 
-- `'none'` fails synth for an app with a server, because a website bucket only
-  serves static files.
+| Mistake | Error |
+|---|---|
+| A value that is not a front door (`'alb'` as a string, `{ kind: 'ALB' }`) | `UnsupportedFrontDoorError` |
+| An option the kind doesn't take, or a value of the wrong shape (`api: 'REST'`, an ARN string as `certificate`) | `InvalidFrontDoorOptionError` |
+| An unknown key inside a `features` setting (`waf: { enable: true }`) | `InvalidFrontDoorSettingError` |
+
+### What needs the CloudFront door
+
+- `'none'` serves static files only: an app with a server fails synth with
+  `UnsupportedFrontDoorError`.
 - `compute: { type: 'web-function' }` (AWS Lambda Web Functions) works with the
-  CloudFront door only: every other door routes to Lambda functions, so a Web
-  Function behind it would get no traffic. Synth fails with
-  `UnsupportedComputeFrontDoorError` for any other door.
-- Next.js middleware (`middleware.ts`, built as a Lambda@Edge function) runs
-  only on the CloudFront door. Behind any other door synth fails with
-  `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
-  middleware (and any route gating it does) skipped.
-- A streaming server handler answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Both also serve a
-  buffered handler (Nitro's `aws-lambda` preset with `awsLambda.streaming`
-  off): they invoke the server with or without streaming, as it was built.
-  Behind the HTTP API the Next.js and Nitro adapters build a buffered server
-  instead (see "The server behind the HTTP API"). The ALB door and the stacked
-  door (its router is an ALB) invoke the server without streaming, so with Next.js
-  through OpenNext, or Nitro with `awsLambda.streaming: true` on the
-  `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
-  instead of deploying an app whose pages never answer. Behind the HTTP API it
-  fails the same way only when the app forces a streaming build (a Nitro
-  `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
-  `open-next.config.ts` with a streaming wrapper).
+  CloudFront door only. Every other door routes to Lambda functions, so synth
+  fails with `UnsupportedComputeFrontDoorError`.
+- Next.js middleware (`middleware.ts`) runs only on the CloudFront door.
+  Behind any other door synth fails with `MiddlewareNeedsCloudFrontDoorError`.
+- A Lambda@Edge compute behind any other door fails synth with
+  `EdgeRouteNeedsCloudFrontDoorError`.
 
-**CloudFront error pages and the API.** A CloudFront distribution's custom
-error responses apply to every path it serves, the proxied API (`/aws-blocks/*`)
-included. The CloudFront door maps 403 / 404 to a page when the app has one —
-`errorPages.notFound`, a static build's own `404.html` — and, for a static
-multi-page site with no server, no SPA fallback and no 404 page of its own, to
-the built-in not-found page. The Blocks API normally answers every call with
-HTTP 200, so this never touches it; but an `ApiNamespace` created with
-`httpErrorStatus: true` (`@aws-blocks/core`) answers a 4xx `ApiError` with that
-status, and its 403 / 404 then reach the browser as that HTML page instead of
-the JSON-RPC error, which the typed client cannot read. CloudFront cannot
-scope error responses away from `/aws-blocks/*`, so `Hosting` from
-`@aws-blocks/core` fails synth when it sees both, with a `HostingError` named
-`HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
-Remove the 4xx error pages, or leave `httpErrorStatus` off for those
-namespaces.
+### Streaming and buffered servers
+
+A streaming server handler (Next.js through OpenNext, or Nitro's `aws-lambda`
+preset with `awsLambda.streaming: true`) answers only through a door that
+streams. Behind a door that invokes the server without streaming, synth fails
+with `StreamingServerNeedsStreamingDoorError`. A Lambda Web Adapter server
+(Astro, SvelteKit, Nitro's `node-server`) works behind every door.
+
+| Door | Invokes the server | Next.js | Nitro `aws-lambda` preset |
+|---|---|---|---|
+| CloudFront; `apiGateway` with `api: 'rest'` | Streaming or buffered, as it was built | Works | Works with `awsLambda.streaming` on or off |
+| `apiGateway` with `api: 'http'` | Buffered | Works: the adapter builds a buffered server. A hand-written `open-next.config.ts` with a streaming wrapper fails synth | Works with `awsLambda.streaming` off; fails synth with it on |
+| `alb`, `stacked` | Buffered | Fails synth | Works with `awsLambda.streaming` off; fails synth with it on |
+| `custom` | As the door's `serverResponse` declares (default `'streaming'`) | Works with `'streaming'`; fails synth with `'buffered'` | Works with `'streaming'`, or with `awsLambda.streaming` off |
+
+### Error pages with `httpErrorStatus`
+
+The CloudFront door maps 403 / 404 to a not-found page when the app has one
+(`errorPages.notFound`, or a static build's own `404.html`) and, for a
+multi-page static site with no server and no 404 page of its own, to AWS
+Blocks' default page. The mapping applies to every path the distribution
+serves, the proxied API (`/aws-blocks/*`) included. The API answers every
+call with HTTP 200 unless an `ApiNamespace` sets `httpErrorStatus: true`
+(`@aws-blocks/core`), which answers a 4xx `ApiError` with that status. Its
+403 / 404 would then reach the browser as the HTML page instead of the
+JSON-RPC error. `Hosting` from `@aws-blocks/core` fails synth when it sees
+both (`HttpErrorStatusErrorPagesError`, naming the namespaces and the mapped
+codes). Remove the 4xx error pages (`errorPages.notFound`, a build's own 404
+page), or leave `httpErrorStatus` off for those namespaces.
 
 ### Settings per door kind
 
@@ -741,100 +252,59 @@ frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', count
 | `geoRestriction` | ✓ | – | – | ✓ |
 | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
 
-`geoRestriction.type` is `'allowlist'` or `'denylist'` (the legacy `'whitelist'`
-/ `'blacklist'` still work and mean the same; any other value fails synth). The
-asset bucket's own access logs are on by default on every door;
-`logging: { enabled: false }` turns them off.
+- `geoRestriction.type` is `'allowlist'` or `'denylist'`. The legacy
+  `'whitelist'` / `'blacklist'` mean the same. Any other value fails synth
+  with `InvalidFrontDoorSettingError`.
+- The asset bucket's own access logs are on by default on every door;
+  `logging: { enabled: false }` turns them off.
+- The door's own options (`vpc`, `internal`, `certificate`, `api`, `door`,
+  `wiringCheck`, `allowPlainHttp`) sit beside `features`.
+- On the ALB, a `certificate` needs `features.domain` (synth fails with
+  `AlbCertificateNeedsDomainError` otherwise). A certificate can't cover the
+  ALB's own `*.elb.amazonaws.com` name, so that domain is the app's URL (the
+  trusted origin and the CORS origin).
+- The stacked door takes its settings per layer:
+  `features: { edge: { waf: { webAclArn }, contentSecurityPolicy }, router: { domain, waf, logging, monitoring } }`.
+  The edge takes your CLOUDFRONT-scoped web ACL, the ALB router a REGIONAL
+  one.
+- `'none'` takes no settings.
 
-The door's own options (`vpc`, `internal`, `certificate`, `api`, `door`,
-`wiringCheck`) stay next to `features`. On the ALB, a `certificate` needs
-`features.domain` (synth fails with `AlbCertificateNeedsDomainError`
-otherwise): a certificate can't cover the ALB's own `*.elb.amazonaws.com` name,
-so the app is browsed at your domain, which must then be its URL (the trusted
-origin and the CORS origin). The stacked door (`Hosting` from
-`@aws-blocks/core`) takes its settings per layer:
-`features: { edge: { waf: { webAclArn }, contentSecurityPolicy }, router: { domain, waf, logging, monitoring } }`
-— the edge takes your CLOUDFRONT-scoped web ACL, the ALB router a REGIONAL one.
-`'none'` takes no settings.
+**Deprecated top-level props.** `domain`, `waf`, `logging`, `monitoring`,
+`skewProtection` and the `cdn.*` settings are deprecated aliases of the
+`frontDoor.features` settings of the same name (`cdn.priceClass` is
+`features.priceClass`; `cdn.webAclArn` is `features.waf.webAclArn`). They are
+merged into the effective `frontDoor.features`.
 
-**Migrating from the top-level props.** `domain`, `waf`, `logging`,
-`monitoring`, `skewProtection` and the `cdn.*` settings (`cdn.priceClass` →
-`features.priceClass`, …; `cdn.webAclArn` → `features.waf.webAclArn`) are
-deprecated aliases. They keep working: at construction they are merged into
-the effective `frontDoor.features`, and an existing app that sets them with no
-`frontDoor` (or `'cloudfront'`) synthesizes the same template. Move each one
-into `frontDoor.features` under the same name. Setting a setting both ways
-fails synth with `FrontDoorSettingConflictError`, naming both; a top-level prop
-the chosen kind doesn't implement (for example `cdn.geoRestriction` with
-`{ kind: 'alb' }`) fails synth with `UnsupportedFrontDoorSettingError`, naming
-the kind and the prop.
+- Setting a setting both ways fails synth with
+  `FrontDoorSettingConflictError`.
+- A top-level prop the chosen kind doesn't implement (for example
+  `cdn.geoRestriction` with `{ kind: 'alb' }`) fails synth with
+  `UnsupportedFrontDoorSettingError`.
 
-Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/*`
-(RPC and sign-in) and each of the backend's raw routes registered before
-`Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
-into behaviors). A door served over plain HTTP with an API (an ALB without a
-certificate) would send sign-in, cookies and every RPC unencrypted, so a
-production deploy fails synth (`PlainHttpFrontDoorError`), and a sandbox deploy
-warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only for a trusted network
-path, `allowPlainHttp: true` opts a production deploy out (see
-[Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). `'none'` warns with the same id
-whether or not the app has an API: the S3 website can't serve over TLS, so the
-pages and scripts themselves can be read or altered in transit (see
-[the `'none'` door](#the-none-door)).
+**The API on the app's origin.** Every door except `'none'` serves the API on
+the app's own origin: `/aws-blocks/*` (RPC and sign-in) and each of the
+backend's raw routes registered before `Hosting`
+(`DoorInput.origins.api.paths`). `ApiUrl` (what native clients call) depends
+on the backend's `apiFrontDoor`:
 
-The session cookie can't be `Secure` behind such a door either: a browser
-discards a `Secure` cookie set by a plain-HTTP origin. In a sandbox deploy
-`Auth` therefore omits `Secure` from its same-origin session cookie behind a
-standalone `{ kind: 'alb' }` door with no certificate, so the cookie and the
-session it carries cross the network in clear text. Outside a sandbox `Auth`
-refuses to issue the session instead: sign-in fails with
-`InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500) before
-any session is stored, and no `Set-Cookie` line is written. Sign-out and account
-deletion still clear the cookie (a `Max-Age=0` cookie carries no value). With
-the door's `allowPlainHttp: true`, `Auth` issues the cookie without `Secure` in
-production too, as in a sandbox.
-Use a plain-HTTP door in a sandbox only, unless the network path is trusted
-and the door opts out: for anything else, give the ALB door a
-`certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
-or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
-`Secure`. Its edge → router hop is plain HTTP unless the router has a
-certificate, and to an internet-facing router that warns separately
-(`@aws-blocks/hosting:StackedRouterPlainHttp`, see
-[the edge → router hop](#the-stacked-door)).
-
-Only a CloudFront-backed door (the default, or the stacked door's edge) takes
-over the API's address. Under the backend's `apiFrontDoor: 'cloudfront'` it
-claims the API front-door role: the backend builds no distribution of its own,
-and `ApiUrl` (what native clients call) is the door's. Behind the ALB, API
-Gateway or a bring-your-own door, the API keeps the distribution
-`apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it; under the
-default `'apigateway'` tier, `ApiUrl` is the backend's own API Gateway URL
-behind every door. The browser reaches the API same-origin through the door
-either way.
+| `apiFrontDoor` | Door | `ApiUrl` |
+|---|---|---|
+| `'cloudfront'` | CloudFront or stacked | The door's URL. The backend builds no distribution of its own. |
+| `'cloudfront'` | ALB, API Gateway or bring-your-own | The backend's own distribution. |
+| `'apigateway'` (default) | Any | The backend's own API Gateway URL. |
 
 **The host the server sees.** The CloudFront door and the stacked door's edge
 set `x-forwarded-host` from the viewer's `Host`. Behind the ALB and API Gateway
-doors nothing in front does, so the server is given `Host` instead: a native
-Lambda handler (Nitro's `aws-lambda` preset, OpenNext) through a small shim, and
-a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
-`HOST_HEADER` (SvelteKit) by reading `host`. Any other Lambda Web Adapter server
-(Astro's Node adapter, Nitro's `node-server`) receives the request's headers as
-sent, so don't configure it to trust `x-forwarded-host` behind these doors.
+doors nothing sets it:
 
-A door that invokes the server without streaming (the ALB, the stacked door's
-ALB router, the API Gateway HTTP API) gets a server built in buffered mode.
-Behind the HTTP API that includes Next.js, which the adapter builds with
-OpenNext's buffered `aws-apigw-v2` handler. Behind the ALB and the stacked door,
-Next.js is the exception: its OpenNext build targets a streaming API Gateway
-REST integration, so serve it there through CloudFront, an API Gateway door, or
-a door that streams.
+- Next.js (OpenNext), Nitro's `aws-lambda` preset and SvelteKit are given the
+  viewer's `Host` instead.
+- Any other Lambda Web Adapter server (Astro's Node adapter, Nitro's
+  `node-server`) receives the request's headers as sent, so don't configure
+  it to trust `x-forwarded-host` behind these doors.
 
-Behind the ALB, the server's target group sends and expects multi-value
-headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
-(Astro, SvelteKit, Nitro `node-server`) reads the ALB event as is; a native
-handler server (Nitro's default `aws-lambda` preset) runs behind a small ALB
-event shim (`blocks_alb_event.mjs`, written next to the handler at synth) that
-maps the ALB event to the API Gateway REST shape and the response back.
+Behind the ALB, multi-value headers are on, so several `Set-Cookie` headers
+survive.
 
 ### The ALB and API Gateway doors: rules and limits
 
@@ -867,11 +337,7 @@ on the ALB, the headers also by the API forwarder) with the CloudFront door's
 semantics, using the same matching code:
 
 - redirects: first match wins, a wildcard destination gets the matched tail
-  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308).
-  A spliced target that starts with extra slashes or backslashes keeps one
-  (`/old//evil.example` never becomes `Location: //evil.example`). Every
-  redirect source is routed to the asset proxy (an ALB listener rule, an HTTP
-  API route, a REST resource);
+  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308);
 - header rules: every matching rule is added to a successful response (not to
   a redirect or an error, as at the CloudFront edge);
 - error pages: a missing static file answers with the 404 page (status 404),
@@ -908,12 +374,10 @@ from a file bucket. The same limits bind everything else these doors carry:
   integration timeout.
 
 **ALB listener rules.** Consecutive paths bound for the same target share a
-rule (up to five path values each, four beside the stacked router's header
-check, and at most six wildcards, `*` or `?`, per rule), and routes that go
-where the default goes get no rule. A single pattern with more than six
-wildcards fails synth (`UnsupportedRoutePatternError`). A load balancer
-allows 100 rules by default; synth warns above that
-(`@aws-blocks/hosting:AlbRuleLimit`).
+rule, and routes that go where the default goes get no rule. A single pattern
+with more than six wildcards (`*` or `?`) fails synth
+(`UnsupportedRoutePatternError`). A load balancer allows 100 rules by default;
+synth warns above that (`@aws-blocks/hosting:AlbRuleLimit`).
 
 **ALB custom domain.** `{ kind: 'alb', certificate, features: { domain } }`
 serves HTTPS (TLS 1.2+, the `RECOMMENDED_TLS` policy) with a port 80 → 443
@@ -928,14 +392,40 @@ isolated private subnets (the VPC still has no NAT gateway). With your own VPC,
 it goes in that VPC's private subnets. The API forwarder isn't VPC-attached: it
 still reaches the backend at its public endpoint.
 
-**API Gateway routes.** Each function gets one API-scoped invoke permission
-(not one per route, which would fill Lambda's 20 KB resource policy). A raw
-route `/hooks/*` also serves `/hooks` (a greedy `{proxy+}` needs at least one
-character). A backend route with a wildcard inside a segment (`/files*`) has
-no API Gateway form and fails synth (`UnsupportedRoutePatternError`); a
-route-table pattern of that shape is served by the default integration, with a
-synth warning (`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows
-300 resources by default (every path segment is one); synth warns above that.
+**API Gateway routes.** A raw route `/hooks/*` also serves `/hooks`. A backend
+route with a wildcard inside a segment (`/files*`) has no API Gateway form and
+fails synth (`UnsupportedRoutePatternError`); a route-table pattern of that
+shape is served by the default integration, with a synth warning
+(`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows 300 resources
+by default (every path segment is one); synth warns above that.
+
+**The server behind the HTTP API.** An HTTP API Lambda integration sends the
+payload format 2.0 event and can't stream, so the adapters build the server
+for it:
+
+- Next.js: OpenNext's `aws-apigw-v2` converter with the buffered `aws-lambda`
+  wrapper. A hand-written `open-next.config.ts` must use the same pair.
+- Nitro with no preset set, in a stack whose region is pinned to one with a
+  Lambda Web Adapter layer (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported
+  from `@aws-blocks/hosting/adapters`): the `node-server` preset, a Lambda Web
+  Adapter server run buffered.
+- Nitro otherwise, including a stack with no `env`: the `aws-lambda` preset,
+  which the HTTP API serves while `awsLambda.streaming` is off. The CloudFront
+  door serves that build too, so the same Nuxt app works behind both doors
+  (for example the HTTP API for a preview stack and CloudFront for
+  production).
+- A route served by a compute other than the server (for example a Next.js
+  `runtime: 'edge'` route built as a regional function) gets its own route to
+  that function.
+
+**No image function.** With `imageOptimization: false` on `Hosting` from
+`@aws-blocks/core` (which `HostingPresets.preview` sets) no image function is
+built, and the HTTP API routes the framework image endpoints (`/_next/image`,
+`/_ipx/*`, `/_image`, under the basePath) to the asset proxy, which serves the
+source image unoptimized. A remote source is redirected (302) to itself only
+when its host is in the manifest's image allowlist
+(`imageOptimization.domains`, `remotePatterns` hostnames); anything else is a
+404. The proxy never fetches a remote URL.
 
 ### The `'none'` door
 
@@ -950,11 +440,10 @@ session cookie is then set by the API's own HTTPS response.
 
 The website endpoint takes no certificate, so `'none'` always warns at synth
 (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
-HTML and scripts travel unencrypted and can be altered in transit, and a
-tampered script sees everything the user enters, even when the API it calls is
-HTTPS. Use `'none'` for testing or public, non-interactive content; use the
-CloudFront door for HTTPS. If you chose `'none'` deliberately, acknowledge the
-warning on the stack:
+HTML and scripts travel unencrypted and can be altered in transit, even when
+the API they call is HTTPS. Use `'none'` for testing or public,
+non-interactive content; use the CloudFront door for HTTPS. If you chose
+`'none'` deliberately, acknowledge the warning on the stack:
 
 ```ts
 import { Annotations } from 'aws-cdk-lib';
@@ -962,105 +451,69 @@ import { Annotations } from 'aws-cdk-lib';
 Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
 ```
 
-**The server behind the HTTP API.** An HTTP API Lambda integration sends the
-payload format 2.0 event and can't stream, so the server is built for it: the
-Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
-`aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
-pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
-Adapter server, run buffered) when the app sets no preset and the stack's
-region is pinned to one with a Lambda Web Adapter layer
-(`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
-`@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
-Nitro keeps the `aws-lambda` preset, which
-the HTTP API serves while `awsLambda.streaming` is off. The CloudFront door
-serves that buffered build too, so a Nuxt app that leaves
-`awsLambda.streaming` off works behind both doors (for example the HTTP API
-for a preview stack and CloudFront for production). A route served by
-a compute other than the server (for example a Next.js `runtime: 'edge'` route
-built as a regional function) gets its own route to that function. A
-Lambda@Edge compute behind any door other than CloudFront fails synth
-(`EdgeRouteNeedsCloudFrontDoorError`), since only CloudFront invokes it.
-
-**No image function.** With `imageOptimization: false` on core `Hosting`
-(which `HostingPresets.preview` sets) no image function is built, and the HTTP API routes the framework
-image endpoints (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to
-the asset proxy, which serves the source image unoptimized. A remote source is
-redirected (302) to itself only when its host is in the manifest's image
-allowlist (`imageOptimization.domains`, `remotePatterns` hostnames); anything
-else is a 404. The proxy never fetches a remote URL.
-
 ### The stacked door
 
 `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` puts a CloudFront edge
 (TLS, cache, security headers, your edge web ACL) in front of the ALB router.
 
 - **Static routes come from S3.** The edge serves the app's static routes
-  straight from the private assets bucket (origin access control); only the
-  API and the dynamic routes (server rendering, image optimization) go to the
-  ALB. Its behaviors follow the router's precedence (the API first, then the
-  routes most-specific first), and a viewer-request function resolves the path
-  as the router would (basePath, directory index, single-page-app fallback),
-  answers the app's redirects, and prefixes the build (`/builds/<buildId>`), so
-  a new build never hits the previous build's cached files. The cutover waits
-  for the build's uploads, the resolved runtime config included. The app's
-  header rules and error pages apply at the edge to every response.
-- **Caching.** The API is never cached at the edge. Server-rendered routes
-  honor the server's `Cache-Control` and key on cookies; image routes honor
-  the origin's TTLs without cookies in the key, and so does the router default
-  of a site without a server (where static routes beyond the behavior budget
-  go). With a server, those static routes share the server's default (cookies
-  in the key). An app with a server gets a CloudFront invalidation on each deploy
-  (`manifest.invalidationPaths`, else `/*`), after the new build and server are
-  live. The router sees the public host in `x-forwarded-host`.
+  from the private assets bucket (origin access control); only the API and
+  the dynamic routes (server rendering, image optimization) go to the ALB.
+  The app's redirects, header rules and error pages apply at the edge to
+  every response. A new build never hits the previous build's cached files,
+  and the cutover waits for the build's uploads, the resolved runtime config
+  included.
+- **Caching.**
+  - The API is never cached at the edge.
+  - Server-rendered routes honor the server's `Cache-Control` and key on
+    cookies.
+  - Image routes honor the origin's TTLs without cookies in the key.
+  - Static routes beyond the behavior budget get the router default: the
+    origin's TTLs without cookies for a site without a server, the server's
+    default (cookies in the key) with one.
+  - An app with a server gets a CloudFront invalidation on each deploy
+    (`manifest.invalidationPaths`, else `/*`), after the new build and server
+    are live.
+  - The router sees the public host in `x-forwarded-host`.
 - **Behavior budget.** A distribution allows 25 behaviors, the default
   included. Over that, the router becomes the default, API paths no static
   route can shadow are left to it first, and the rest goes through the ALB
   (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`); files that then reach the
   router are checked against its 1 MB limit.
-- **The ALB admits only the edge.** Every listener rule requires a secret
-  header (`x-blocks-origin-verify`) that the edge sends; without it the ALB
-  answers 403. The value is generated once by Secrets Manager (a secret in the
-  stack) and both the edge's origin and the listener rules read it through a
-  CloudFormation dynamic reference, so it is in no template and changes only
-  when you rotate the secret. To rotate it, put a new value and then deploy a
-  change that updates both the distribution and the listener rules:
-  CloudFormation re-reads a dynamic reference only for a resource it updates.
-  Each rule matches one value, and the listener rules update within seconds
-  while the distribution takes minutes to propagate, so expect 403s from the
-  router until the edge carries the new value; rotate in a quiet window.
-  The ALB forwards the header to its Lambda targets. A native handler server
-  (behind the ALB event shim) never sees it; a Lambda Web Adapter server and
-  the image-optimization function do, so don't log or report request headers
-  verbatim from them (a leaked value lets any CloudFront distribution reach
-  the router, past the edge's web ACL).
-  An internet-facing ALB's security group admits only the CloudFront
-  origin-facing managed prefix list
-  (`com.amazonaws.global.cloudfront.origin-facing`, looked up per region at
-  deploy). With `internal: true`, the edge reaches the ALB through a CloudFront
-  VPC origin, and the ALB's security group admits only that VPC origin's
-  service security group (`CloudFront-VPCOrigins-Service-SG`). The standalone
-  `{ kind: 'alb' }` door stays public by design.
-- **The edge → router hop.** With a router `certificate` and
-  `features.router.domain` (the name the certificate covers; Route 53 alias
-  records point it at the ALB), the edge connects to the router over HTTPS on
-  port 443. A domain with a hosted zone and no certificate gets a DNS-validated
-  one. Without either, the hop is plain HTTP on port 80 and unencrypted:
-  through a VPC origin (`internal: true`) it stays on the AWS network; to an
-  internet-facing ALB it reaches the ALB's public addresses. That last hop
-  would carry the origin-verify secret in cleartext, so a production deploy
-  fails synth (`OriginSecretOverPlainHttpError`) and the secret is never sent;
-  give the router a `certificate` and `features.router.domain`, or set
-  `internal: true`. A sandbox deploy (the `sandboxMode` context the sandbox
-  scripts pass) still synthesizes, and warns
-  (`@aws-blocks/hosting:StackedRouterPlainHttp` and
-  `@aws-blocks/hosting:OriginSecretOverPlainHttp`). Only when the path between
-  CloudFront and the router is trusted, `allowPlainHttp: true` on the stacked
-  door lets a production deploy send the secret over that hop, with the
-  `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning (see
-  [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). The router's `x-forwarded-proto`
-  is `http` on a plain-HTTP hop. A certificate without a router domain fails
-  synth (`StackedRouterCertificateNeedsDomainError`).
-- There is no custom domain or skew protection on the edge yet.
+- **The ALB admits only the edge.**
+  - Every listener rule requires a secret header (`x-blocks-origin-verify`)
+    that the edge sends; without it the ALB answers 403. Secrets Manager
+    generates the value once (a secret in the stack), and it is in no
+    template.
+  - An internet-facing ALB's security group admits only the CloudFront
+    origin-facing managed prefix list
+    (`com.amazonaws.global.cloudfront.origin-facing`). With `internal: true`,
+    the edge reaches the ALB through a CloudFront VPC origin, and the
+    security group admits only that VPC origin's service security group
+    (`CloudFront-VPCOrigins-Service-SG`).
+  - To rotate the secret, put a new value and then deploy a change that
+    updates both the distribution and the listener rules (CloudFormation
+    re-reads the value only for a resource it updates). The listener rules
+    update within seconds and the distribution takes minutes, so expect 403s
+    from the router in between; rotate in a quiet window.
+  - The ALB forwards the header to a Lambda Web Adapter server and to the
+    image-optimization function. Don't log or report request headers
+    verbatim from them: a leaked value lets any CloudFront distribution reach
+    the router, past the edge's web ACL.
+- **The edge → router hop.**
+  - With a router `certificate` and `features.router.domain` (the name the
+    certificate covers; Route 53 alias records point it at the ALB), the edge
+    connects to the router over HTTPS on port 443. A domain with a hosted
+    zone and no certificate gets a DNS-validated one.
+  - A certificate without a router domain fails synth
+    (`StackedRouterCertificateNeedsDomainError`).
+  - Without either, the hop is plain HTTP on port 80, and the router's
+    `x-forwarded-proto` is `http`. With `internal: true` it stays on the AWS
+    network, through a VPC origin. To an internet-facing ALB it would carry
+    the origin-verify secret in cleartext: the sandbox-only options table
+    under [Front doors](#front-doors) gives the production, sandbox and
+    `allowPlainHttp` outcomes.
+- The stacked door's edge has no custom domain and no skew protection.
 
 ### Switching doors on a deployed app
 
@@ -1073,7 +526,7 @@ it is not an in-place update.
 - **CloudFront → ALB or stacked** deletes the default distribution and its
   alarms; the ALB door's (and the router's) own alarms are on unless
   `monitoring: { enabled: false }`, and its access logs are off unless you set
-  them. The stacked door has no custom domain yet.
+  them.
 - **A custom domain moving between doors** (for example the CloudFront door's
   `domain` to an API Gateway or ALB door) creates Route 53 records of the same
   name under new logical IDs, which collides with the old ones while both
@@ -1082,51 +535,281 @@ it is not an in-place update.
 
 ### Bring your own front door
 
-A door is one function, typed by `defineFrontDoor` from `@aws-blocks/hosting/constructs` and passed as `frontDoor: { kind: 'custom', door }`. [CUSTOM-FRONT-DOOR.md](./CUSTOM-FRONT-DOOR.md) shows a complete CloudFront door and the two things it doesn't do that the built-in CloudFront door does (single-page-app deep links, POST bodies to the server), and covers streaming or buffered servers, what the door receives (`DoorInput`) and returns, the wiring check AWS Blocks runs at synth, the redirect, header and error-page helpers, testing a door with `assertDoorConformance`, and a door that stacks CloudFront over its own ALB.
+A door is one function, typed by `defineFrontDoor` from
+`@aws-blocks/hosting/constructs` and passed as
+`frontDoor: { kind: 'custom', door }`.
+[CUSTOM-FRONT-DOOR.md](./CUSTOM-FRONT-DOOR.md) shows a complete CloudFront
+door and its limits, and covers what the door receives (`DoorInput`) and
+returns, the `cf.*` helpers, testing a door with `assertDoorConformance`, and
+a door that stacks CloudFront over its own ALB.
 
-What AWS Blocks checks and enforces for a bring-your-own door:
+What AWS Blocks checks for a bring-your-own door:
 
 - A missing or empty `url` fails synth with `MissingFrontDoorUrlError`.
-- An `http://` `url` with an API fails a production synth (`PlainHttpFrontDoorError`) and only warns in a sandbox deploy (`@aws-blocks/hosting:PlainHttpFrontDoor`), unless the door sets `allowPlainHttp: true` (see [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)).
-- Beyond its `url`, AWS Blocks checks one thing about a bring-your-own door: its routing, from what the `cf.*` helpers recorded.
-  - If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
-  - If the app has an API and none of `origins.api.paths` were wired, synth fails with `ProxySameOriginApi`.
-  - If some API paths (for example a raw route) were left unwired, synth warns.
-  - If the app has redirects, per-pattern headers or error pages and the door wired none of them (`cf.redirects`, `cf.headers`, `cf.errorPages`), synth warns (`FrontDoorRuleUnwired`).
-  - If `cf.behaviors` and `cf.apiBehaviors` handed out more than the 24 behaviors a distribution allows besides its default, synth warns (`FrontDoorBehaviorLimit`).
-  - A door that wires correctly with raw CDK gets a false alarm: declare hand-wired origins and rules with `cf.recordWired(...)`, or turn the check off with `frontDoor: { kind: 'custom', door, wiringCheck: false }`.
-- It does not check features. If a door ignores `features.waf`, the app deploys without a WAF.
-- `cf.redirects` and `cf.headers` put the rules inline in a CloudFront Function, which holds at most 10 KB, so synth fails above that.
-- A door that invokes the server without streaming (an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED` Function URL) declares `serverResponse: 'buffered'`, and AWS Blocks builds the server to answer with a complete response. The default is `'streaming'`.
-- A door that reaches the server with `cf.origin(origins.server)` (the server's Function URL with origin access control) answers 403 to browser form posts and server actions: CloudFront then requires the viewer to send an `x-amz-content-sha256` header with any request body, and browsers don't. The built-in door reaches the server through an API Gateway REST API with a secret header instead.
+- An `http://` `url` with an API is a plain-HTTP door: see
+  [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production).
+- Routing, from what the `cf.*` helpers recorded. A failed check throws
+  `UnsupportedFrontDoorError`, whose message lists the unmet rules:
+  - `ServeStaticAsset`: nothing reaches the static assets.
+  - `ProxySameOriginApi`: the app has an API and none of `origins.api.paths`
+    were wired.
+- The same check warns:
+  - `@aws-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for
+    example a raw route) were left unwired.
+  - `@aws-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
+    per-pattern headers or error pages and the door wired none of them
+    (`cf.redirects`, `cf.headers`, `cf.errorPages`).
+  - `@aws-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
+    `cf.apiBehaviors` handed out more than the 24 behaviors a distribution
+    allows besides its default.
+- A door that wires with raw CDK declares its origins and rules with
+  `cf.recordWired(...)`, or turns the check off with
+  `frontDoor: { kind: 'custom', door, wiringCheck: false }`.
+- Features are not checked. If a door ignores `features.waf`, the app deploys
+  without a WAF.
+- A door that invokes the server without streaming declares
+  `serverResponse: 'buffered'`, and AWS Blocks builds the server to answer
+  with a complete response. The default is `'streaming'`.
+
+## Next.js: the OpenNext version
+
+The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
+(`@opennextjs/aws`). Declare it in your app so you control its version and the
+build doesn't download it:
+
+```bash
+npm install --save-dev @opennextjs/aws@~4.1.14
+```
+
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`.
+  Outside that range the build warns and continues.
+- If the app doesn't declare OpenNext, the adapter builds with
+  `@opennextjs/aws@4.1.14` and prints a warning.
+- OpenNext declares the Next.js versions it supports as a `next` peer range
+  (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
+  it, the build prints a warning. Upgrade `next` within its major version to
+  one that range accepts.
+
+### Edge routes (`runtime = 'edge'`)
+
+A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
+stack's region at synth time. Set `env` on the stack that holds `Hosting`:
+
+```ts
+const blocksStack = await BlocksStack.create(app, stackName, {
+	env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+	// …
+});
+```
+
+- Without `env`, synth fails with `EdgeComputeRequiresRegionError`.
+- Outside `us-east-1`, an Edge route adds a separate `us-east-1` support stack
+  for the Lambda@Edge function, so bootstrap `us-east-1` too
+  (`npx cdk bootstrap aws://<account>/us-east-1`).
+- `npm run sandbox:destroy` deletes every stack the sandbox deploys, the
+  `us-east-1` support stack included.
+- `npm run destroy` passes no stack selection, so the CDK CLI refuses to
+  destroy an app with more than one top-level stack.
+
+## SSR compute: Lambda or Lambda Web Functions
+
+By default the SSR server runs on a Lambda function behind an API Gateway REST
+API (`compute.type: 'lambda'`). HTTP-server frameworks run inside it via the
+Lambda Web Adapter. Set `compute.type: 'web-function'` to run it on
+[AWS Lambda Web Functions](https://docs.aws.amazon.com/lambda/latest/dg/web-functions.html)
+instead. The framework's own Node.js server then runs directly on Lambda, and
+CloudFront reaches it through origin access control (OAC):
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  compute: {
+    type: 'web-function',
+    timeout: Duration.seconds(60),
+    webFunction: { maxEnvironments: 20 }, // optional tuning
+  },
+});
+```
+
+| | `'lambda'` (default) | `'web-function'` |
+|---|---|---|
+| Path | CloudFront → API Gateway → Lambda (+ Lambda Web Adapter) | CloudFront → Web Function endpoint |
+| Requests per environment | 1 | many (dynamic, up to `webFunction.maxConcurrencyPerEnvironment`, 1–128, default 64) |
+| Billing | duration × memory | active CPU + memory over the environment lifetime |
+| Origin auth | shared-secret header checked by API Gateway | IAM: OAC-signed, endpoint grants only this distribution |
+| Warm capacity | `provisionedConcurrency` / `warmup` | automatic headroom (scales to zero when idle) |
+| Regions | all | us-east-1, us-east-2, us-west-2, ap-northeast-1, eu-west-1 |
+| Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
+
+**Requirements.**
+- An HTTP-server build. With `Hosting` from `@aws-blocks/core` every built-in
+  framework works unchanged, because the adapters switch their output when
+  Web Functions are selected:
+  - Astro (`@astrojs/node` standalone) and SvelteKit (`adapter-node`)
+    already emit an HTTP server.
+  - Nuxt/Nitro builds with the `node-server` preset instead of `aws-lambda`.
+  - Next.js builds with OpenNext's `node` wrapper/converter as a container
+    origin. A user `open-next.config.ts` must then set `wrapper: 'node'`,
+    `converter: 'node'` and `generateDockerfile: true`.
+- If you run an adapter yourself in front of `HostingConstruct`, wrap the run in
+  `withComputeTarget('web-function', …)` from `@aws-blocks/hosting/adapters` to
+  get the same output.
+- An event-handler build (an OpenNext `aws-lambda` wrapper or a Nitro
+  `aws-lambda` preset) fails synth with `WebFunctionUnsupportedComputeError`.
+- Synth also fails with `WebFunctionUnsupportedRegionError` outside the
+  supported Regions. If Web Functions have since launched in your Region,
+  bypass the check with `skipRegionValidation: true`.
+
+**What changes.**
+- `memorySize`, `reservedConcurrency`, `provisionedConcurrency` and `warmup`
+  apply to Lambda only: they are ignored with a synth warning. Use
+  `webFunction.maxEnvironments` and `webFunction.rateLimit` to cap scale.
+- No default SSR CloudWatch alarms are created for a Web Function.
+- Only the SSR server moves. Image optimization, ISR revalidation,
+  middleware and edge routes stay on Lambda.
+- Native modules must be Arm64. Astro's bundled `sharp` is installed for
+  Arm64 automatically. Synth warns when the bundle contains x86-64 `.node`
+  binaries; a server that crashes on start still deploys.
+- The SSR server is exposed as `HostingConstruct.computeWebFunctions`, not in
+  `computeFunctions`. Grant it access to AWS resources through its
+  `grantPrincipal`.
+- Superseded bundle zips expire after 30 days.
+- Each Web Function stack creates one response headers policy, which counts
+  against the account's response headers policy quota (20 by default). It has
+  the settings of AWS's managed `SecurityHeadersPolicy` and removes the
+  `lambda-web-logstream` response header, which names the internal log stream
+  and revision. To share one policy across stacks, create it once with
+  `removeHeaders` and pass it as `frontDoor.features.responseHeadersPolicy`
+  in each stack:
+
+    ```ts
+    // once, e.g. in a shared-infra stack
+    new ResponseHeadersPolicy(shared, 'WebFunctionHeaders', {
+      securityHeadersBehavior: { /* … */ },
+      removeHeaders: ['lambda-web-logstream'],
+    });
+    // in each hosting stack
+    frontDoor: {
+      features: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) },
+    }
+    ```
+
+    Synth reminds you to include the removal in a policy of your own, because
+    Hosting can't inspect or extend it.
+
+### The server origin's REST API (`compute.type: 'lambda'`)
+
+CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
+`execute-api` URL is public, so the API is locked to the distribution. A Nuxt
+IPX image optimizer gets a REST API of its own with either compute type, so
+with `compute.type: 'web-function'` everything below, including the
+`serverOrigin` settings, applies to that image REST API.
+
+The REST API invokes the server the way it was built:
+
+| Server build | Integration | Response |
+|---|---|---|
+| Streaming: Next.js through OpenNext, Nitro's `aws-lambda` preset with `nitro.awsLambda.streaming: true`, any Lambda Web Adapter server | Response streaming (`ResponseTransferMode: STREAM`) | Sent as the page renders |
+| Buffered: Nitro's `aws-lambda` preset with `awsLambda.streaming` off (Nitro's default) | Lambda proxy, which reads the `{ statusCode, headers, body }` object the handler returns | Sent whole once the handler returns; Lambda limits it to 6 MB |
+
+- **Origin-verify secret.** CloudFront adds a secret as the `Referer` origin
+  custom header (a viewer's own `Referer` is replaced), and the REST API's
+  resource policy denies any request without it.
+  - Secrets Manager generates the secret once per stack. The policy and the
+    CloudFront origin read it through a CloudFormation
+    `{{resolve:secretsmanager:…}}` dynamic reference, so it is in no template
+    or source.
+  - Anyone who can read the distribution's config
+    (`cloudfront:GetDistributionConfig`), the API's policy (`apigateway:GET`)
+    or the Secrets Manager secret can read it.
+  - Your SSR app receives it as the request's `Referer` header. Don't log
+    that header (for example with a `combined`-format request logger) or
+    redirect back to it.
+- **A separate image origin.** A Nuxt IPX image optimizer (`imageOptimization.baseURL`)
+  gets its own REST API with its own secret, so neither value reaches the other
+  Lambda.
+- **A web ACL on the stage.** With an AWS Blocks-managed web ACL on the
+  distribution (`waf: { enabled: true }`), each server-origin stage also gets
+  a REGIONAL web ACL.
+  - It has the same rules: the AWS managed common and known-bad-inputs rule
+    groups, and the per-IP rate limit at the same `rateLimit`.
+  - Requests from CloudFront carry an `x-blocks-front-door` marker (the
+    stack's id), with or without a web ACL, which exempts them from the
+    stage's rate rule.
+  - It logs the requests a rule blocked or counted to a CloudWatch log group
+    named `aws-waf-logs-…`, with the `Referer`, `Cookie` and `Authorization`
+    headers redacted. It keeps no sampled requests, which AWS WAF doesn't
+    redact.
+  - Cost: each web ACL has a monthly charge, a charge per request it
+    evaluates (every uncached SSR request is evaluated by two web ACLs), and
+    the CloudWatch Logs ingestion of the requests it blocks or counts.
+  - A `waf.webAclArn` of your own adds nothing to the stage.
+- **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
+  access logs (`AccessLogFormat.jsonWithStandardFields()`) from each stage to a
+  CloudWatch log group. REST API access logging needs the account-level API
+  Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), which this then
+  creates once per stack (the same resource `@aws-blocks/core`'s
+  `defaults.accessLogging` uses). That setting is one per account and region:
+  a second stack that also creates it repoints it, and tearing that stack down
+  leaves it pointing at a deleted role. Turn it on in one stack per account and
+  region, or manage that role yourself.
+
+```ts
+frontDoor: {
+  features: {
+    waf: { enabled: true, rateLimit: 2000 }, // also on the server origin's stage
+    serverOrigin: {
+      accessLogging: true,
+      logRetention: RetentionDays.THREE_MONTHS, // default: one month (access and web ACL logs)
+    },
+  },
+}
+```
+
+| `serverOrigin` option | Default | Description |
+|---|---|---|
+| `accessLogging` | `false` | JSON access logs from each stage to CloudWatch Logs. |
+| `logRetention` | `RetentionDays.ONE_MONTH` | Retention of the access logs and of the stage's web ACL logs. |
+| `verifySecretRotation` | `0` | A non-negative integer. A new number rotates the origin-verify secrets. |
+| `acceptLegacyVerifyHeader` | `false` | For one deploy of an upgrade (below). |
+
+**Rotating the secret.** Bump `serverOrigin.verifySecretRotation` (`1`, `2`, …)
+and deploy: Secrets Manager generates new values, and the REST API policies and
+the CloudFront origins update in the same deploy. The REST API policy applies
+within seconds and the distribution takes minutes, so the server origin
+answers 403 in between; rotate in a quiet window.
+
+**`acceptLegacyVerifyHeader`.** A stack whose header value is still derived
+from the stack name and construct path has the same window of 403s on the
+deploy that moves it to the random secret. To avoid it, deploy once with
+`serverOrigin: { acceptLegacyVerifyHeader: true }`, and then deploy again
+without it. While it is set:
+
+- the SSR REST API's policy accepts both values;
+- with a Nuxt IPX optimizer, the SSR REST API keeps the image routes for the
+  edges still sending image requests there;
+- the SSR REST API's stage gets no web ACL, because edges on the previous
+  config don't send the `x-blocks-front-door` marker and would hit the per-IP
+  rate limit. The next deploy attaches it;
+- synth warns (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`).
 
 ## Build retention & rollback
 
-Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and
-flips a CloudFront KeyValueStore pointer (`meta.b`) to the new build. Old builds
-are retained for `storage.buildRetentionDays` (default **30**) so you can roll
-back, then expired by an S3 lifecycle rule.
+Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix.
+A build that a later deploy replaced is kept for `storage.buildRetentionDays`
+(default 30) so you can roll back, then expired by an S3 lifecycle rule.
 
-- **The build currently being served is never expired**, no matter how long ago
-  it was deployed. Only *superseded* builds (ones a later deploy replaced) are
-  eligible for cleanup — they are tagged `aws-blocks:build-state=superseded` at
-  the cutover, and the lifecycle rule matches only that tag.
-- Raise `storage.buildRetentionDays` for a longer rollback window. It must be at
-  least `skewProtection.maxAge` (converted to days), or synth throws
-  `InvalidSkewProtectionMaxAgeError` — a skew cookie must not outlive the build
-  it pins to.
-- Optional `storage.deployIntervalDays` is an advisory hint: if you set it and
-  it is ≥ `buildRetentionDays`, synth prints a warning that superseded builds
-  may expire before your next deploy (shrinking the rollback window). It never
-  blocks a deploy and never affects the live build.
-
-> **Cleanup caveat:** a build is tagged superseded only during a normal deploy
-> cutover (an `Update` that flips `meta.b`). Builds that become stale outside
-> that path — every build uploaded by a hosting release that didn't tag builds, or
-> builds left by an aborted/rolled-back deploy — are never tagged, so the
-> lifecycle rule never expires them and they accumulate until you remove them
-> manually. This is safe (nothing deletes the live build), just not
-> self-cleaning for pre-existing artifacts.
+- The build being served is never expired.
+- `storage.buildRetentionDays` must be at least `skewProtection.maxAge`
+  (converted to days), or synth throws `InvalidSkewProtectionMaxAgeError`: a
+  skew cookie must not outlive the build it pins to.
+- `storage.deployIntervalDays` is an advisory hint: when it is ≥
+  `buildRetentionDays`, synth warns that superseded builds may expire before
+  your next deploy.
+- The lifecycle rule expires only builds tagged
+  `aws-blocks:build-state=superseded`, which a deploy's cutover sets. Builds
+  left by an aborted or rolled-back deploy are never tagged: remove them
+  yourself.
 
 ```ts
 new HostingConstruct(stack, 'Hosting', {
@@ -1140,23 +823,20 @@ new HostingConstruct(stack, 'Hosting', {
 
 ## Access logging
 
-CloudFront access logs are delivered to a dedicated, private S3 bucket. Two
-pipelines are supported via `frontDoor.features.logging.version` (the top-level
-`logging` prop is its deprecated alias). The server origin's API Gateway stage logs
-separately, to CloudWatch Logs, when `frontDoor.features.serverOrigin.accessLogging`
-is on (see [The server origin's REST API](#the-server-origins-rest-api-computetype-lambda)):
+CloudFront access logs are delivered to a dedicated, private S3 bucket.
+`frontDoor.features.logging.version` picks the pipeline. The server origin's
+API Gateway stage logs separately, to CloudWatch Logs, when
+`frontDoor.features.serverOrigin.accessLogging` is on (see
+[The server origin's REST API](#the-server-origins-rest-api-computetype-lambda)):
 
 | | `'v1'` (default) | `'v2'` |
 | --- | --- | --- |
 | Mechanism | Legacy standard logging (inline on the distribution) | Standard logging v2 (CloudWatch Logs vended-logs delivery) |
-| Log bucket ACLs | Required (`BUCKET_OWNER_PREFERRED`) | **None** (`BUCKET_OWNER_ENFORCED`) |
-| S3 key layout | Flat prefix | **Partitioned** — `date` or Hive-compatible (`logging.partitioning`) |
+| Log bucket ACLs | Required (`BUCKET_OWNER_PREFERRED`) | None (`BUCKET_OWNER_ENFORCED`) |
+| S3 key layout | Flat prefix | Partitioned: `date` or Hive-compatible (`logging.partitioning`) |
 | Record format | W3C tab-separated | `w3c` \| `plain` \| `json` \| `parquet` (`logging.format`) |
 | CloudFront charge | None (S3 storage only) | Per-GB vended-logs delivery charge |
-| Region constraint | Any | Delivery source must be **us-east-1** |
-
-`v1` stays the default (no billing change). Opt into `v2` for an ACL-free log
-bucket and a partitioned, query-ready layout with no post-processing Lambda:
+| Region constraint | Any | Delivery source must be us-east-1 |
 
 ```ts
 new HostingConstruct(stack, 'Hosting', {
@@ -1175,30 +855,30 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-> **Region:** because CloudFront is a global service, standard logging v2's
-> delivery source must be created in **us-east-1** (same constraint as ACM
-> certificates). Synth throws `LoggingV2RegionError` in any other Region — deploy
-> the hosting stack to us-east-1 or use `version: 'v1'`. When the stack's Region
-> is unresolved at synth (an environment-agnostic stack), synth emits a
-> `LoggingV2RegionUnresolved` warning instead. `skipRegionValidation` skips this
-> check along with the WAF, ACM and Lambda Web Adapter Region checks.
+`version: 'v2'` needs the stack in us-east-1. Synth throws
+`LoggingV2RegionError` in any other Region, and warns
+`@aws-blocks/hosting:LoggingV2RegionUnresolved` when the stack's Region is
+unresolved. `skipRegionValidation` skips this check along with the WAF, ACM
+and Lambda Web Adapter Region checks.
 
-> **Entry point:** `version`, `partitioning` and `format` are set through
-> `frontDoor.features.logging`, on `HostingConstruct` from `@aws-blocks/hosting`
-> and on the `Hosting` block in `@aws-blocks/core`. Core's deprecated top-level
-> `logging` prop accepts only `enabled` and `retentionDays`, so it always uses v1.
+The deprecated top-level `logging` prop of `Hosting` from `@aws-blocks/core`
+accepts only `enabled` and `retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
 
-`frontDoor.features.ssrDefaultTtl` (CloudFront door; `cdn.ssrDefaultTtl` is its
-deprecated alias) enables CloudFront edge caching of SSR responses that carry
-no explicit `Cache-Control` header. Those responses are then shared at the edge,
-and the SSR cache key does **not** include `Authorization` or session cookies by
-default — so one cached entry would answer requests regardless of their
-credentials. Set `cacheKeyCookies` (your session cookie name(s)) and/or
-`cacheKeyHeaders` (e.g. `'authorization'`) so cached responses are keyed per
-credential. Synth **fails closed**: if `ssrDefaultTtl` resolves to `> 0` and
-neither is set, synthesis throws.
+`frontDoor.features.ssrDefaultTtl` (CloudFront door) enables CloudFront edge
+caching of SSR responses that carry no explicit `Cache-Control` header. The
+SSR cache key does not include `Authorization` or session cookies by default,
+so one cached entry would answer requests regardless of their credentials.
+Set `cacheKeyCookies` (your session cookie names) and/or `cacheKeyHeaders`
+(for example `'authorization'`) so cached responses are keyed per credential.
+
+| `frontDoor.features` option | Type | Default | Limit | Error |
+|---|---|---|---|---|
+| `ssrDefaultTtl` | `Duration` | `Duration.seconds(0)`: no caching unless the origin opts in | Edge TTLs are capped at 1 day | `SsrCacheKeyCredentialsRequiredError` when above 0 and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set |
+| `cacheKeyCookies` | `string[]` | none | 8 names | `SsrCacheKeyCookieCapError` |
+| `cacheKeyHeaders` | `string[]` | none | 5 names; `accept-encoding` is handled automatically and not allowed | `SsrCacheKeyHeaderCapError`, `SsrCacheKeyAcceptEncodingError` |
+| `cacheGuardIgnoredCookies` | `string[]` | none | A name may not also be in `cacheKeyCookies` | `CacheGuardIgnoredCookieInCacheKeyError` |
 
 ```ts
 new HostingConstruct(stack, 'Hosting', {
@@ -1212,18 +892,16 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-The synth guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
-emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
-Astro SSR) are not seen by synth; for those, the SSR server's responses pass
-through a runtime cache guard that the construct installs in front of the SSR
-server, and in front of every other regional compute a route targets (such as a
-Next.js split function built regional): Lambda handlers, and Node.js servers on
-the Lambda Web Adapter or a Web Function, for every framework. Where the guard cannot be installed (for example
-a Lambda Web Adapter server that is not Node.js, or a handler module missing from
-the bundle), synth emits a `@aws-blocks/hosting:SsrCacheGuardNotInstalled`
-warning and that server's responses are cached as its `Cache-Control` says. The
-guard sends `Cache-Control: private, no-store` instead of the origin's value
-when:
+Synth checks only `ssrDefaultTtl`. It does not see routes the origin makes
+cacheable (`s-maxage`, Next.js `revalidate`, Nuxt `routeRules`, Astro SSR).
+For those, the construct installs a runtime cache guard in front of the SSR
+server and of every other regional compute a route targets: Lambda handlers,
+and Node.js servers on the Lambda Web Adapter or a Web Function. Where the
+guard cannot be installed (for example a Lambda Web Adapter server that is not
+Node.js, or a handler module missing from the bundle), synth warns
+`@aws-blocks/hosting:SsrCacheGuardNotInstalled` and that server's responses
+are cached as its `Cache-Control` says. The guard sends
+`Cache-Control: private, no-store` instead of the origin's value when:
 
 - the response sets cookies (`Set-Cookie`) and is not already `private` or
   `no-store` — CloudFront stores `Set-Cookie` with a cached object and replays
@@ -1248,21 +926,20 @@ gets ISR/SSR pages as `private, no-store` and they are not edge-cached for that
 visitor. List such cookies in `cacheGuardIgnoredCookies`
 (`frontDoor.features.cacheGuardIgnoredCookies`) to have the guard ignore them.
 They stay out of the cache key, so a listed cookie must never change what the
-server renders. A name may not be in both `cacheKeyCookies` and
-`cacheGuardIgnoredCookies`.
+server renders.
 
 ```ts
 frontDoor: { features: { cacheKeyCookies: ['session'], cacheGuardIgnoredCookies: ['_ga', '_gid', '_fbp'] } }
 ```
 
-Behind the CloudFront-over-ALB door the server-route cache key holds every
+Behind the stacked door the server-route cache key holds every
 cookie, so cookies never lead to a rewrite there; `Authorization` and
 `Set-Cookie` still do.
 
 CloudFront caches the 500, 501, 502, 503 and 504 responses of an origin for the
 error caching minimum TTL and, except for 501, does so whatever their
 `Cache-Control` says. A distribution with a server (the CloudFront door and the
-CloudFront-over-ALB door) therefore sets that TTL to 0 for those statuses,
+stacked door) therefore sets that TTL to 0 for those statuses,
 keeping any error page configured for them.
 
 The guard models CloudFront's own caching inputs only: `CDN-Cache-Control` and
@@ -1274,32 +951,21 @@ CloudFront uses `max-age` as its edge TTL when `s-maxage` is absent, so a bare
 route that should still be cached by the browser should send
 `Cache-Control: private, max-age=…`, which the guard leaves unchanged.
 
-The SSR cache policy clamps edge TTLs to at most **1 day**, whatever
-`s-maxage` the origin sends.
+The SSR cache policy caps edge TTLs at 1 day, whatever `s-maxage` the origin
+sends. CloudFront caps the cache key at 10 cookies and 10 headers; reserved
+slots leave 8 cookies and 5 headers for `cacheKeyCookies` and
+`cacheKeyHeaders`.
 
-CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
-**8 cookies** and **5 headers** for callers. `accept-encoding` is handled
-automatically and is not allowed in `cacheKeyHeaders`.
+Static and image routes are not keyed on `cacheKeyCookies` /
+`cacheKeyHeaders`, and those cookies and headers are not forwarded to the
+origin on those routes (an auth-gated image source does not receive them).
 
-On a compute deploy every request is routed through a single default cache
-behavior, so `cacheKeyCookies`/`cacheKeyHeaders` affect the cache key for **all**
-routes on that behavior. To keep shared assets from being keyed per credential,
-the edge router deletes the configured cache-key cookies and headers on static
-and image routes before origin selection — those routes compute a shared cache
-key, while SSR/compute routes keep the credentials and stay keyed per credential.
-Because the router deletes them at viewer-request, those cookies and headers are
-also not forwarded to the origin on static and image routes (e.g. an auth-gated
-image source would not receive them).
-
-## Custom domains
+## Custom domains (CloudFront door)
 
 Configure a custom domain through `frontDoor.features.domain`
-(`HostingDomainConfig`; the top-level `domain` prop is its deprecated alias).
-This section covers the CloudFront door; the ALB and API Gateway doors take a
-**regional** certificate instead (see [Front doors](#front-doors)). CloudFront
-only accepts ACM certificates in **us-east-1**, so every certificate, whether
-auto-provisioned or bring-your-own, must live in us-east-1. There are two
-paths, depending on where you manage DNS.
+(`HostingDomainConfig`). The ALB and API Gateway doors take a regional
+certificate instead (see [Front doors](#front-doors)). CloudFront only accepts
+ACM certificates in us-east-1.
 
 ### Route 53 (automatic)
 
@@ -1323,8 +989,8 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-Use `hostedZoneId` to skip `HostedZone.fromLookup()`, which otherwise requires
-`env: { account, region }` on the stack. This is useful in pipeline stages:
+Pass `hostedZoneId` when the stack has no `env: { account, region }`, for
+example in a pipeline stage: it skips `HostedZone.fromLookup()`.
 
 ```ts
 domain: {
@@ -1336,86 +1002,49 @@ domain: {
 
 ### Bring your own DNS (manual)
 
-If you manage DNS elsewhere (your registrar, Cloudflare, or another provider),
-omit `hostedZone` and `hostedZoneId` and pass a pre-validated `certificate`, an
-ACM certificate in us-east-1. The construct creates no DNS records. Instead it
-emits the CloudFront distribution domain as a `DistributionDomainName`
-CloudFormation output, so you can point a CNAME at it from your own DNS
-provider.
+If your DNS is not in Route 53, omit `hostedZone` and `hostedZoneId` and pass a
+validated `certificate`, an ACM certificate in us-east-1. The construct
+creates no DNS records:
 
 ```ts
-new HostingConstruct(stack, 'Hosting', {
-  manifest,
-  frontDoor: {
-    features: {
-      domain: {
-        domainName: 'app.example.com',
-        // no hostedZone: you manage DNS externally
-        certificate: myPreValidatedCert, // ACM cert in us-east-1, pre-validated
-      },
-    },
-  },
-});
+domain: {
+  domainName: 'app.example.com',
+  certificate, // an ACM certificate in us-east-1 with status Issued
+}
 ```
+
+1. Before the deploy, request an ACM certificate in us-east-1 for your domain
+   and validate it (add the ACM validation CNAME to your DNS, or use email
+   validation). Wait until the certificate status is Issued.
+2. Deploy the stack. It emits the CloudFront distribution domain as the
+   `DistributionDomainName` output (for example `d1234abcd.cloudfront.net`).
+3. In your DNS provider, create a CNAME from your domain to that value. For
+   an apex domain, use an ALIAS or ANAME record if your provider supports it.
 
 ### Error behavior
 
-Omitting both `hostedZone` / `hostedZoneId` and `certificate` throws
-`MissingCertificateError` at synth time. Synthesis fails immediately, so the
-deploy never starts and there is no 72-hour CloudFormation wait on an
-unvalidated certificate. A bring-your-own certificate outside us-east-1 fails
-synthesis with `InvalidCertificateRegionError`.
+- Omitting `hostedZone`, `hostedZoneId` and `certificate` throws
+  `MissingCertificateError` at synth.
+- A certificate outside us-east-1 fails synth with
+  `InvalidCertificateRegionError`.
 
-### Two-phase workflow for external DNS
+## CloudFront 5xx alarm outside us-east-1
 
-A certificate must be validated before CloudFront will serve the domain, and
-the CloudFront domain is only known after deploy. Set up external DNS in two
-phases around the deploy:
+CloudFront metrics are published only in `us-east-1`, and a CloudWatch alarm
+evaluates only metrics of its own region. When the stack's region is not
+`us-east-1`, `HostingConstruct` adds a companion stack named
+`<stackName>-CfMonitoring-<addr>` in `us-east-1` with the CloudFront 5xx rate
+alarm and its own encrypted SNS topic. There is no opt-out.
 
-1. **Before deploy:** request an ACM certificate in **us-east-1** for your
-   domain and validate it (add the ACM validation CNAME to your DNS, or use
-   email validation). Wait until the certificate status is **Issued**.
-2. **Deploy:** deploy the stack with `frontDoor.features.domain: { domainName, certificate }`. The
-   stack emits the `DistributionDomainName` output (for example
-   `d1234abcd.cloudfront.net`).
-3. **After deploy:** in your DNS provider, create a CNAME from your domain
-   (`app.example.com`) to the `DistributionDomainName` value. For an apex
-   domain, use an ALIAS or ANAME record if your provider supports it.
-
-## Off-region CloudFront alarm parity
-
-AWS CloudFront metrics only publish in `us-east-1`. A CloudWatch alarm
-can only evaluate a metric in its own region, so the CloudFront 5xx
-alarm cannot be placed in a non-`us-east-1` hosting stack.
-
-When `HostingConstruct` detects that the stack's region is **not**
-`us-east-1` it automatically synthesizes a companion stack named
-`<stackName>-CfMonitoring-<addr>` (the `<addr>` suffix keeps the id
-unique when several hosting constructs share a stage) pinned to
-`us-east-1`. That stack:
-
-- creates its own encrypted SNS topic (the alarm action target),
-- wires the CloudFront 5xx rate alarm to that topic,
-- applies the same `frontDoor.features.monitoring.subscriptions` you pass to
-  the hosting construct (the top-level `monitoring` prop is its deprecated
-  alias), so you subscribe in one place and both regions are covered,
-  and
-- emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
-  who want the raw ARN can find it.
-
-> **Requirement:** because the companion stack is region-pinned you must
-> set `env: { account, region }` on the parent hosting stack when
-> deploying outside `us-east-1`, exactly as you would for a WAF stack
-> (see `waf_construct.ts`). If the region is resolved but the account is
-> unresolved, only the CloudFront alarm is skipped (with a loud synth
-> warning); all other alarms are kept. A fully env-agnostic stack
-> (unresolved-token region) creates the alarm locally and warns that it
-> will never fire if the app deploys outside `us-east-1`. See D-016.
-
-Off-region placement is **always on**; there is no opt-out. The
-CloudFront 5xx alarm is the whole point of `monitoring`, and an alarm
-placed in a region where CloudFront metrics never arrive would silently
-never fire.
+- Your `frontDoor.features.monitoring.subscriptions` apply to that topic too.
+- The topic's ARN is the `MonitoringTopicArnUsEast1` output.
+- Set `env: { account, region }` on the hosting stack when deploying outside
+  `us-east-1`.
+- With the region resolved and the account unresolved, only the CloudFront
+  alarm is skipped, with a synth warning. All other alarms are kept.
+- A stack with an unresolved region creates the alarm locally and warns that
+  it never fires if the app deploys outside `us-east-1`.
+- In `us-east-1` the alarm stays in the hosting stack.
 
 Subscribe with endpoint subscriptions (`EmailSubscription` /
 `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
@@ -1435,19 +1064,261 @@ new HostingConstruct(this, 'Hosting', {
 });
 ```
 
-Resource-target subscriptions (Lambda/SQS) are not yet supported —
-applying them to the us-east-1 topic would create an unresolvable
-cross-region reference. For a custom action, reach the alarms directly
-via `hosting.monitoring.alarms`. In `us-east-1` no companion stack is
-created — the alarm stays local.
+Lambda and SQS subscriptions are not supported. For a custom action, use the
+alarms in `hosting.monitoring.alarms`.
 
+## Secrets & config
 
-## Development
+`secret('KEY')` and `config('KEY')` declare a value. The function you call
+picks the store:
+
+| Declare (infra) | Store | Read (runtime) |
+| --- | --- | --- |
+| `secret('KEY')` | AWS Secrets Manager (sensitive) | `getSecret('KEY')` |
+| `config('KEY')` | AWS SSM Parameter Store (non-sensitive, free tier) | `getConfig('KEY')` |
+
+### Declare — in your hosting infra
+
+```ts
+import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+import { secret, config } from '@aws-blocks/hosting';
+
+new HostingConstruct(stack, 'Web', {
+  manifest, // a DeployManifest from an adapter (see Quick start)
+  environment: {
+    STRIPE_KEY: secret('STRIPE_KEY'), // → Secrets Manager
+    FEATURE_FLAGS: config('FEATURE_FLAGS'), // → SSM Parameter Store
+  },
+  // Optional per-kind namespace / cache config:
+  secretStore: { prefix: '/myapp/secrets' },
+  configStore: { prefix: '/myapp/config', cacheTtlSeconds: 30 },
+});
+```
+
+| Option of `secretStore` / `configStore` | Default | Description |
+|---|---|---|
+| `prefix` | `/hosting/secrets`, `/hosting/config` | Store path prefix. A value is stored at `<prefix>/<key>`. |
+| `stage` | none | A value resolves to `<prefix>/<stage>/<key>` and falls back to the shared `<prefix>/<key>`. |
+| `cacheTtlSeconds` | none | Seconds the getter reuses a fetched value. Omitted or `0`: for the life of the process. |
+
+The marker is inert (`{ key, kind }`) and safe to commit. Only the store
+locator is injected, never the value. The compute role is granted read on that
+one resource (`secretsmanager:GetSecretValue` / `ssm:GetParameter`, scoped to
+the exact ARN) plus `kms:Decrypt`.
+
+`environment` accepts both `secret()` and `config()`. On `HostingConstruct`,
+`domain.domainName` is a plain `string | string[]`. Only
+`await Hosting.create(...)` (`Hosting` from `@aws-blocks/core`) resolves a
+marker at synth, and there it accepts only `config()` or a plain string, never
+`secret()`: the resolved value is written into the CloudFormation template.
+
+**Bring your own:** `environment` also accepts an existing CDK `ISecret` /
+`IParameter` handle. The construct grants read through the handle and injects
+its locator, so `getSecret` / `getConfig` read it the same way.
+
+### Read — in your SSR / API / runtime code
+
+```ts
+import { getSecret, getConfig } from '@aws-blocks/hosting';
+
+const key = await getSecret('STRIPE_KEY'); // Secrets Manager
+const flags = await getConfig('FEATURE_FLAGS'); // SSM
+```
+
+- Each getter reads `process.env.KEY` first, so local development needs no
+  AWS.
+- Locally, put the value in `.env.local`. `npm run dev` and `npm run sandbox`
+  load that file into the backend and do not load `.env`: with a value only
+  in `.env`, `getConfig` throws `no config reference found` and `getSecret`
+  throws `no secret reference found`.
+- Next.js SSR code under `next dev` also reads `.env`, because Next.js loads
+  it.
+- On a deployed function the getter fetches and decrypts the value from its
+  store and caches it for the life of the process, or for `cacheTtlSeconds`
+  (a rotated value is then read without a redeploy).
+
+### Type-safe keys (`hosting-typegen`)
+
+`getSecret` / `getConfig` accept any `string` until you run `hosting-typegen`
+(wire it as `"typegen": "hosting-typegen"`), which narrows them to the
+declared keys with no call-site change:
 
 ```bash
-npm run build        # compile TypeScript
-npm test             # run tests (node --test)
+npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
+npx hosting-typegen --check   # CI: fail if that file is stale
 ```
+
+In an AWS Blocks app, `npm run dev` runs the generate-and-watch step itself
+when the app calls `secret()` / `config()`. In a standalone hosting app, run
+`hosting-typegen --watch` beside the dev server or add a `"predev"` hook.
+
+The scan is static: the app is not run and no AWS credentials are needed. A
+key that is not declared with the matching function is a compile error:
+
+```ts
+await getSecret('STRIPE_KEY'); // ✅ declared with secret()
+await getSecret('STRIPE_KYE'); // ❌ compile error — not a declared secret key
+```
+
+Add the generated file to your `tsconfig.json` `include`. Do not edit it by
+hand: the tool regenerates it.
+
+```jsonc
+{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
+```
+
+The file is safe to delete (the keys fall back to `string`) and safe to
+`.gitignore`. A `secret(myVar)` with a non-literal key is reported and
+skipped. A synth-only `domain` / `connectionArn` key may appear in
+autocomplete even though it is not readable at runtime.
+
+### Typed, parsed values with a schema
+
+Pass a Standard Schema (Zod, Valibot, ArkType) to get a typed, JSON-parsed
+value instead of a `string`:
+
+```ts
+// declare
+import { z } from 'zod';
+environment: { FEATURE_FLAGS: config('FEATURE_FLAGS', { schema: z.object({ beta: z.boolean() }) }) }
+
+// read — no JSON.parse, no `any`
+const { beta } = await getConfig('FEATURE_FLAGS');   // typed as { beta: boolean }
+```
+
+After `hosting-typegen`, `getConfig` / `getSecret` return the schema's output
+type and JSON-parse the stored value. The `schema` option is typed as
+`StandardSchemaV1`. The schema does not run at runtime: the value is parsed,
+not validated, on read.
+
+### Transport markers across a JSON / build boundary
+
+A marker does not survive `JSON.stringify` → `JSON.parse`:
+`isManagedValue()` returns `false` afterwards. To carry markers through JSON,
+for example in a build environment variable that a later build phase reads,
+use the codec:
+
+```ts
+import { config, isSecret, managedValueReplacer, managedValueReviver, secret } from '@aws-blocks/hosting';
+
+// Producer (phase 1): stringify with the replacer, stash in an env var.
+process.env.STAGE_CONFIG = JSON.stringify({ domain: config('DOMAIN'), apiKey: secret('API_KEY') }, managedValueReplacer);
+
+// Consumer (phase 2, possibly a different process): parse with the reviver.
+const cfg = JSON.parse(process.env.STAGE_CONFIG, managedValueReviver);
+isSecret(cfg.apiKey); // true
+```
+
+`managedValueReplacer` / `managedValueReviver` are `JSON.stringify` /
+`JSON.parse` hooks for a whole, possibly nested, object. `encodeManagedValue`
+/ `decodeManagedValue` convert a single value.
+
+Wire format:
+
+- Each encoded value carries a protocol version
+  (`MANAGED_VALUE_JSON_VERSION`).
+- `decodeManagedValue(v: unknown)` throws `ManagedValueCodecError` on an
+  unsupported version, an unknown kind, an invalid key or any other malformed
+  shape.
+- `managedValueReviver` never throws: it leaves anything that is not an exact
+  wire value untouched.
+- Only an object whose sole property is the codec tag is revived. An object
+  with the tag and other fields is left as is.
+- `schema` is not transported. The decoded marker still JSON-parses its
+  value; declare the schema again on the consuming side to get its type.
+
+### Set the values (out of band, never in git)
+
+Standalone hosting apps get two bundled CLIs:
+
+```bash
+# Secrets Manager — a secret value is NEVER taken from argv (it would land in
+# shell history). Omit the value for a hidden prompt, or pipe it via --value-stdin:
+npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
+cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
+npx hosting-secret list --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets               # recoverable
+npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # immediate, no recovery
+
+# SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
+npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
+```
+
+- `set` creates the entry or overwrites it, with no prompt. Run it again to
+  rotate a value.
+- `hosting-secret set KEY value` is an error: a secret value comes from the
+  hidden prompt or `--value-stdin`.
+- `hosting-config set` also accepts `--value-stdin` and the prompt.
+- `list` prints names only.
+- `remove` on a secret is recoverable by default (Secrets Manager's recovery
+  window). `--force` deletes immediately. It needs `--yes` (or `-y`) in every
+  stage and prints a warning that names the stage, or says that the un-staged
+  value is shared by every stage, production included.
+- `remove` on a config value is always immediate (SSM Parameter Store has no
+  recovery window) and needs no `--yes`.
+
+### Region, prefix and `stage` limits
+
+- `--region` (or `AWS_REGION`) must match the region the app deploys to, or
+  the deploy reports the value as "not set".
+- The default prefixes (`/hosting/secrets`, `/hosting/config`) are
+  account-global. When more than one app deploys to the same account, give
+  each its own `secretStore.prefix` / `configStore.prefix` and the matching
+  CLI `--prefix`, or their same-named values collide.
+- `stage` is not a security boundary. A stage's compute can read both its
+  stage value and the shared `<prefix>/<key>` value, so every stage sharing a
+  prefix can read the shared value. Put production-only secrets in a
+  stage-scoped slot and only a safe cross-stage default (for example a sandbox
+  credential) in the shared slot. Two constructs sharing a prefix are not
+  isolated from each other.
+
+## Errors
+
+The errors below are `HostingError`s (`@aws-blocks/hosting/error`), thrown at
+synth. `error.name` and `error.code` hold the name in the table, and
+`error.resolution` says how to fix it.
+
+| `error.name` | Thrown when |
+|---|---|
+| `AlbCertificateNeedsDomainError` | `{ kind: 'alb', certificate }` has no `features.domain`. |
+| `CacheGuardIgnoredCookieInCacheKeyError` | A cookie is in both `cacheKeyCookies` and `cacheGuardIgnoredCookies`. |
+| `EdgeComputeRequiresRegionError` | The app has Lambda@Edge compute and the stack has no explicit region. |
+| `EdgeRouteNeedsCloudFrontDoorError` | A Lambda@Edge compute is behind a door other than CloudFront. |
+| `FrontDoorSettingConflictError` | A setting is set both as a top-level prop and in `frontDoor.features`. |
+| `HttpErrorStatusErrorPagesError` | `Hosting` from `@aws-blocks/core` sees an `ApiNamespace` with `httpErrorStatus: true` and a CloudFront 403 / 404 error page. |
+| `InvalidCertificateRegionError` | The CloudFront door's `certificate` is not in us-east-1. |
+| `InvalidFrontDoorOptionError` | A door option is unknown for the kind or has the wrong type. |
+| `InvalidFrontDoorSettingError` | A `features` setting has an unknown key, an unknown `geoRestriction.type`, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer. |
+| `InvalidSkewProtectionMaxAgeError` | `skewProtection.maxAge` is outside 0 to 2592000 seconds (30 days), or exceeds `storage.buildRetentionDays`. |
+| `LoggingV2RegionError` | `logging.version: 'v2'` in a stack outside us-east-1. |
+| `MiddlewareNeedsCloudFrontDoorError` | The app has Next.js middleware and the door is not CloudFront. |
+| `MissingCertificateError` | A `domain` has no `hostedZone`, no `hostedZoneId` and no `certificate`. |
+| `MissingFrontDoorUrlError` | A custom door's `build` returns no `url`. |
+| `OriginSecretOverPlainHttpError` | Production synth of a `stacked` door whose edge → router hop is plain HTTP to an internet-facing router, without `allowPlainHttp: true`. |
+| `PlainHttpFrontDoorError` | Production synth of an `alb` or `custom` door served over plain HTTP with an API, without `allowPlainHttp: true`. |
+| `RestFrontDoorNeedsDomainError` | `{ kind: 'apiGateway', api: 'rest' }` has no custom domain. |
+| `SsrCacheKeyAcceptEncodingError` | `cacheKeyHeaders` includes `accept-encoding`. |
+| `SsrCacheKeyCookieCapError` | `cacheKeyCookies` has more than 8 names. |
+| `SsrCacheKeyCredentialsRequiredError` | `ssrDefaultTtl` is above 0 and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set. |
+| `SsrCacheKeyHeaderCapError` | `cacheKeyHeaders` has more than 5 names. |
+| `StackedRouterCertificateNeedsDomainError` | `Hosting` from `@aws-blocks/core`: the stacked door's router has a `certificate` and no `features.router.domain`. |
+| `StreamingServerNeedsStreamingDoorError` | A streaming server handler is behind a door that invokes it without streaming. |
+| `UnsupportedComputeFrontDoorError` | `compute.type: 'web-function'` behind a door other than CloudFront. |
+| `UnsupportedFrontDoorError` | `frontDoor` is not a front door, `'none'` is set for an app with a server, or a custom door fails the wiring check. |
+| `UnsupportedFrontDoorSettingError` | The door kind doesn't implement a setting. |
+| `UnsupportedRoutePatternError` | ALB: one pattern has more than six wildcards. API Gateway: a backend route has a wildcard other than one trailing `/*`. |
+| `WebFunctionUnsupportedComputeError` | `compute.type: 'web-function'` with a compute that is not an HTTP-server build. |
+| `WebFunctionUnsupportedRegionError` | `compute.type: 'web-function'` in a Region without Lambda Web Functions. |
+
+The adapters and the construct throw further `HostingError`s for build
+failures and invalid props. Two errors are not `HostingError`s:
+
+- `ManagedValueCodecError` (from `@aws-blocks/hosting`): `decodeManagedValue`
+  got a malformed value or an unsupported version.
+- `InsecureTransportException`: thrown by `Auth` at sign-in behind a
+  plain-HTTP door (see
+  [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)).
 
 ## License
 
