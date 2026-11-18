@@ -23,10 +23,31 @@ export function tracerTests(getApi: () => typeof apiType) {
       assert.ok(traceId.length > 0);
     });
 
+    test('local mock isolates parallel root segments', {
+      // Deployed roots share their invocation's X-Ray trace; this tests local root isolation.
+      skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local',
+    }, async () => {
+      const [first, second] = await getApi().tracerParallelRoots();
+      assert.ok(first.before);
+      assert.ok(second.before);
+      assert.strictEqual(first.after, first.before);
+      assert.strictEqual(second.after, second.before);
+      assert.notStrictEqual(first.before, second.before);
+    });
+
     test('addAnnotation succeeds', async () => {
       const api = getApi();
       const result = await api.tracerAddAnnotation('region', 'us-east-1');
       assert.deepStrictEqual(result, { success: true });
+    });
+
+    test('local mock starts a new trace for work after a root closes', {
+      skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local',
+    }, async () => {
+      const { requestId, deferredId } = await getApi().tracerDeferredRoot();
+      assert.ok(requestId);
+      assert.ok(deferredId);
+      assert.notStrictEqual(requestId, deferredId);
     });
 
     test('addMetadata succeeds', async () => {
