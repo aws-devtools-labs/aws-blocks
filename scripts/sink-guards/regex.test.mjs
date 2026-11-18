@@ -26,7 +26,7 @@ import {
 
 const ALLOWLIST = [
 	{
-		at: 'packages/blocks/src/cli/config.ts:228',
+		at: 'packages/blocks/src/cli/config.ts:242',
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
 	},
 	{
