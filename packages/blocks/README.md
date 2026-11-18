@@ -167,8 +167,8 @@ Run `npm run docs` in the app to list the Building Blocks shipped with its insta
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
 | bb-async-job | Background job processing backed by SQS, run on Lambda or a container. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
-| bb-auth | `Auth` is the single authentication Building Block for AWS CDK Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
-| bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
+| bb-auth | `Auth` is the single authentication Building Block for AWS Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
+| bb-compute | The `Compute` Building Block selects where a workload runs: `type: 'serverless'` (AWS Lambda) or `type: 'container'` (AWS Fargate). | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-database | `Database` is a PostgreSQL schema on a cluster: Aurora DSQL by default, or Aurora PostgreSQL Serverless v2 created with the express configuration. | — |
