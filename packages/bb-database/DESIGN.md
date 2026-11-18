@@ -1,227 +1,456 @@
 # Database: design
 
-Status: implemented (`dsql` and `aurora` clusters). Usage is documented in [README.md](./README.md).
+Status: implemented for `dsql` clusters, `aurora` clusters and existing databases. [README.md](./README.md) documents usage.
 
 ## Abstract
 
-`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` either owns an Aurora DSQL cluster or attaches to a shared `DatabaseCluster` of type `dsql` (Aurora DSQL) or `aurora` (Aurora PostgreSQL Serverless v2, created with the express configuration). The query interface is the same on every cluster. Migration files are written for the cluster's engine and run as written: on DSQL the block checks them with `dsql-lint`, sequences them into a plan that runs one DDL statement per transaction and waits for the jobs that asynchronous statements start, and resumes a failed file at the failed step; on Aurora each file is one PostgreSQL transaction. The principal trade-off is that a block is bound to its cluster for its lifetime: changing clusters requires a new block and a data copy, and a deploy-time check enforces this without a production override.
+`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` runs on one of three kinds of cluster:
+
+- An Aurora DSQL cluster that the block owns. This is the default.
+- A `DatabaseCluster` of type `dsql` or `aurora` that several blocks share.
+- A PostgreSQL database that already exists (`DatabaseCluster.fromExisting()`).
+
+The query interface is the same on all three. Migration files are written for the cluster's engine, and the block runs them as written. A block is bound to its cluster. To change clusters, add a new block and copy the data.
 
 ## 1. Introduction
 
 ### 1.1 Motivation
 
-A SQL block per service (one for Aurora, one for DSQL) gives each service its own class, options, migration runner and error set, so moving an application between them means rewriting every call site. Each block also provisions its own cluster. This package is a single block whose cluster is a constructor option.
+One SQL block per AWS service gives each service its own class, options, migration runner and error names. Moving an application between services then means rewriting every call site, and each block provisions its own cluster. This package is one block, and the cluster is a constructor option.
 
 ### 1.2 Requirements
 
-- **R1. Portability.** Application code (queries, transactions, error handling) is unchanged when the cluster changes.
-- **R2. Early failure.** An operation the cluster cannot support fails at compile time where the type system can express it, and otherwise on the dev server before any deploy.
+- **R1. Portability.** Application code (queries, transactions, error handling) does not change when the cluster changes.
+- **R2. Early failure.** An operation that the cluster cannot support fails at compile time where the type system can express it. Otherwise it fails on the dev server, before any deploy.
 - **R3. Sharing.** Several blocks can share one cluster, each in its own schema, without name collisions.
-- **R4. Data safety.** No deploy can silently move a block to a different cluster or destroy a cluster that still holds data.
+- **R4. Data safety.** No deploy silently moves a block to a different cluster or destroys a cluster that still holds data. This requirement is not met yet (section 6).
 
 ### 1.3 Out of scope
 
-- **In-place cluster migration.** Moving data between clusters is a copy whose timing depends on the application. The README documents the procedure; the package does not automate it.
-- **Emulation of DSQL limits.** A `dsql` cluster keeps optimistic concurrency and its per-transaction limits. The package reports these early rather than hiding them.
+- **Moving data between clusters.** The timing of a copy depends on the application. The README documents the procedure, and the package does not automate it.
+- **Hiding DSQL's limits.** A `dsql` cluster keeps optimistic concurrency and its per-transaction limits. The package reports them early.
 
 ## 2. Data model
 
 ### 2.1 Clusters and blocks
 
-A `DatabaseCluster` exists only as the value of a `Database`'s `cluster` option. A cluster with no block attached serves no request, so it is not itself a Building Block. It has no `bbName`, no catalog entry, and no telemetry. Its CDK class extends `BuildingBlockScope` only to declare VPC requirements and to reach the stack's execution role. The `type` value names a category of cluster rather than a product, following the convention established by compute: `dsql` is Aurora DSQL and `aurora` is Aurora PostgreSQL Serverless v2 created with the express configuration (a cluster and its writer instance in one CloudFormation resource, outside any VPC, behind an internet access gateway). The block that owns its cluster owns a `dsql` one; an `aurora` cluster is always a `DatabaseCluster`, so the choice of engine is written once, where the cluster is declared.
+A `DatabaseCluster` exists only to be the value of a `Database`'s `cluster` option. It serves no request by itself, so it is not a Building Block. It has no `bbName`, no catalog entry and no telemetry. Its CDK class extends `BuildingBlockScope` only to declare VPC requirements and to reach the stack's execution role.
+
+`type` names a category of cluster, not a product, as the compute blocks do:
+
+- `dsql` is Aurora DSQL.
+- `aurora` is Aurora PostgreSQL Serverless v2 created with the express configuration. That is one CloudFormation resource for the cluster and its writer instance, outside any VPC, behind an internet access gateway.
+
+A block that owns its cluster owns a `dsql` cluster. An `aurora` cluster is always a `DatabaseCluster`, so the engine is chosen in one place.
+
+`DatabaseCluster.fromExisting()` returns a reference object, not a construct (section 7).
 
 ### 2.2 Schema allocation
 
-A block that owns its cluster uses the `public` schema. A block on a shared cluster uses its id as the schema name unless `schemaName` overrides it. The id is made a PostgreSQL identifier first (`sanitizeSchemaName` in `src/constants.ts`): lower-cased, every character outside `[a-z0-9_]` replaced by `_`, a leading digit prefixed with `_`, a `pg_` prefix replaced by `blocks_`, and a name over 63 characters truncated with a hash suffix. Two blocks on one cluster may not share a schema; the conflict is reported when the second block is constructed. Short ids of `Database` and `DatabaseCluster` are likewise unique per application. Both checks, and the schema check, are keyed by the application's root (the `BlocksStack` or `BlocksBackend` at synth, the stack name at runtime), so two backends synthesized in one process do not collide.
+A block that owns its cluster uses the `public` schema, and so does a block on an existing database. A block on a shared cluster uses its id as the schema name. `schemaName` overrides either default.
+
+`sanitizeSchemaName` in `src/constants.ts` makes the id a PostgreSQL identifier:
+
+- It lower-cases the id and replaces every character outside `[a-z0-9_]` with `_`.
+- It prefixes a leading digit with `_` and replaces a `pg_` prefix with `blocks_`.
+- It truncates a name over 63 characters and adds a hash suffix.
+
+Two blocks on one cluster cannot share a schema. The second block fails at construction. The ids of `Database` and `DatabaseCluster` are unique per application for the same reason. These checks are keyed by the application's root: the `BlocksStack` or `BlocksBackend` at synth, and the stack name at runtime. Two backends synthesized in one process therefore do not collide.
 
 ## 3. Type system
 
-`Database` and `DatabaseCluster` are not generic. `ClusterType` is `'dsql' | 'aurora'`; `type` is required on `DatabaseCluster`, and `DatabaseClusterOptions` is a union discriminated on it, so capacity options exist only on `aurora` and `snapshot` is a removal policy only there. `db.cluster.kind` is the `ClusterType` union, not the literal of the constructor: the block is not generic, and a handler that must branch on the kind reads the value. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `core/construction.ts`. `DatabaseOptions` is a union discriminated on `cluster`, so an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error without constructor overloads; `types.test.ts` asserts the option rules with `@ts-expect-error`.
+`Database` and `DatabaseCluster` are not generic.
 
-A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`runtime/index.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`; its message, which reaches the client, names the row index and the first issue's path. The schema library's issues, whose messages can quote the row's values, are the error's non-enumerable `cause` and stay on the server. The type argument form stays in place.
+- `ClusterType` is `'dsql' | 'aurora'`. `DatabaseClusterOptions` is a union discriminated on `type`, so the capacity options exist only on `aurora`, and `snapshot` is a removal policy only there.
+- `ClusterKind` is `ClusterType | 'external'`. `db.cluster` is `{ kind, id }`. The type of `kind` is `ClusterKind`, not the literal that the constructor received, so a handler that branches on the kind reads the value.
+- `DatabaseOptions` is a union discriminated on `cluster`. An option that belongs to another shape, such as `removalPolicy` next to `cluster`, is a compile error, with no constructor overloads. `types.test.ts` asserts these rules with `@ts-expect-error`.
+- Every entry point resolves the `cluster` option with one function in `src/runtime/construction.ts`.
+
+A query's row type can come from a value instead of a type argument. `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`. The schema is a [Standard Schema](https://standardschema.dev). Its output type is the result type, and the block validates every row against it (`src/runtime/index.ts`). The block depends only on the specification's types, so the application chooses the schema library.
+
+A row that fails validation raises `ResultValidationFailed`. The message reaches the client and names the row index and the path of the first issue. The library's own issue messages can quote the row's values, so they go on the error's non-enumerable `cause` and stay on the server.
 
 ## 4. Execution environments
 
-`DatabaseCore` (`runtime/index.ts`) tracks the transaction a `transaction()` callback runs in with `AsyncLocalStorage` (`runtime/tx-scope.ts`). A `query`, `queryOne` or `execute` call on the block that opened the transaction, made inside the callback, is routed to the engine's in-transaction methods with that handle, so the rule holds for every engine: on DSQL the statement would otherwise auto-commit on another pooled connection; locally it would wait on the mutex the transaction holds. The scope closes with the transaction, so a statement from a promise the callback did not await runs auto-commit. A call on another block is not joined; it runs on that block's own engine.
+**Statements join the open transaction.** `DatabaseCore` (`src/runtime/index.ts`) tracks the transaction that a `transaction()` callback runs in with `AsyncLocalStorage` (`src/runtime/tx-scope.ts`). A `query`, `queryOne` or `execute` call on the block that opened the transaction, made inside the callback, runs in that transaction. Without this rule the statement would auto-commit on another pooled connection on AWS, and locally it would wait on the mutex that the transaction holds.
 
-`DatabaseCore.transaction()` is also where a conflict is retried, for the mock and the Lambda runtime alike. With `retryOnConflict` it re-runs the callback up to `maxRetries` times (`DEFAULT_MAX_RETRIES`, 8) and waits before each re-run. The wait is `conflictRetryDelayMs()`: a whole number of milliseconds drawn uniformly from 0 to `min(2000, 50 × 2^retry)`, where `retry` is 0 for the first retry. This is full jitter: the ceiling grows so that a busy row gets fewer attempts per second, and the wait is random so that transactions that conflicted together do not re-run together and conflict again. The failed attempt has rolled back and freed its connection before the wait (§4.3), so a waiting retry holds no connection and no mutex. With the default the waits add up to 7,150 ms at most. The retries after a conflict on a single auto-commit statement are a separate path with three fixed waits (`AUTOCOMMIT_CONFLICT_BACKOFF_MS`).
+The scope closes with the transaction. A statement from a promise that the callback did not await runs auto-commit. A call on another block does not join. It runs on that block's own engine.
+
+**Conflicts are retried in one place.** `DatabaseCore.transaction()` retries a conflict in local mode and on AWS. With `retryOnConflict` it runs the callback again up to `maxRetries` times (`DEFAULT_MAX_RETRIES`, 8) and waits before each run. The wait is `conflictRetryDelayMs()`, a whole number of milliseconds drawn uniformly from 0 to `min(2000, 50 × 2^retry)`, where `retry` is 0 for the first retry. The ceiling grows so that a busy row gets fewer attempts per second. The wait is random so that transactions that conflicted together do not run again together.
+
+The failed attempt has rolled back and freed its connection before the wait (section 4.3), so a waiting retry holds no connection and no mutex. With the default, the waits add up to 7,150 ms at most. A single auto-commit statement that conflicts takes a separate path with three fixed waits (`AUTOCOMMIT_CONFLICT_BACKOFF_MS`).
 
 ### 4.1 Local execution
 
-Locally, each cluster is one PGlite instance on disk, whether a block owns it or several share it. The dev server therefore has the same layout as AWS: one database, one schema per block.
+**One PGlite per cluster.** Locally, each provisioned cluster is one PGlite instance on disk, whether one block owns it or several share it. The dev server has the layout of AWS: one database, one schema per block. An existing database is different (section 7).
 
-PGlite provides a single session, so work is serialized by a mutex held for each auto-commit statement or for an entire `BEGIN … COMMIT`. PGlite's own callback-shaped `transaction()` is not used: it serialises top-level statements behind the same lock and has no savepoint API, which the nesting below needs. A block's own statements inside its `transaction()` callback never reach the mutex: `DatabaseCore` routes them to the in-transaction methods (§4). Another block's statements inside that callback, and a nested `transaction()`, cannot wait for the mutex the open transaction holds, so the `SchemaEngine` nests them in it: `SAVEPOINT`, `SET search_path` to its own schema, the statement or callback, `SET search_path` back to the enclosing block's schema, `RELEASE SAVEPOINT`; a failure is `ROLLBACK TO SAVEPOINT` (which also undoes the inner `SET`) followed by the restoring `SET`, so the enclosing transaction goes on. This is a documented divergence from DSQL, where the call runs on the other block's own connection (§9): locally it sees the enclosing transaction's uncommitted writes and is rolled back with it. The alternative, a configuration error, would reject code that is correct on DSQL, such as a read of another block's table inside a transaction. A block's migration run is the same kind of nested work: it happens on the block's first statement, and when that statement is inside another block's callback the schema, tables and `_migrations` rows it creates roll back with that transaction. The handle therefore takes rollback listeners (`ClusterTransaction.onRollback`), fired by a `ROLLBACK`, a failed `COMMIT` or a `ROLLBACK TO` its savepoint and handed to the parent on `RELEASE`; the mock registers one during the build that drops `DatabaseCore`'s cached engine, so the next statement builds it and runs the migrations again. A sibling's own failed statement rolls back only to its savepoint and leaves the engine in place.
+**One session.** PGlite has a single session, so a mutex serializes the work. The mutex is held for one auto-commit statement or for a whole `BEGIN … COMMIT`. The block does not use PGlite's own `transaction()`, because that API has no savepoints, and the nesting below needs them.
 
-The application's statements run as a plain role, `blocks_app_local`, which the cluster creates at init. Migrations run as PGlite's own user, a superuser, which stands in for the cluster admin. After a block's migrations the mock issues the grants the migration Lambda issues, through one function for both (`migrations/grants.ts`): DML on the schema's tables, `SELECT` on its views, `USAGE` on its sequences, nothing on the ledger. PostgreSQL then enforces locally what it enforces on AWS: DDL and `TRUNCATE` in a handler fail with SQLSTATE `42501`, the ledger is closed, and a Row Level Security policy applies, since the role does not own the tables. The session's user is switched the way its `search_path` is: `SET SESSION AUTHORIZATION` before a top-level statement or `BEGIN`, tracked so that an unchanged user costs no statement, set again after a `SAVEPOINT` and restored before its `RELEASE`. The statement names the role each time, because `RESET SESSION AUTHORIZATION` does not return a PGlite session to its own user. It is `SET SESSION AUTHORIZATION` and not `SET ROLE`, so that a `SET ROLE` in application SQL is checked against the app role's memberships, as on AWS. An earlier version refused DDL and `TRUNCATE` with a regex over the statement text; it could not enforce a policy or close the ledger.
+**Nested work.** A block's own statements inside its `transaction()` callback go to the in-transaction methods (section 4) and never reach the mutex. Another block's statements inside that callback, and a nested `transaction()`, cannot wait for a mutex that the open transaction holds. The `SchemaEngine` nests them in the open transaction:
 
-Each local engine is wrapped by `RulesEngine`, which implements `simulateConflict()`. On an `aurora` cluster that is all it does: PGlite is PostgreSQL, as the cluster is, and the PGlite cluster (which knows its kind) installs no `sys` stub and strips no `ASYNC`, so a DSQL form fails locally as it would on Aurora. Cluster options are checked once, in `runtime/construction.ts`, by every entry point, so a capacity or backup value the service would reject stops `npm run dev` before it stops a deploy. On a `dsql` cluster it also applies the DSQL checks: `dsql-lint` on each distinct statement (§5.1) and the per-transaction limits. It also runs the two asynchronous DDL forms synchronously by stripping the `ASYNC` keyword, and the cluster installs a stub of DSQL's `sys` schema at init (`sys.wait_for_job()` returns `true`, `sys.jobs` is empty) so a job wait written into a migration the way the AWS examples show runs as a no-op (§9). The limits are enforced for explicit transactions and for auto-commit DML statements alike, before the change is committed, so a statement that would exceed them rolls back as on DSQL. A statement is tracked by its kind, not by the method that issued it: an `INSERT … RETURNING` through `query()` or `queryOne()` counts the rows it changed (the engine's affected-row count, not the rows it returned), and a `SELECT` counts nothing. Rows removed by an `ON DELETE CASCADE` foreign key are counted by comparing the child tables' row counts before and after the statement; `SET NULL` and `SET DEFAULT` fan-out is not counted. The 10 MiB limit is approximated from the statement text and its parameters.
+1. `SAVEPOINT`.
+2. `SET search_path` to the nested block's schema.
+3. The statement or the callback.
+4. `SET search_path` back to the enclosing block's schema.
+5. `RELEASE SAVEPOINT`.
 
-### 4.2 Schema scoping on AWS
+On a failure the engine runs `ROLLBACK TO SAVEPOINT`, which also undoes the inner `SET`, and then restores the `search_path`. The enclosing transaction continues.
 
-Both kinds are reached through one `pg` pool engine (`engines/pg-engine.ts`) authenticated with IAM tokens: DSQL's through `@aws-sdk/dsql-signer`, Aurora's through `@aws-sdk/rds-signer` for the app's own database role, which the migration Lambda made a member of `rds_iam`. The two services have the same connection contract: port 5432, the `postgres` database, and TLS against the public Amazon Trust Services roots (the express configuration's internet access gateway presents the same certificate chain DSQL does, not the RDS certificate authority, so no bundle ships with the block). An Aurora cluster at `minCapacity: 0` pauses after five idle minutes with no client connection open, and takes about 20 seconds to answer the next one. Because any open connection prevents the pause, the pool lets an Aurora connection go ten seconds after its last statement (a DSQL connection is kept for five minutes, since DSQL has no pause to protect); a warm invocation then pays a reconnect, and an idle cluster costs nothing. The ten seconds are a timer, and a Lambda execution environment frozen after its response runs no timers: its socket stays open until the environment thaws or is reclaimed, so the pause can arrive later than five minutes after the last request. A connect is bounded to 25 seconds, under the handler's deadline, so a cluster still resuming fails the statement as `ConnectionFailed` instead of running it after the caller was answered; a dead idle socket (a code-less `Connection terminated` from pg) is retried once like a class `08` error, and the pool's `error` event is handled so an idle client's failure cannot end the process. The reconnect is an IAM authentication, which RDS recommends for fewer than 200 new connections a second per cluster; a burst that wakes several hundred containers whose pools have emptied in the same second can reach that ceiling, where the connection fails with SQLSTATE `28000` and surfaces as `ConnectionFailed`. Letting the pool keep connections longer when `minCapacity` is above 0, where there is no pause to protect, is listed under Limitations and future work. A dropped connection is retried once like any other, and no socket outlives 55 minutes. It sets `search_path` on each new connection through pg-pool's `onConnect` hook, which the pool awaits before it hands the connection out: a `SET` that fails fails that connection's checkout, and the statement waiting on it reports the error. A block that owns its cluster, or sets `schemaName: 'public'`, needs no `search_path`. The pool retires a connection after 55 minutes, inside DSQL's 60-minute connection limit. DSQL reports a stale catalog cache as SQLSTATE `40001` with `OC001` in the message; an auto-commit statement that hits it, or that finds its connection closed (SQLSTATE class `08`, or `57P01` when the server ended it), is retried once, since the pool hands the retry a fresh connection and a single auto-commit statement is safe to run again. A statement inside a transaction is not retried: the transaction is aborted, or gone with the connection.
+This differs from AWS, where the call runs on the other block's own connection (section 11). Locally the nested call sees the uncommitted writes of the enclosing transaction and rolls back with it.
+
+**A migration run can be nested too.** A block applies its migrations with its first statement. When that statement is inside another block's callback, the schema, the tables and the `_migrations` rows that the run creates roll back with that transaction. The transaction handle therefore takes rollback listeners (`ClusterTransaction.onRollback`). A `ROLLBACK`, a failed `COMMIT` or a `ROLLBACK TO` the handle's savepoint fires them, and a `RELEASE` hands them to the parent. The local entry point registers a listener that drops the engine that `DatabaseCore` cached, so the next statement builds the engine and applies the migrations again. A failed statement of a sibling block rolls back only to its own savepoint and leaves the engine in place.
+
+**The application role.** The application's statements run as a plain role, `blocks_app_local`, which the cluster creates at init. Migrations run as PGlite's own user, a superuser, in place of the cluster admin. After a block's migrations, the local entry point issues the grants that the migration function issues on AWS. One function serves both (`src/migrations/grants.ts`): DML on the schema's tables, `SELECT` on its views, `USAGE` on its sequences, and nothing on the ledger tables.
+
+PostgreSQL then enforces locally what it enforces on AWS. DDL and `TRUNCATE` in a handler fail with SQLSTATE `42501`. The ledger tables are closed. A Row Level Security policy applies, because the role does not own the tables.
+
+**Switching the session user.** The engine switches the session's user as it switches the `search_path`. It issues `SET SESSION AUTHORIZATION` before a top-level statement or a `BEGIN`, tracks the current user so that an unchanged user costs no statement, sets the user again after a `SAVEPOINT`, and restores it before the `RELEASE`. The statement names the role each time, because `RESET SESSION AUTHORIZATION` does not return a PGlite session to its own user. The statement is `SET SESSION AUTHORIZATION` and not `SET ROLE`, so that a `SET ROLE` in application SQL is checked against the application role's memberships, as on AWS.
+
+**Rules by cluster type.** `RulesEngine` wraps each local engine and implements `simulateConflict()`.
+
+- On an `aurora` cluster it does nothing else. PGlite is PostgreSQL, as the cluster is. The PGlite cluster installs no `sys` stub and strips no `ASYNC`, so a DSQL form fails locally as it does on Aurora.
+- On a `dsql` cluster it also runs `dsql-lint` on each distinct statement (section 5.1) and enforces the per-transaction limits. It runs the two asynchronous DDL forms synchronously by removing the `ASYNC` keyword. The cluster installs a stub of DSQL's `sys` schema at init: `sys.wait_for_job()` returns `true` and `sys.jobs` is empty. A job wait copied from the AWS examples therefore runs and does nothing.
+
+`src/runtime/construction.ts` checks the cluster options once for every entry point. A capacity or backup value that the service rejects stops `npm run dev` before it stops a deploy.
+
+**How the limits are counted.** The limits apply to explicit transactions and to auto-commit DML statements, before the change commits. A statement that exceeds a limit rolls back, as on DSQL.
+
+- A statement is counted by its kind, not by the method that issued it. An `INSERT … RETURNING` through `query()` counts the rows it changed. A `SELECT` counts nothing.
+- Rows that an `ON DELETE CASCADE` foreign key removes are counted. The engine compares the child tables' row counts before and after the statement. `SET NULL` and `SET DEFAULT` fan-out is not counted.
+- The 10 MiB limit is an approximation from the statement text and its parameters.
+
+### 4.2 Connections on AWS
+
+**One pool engine.** Both provisioned types use one `pg` pool engine (`src/engines/pg-engine.ts`) that authenticates with IAM tokens. DSQL tokens come from `@aws-sdk/dsql-signer`. Aurora tokens come from `@aws-sdk/rds-signer`, for the application's database role, which the migration function made a member of `rds_iam`.
+
+**One connection contract.** Both services use port 5432, the `postgres` database, and TLS against the public Amazon Trust Services roots. The internet access gateway of the express configuration presents the same certificate chain as DSQL, not the RDS certificate authority. No certificate bundle ships with the block.
+
+**The Aurora pause.** An Aurora cluster at `minCapacity: 0` pauses after five idle minutes with no client connection open. It takes about 20 seconds to answer the next connection. Any open connection prevents the pause, so the pool closes an Aurora connection ten seconds after its last statement. A warm invocation then pays a reconnect, and an idle cluster costs nothing. A DSQL connection is kept for five minutes, because DSQL has no pause.
+
+The ten seconds are a timer. A Lambda execution environment that is frozen after its response runs no timers. Its socket stays open until the environment thaws or is reclaimed, so the pause can come later than five minutes after the last request.
+
+**Connect timeout.** A connect is bounded to 25 seconds, under the handler's deadline. A cluster that is still resuming fails the statement with `ConnectionFailed`. The statement does not run after the caller was answered.
+
+**The IAM connection rate.** A reconnect is an IAM authentication. RDS recommends fewer than 200 new connections a second per cluster. A burst that wakes several hundred containers with empty pools in the same second can reach that rate. The connection then fails with SQLSTATE `28000` and surfaces as `ConnectionFailed`.
+
+**`search_path`.** The pool sets `search_path` on each new connection through pg-pool's `onConnect` hook. The pool awaits the hook before it hands the connection out. A `SET` that fails therefore fails the checkout, and the statement that waits on it reports the error. A block in the `public` schema needs no `search_path`.
+
+**Connection lifetime.** The pool retires a connection after 55 minutes, inside DSQL's 60-minute limit. The pool handles its `error` event, so the failure of an idle client does not end the process.
+
+**Which statements run again.**
+
+- An auto-commit statement runs once more on a fresh connection in two cases. The first is a stale catalog cache, which DSQL reports as SQLSTATE `40001` with `OC001` in the message. The second is a connection that the server closed while it sat idle: SQLSTATE class `08`, `57P01`, or pg's `Connection terminated` error, which has no code.
+- An auto-commit statement does not run again when the socket was reset under it (`ECONNRESET`, `EPIPE`). The server may have run the statement already.
+- A `BEGIN` runs once more on a fresh connection, because nothing has run yet.
+- A statement inside a transaction does not run again. The transaction is aborted, or gone with the connection.
 
 ### 4.3 Transaction handle lifecycle
 
-Both engines settle a handle on the first of `commitTransaction()` and `rollbackTransaction()`. A `COMMIT` that fails has already rolled the transaction back on the server, so a failed commit settles the handle too and frees its connection (DSQL: the pooled client; local: the cluster mutex). `rollbackTransaction()` on a settled handle is a no-op, and a statement on one is refused with `TransactionFailed`. `DatabaseCore.runTransaction` and the migration runner both issue `commit`, then `rollback` on failure; under this contract the second call never reaches a connection another borrower holds. A `BEGIN` or `ROLLBACK` that fails hands the DSQL client back with the error, so the pool discards the connection.
+Both engines settle a handle on the first of `commitTransaction()` and `rollbackTransaction()`. A `COMMIT` that fails has already rolled the transaction back on the server, so a failed commit also settles the handle and frees its connection. On AWS that is the pooled client. Locally it is the cluster mutex.
+
+`rollbackTransaction()` on a settled handle does nothing. A statement on a settled handle fails with `TransactionFailed`. `DatabaseCore.runTransaction` and the migration runner both call `commit` and then, on a failure, `rollback`. Under this contract the second call never reaches a connection that another borrower holds. A `BEGIN` or a `ROLLBACK` that fails returns the client to the pool with the error, so the pool discards the connection.
 
 ### 4.4 Kysely
 
-`DatabaseDialect` (`src/kysely.ts`, the `@aws-blocks/bb-database/kysely` entry) is a Kysely dialect over the block's engine: Kysely's PostgreSQL query compiler, adapter and introspector, with the block's own driver. It is the only module of the block that imports Kysely, which is an optional peer dependency. No entry point of the block imports that module, and `kysely-free.test.ts` fails if one of them loads Kysely, so an application that does not use Kysely does not install or load it. The root entry of `@aws-blocks/data-common` loads Kysely for the adapter that `bb-data` re-exports, so the block imports `@aws-blocks/data-common/core`, which has the same exports without the adapter.
+`DatabaseDialect` (`src/kysely.ts`, the `@aws-blocks/bb-database/kysely` entry) is a Kysely dialect over the block's engine. It uses Kysely's PostgreSQL query compiler, adapter and introspector with the block's own driver.
 
-Each Kysely connection is a `Session` (`runtime/session.ts`) from `DatabaseCore`: the same engine, the same conflict retry for an auto-commit statement, and the same join into the block's open `transaction()` (§4). Kysely's driver interface passes transaction control as calls, so nothing is read from statement text. `beginTransaction` maps onto the handle API (§4.3); an isolation level or an access mode becomes `SET TRANSACTION`, the first statement of the transaction. A savepoint is a statement of the open transaction.
+**Kysely is optional.** `src/kysely.ts` is the only module that imports Kysely, which is an optional peer dependency. No entry point of the block imports that module, and `kysely-free.test.ts` fails if one of them loads Kysely. An application that does not use Kysely does not install or load it.
 
-Kysely expects the number of rows that a statement changed. The engines report it (`RowCountingEngine` in `engines/handle.ts`: PGlite's `affectedRows`, and pg's `rowCount` when the command changes data), so a `RETURNING` clause or a literal in the statement cannot change the count.
+**Connections.** Each Kysely connection is a `Session` (`src/runtime/session.ts`) from `DatabaseCore`. It has the same engine, the same conflict retry for an auto-commit statement, and the same join into the block's open `transaction()` (section 4). Kysely's driver interface passes transaction control as calls, so the block reads nothing from statement text. `beginTransaction` maps to the handle API (section 4.3). An isolation level or an access mode becomes `SET TRANSACTION`, the first statement of the transaction. A savepoint is a statement of the open transaction.
 
-The callback of a Kysely transaction runs outside the block's `AsyncLocalStorage` scope, so no other statement can join that transaction. On AWS a statement on the block or on the root Kysely instance, issued inside that callback, runs on another connection. Locally it would wait for the one session forever. While such a transaction holds the mutex, a wait for it is therefore bounded (`SESSION_TRANSACTION_WAIT_MS`) and ends with a `QueryFailed` whose message names the cause. Streaming needs a cursor on one connection, which the engine interface does not have, so it is refused.
+**Row counts.** Kysely expects the number of rows that a statement changed. The engines report it (`RowCountingEngine` in `src/engines/handle.ts`): PGlite's `affectedRows`, and pg's `rowCount` when the command changes data. A `RETURNING` clause or a literal in the statement does not change the count.
+
+**A statement outside a Kysely transaction.** The callback of a Kysely transaction runs outside the block's `AsyncLocalStorage` scope, so no other statement can join that transaction. On AWS a statement on the block or on the root Kysely instance, issued inside that callback, runs on another connection. Locally it would wait for the one session forever. The wait is therefore bounded (`SESSION_TRANSACTION_WAIT_MS`) and ends with a `QueryFailed` whose message names the cause.
+
+**Streaming.** Streaming needs a cursor on one connection. The engine interface has none, so the dialect refuses it.
 
 ### 4.5 User-scoped statements
 
-`asUser(user, claims?)` returns a `ScopedDatabase`: the block's four statement methods over a second `DatabaseCore` whose only engine is a `ScopedEngine` (`runtime/scoped.ts`). The wrapper sets the user's claims at the start of every transaction it begins, `SELECT set_config('request.jwt.claims', $1, true)` with `{ ...claims, sub: userId }`, and runs a single statement in a transaction of its own, because the setting is transaction-local. Every exit of the scoped object reaches the database through that engine's `beginTransaction`: an auto-commit statement, `transaction()`, and a Kysely connection, whose `Session` comes from the same core. There is no per-method code to forget, and the scoped object holds no reference to the unwrapped engine: its entry in the internal access channel returns the wrapper. `as-user.test.ts` checks each exit against PGlite and, on a recording engine, that no statement runs outside a transaction and that every transaction starts with the claims. `types.test.ts` pins the keys of `ScopedDatabase`, so a new exit fails the build until it has a test.
+`asUser(user, claims?)` returns a `ScopedDatabase`. It has the block's four statement methods over a second `DatabaseCore`, whose only engine is a `ScopedEngine` (`src/runtime/scoped.ts`).
 
-**Identity, not a role.** The application connects as one role, which does not own the tables (§4.1, §5.4), so policies already apply to every statement; the claim says which user a statement is for. The setting's name is PostgREST's, so a policy written for it reads the same value here. A role switch for each transaction, as PostgREST does, would add cluster roles, a grant for each table and a reorder of the migration Lambda, for no effect on a cluster where the block already connects as a role that owns nothing. It belongs to an external database, where the connecting role usually owns the tables (§10).
+**One way in.** The wrapper sets the user's claims at the start of every transaction it begins, with `SELECT set_config('request.jwt.claims', $1, true)` and `{ ...claims, sub: userId }`. The setting is transaction-local, so a single statement runs in a transaction of its own. Every path from the scoped object to the database goes through that engine's `beginTransaction`: an auto-commit statement, `transaction()`, and a Kysely connection, whose `Session` comes from the same core. The scoped object holds no reference to the unwrapped engine. Its entry in the internal access channel returns the wrapper.
 
-**A statement with no user.** A custom setting that a transaction set locally reverts to the session's value, and to an empty string when the session has none; `''::jsonb` raises an error. Each `aurora` connection therefore gets the session value `{}` when it opens (pg-pool's `onConnect`, in the round trip that sets `search_path`), and PGlite gets it at init. A policy that compares a column with `->> 'sub'` then gives a statement with no user no rows, on every connection. Server code that must see every row passes a claim of its own that a policy admits; only server code sets claims.
+`as-user.test.ts` checks each path against PGlite. On a recording engine it also checks that no statement runs outside a transaction and that every transaction starts with the claims. `types.test.ts` pins the keys of `ScopedDatabase`, so a new path fails the build until it has a test.
 
-**Transaction modes.** PostgreSQL takes an isolation level only before a transaction's first query, and the claims statement is a query. `beginTransaction(modes)` on the engines therefore issues `SET TRANSACTION` itself, and the wrapper runs the claims after it (§4.4).
+**Identity, not a role.** On a provisioned cluster the application connects as one role that does not own the tables (sections 4.1 and 5.4). Policies already apply to every statement, and the claim says which user a statement is for. The name of the setting is PostgREST's, so a policy written for PostgREST reads the same value. On an existing database the connection role usually owns the tables, so `asRole()` switches the role as well (section 7).
 
-**Errors.** SQLSTATE `42501` from a statement of a scoped database is `PermissionDenied`, HTTP 403: a policy's `WITH CHECK` refused the row. From any other statement it stays `QueryFailed`, because there it is the application's own mistake, such as DDL in a handler. A row that a `USING` clause hides is not an error.
+**A statement with no user.** A transaction-local custom setting reverts to the session's value when the transaction ends. When the session has no value, it reverts to an empty string, and `''::jsonb` is an error. Each `aurora` connection therefore gets the session value `{}` when it opens, in the round trip that sets `search_path`. PGlite gets it at init. A policy that compares a column with `->> 'sub'` then gives a statement with no user no rows. Server code that must see every row passes a claim that a policy admits.
 
-**Cost and retries.** A scoped auto-commit statement is four round trips. It is retried on a serialization conflict as a whole, like the block's. `PgEngine` retried an auto-commit statement once on a connection the server had closed while it sat idle, but not a `BEGIN`; every scoped statement begins a transaction, so `BEGIN` is now tried once more on a fresh connection.
+**Transaction modes.** PostgreSQL accepts an isolation level only before the first query of a transaction, and the claims statement is a query. `beginTransaction(modes)` on the engines therefore issues `SET TRANSACTION` itself, and the wrapper sets the claims after it (section 4.4).
 
-**Local nesting.** Locally a statement of another database object inside a `transaction()` callback is a savepoint of the open transaction (§4.1), and a transaction-local setting made in a savepoint outlives its `RELEASE`. The `SchemaEngine` therefore reads the enclosing transaction's claims at `SAVEPOINT`, sets `{}` for the nested work, and puts them back before `RELEASE`; `ROLLBACK TO` restores them by itself. A nested statement then carries its own database's user or none, as it does on AWS on its own connection.
+**Errors.** SQLSTATE `42501` from a statement of a scoped database is `PermissionDenied`, HTTP 403. A policy's `WITH CHECK` refused the row. From any other statement it stays `QueryFailed`, because there it is the application's own mistake, such as DDL in a handler. A row that a `USING` clause hides is not an error.
 
-**`dsql`.** DSQL has no Row Level Security. `asUser()` throws `DatabaseConfigurationError` when it is called, in the mock and the Lambda entry; `db.cluster.kind` is a union (§3), so there is no type to carry a compile error.
+**Cost and retries.** A scoped auto-commit statement takes four round trips. On a serialization conflict the whole statement is retried, as the block's own statements are. Every scoped statement begins a transaction, so the retry of `BEGIN` on a closed idle connection (section 4.2) covers it.
+
+**Local nesting.** Locally, a statement of another database object inside a `transaction()` callback is a savepoint of the open transaction (section 4.1). A transaction-local setting made in a savepoint outlives its `RELEASE`. The `SchemaEngine` therefore reads the enclosing transaction's claims at the `SAVEPOINT`, sets `{}` for the nested work, and puts the claims back before the `RELEASE`. `ROLLBACK TO` restores them by itself. A nested statement carries its own database's user or none, as it does on AWS on its own connection.
+
+**`dsql`.** DSQL has no Row Level Security. `asUser()` and `asRole()` throw `DatabaseConfigurationError` in local mode and in the Lambda entry point. `db.cluster.kind` is a union (section 3), so no type can carry a compile error.
 
 ## 5. Schema migration
 
 ### 5.1 The compatibility checker
 
-Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`src/dialect/lint.ts`), from the `awslabs/aurora-dsql-tools` repository. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on each migration file as written, at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text in a bounded map of 2,000 entries that drops the oldest (about 8 ms per uncached statement). Statements that run as part of a migration are not linted again; the file was linted whole before the run. It is never run on AWS: the lint is a separate call, `lintMigrationFiles`, which the local entry makes at construction and the CDK entry makes at synth; the migration Lambda, which does not ship the binary, only builds and runs the plan (`buildMigrationPlan` and `runMigrationPlan`) over files that already passed the lint. The app runtime does no validation.
+[`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`src/dialect/lint.ts`) decides whether a statement is valid on DSQL.
 
-dsql-lint marks some findings as fixable (`fix_result.status` of `fixed` or `fixed_with_warning`: `serial_type`, `index_async`, `foreign_key_not_valid`, `check_not_valid`, `sequence_cache_missing`, `alter_add_unique_collapse`). The block treats them exactly like the unfixable ones: the file stops with the linter's message and suggestion, and the author makes the change (§5.2).
+**Where it runs.** The block runs it on each migration file, at synth and when the dev server starts. Locally it also runs on each statement that a handler issues, and caches the result per statement text in a map of 2,000 entries that drops the oldest. Statements that run as part of a migration are not checked again, because the file was checked whole.
 
-One check stays in the block because it covers a gap in the linter: `GRANT … ON SCHEMA public`, which dsql-lint 0.2.20 accepts but DSQL rejects at runtime (`public` is a system schema). The sandbox run found it when every block that owned its cluster failed to deploy on that grant. `validation.test.ts` pins the rule ids the integration must report and the SQL it must accept, so a `dsql-lint` upgrade that changes a rule shows up there. The baseline is `@aws/dsql-lint` 0.2.20 and the DSQL user guide as of 2026-10-11.
+It does not run on AWS. The lint is a separate call, `lintMigrationFiles`. The local entry point makes it at construction, and the CDK entry point makes it at synth. The migration function only builds and runs the plan (`buildMigrationPlan`, `runMigrationPlan`) over files that passed the lint.
 
-For the identity and sequence rules the block appends the cache trade-off to dsql-lint's suggestion, which recommends `CACHE 1`, so the choice is explained where the author reads the error. One rule is the block's own, because dsql-lint and PGlite both accept the statement and DSQL rejects it at run time: `GRANT … ON SCHEMA public`, since `public` is a system entity that custom roles can use without a grant. The linter is a native binary that `@aws/dsql-lint` installs per platform as an optional dependency (macOS, Linux and Windows on x64; macOS and Linux on arm64); it runs on the developer's machine and at synth, never on AWS, so the migration Lambda does not ship it.
+**The binary.** `@aws/dsql-lint` installs a native binary per platform as an optional dependency: macOS, Linux and Windows on x64, and macOS and Linux on arm64. The migration function does not ship it.
+
+**Fixable findings.** dsql-lint marks some findings as fixable: `serial_type`, `index_async`, `foreign_key_not_valid`, `check_not_valid`, `sequence_cache_missing` and `alter_add_unique_collapse`. The block treats them like every other finding. The file stops with the linter's message and suggestion, and the author makes the change (section 5.2). For the identity and sequence rules, the block adds the cache trade-off to the suggestion, which recommends `CACHE 1`.
+
+**The block's own rule.** The block rejects `GRANT … ON SCHEMA public`. dsql-lint 0.2.20 and PGlite both accept it, and DSQL rejects it at run time, because `public` is a system schema that custom roles use without a grant.
+
+**Version.** The baseline is `@aws/dsql-lint` 0.2.20. `validation.test.ts` pins the rule ids that the integration must report and the SQL that it must accept, so an upgrade that changes a rule fails that test.
 
 ### 5.2 Plan construction
 
-Each block has one directory of migration files written in DSQL, as AWS documents it, and the block runs what the file says. The engine is a framework default rather than the application's choice, so the block carries the engine's differences in its runner and its checks; it does not change the SQL text a customer wrote, because a file that reads one way in the repository and runs another way on the cluster cannot be reviewed. `buildMigrationPlan` therefore only sequences, by cluster kind. For `aurora` every statement of a file is one step of one transaction: PostgreSQL DDL is transactional, so a file applies entirely or not at all and leaves nothing to resume; the file is never linted, since the cluster runs what PostgreSQL runs. For `dsql` it splits each file into statements with the shared lexer (string literals, dollar-quoted bodies and comments are respected), gives every DDL statement its own transaction while consecutive DML statements share one (DSQL allows one DDL statement per transaction and no DDL with DML), and follows the two asynchronous forms a file contains, `CREATE [UNIQUE] INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`, with a wait for the job DSQL returns. Nothing else is touched or generated; the SQL of every step is the file's statement.
+Each block has one directory of migration files, written for its cluster's engine. The block runs what the file says. It does not change the SQL text, so the file in the repository is the SQL that runs on the cluster. `buildMigrationPlan` only sequences the statements, by cluster kind.
 
-The first cut of this package rewrote PostgreSQL files into those forms at deploy time: `SERIAL` to an identity column with a cache, `CREATE INDEX` to `ASYNC` plus a wait, a named `ADD CONSTRAINT` to `NOT VALID` plus a synthesized validation. It was removed. The rewrite chose values the author had not written (a cache of 65536), left an unnamed constraint `NOT VALID` with no validation, tracked DSQL's grammar in regular expressions, and made the SQL that ran on the cluster differ from the file in the repository, visible only through a CLI that printed the plan. With the rewrite gone, dsql-lint's findings for those spellings stop the file like any other, with the linter's own suggestion (§5.1). An author with an existing PostgreSQL file can run `dsql-lint --fix` once and review the result; the block does not do it silently.
+**`aurora`.** Every statement of a file is one step of one transaction. PostgreSQL DDL is transactional, so a file applies entirely or not at all, and there is nothing to resume. The file is not linted.
+
+**`dsql`.** The plan splits each file into statements with the shared lexer, which respects string literals, dollar-quoted bodies and comments. DSQL allows one DDL statement per transaction and no DDL with DML. The plan therefore gives every DDL statement its own transaction, and consecutive DML statements share one. After each of the two asynchronous forms, `CREATE [UNIQUE] INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`, the plan adds a wait for the job that DSQL returns. The SQL of every step is a statement of the file.
+
+**An existing database.** The plan is the `aurora` plan, without the checks (section 7).
+
+An author with a PostgreSQL file can run `dsql-lint --fix` once and review the result.
 
 ### 5.3 Resumable execution
 
-The runner records progress in a `_migration_progress` table in the block's schema: after each step that runs outside a transaction, and once per transactional batch, in the batch's own transaction so the record becomes visible with its COMMIT. The ledger tables are always schema-qualified in the runner's SQL, so a file that changes `search_path` (the first line of a `pg_dump`) cannot redirect the bookkeeping. One row per partly applied file holds the whole resume state: `name` (the file), `step` (the next step to run), `job_id` (when that step is a wait, the DSQL job it waits on) and `file_hash` (SHA-256 of the file text the completed steps came from). A file that fails partway resumes at the recorded step on the next run. Error messages count statements, not steps: a failure reads `statement k of n`, where `n` is the number of SQL statements in the file, and a failure at a wait step is reported at the `ASYNC` statement that started the job. A row whose `file_hash` differs from the current file stops the run with an error that names the file: the recorded step belongs to another text, and matching old steps to new ones would be a guess. The author restores the earlier text to finish the file and puts the change in a new file. An `aurora` file is one transaction, so it never has a progress row to resume from: its failure message says that nothing from the file was applied and that the file runs again from the start, and editing it is the right move; the `dsql` message says the runner resumes at the statement. The block is unpublished, so `ensureMigrationTables` creates both tables in this shape and no earlier shape is migrated; `_migrations.applied_at` is `TIMESTAMPTZ`, where the sibling blocks' tables still use zoneless `TIMESTAMP`. The plan decides which files exist; a progress row is a fact about the database and outlives any plan, so rows are never deleted for files absent from the plan. A deploy that fails rolls the custom resource back to its previous properties, and the previous migration set may run again; it leaves the rows of files it does not know about alone. Replaying earlier steps would re-execute DDL that already succeeded, which DSQL does not run transactionally and so cannot roll back. The one step that may have run without being recorded is an `ASYNC` statement whose progress save failed after the DDL succeeded; a run that resumes at such a statement reads the catalog before re-issuing it: a valid object completes the statement, a missing one lets it run, and an INVALID index or NOT VALID constraint is first matched against the running jobs in `sys.jobs` by object name: a running job on that object is adopted as the wait step's job; without one, the INVALID index is dropped and the statement re-issued. Completed files are recorded in `_migrations`. A wait step records the DSQL job it is waiting on, so a later run can check `sys.jobs` instead of re-issuing the DDL. A job that `sys.jobs` reports `failed` fails the file at the `ASYNC` statement, not at the wait: the runner clears the job id, rewinds `step` to that statement (or deletes the row when that statement is the file's first step: nothing persisted ran, so the next run accepts an edited file), and, for an index, drops the INVALID index DSQL leaves behind (a failed validation leaves the constraint NOT VALID and needs no cleanup), so the next deploy reissues the statement after the author has fixed the cause. DSQL purges finished jobs from `sys.jobs` after 30 minutes, so a missing row is not taken as success: the plan records the index or constraint name the statement names (`src/migrations/plan.ts`, parsed by `src/dialect/async-ddl.ts`) on the wait step, and the runner reads `pg_index.indisvalid` or `pg_constraint.convalidated`; a valid object completes the step, a missing or invalid one is handled like a failed job. Locally the wait step is a no-op: PGlite runs the asynchronous forms synchronously and returns no job id, so there is nothing to poll.
+**The ledger tables.** `_migrations` records the files that are complete. `_migration_progress` records where a partly applied file stopped. Both are in the block's schema, and the runner's SQL always qualifies them with that schema. A file that changes `search_path`, as the first line of a `pg_dump` file does, cannot redirect them. `ensureMigrationTables` creates both. `_migrations.applied_at` is `TIMESTAMPTZ`.
+
+**The progress row.** One row per partly applied file holds the resume state:
+
+| Column | Meaning |
+|---|---|
+| `name` | The file. |
+| `step` | The next step to run. |
+| `job_id` | The DSQL job that the step waits on, when the step is a wait. |
+| `file_hash` | SHA-256 of the file text that the completed steps came from. |
+
+The runner writes the row after each step that runs outside a transaction. For a transactional batch it writes the row once, in the batch's own transaction, so the row becomes visible with the `COMMIT`. A file that fails resumes at the recorded step on the next run.
+
+**Error messages count statements.** A failure reads `statement k of n`, where `n` is the number of SQL statements in the file. A failure at a wait step is reported at the `ASYNC` statement that started the job.
+
+**An edited file.** A row whose `file_hash` differs from the current file stops the run with an error that names the file. The recorded step belongs to another text, and the runner does not guess which new step matches it. The author restores the earlier text to finish the file and puts the change in a new file.
+
+**An `aurora` file.** The file is one transaction, so it has no progress row. Its failure message says that nothing from the file was applied and that the file runs again from the start. The `dsql` message says that the runner resumes at the statement.
+
+**A deploy that rolls back.** The plan decides which files exist. A progress row is a fact about the database, so the runner never deletes the rows of files that are absent from the plan. A deploy that fails returns the custom resource to its previous properties, and the previous set of files can run again. That run leaves the rows of unknown files alone. The runner does not replay earlier steps, because DDL on DSQL is not transactional and cannot roll back.
+
+**An `ASYNC` statement that ran without a record.** The progress save can fail after the DDL succeeded. A run that resumes at such a statement reads the catalog before it issues the statement again:
+
+- A valid object completes the statement.
+- A missing object lets the statement run.
+- For an `INVALID` index or a `NOT VALID` constraint, the runner looks for a running job on that object in `sys.jobs`. It adopts a running job as the job of the wait step. With no running job, it drops the `INVALID` index and issues the statement again.
+
+**A failed job.** A job that `sys.jobs` reports as `failed` fails the file at the `ASYNC` statement, not at the wait. The runner clears the job id and sets `step` back to that statement. When that statement is the first step of the file, the runner deletes the row instead, so the next run accepts an edited file. For an index, the runner also drops the `INVALID` index that DSQL leaves. A failed validation leaves the constraint `NOT VALID` and needs no cleanup. The next deploy issues the statement again after the author has fixed the cause.
+
+**A purged job.** DSQL removes finished jobs from `sys.jobs` after 30 minutes, so a missing row does not mean success. The plan records the index or constraint name on the wait step (`src/migrations/plan.ts`, parsed by `src/dialect/async-ddl.ts`). The runner reads `pg_index.indisvalid` or `pg_constraint.convalidated`. A valid object completes the step. A missing or invalid object is handled like a failed job.
+
+**Local mode.** The wait step does nothing. PGlite runs the asynchronous forms synchronously and returns no job id.
 
 ### 5.4 Deployment
 
-Each cluster has two migration Lambdas built from one bundle and one custom-resource provider; each block has one CloudFormation custom resource. Resources on the same cluster depend on one another, so blocks migrate sequentially. CDK bundles a function's code when the function is constructed, which precedes the attachment of any block. Migration files therefore cannot be bundled with the Lambda. Instead, each block publishes its files as a single JSON asset in S3, and its custom resource carries the asset's location. A change to the files changes the asset hash, which causes CloudFormation to re-run the resource.
+**Resources.** Each provisioned cluster has two migration functions, built from one bundle, and one custom-resource provider. Each block has one CloudFormation custom resource. The resources of one cluster depend on one another, so its blocks migrate one at a time. An existing database is different (section 7).
 
-The provider's `onEvent` handler runs the plan until it finishes or reaches a DSQL job that is still running, and the `isComplete` handler resumes it on every poll, every 30 seconds for up to 55 minutes. A long index build is therefore bounded by the provider's total timeout, not by one invocation's ten minutes. An `aurora` file has the opposite bound: it is one transaction inside one invocation, so it must finish within the function's ten minutes. Left alone, a longer file ends with the invocation's own `Task timed out after 600 seconds`, which names no file, and the server rolls the transaction back when the connection drops. The migration Lambda therefore runs the plan `boundToInvocation`, and the runner sets PostgreSQL 17's `transaction_timeout` at `BEGIN` to nine minutes, so the server cancels the transaction first (SQLSTATE `25P04`) and the error names the file and the statement and says to split the file. The bound is fixed rather than the invocation's remaining time; a second long file in the same invocation can still meet the invocation's own timeout, accepted for a case this uncommon. `transaction_timeout` exists from PostgreSQL 17; the express configuration creates the default engine version, 17 at the time of writing, and versions only go up. The dev server does not set the bound. The provider's budget sits under CloudFormation's own limit: a stack waits for a custom resource for `ServiceTimeout` seconds, 3600 at most, and the block sets that value on each resource explicitly. A provider that polled longer would still be running when CloudFormation gave the resource up, and the deploy would end with a timeout from CloudFormation instead of the runner's message. When the plan is complete the handler creates the per-cluster app role if needed, maps it to IAM (`AWS IAM GRANT` to the stack's execution role on DSQL; `GRANT rds_iam` on Aurora, where the execution role's `rds-db:connect` grant on `dbuser:<cluster resource id>/<role>` is what admits it), and grants it DML on the schema's tables, `SELECT` on its views and `USAGE` on its sequences. The Lambdas connect as the cluster admin: DSQL's `admin` with an admin token, Aurora's master user `postgres`, which the express configuration creates with IAM authentication and no password. The template does not name `EnableIAMDatabaseAuthentication` or `MasterUserAuthenticationType`: express sets both, and naming them makes the CloudFormation handler modify the cluster after the create (174 s for the resource against 22 s).
+**Files travel as an asset.** CDK bundles a function's code when the function is constructed, which is before any block attaches. The migration files therefore cannot be in the bundle. Each block publishes its files as one JSON asset in S3, and its custom resource carries the asset's location. A change to the files changes the asset hash, and CloudFormation runs the resource again.
 
-Every Lambda function that assumes the stack's execution role is made to depend on each block's custom resource, through a CDK aspect that runs at synth after all constructs exist. A deploy therefore applies a block's migrations before any new handler code runs.
+**Long jobs on DSQL.** The provider's `onEvent` handler runs the plan until it finishes or reaches a DSQL job that is still running. The `isComplete` handler resumes the plan on every poll, every 30 seconds for up to 55 minutes. The provider's total timeout bounds a long index build, not the ten minutes of one invocation.
+
+**The ten-minute bound on Aurora.** An `aurora` file is one transaction inside one invocation, so it must finish within the function's ten minutes. The invocation's own timeout message names no file. The migration function therefore runs the plan with `boundToInvocation`, and the runner sets PostgreSQL 17's `transaction_timeout` to nine minutes at `BEGIN`. The server cancels the transaction first, with SQLSTATE `25P04`. The error names the file and the statement and says to split the file.
+
+The bound is fixed. It is not the invocation's remaining time, so a second long file in the same invocation can still meet the invocation's own timeout. The express configuration creates the default engine version, which is 17. The dev server does not set the bound.
+
+**CloudFormation's limit.** A stack waits for a custom resource for `ServiceTimeout` seconds, 3600 at most. The block sets that value on each resource. The provider's 55 minutes stay under it, so a deploy that runs out of time ends with the runner's message and not with a timeout from CloudFormation.
+
+**The application role.** When the plan is complete, the handler creates the application role of the cluster if needed and maps it to IAM. On DSQL that is `AWS IAM GRANT` to the stack's execution role. On Aurora it is `GRANT rds_iam`, and the execution role's `rds-db:connect` grant on `dbuser:<cluster resource id>/<role>` admits the role. The handler then grants the role DML on the schema's tables, `SELECT` on its views and `USAGE` on its sequences.
+
+**The admin connection.** The functions connect as the cluster admin. On DSQL that is `admin` with an admin token. On Aurora it is the master user `postgres`, which the express configuration creates with IAM authentication and no password. The template does not name `EnableIAMDatabaseAuthentication` or `MasterUserAuthenticationType`. Express sets both, and naming them makes CloudFormation modify the cluster after the create.
+
+**Migrations run before handler code.** A CDK aspect runs at synth, after all constructs exist. It makes every Lambda function that assumes the stack's execution role depend on each block's custom resource. A deploy therefore applies a block's migrations before any new handler code runs.
 
 ## 6. Cluster binding
 
-R4 is met by a separate pull request: a binding record in stack metadata, a dev-server marker in `.bb-data`, and a pre-deploy guard that inspects a change set before `cdk deploy`. Until it lands, production relies on the cluster's removal policy, `retain` by default: a renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data but points the app at a new, empty schema.
+R4 is not met yet. Nothing stops a deploy that renames a `Database` or `DatabaseCluster` id. In production the removal policy of the cluster is `retain` by default, so the old cluster and its data stay. The application then points at a new, empty schema.
 
-## 6a. Existing databases
+The planned mechanism has three parts: a binding record in stack metadata, a marker in `.bb-data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
 
-`DatabaseCluster.fromExisting()` returns a reference object, not a construct: `{ type: 'external' }` with either a `name` or the app's own connection string source, and an optional `ca`. A block on it has `cluster.kind === 'external'` and provisions no cluster. Three properties of an existing database shape everything below: the block does not own it, the app connects as whatever role the connection string names, and the path from a Lambda function to it usually goes through a connection pooler in transaction mode.
+## 7. Existing databases
 
-**Where the connection string is.** With `name`, each layer derives the same SSM SecureString name, `/<stackName>-<name>`, as it derives every other resource name: the CDK entry grants the execution role the read, the Lambda entry reads it through an `AppSetting` with the first statement, and the command line writes it (`cdk-blocks db connect --stage`), with the stack name from core's `getStackName()`. The name is the one `@aws-blocks/bb-data` used for `name: 'db-url'`, so an app that moves from it finds its production value in place. Locally the value is an `AppSetting` under one fixed scope, keyed by the name, so the block and the command line reach the same entry without the app's scopes. The value appears in no template, no custom resource property and no log; the migration function receives the name.
+`DatabaseCluster.fromExisting()` returns `{ type: 'external' }` with either a `name` or the application's own connection string source, and an optional `ca`. A block on it has `cluster.kind === 'external'` and provisions no cluster.
 
-**The driver never sees the connection string.** `pg` merges a connection string over the programmatic config, and a parameter in it replaces the `ssl` object: `sslmode=no-verify` turned verification off against `rejectUnauthorized: true`, and `sslmode=require` dropped a pinned authority (observed on pg 8.23). `src/external/connection.ts` therefore splits the value with `new URL()` into host, port, user, password and database, refuses the TLS parameters, and replaces the parser's own error, whose `input` field carries the value. The pool always gets an `ssl` value (`{ ca }` or `true`), because with none `pg` reads `PGSSLMODE`.
+Three properties of an existing database shape this section:
 
-**Session state does not cross a transaction pooler.** A session `SET` reached another client or was lost for its setter in tests against PgBouncer; a session advisory lock stayed held. So nothing the block does on an existing database depends on session state: the identity of `asRole()` and `asUser()` is set with `set_config(…, true)`, the migration runner sets its limits and a non-`public` `search_path` with `SET LOCAL`, and there is no lock. The one exception is the app-facing `search_path` of a block whose schema is not `public`, which is a session `SET` and is documented as such.
+- The block does not own the database.
+- The application connects as the role that the connection string names.
+- The path from a Lambda function to the database usually goes through a connection pooler in transaction mode.
 
-**Migrations.** The plan is the PostgreSQL one (every statement of a file in one transaction), without the file check: the files may be older than the block, and an applied file cannot be changed. The runner adds, for this kind only: `SET LOCAL idle_in_transaction_session_timeout`, so a run that stops does not keep its locks; `statement_timeout` and, from PostgreSQL 17, `transaction_timeout` when it runs inside the migration function; `RESET ALL` before the commit, so the session settings of a `pg_dump` file do not stay on a pooled connection; and the ledger row in the file's own transaction. The last one is what makes two runs at once safe without a lock: with the row written after the commit, as the provisioned kinds do under CloudFormation's ordering, two runs both applied a data-only file. The ledger table of `@aws-blocks/bb-data` (`_migrations` with an extra `id` column) is used as it is. `src/deploy/external-infra.ts` creates the two functions, the provider and the custom resource per block, outside any VPC; the files and the `ca` travel as one asset. There is no command that writes a baseline file: a schema dump is the work of the user's own tool (`pg_dump`, a provider's CLI), and the block only supplies the step that no such tool has, `migrate --mark-applied <file>`, one `INSERT ... ON CONFLICT DO NOTHING` into the ledger of the database that already has the schema.
+**Where the connection string is.** With `name`, every layer derives the same SSM SecureString name, `/<stackName>-<name>`, from one function (`dbConnectionParameterName` in `@aws-blocks/core`):
 
-**Local mode is the real database.** The schema, roles and data of an existing database cannot be rebuilt from files in PGlite, so the local entry opens the same engine as the Lambda entry. It runs no migration file: nothing that starts from `npm run dev` changes a schema. `cdk-blocks db migrate` is the explicit step, with the runner the deploy uses.
+- The CDK entry point grants the execution role read access to the parameter.
+- The Lambda entry point reads the parameter through an `AppSetting` with the first statement.
+- `cdk-blocks db connect --stage` writes the parameter. It takes the stack name from core's `getStackName()`.
 
-**Identity.** The connection role usually owns the tables, and PostgreSQL does not apply policies to an owner, so `asUser()`'s claims alone filter nothing there. `asRole(role, claims?)` switches role and sets the claims in one statement at the start of each transaction (`runtime/scoped.ts`); the role name is a bound parameter. The block takes no position on which roles exist or what the claims hold.
+Locally the value is an `AppSetting` under one fixed scope, keyed by the name. The block and the command line reach the same entry without the application's scopes. The value appears in no template, no custom resource property and no log. The migration function receives the name of the parameter.
 
-**Connection errors.** A connection that was never made (address, certificate, login, a missing database, too many clients) is `ConnectionFailed`, not `QueryFailed`, and is not retried; the driver's text, which names the host or the role and never the password, goes to the function's log. A client that is checked out for a transaction has its own `error` listener: without it, a connection that ends between two statements ended the Node process.
+`AppSetting.put()` and `Secret.put()` store a value as JSON, so a string is held in quotes. `cdk-blocks db connect` stores the string as it is. `decodeStoredValue` (`src/external/ssm-store.ts`) reads both forms for the migration function and the command line.
 
-**Command line for a block that provisions its cluster.** `types --block <id>` applies the block's migration files to a new PGlite database in a temporary directory, with the function the local entry point uses before a block's first statement (`prepareLocalSchema`), and reads the columns from it: the files are the schema of such a block, so the result does not depend on `.bb-data/`, and a running dev server is not touched. `status --block <id>` needs the block's real local ledger, and PGlite takes one process, so it copies the PGlite directory and opens the copy; with a dev server running it shows what that process had written to disk. Neither reads a deployed cluster.
+**The driver never sees the connection string.** `pg` merges a connection string over the programmatic config, and a TLS parameter in the string replaces the `ssl` object. For example, `sslmode=no-verify` turns verification off. `src/external/connection.ts` therefore splits the value with `new URL()` into host, port, user, password and database, and refuses the TLS parameters. It also replaces the parser's own error, because that error carries the value in its `input` field. The pool always gets an `ssl` value, `{ ca }` or `true`. With no value, `pg` reads `PGSSLMODE`.
 
-## 7. Alternatives considered
+**The certificate authority.** `ca` is an option in code, per connection. `cdk-blocks db connect --ca` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
 
-**Separate blocks per service.** This keeps each block small and introduces no new concepts. It violates R1, because changing service requires rewriting call sites, and R3, because no mechanism shares a cluster.
+**Session state does not cross a transaction pooler.** Through such a pooler, a session `SET` can reach another client or be lost, and a session advisory lock can stay held. Nothing that the block does on an existing database depends on session state:
 
-**Static factory methods** (`Database.dsql()`, `Database.aurora()`). This retains a single class with concise call sites. It exposes service names in the public interface and provides no value that several blocks could share, so R3 would need a second mechanism.
+- `asRole()` and `asUser()` set the identity with `set_config(…, true)`.
+- The migration runner sets its limits and a non-`public` `search_path` with `SET LOCAL`.
+- The migration runner takes no lock.
 
-**A hand-written compatibility rule table.** The first cut of this package kept a table of regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments.
+The one exception is the `search_path` that the application's statements get for a schema other than `public`. It is a session `SET`, and the README says so.
 
-**Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
+**Migrations.** The plan is the PostgreSQL plan, with every statement of a file in one transaction. The files are not checked, because they can be older than the block and an applied file cannot change. For this kind the runner also does the following in each file's transaction:
 
-**A Kysely adapter in the block's root entry.** It makes Kysely a dependency that every application installs and loads. The dialect is in its own entry, so only an application that imports it loads Kysely (§4.4).
+- It sets the limits in one query after `BEGIN`: `idle_in_transaction_session_timeout` always, and `statement_timeout` and `transaction_timeout` (PostgreSQL 17 and later) in the migration function. A run that stops does not keep its locks.
+- It does not send a file's own `SET` of one of those limits. Every `pg_dump` file sets them to 0, and a plain `SET` would replace the limit for the rest of the transaction.
+- It does not send `SET transaction_timeout` to a server older than PostgreSQL 17, which refuses the parameter.
+- It runs `RESET ALL` before the commit, so the session settings of a `pg_dump` file do not stay on a pooled connection.
+- It writes the ledger row before the commit, in the same transaction. Of two runs at the same time, one commits. The other fails on the row and rolls back everything its copy of the file did.
 
-**A `pg`-pool-shaped object for Kysely's own `PostgresDialect`.** It needs no Kysely import at all, and it was the first cut of the Kysely support. It has to read `begin`, `commit` and `rollback` out of statement text and invent a command tag so that Kysely's `pg` driver counts affected rows, and it looks like a `pg` pool to libraries that it does not support. Kysely's driver interface is the documented extension point and has none of these problems.
+The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table is `_migrations` with an extra `id` column.
 
-**Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a 55-minute budget, the most CloudFormation's one-hour wait for a custom resource allows.
+**Deploying migrations.** `src/deploy/external-infra.ts` creates two functions, a provider and a custom resource for each block that has migration files, outside any VPC. The files and the `ca` travel as one asset. The resources of two blocks on one database are not chained, so those blocks can migrate at the same time. The migration function runs again after a refusal that passes: a server that is full or starting, or a lookup or connect that timed out. It reports a refused login, a missing database and a certificate that does not verify at once.
 
-## 8. Security and cost
+**No baseline command.** A schema dump is the work of the user's own tool, such as `pg_dump` or a provider's command line. The block supplies the step that such a tool lacks. `migrate --mark-applied <file>` records a file in the ledger of a database that already has the schema, with one `INSERT … ON CONFLICT DO NOTHING`.
 
-**Security.** The application connects as a per-cluster database role, `blocks_app_{clusterId}`, through one connection pool per block with `search_path` set to the block's schema. The migration Lambdas create this role and map it to IAM: `AWS IAM GRANT` to the stack's execution role on DSQL, `rds_iam` membership plus the execution role's `rds-db:connect` grant on Aurora. Neither kind has a password anywhere: no Secrets Manager secret, no connection string. An `aurora` cluster's storage is encrypted with an AWS-owned key: the express configuration encrypts every cluster and accepts no key choice, so the template does not set `StorageEncrypted` or `KmsKeyId` (the service rejects `StorageEncrypted`, verified 2026-11-08). An application that needs a customer managed KMS key needs the full configuration, which this block does not create. The role holds `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, `USAGE, SELECT` on its sequences, and `USAGE` on the schema when it is not `public`; the two bookkeeping tables `_migrations` and `_migration_progress` are excluded. DDL requires the admin token, which only the migration Lambdas hold. The stack's execution role is granted `dsql:DbConnect` on the cluster; the migration Lambdas are granted `dsql:DbConnectAdmin`.
+**Local mode is the real database.** PGlite cannot rebuild the schema, roles and data of an existing database from files, so the local entry point opens the same engine as the Lambda entry point. It runs no migration file. Nothing that starts from `npm run dev` changes a schema. `cdk-blocks db migrate` is the explicit step, with the runner that the deploy uses.
 
-**Cost.** A DSQL cluster incurs no cost when idle; an `aurora` cluster at `minCapacity: 0` pauses after five idle minutes and incurs none while paused, at the price of about 20 seconds on the next connection (measured 18.5 s against the service), and `0.5` ACU keeps it warm for about $44 a month. Each cluster adds two migration Lambdas and one custom-resource provider, which run only during deploys. A `Database` that owns its cluster is one DSQL cluster against the default quota of 20 per account and Region; blocks sharing a `DatabaseCluster` count once.
+**Identity.** The connection role usually owns the tables, and PostgreSQL does not apply policies to an owner. The claims of `asUser()` alone filter nothing there. `asRole(role, claims?)` switches the role and sets the claims in one statement at the start of each transaction (`src/runtime/scoped.ts`). The role name is a bound parameter. The block takes no position on which roles exist or what the claims hold.
 
-**Observability.** Driver errors retain their SQLSTATE on the server-side `cause`. Only the `DatabaseErrors` name and a fixed message are sent to the client. The migration Lambdas log each applied file, each job they wait on, and, on failure, the step at which they stopped.
+**The claims after a transaction.** The block cannot give each connection a session default for `request.jwt.claims`, because a transaction pooler does not keep it. After a scoped transaction the setting is an empty string on that connection (section 4.5). A policy on an existing database must accept that value, and the README shows the `nullif` form.
 
-## 9. Behavioral differences between environments
+**Connections and errors.** The pool connects with a ten-second timeout and closes a connection ten seconds after its last statement. A connection that was never made is `ConnectionFailed`, not `QueryFailed`: the address, the certificate, the login, a missing database, or too many clients. A request does not try again. The driver's text names the host or the role and never the password, and it goes to the function's log. A client that is checked out for a transaction has its own `error` listener, so a connection that ends between two statements does not end the Node process.
+
+## 8. Command line
+
+The package has one binary, `bb-database`. `cdk-blocks db` runs it from the project root. The wrapper passes the arguments as typed and adds two environment variables: `BB_DATABASE_COMMAND`, the name for the usage text, and `BB_DATABASE_START_DIR`, the directory that the user is in. The binary resolves the paths in its own options from that directory, so the wrapper keeps no list of those options.
+
+**An existing database.** `connect`, `migrate`, `types` and `status` work on the database of a stored connection string. `connect` reads the string from a hidden prompt or from stdin. The string is never an argument, and the binary removes it and its password from everything it prints.
+
+**A block that provisions its cluster.** The schema of such a block is its migration files, and its local database is PGlite.
+
+- `types --block <id>` applies the block's migration files to a new PGlite database in a temporary directory and reads the columns from it. It uses `prepareLocalSchema` (`src/migrations/local.ts`), the function that the local entry point runs before a block's first statement. The result does not depend on `.bb-data/`, and a running dev server is not touched.
+- `status --block <id>` needs the block's real local ledger. PGlite takes one process, so the command copies the PGlite directory and opens the copy. With a dev server running, it shows what that process had written to disk.
+
+Neither command reads a deployed cluster.
+
+## 9. Alternatives considered
+
+**Separate blocks per service.** Each block stays small and adds no new concept. It fails R1, because a change of service means rewriting call sites, and R3, because nothing shares a cluster.
+
+**Static factory methods** (`Database.dsql()`, `Database.aurora()`). One class with short call sites. It puts service names in the public interface and gives no value that several blocks can share, so R3 needs a second mechanism.
+
+**A hand-written table of compatibility rules.** A table of regular expressions cannot parse SQL, so it guesses at literals and comments, and someone must update it by hand for each DSQL release. `dsql-lint` parses the SQL and follows DSQL releases.
+
+**Rewriting PostgreSQL migrations into DSQL at deploy time.** An application written for PostgreSQL keeps its files. The SQL that runs is then not the SQL in the repository, and a reviewer cannot see it. The rewrite also has to choose values that the author did not write, such as a sequence cache size.
+
+**A regular expression that refuses DDL in local mode.** It cannot enforce a Row Level Security policy or close the ledger tables. A real application role does both (section 4.1).
+
+**A configuration error for a call to another block inside a local transaction.** It rejects code that is correct on DSQL, such as a read of another block's table inside a transaction. The savepoint keeps that code working locally (section 4.1).
+
+**A role switch for each transaction on a provisioned cluster,** as PostgREST does. It adds cluster roles, a grant for each table and a reorder of the migration function. It changes nothing on a cluster where the block already connects as a role that owns nothing (section 4.5).
+
+**A Kysely adapter in the block's root entry.** Every application then installs and loads Kysely. The dialect has its own entry, so only an application that imports it loads Kysely (section 4.4).
+
+**A `pg`-pool-shaped object for Kysely's own `PostgresDialect`.** It needs no Kysely import. It has to read `begin`, `commit` and `rollback` out of statement text and invent a command tag so that Kysely's `pg` driver counts affected rows. It also looks like a `pg` pool to libraries that it does not support. Kysely's driver interface is the documented extension point.
+
+**Waiting for DDL jobs inside one Lambda invocation.** One handler instead of two. A Lambda function runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has 55 minutes, the most that CloudFormation's one-hour wait for a custom resource allows.
+
+**A lock for migrations on an existing database.** A session advisory lock does not survive a transaction pooler. The ledger row in the file's own transaction gives the same guarantee without a lock (section 7).
+
+**A command that writes a baseline file.** The dump of a hosted database contains objects that the provider owns, and the list differs by provider. The provider's own tool knows that list (section 7).
+
+## 10. Security and cost
+
+**Security on a provisioned cluster.** The application connects as a database role per cluster, `blocks_app_{clusterId}`, through one connection pool per block. The migration functions create this role and map it to IAM (section 5.4). No password exists: no Secrets Manager secret and no connection string.
+
+The role holds `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, `USAGE, SELECT` on its sequences, and `USAGE` on the schema when it is not `public`. It holds nothing on `_migrations` and `_migration_progress`. DDL needs the admin token, which only the migration functions hold. On DSQL the execution role has `dsql:DbConnect` on the cluster, and the migration functions have `dsql:DbConnectAdmin`.
+
+The storage of an `aurora` cluster is encrypted with an AWS-owned key. The express configuration encrypts every cluster and accepts no key choice, and the service rejects `StorageEncrypted` in the template. An application that needs a customer managed KMS key needs the full configuration, which this block does not create.
+
+**Security on an existing database.** The connection string holds a password. It is an SSM SecureString, or a value in the application's own `AppSetting` or `Secret`. The execution role and the migration functions can read that one parameter or secret. The block always verifies the server certificate. What the application can do in the database is decided by the role in the connection string, not by the block (section 7).
+
+**Cost.** A DSQL cluster costs nothing when idle. An `aurora` cluster at `minCapacity: 0` pauses after five idle minutes and costs nothing while paused. The next connection then takes about 20 seconds. `0.5` ACU keeps the cluster warm. Each cluster adds two migration functions and one custom-resource provider, which run only during deploys. A `Database` that owns its cluster uses one DSQL cluster of the default quota of 20 per account and Region. Blocks on a shared `DatabaseCluster` count once.
+
+**Observability.** A driver error keeps its SQLSTATE on the server-side `cause`. The client receives only the `DatabaseErrors` name and a fixed message. The migration functions log each applied file, each job that they wait on, and the step at which a failed run stopped.
+
+## 11. Differences between local mode and AWS
+
+Provisioned clusters:
 
 | Area | Local | AWS |
 |---|---|---|
-| Concurrency | Serialized per cluster (one PGlite session) | Concurrent; DSQL may raise `40001` at commit, Aurora under `SERIALIZABLE` only |
-| DSQL feature gaps (`dsql` only) | Rejected by `dsql-lint` before PGlite | Rejected by DSQL (`42501`, reported as `QueryFailed`) |
-| An `aurora` cluster's PostgreSQL features (triggers, PL/pgSQL, extensions) | PGlite runs them; an extension PGlite lacks fails locally first | Aurora PostgreSQL 17 |
-| `ASYNC` DDL (`CREATE INDEX ASYNC`, `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`) | Runs synchronously: the mock strips `ASYNC`; the job wait is a no-op. `sys.wait_for_job()` returns `true` at once and `sys.jobs` is empty, so a wait written into a file runs unchanged | DSQL returns a job id; the runner polls `sys.jobs` every 30 seconds for up to 55 minutes |
-| 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
-| `simulateConflict()` (`@aws-blocks/bb-database/testing`) | Available | Throws |
-| `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `pg-engine.ts` installs a parser that matches PGlite |
-| An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
-| `db.query()` / `db.execute()` on the block inside its own `transaction()` callback | Runs in the transaction (`DatabaseCore`) | Same |
-| Another block on the same cluster, a nested `transaction()`, or a Kysely transaction, called inside a `transaction()` callback | Nests in the open transaction as a savepoint: sees its writes, rolls back with it | Runs on its own connection and commits on its own |
-| A statement on the block or on the root Kysely instance, inside the callback of a Kysely transaction | Fails after five seconds with `QueryFailed`: the transaction holds the one session and the statement cannot join it (§4.4) | Runs on another connection, outside the transaction |
-| The user of a statement nested in another database object's `transaction()` (`asUser()`, §4.5) | Its own database's user or none: the enclosing transaction's claims are set aside for the savepoint and put back | The same, on its own connection |
-| `SET SESSION AUTHORIZATION` in application SQL | Accepted: the session's login user is PGlite's superuser, so a statement can switch back to it | Refused: the app role is not a superuser |
+| Concurrency | Serialized per cluster (one PGlite session) | Concurrent. DSQL can raise `40001` at commit. Aurora raises it under `SERIALIZABLE` only |
+| DSQL feature gaps (`dsql` only) | `dsql-lint` rejects them before PGlite | DSQL rejects them (`42501`, reported as `QueryFailed`) |
+| PostgreSQL features of an `aurora` cluster (triggers, PL/pgSQL, extensions) | PGlite runs them. An extension that PGlite lacks fails locally first | Aurora PostgreSQL 17 |
+| `ASYNC` DDL | Runs synchronously. The job wait does nothing. `sys.wait_for_job()` returns `true` and `sys.jobs` is empty | DSQL returns a job id. The runner polls `sys.jobs` every 30 seconds for up to 55 minutes |
+| 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by `RulesEngine`, cascades counted, size approximated | Enforced by DSQL (`54000`). Both are reported as `TransactionRowLimitExceeded` |
+| `simulateConflict()` | Available | Throws |
+| `bigint` results | PGlite returns a `number`, or a `BigInt` beyond ±2^53 | `pg` returns a string. `pg-engine.ts` installs a parser that matches PGlite |
+| An `ApiError` or a branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
+| A statement on the block inside its own `transaction()` callback | Runs in the transaction | Same |
+| Another block on the same cluster, a nested `transaction()`, or a Kysely transaction, called inside a `transaction()` callback | A savepoint of the open transaction: it sees the open transaction's writes and rolls back with it | Runs on its own connection and commits on its own |
+| A statement on the block or on the root Kysely instance, inside the callback of a Kysely transaction | Fails after five seconds with `QueryFailed` (section 4.4) | Runs on another connection, outside the transaction |
+| The user of a statement nested in another database object's `transaction()` | Its own database's user or none (section 4.5) | The same, on its own connection |
+| `SET SESSION AUTHORIZATION` in application SQL | Accepted. The login user of the session is PGlite's superuser | Refused. The application role is not a superuser |
 
-## 10. Limitations and future work
+An existing database:
+
+| Area | Local | AWS |
+|---|---|---|
+| Engine | The real database, through the `pg` pool engine | The same |
+| Migrations | Not run by `npm run dev`. `cdk-blocks db migrate` runs them | The migration function runs them during the deploy |
+| `request.jwt.claims` on a connection after a scoped transaction | An empty string | The same |
+
+## 12. Limitations and future work
 
 **Known limitations.**
 
-1. `dsql-lint` checks syntax, not the catalog: a statement that is valid SQL but wrong for the schema (a cascade past 3,000 rows, a duplicate key during an index build) fails on DSQL, not locally.
-2. The mock counts `ON DELETE CASCADE` fan-out toward the row limit but not `SET NULL` or `SET DEFAULT`, and approximates the 10 MiB limit from statement and parameter sizes.
-3. A `CREATE INDEX` or constraint validation that DSQL fails leaves the index `INVALID` or the constraint `NOT VALID`; the deploy fails with the job's details, and the fix is to repair the data and deploy again.
+1. `dsql-lint` checks syntax, not the catalog. A statement that is valid SQL but wrong for the schema fails on DSQL, not locally. Examples are a cascade past 3,000 rows and a duplicate key during an index build.
+2. `RulesEngine` counts `ON DELETE CASCADE` fan-out toward the row limit but not `SET NULL` or `SET DEFAULT`. It approximates the 10 MiB limit from statement and parameter sizes.
+3. A `CREATE INDEX` or a constraint validation that DSQL fails leaves the index `INVALID` or the constraint `NOT VALID`. The deploy fails with the job's details. The fix is to repair the data and deploy again.
+4. The pool closes an Aurora connection after ten idle seconds even when `minCapacity` is above 0, where there is no pause to protect.
 
-**Future work.** Each item states the condition for revisiting it.
+**Future work.** Each item states when to revisit it.
 
-1. **More providers for an existing database.** Supabase is the one tested. Neon and Amazon RDS need their own runs: RDS needs a function inside a VPC, and its certificate authority is in the Lambda runtime but not in Node's trust store. Revisit on the first request. A second, less privileged connection string for the app (migrations keep the owner's) is the other open item (§6a).
-2. **Safe replacement**, a `replaces` option naming a previous binding. The same need exists for `KVStore` and `FileBucket`, so it warrants one design across data blocks.
-3. **Compile-time binding verification** from a lock file written by deploys. The per-application uniqueness of short ids (§2.2) allows a block to be identified by the literal in its constructor. Revisit once deploys can write files back to the repository.
-4. **A copy command.** The README procedure suffices until copies are a recurring request.
-5. **Multi-region DSQL** (`regions`, `witnessRegion`). Revisit when the feature is scheduled.
+1. **More providers for an existing database.** Supabase is the tested provider. Amazon RDS needs a function inside a VPC, and its certificate authority is in the Lambda runtime but not in Node's trust store. Revisit on the first request.
+2. **A second, less privileged connection string for the application,** while migrations keep the owner's. Revisit on the first request.
+3. **Safe replacement,** a `replaces` option that names a previous binding. `KVStore` and `FileBucket` have the same need, so it needs one design across the data blocks.
+4. **Compile-time binding verification** from a lock file that deploys write. The ids are unique per application (section 2.2), so the literal in a constructor identifies a block. Revisit when deploys can write files back to the repository.
+5. **A copy command.** The README procedure is enough until copies are a recurring request.
+6. **Multi-region DSQL** (`regions`, `witnessRegion`). Revisit when the feature is scheduled.
 
 ## Appendix A. Source map
 
 | Concern | Files |
 |---|---|
 | Public types and option shapes | `src/types.ts` |
-| Constructor checks: resolution of the `cluster` option, unique ids and schemas | `src/runtime/construction.ts` (shared by all entry points) |
-| Queries, transactions, retries and result schema validation | `src/runtime/index.ts` |
+| Constructor checks: the `cluster` option, unique ids and schemas | `src/runtime/construction.ts` |
+| Queries, transactions, retries and result schema validation | `src/runtime/index.ts`, `src/runtime/tx-scope.ts` |
 | Kysely dialect and its connections | `src/kysely.ts`, `src/runtime/session.ts` |
 | User-scoped and role-scoped statements (`asUser()`, `asRole()`) | `src/runtime/scoped.ts` |
-| Existing databases: connection string parsing, the engine, the local store | `src/external/connection.ts`, `src/external/engine.ts`, `src/external/local-store.ts` |
-| Command line (`connect`, `migrate`, `types`, `status`) | `src/cli.ts`, `src/cli/commands.ts`, `src/cli/types-file.ts`, `src/cli/io.ts` |
-| Test helpers and the internal access channel | `src/testing.ts`, `src/runtime/internal.ts` |
-| Connection pool for both cluster kinds, IAM token passwords, result type parsers | `src/engines/pg-engine.ts` |
-| Local engine, schema and role switching, and the `sys` stub | `src/engines/pglite-cluster.ts` |
-| The app role's grants, for the migration Lambda and the local cluster | `src/migrations/grants.ts` |
-| Local rules by kind: `simulateConflict()` on both; lint per statement and the transaction limits on `dsql` | `src/dialect/rules-engine.ts` |
-| DSQL rules: the linter wrapper, the block's own checks, statement classification, the transaction limits | `src/dialect/lint.ts`, `src/dialect/validation.ts` |
+| Error names and the mapping from SQLSTATE | `src/errors.ts` |
+| Connection pool, IAM token passwords, result type parsers | `src/engines/pg-engine.ts` |
+| Engine interfaces and transaction handles | `src/engines/handle.ts` |
+| Local engine, schema and role switching, the `sys` stub | `src/engines/pglite-cluster.ts` |
+| Local rules by cluster type | `src/dialect/rules-engine.ts` |
+| DSQL rules: the linter wrapper, the block's own rule, statement classification, the transaction limits | `src/dialect/lint.ts`, `src/dialect/validation.ts` |
+| Asynchronous DDL: name parsing, catalog check, invalid-index cleanup | `src/dialect/async-ddl.ts` |
 | Plan sequencing by kind | `src/migrations/plan.ts` |
-| Resumable runner and job waits | `src/migrations/runner.ts` |
-| Async DDL targets: name parsing, catalog check, invalid-index cleanup | `src/dialect/async-ddl.ts` |
-| Provisioning and the migration Lambdas | `src/deploy/cluster-infra.ts`, `src/deploy/external-infra.ts`, `src/deploy/migration-lambda.ts` |
+| Runner, ledger tables and job waits | `src/migrations/runner.ts` |
+| The application role's grants | `src/migrations/grants.ts` |
+| Schema preparation in local mode | `src/migrations/local.ts` |
+| Existing databases: connection string parsing, the engine, the local store, the stored value | `src/external/connection.ts`, `src/external/engine.ts`, `src/external/local-store.ts`, `src/external/ssm-store.ts` |
+| Provisioning and the migration functions | `src/deploy/cluster-infra.ts`, `src/deploy/external-infra.ts`, `src/deploy/migration-lambda.ts` |
+| Command line | `src/cli.ts`, `src/cli/commands.ts`, `src/cli/owned.ts`, `src/cli/types-file.ts`, `src/cli/io.ts` |
+| Test helpers and the internal access channel | `src/testing.ts`, `src/runtime/internal.ts` |
