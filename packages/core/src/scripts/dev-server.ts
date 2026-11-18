@@ -654,6 +654,9 @@ export interface ReclaimPortDeps {
   waitFree: (port: number, timeoutMs?: number) => Promise<void>;
 }
 
+/** Wait for a holder to release the port when the listener lookup finds nothing; adds up to this delay when the holder stays invisible (e.g. `lsof` missing). */
+const PORT_RELEASE_GRACE_MS = 1000;
+
 /**
  * Free a port left bound by this app's crashed / SIGKILL'd previous dev server
  * (typically its detached Vite group on `:3100`), so a fresh start can bind the
@@ -700,7 +703,7 @@ export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> =
     // while the holder is still running (a slow or timed-out `lsof` under load)
     // gets the same short wait. So wait briefly for the port to be released and
     // look again before giving up. Nothing is signalled on this path.
-    await waitFree(port, 1000);
+    await waitFree(port, PORT_RELEASE_GRACE_MS);
     if (!(await probe(port))) return { wasOpen: true, reclaimed: true, pids: [], foreign: [] };
     pids = listPids(port);
   }

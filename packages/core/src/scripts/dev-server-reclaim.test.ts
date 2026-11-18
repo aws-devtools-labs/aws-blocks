@@ -150,7 +150,7 @@ describe('reclaimPort — frees a port only from listeners this app owns', () =>
     assert.deepStrictEqual(result.foreign, [{ pid: 555, command: 'other' }]);
   });
 
-  it('signals nothing when no listener pid can be found', async () => {
+  it('signals nothing when no listener pid can be found, even after the release wait', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
     const result = await reclaimPort(3000, {
       ...ours,
@@ -183,15 +183,17 @@ describe('reclaimPort — frees a port only from listeners this app owns', () =>
   it('looks up the listener again when the first lookup comes back empty while the port stays bound', async () => {
     // A slow or timed-out lsof misses the holder once; the second lookup names it.
     let call = 0;
+    const waits: number[] = [];
     const result = await reclaimPort(3000, {
       probe: scriptedProbe([true, true]),
       listPids: () => (call++ === 0 ? [] : [555]),
       owned: () => false,
       commandOf: () => 'other',
       killTree: () => assert.fail('a foreign holder is never signalled'),
-      waitFree: async () => {},
+      waitFree: async (_port, timeoutMs) => { waits.push(timeoutMs ?? 0); },
     });
     assert.strictEqual(call, 2);
+    assert.deepStrictEqual(waits, [1000]);
     assert.deepStrictEqual(result, { wasOpen: true, reclaimed: false, pids: [], foreign: [{ pid: 555, command: 'other' }] });
   });
 
