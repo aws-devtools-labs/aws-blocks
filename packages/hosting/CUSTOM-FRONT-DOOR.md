@@ -2,7 +2,21 @@
 
 For `frontDoor: { kind: 'custom', door }` on `HostingConstruct` or on `Hosting` from `@aws-blocks/core`. The built-in doors, the settings each takes and the rules for switching doors are in the [README](./README.md#front-doors).
 
-A door is one function. `defineFrontDoor` types it:
+A door is one function. `defineFrontDoor` types it. The example below is a
+CloudFront door for a static site or a server that takes no request bodies.
+It does not do two things the built-in CloudFront door does:
+
+- **Single-page-app deep links.** A deep link (`/dashboard/settings`) has no
+  file, so S3 answers 403/404. Map those to `/index.html` with `errorResponses`
+  (status 200), or resolve the path in a viewer-request function as the
+  stacked door's edge does.
+- **POST bodies to the server.** `cf.origin(origins.server)` reaches the
+  server's Function URL with origin access control, and CloudFront then
+  requires the viewer to send an `x-amz-content-sha256` header with any request
+  body. Browsers don't, so form posts and server actions answer 403. The
+  built-in door reaches the server through an API Gateway REST API with a
+  secret header instead. Use a door like that, or the built-in door, for an app
+  that posts to its server.
 
 ```ts
 // aws-blocks/my-door.ts
@@ -61,20 +75,6 @@ export const myDoor = defineFrontDoor({
 // aws-blocks/index.cdk.ts
 new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
 ```
-
-This door doesn't do two things the built-in CloudFront door does:
-
-- **Single-page-app deep links.** A deep link (`/dashboard/settings`) has no
-  file, so S3 answers 403/404. Map those to `/index.html` with `errorResponses`
-  (status 200), or resolve the path in a viewer-request function as the
-  stacked door's edge does.
-- **POST bodies to the server.** `cf.origin(origins.server)` reaches the
-  server's Function URL with origin access control, and CloudFront then
-  requires the viewer to send an `x-amz-content-sha256` header with any request
-  body. Browsers don't, so form posts and server actions answer 403. The
-  built-in door reaches the server through an API Gateway REST API with a
-  secret header instead. Use a door like that, or the built-in door, for an app
-  that posts to its server.
 
 **Streaming or buffered.** A door that invokes the server without streaming
 (an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED`
@@ -140,40 +140,49 @@ URL with IAM auth (reach it with origin access control, as `cf.origin` does).
   included, so the previous build serves until the new one is whole.
 
 **The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
-its routing, from what the `cf.*` helpers recorded.
+its routing, from what the `cf.*` helpers recorded. A failed check throws
+`UnsupportedFrontDoorError`, whose message lists the unmet rules:
 
-- If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
-- If the app has an API and none of `origins.api.paths` were wired, synth fails
-  with `ProxySameOriginApi`.
-- If some API paths (for example a raw route) were left unwired, synth warns.
-- If the app has redirects, per-pattern headers or error pages and the door
-  wired none of them (`cf.redirects`, `cf.headers`, `cf.errorPages`), synth
-  warns (`FrontDoorRuleUnwired`).
-- If `cf.behaviors` and `cf.apiBehaviors` handed out more than the 24
-  behaviors a distribution allows besides its default, synth warns
-  (`FrontDoorBehaviorLimit`).
+- `ServeStaticAsset`: nothing reaches the static assets.
+- `ProxySameOriginApi`: the app has an API and none of `origins.api.paths`
+  were wired.
+
+It warns in three cases:
+
+- `@aws-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for example
+  a raw route) were left unwired.
+- `@aws-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
+  per-pattern headers or error pages and the door wired none of them
+  (`cf.redirects`, `cf.headers`, `cf.errorPages`).
+- `@aws-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
+  `cf.apiBehaviors` handed out more than the 24 behaviors a distribution
+  allows besides its default.
 
 It does not check features. If a door ignores `features.waf`, the app deploys
 without a WAF.
 
-**Redirects, headers and error pages.** `cf.redirects(scope, app.redirects)`
-and `cf.headers(scope, app.headers)` return CloudFront Function associations
-(viewer request and viewer response) that run the same matcher as the built-in
-CloudFront door, with the rules inline (a CloudFront Function holds at most
-10 KB, so synth fails above that). `cf.errorPages(app.errorPages, origins)`
-returns the distribution's `errorResponses` and the behaviors that serve the
-pages from the assets. Each returns an empty value when the app has none, so it
-can be spread unconditionally. `cf.behaviors` gives an image-optimization
-route a cache policy that honors the image function's `Cache-Control` (one per
-stack), and `cf.invalidate` grants `cloudfront:CreateInvalidation` on that
-distribution only.
-
-**Known limit.** The check sees only what the helpers recorded, so a door that
-wires correctly with raw CDK gets a false alarm. Declare hand-wired origins with
-`cf.recordWired(origins.assets)` and `cf.recordWired(origins.api)` (optionally
-with the paths you wired), hand-wired rules with `cf.recordWired(app.redirects)`
-(likewise `app.headers`, `app.errorPages`), or turn the check off with
+**Hand-wired doors: `cf.recordWired` or `wiringCheck: false`.** The check sees
+only what the helpers recorded, so a door that wires correctly with raw CDK
+fails it. Declare hand-wired origins with `cf.recordWired(origins.assets)` and
+`cf.recordWired(origins.api)` (optionally with the paths you wired),
+hand-wired rules with `cf.recordWired(app.redirects)` (likewise `app.headers`,
+`app.errorPages`), or turn the check off with
 `frontDoor: { kind: 'custom', door, wiringCheck: false }`.
+
+**The `cf.*` helpers.** A helper that takes the app's routes, rules or API
+returns an empty value when the app has none, so it can be spread
+unconditionally.
+
+| Helper | Returns |
+|---|---|
+| `cf.origin(origin)` | The CloudFront origin for `origins.assets`, `origins.server`, `origins.image` or `origins.api`. |
+| `cf.behaviors(app.routes)` | One behavior per route, to its origin. An image-optimization route gets a cache policy that honors the image function's `Cache-Control` (one per stack). |
+| `cf.apiBehaviors(origins.api)` | The behaviors for `/aws-blocks/*` and the raw routes. |
+| `cf.redirects(scope, app.redirects)` | A viewer-request CloudFront Function association that runs the built-in CloudFront door's matcher. The rules are inline: above the 10 KB a CloudFront Function holds, synth fails with `InvalidPropsError`. |
+| `cf.headers(scope, app.headers)` | The same as a viewer-response association, with the same limit. |
+| `cf.errorPages(app.errorPages, origins)` | The distribution's `errorResponses` and the `behaviors` that serve the pages from the assets. |
+| `cf.invalidate(dist, { after: uploads })` | An invalidation that runs after the uploads. It grants `cloudfront:CreateInvalidation` on that distribution only. |
+| `cf.recordWired(origin, paths?)` | Nothing. It declares an origin or a rule set you wired by hand. |
 
 **Testing a door.** Use `assertDoorConformance(door)` from
 `@aws-blocks/hosting/constructs` in the door's own tests. It builds the door
@@ -181,21 +190,27 @@ against a sample SPA with an API and runs the same checks: the shape, a
 non-empty `url`, and the wiring.
 
 The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
-`s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way, and the pieces
-they share are exported for your own doors: `generateAlbAssetProxyCode` and
-`generateApiGwAssetProxyCode` (pass `app.redirects`, `app.headers` and the
-error pages to apply the app's rules; see `AssetProxyOptions`; set
-`environment: assetProxyEnvironment(origins.assets)` on the function and
-`origins.assets.bucket.grantRead(fn)`),
-`generateAlbApiProxyCode` (the ALB's same-origin API forwarder),
-`backendBaseUrl`, `coalesceRoutes`, `routeSpecificity`,
-`createSecurityHeadersPolicy`, and `ORIGIN_VERIFY_HEADER` /
-`CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST`.
+`s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way. The pieces
+they share are exported from `@aws-blocks/hosting/constructs`:
+
+- `generateAlbAssetProxyCode`, `generateApiGwAssetProxyCode`: the asset-proxy
+  Lambda source. Pass `app.redirects`, `app.headers` and the error pages to
+  apply the app's rules (see `AssetProxyOptions`).
+- `assetProxyEnvironment(origins.assets)`: the environment that function
+  needs. Set it as the function's `environment` and call
+  `origins.assets.bucket.grantRead(fn)`.
+- `generateAlbApiProxyCode`: the ALB's same-origin API forwarder.
+- `backendBaseUrl`: the backend's base URL, from its API URL.
+- `coalesceRoutes`, `routeSpecificity`: route grouping and ordering.
+- `createSecurityHeadersPolicy`: the security response headers policy.
+- `ORIGIN_VERIFY_HEADER`, `CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST`: the secret
+  header's name and the name of CloudFront's origin-facing prefix list.
 
 **A door that stacks CloudFront over its own ALB.** Lock the ALB to the
 distribution the same way the stacked door does: admit only CloudFront in the
 ALB's security group, and require a secret header that only the distribution
-sends.
+sends. Send the header over HTTPS: over plain HTTP to a public ALB anyone on
+the path can read it and reach the ALB directly.
 
 ```ts
 import { OriginProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
@@ -205,14 +220,16 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from '@aws-blocks/hosting/constructs';
 
-// In build(scope, input): `alb` is your ApplicationLoadBalancer, `target` its target group.
+// In build(scope, input): `alb` is your ApplicationLoadBalancer, `target` its target group,
+// `certificate` an ACM certificate for `routerDomainName`, a name of yours that points at the ALB.
 // A random value (alphanumeric: an ALB header condition treats `*` and `?` as
 // wildcards), read by both sides through a dynamic reference.
 const secret = new Secret(scope, 'OriginVerify', {
   generateSecretString: { passwordLength: 64, excludePunctuation: true, includeSpace: false },
 }).secretValue.unsafeUnwrap();
-const listener = alb.addListener('Http', {
-  port: 80,
+const listener = alb.addListener('Https', {
+  port: 443,
+  certificates: [certificate],
   open: false, // no 0.0.0.0/0 ingress
   defaultAction: elbv2.ListenerAction.fixedResponse(403, { contentType: 'text/plain', messageBody: 'Forbidden' }),
 });
@@ -222,9 +239,9 @@ listener.addTargetGroups('FromCloudFront', {
   targetGroups: [target],
 });
 const cloudFront = ec2.PrefixList.fromLookup(scope, 'CloudFront', { prefixListName: CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST });
-alb.connections.allowFrom(ec2.Peer.prefixList(cloudFront.prefixListId), ec2.Port.tcp(80));
-const origin = new HttpOrigin(alb.loadBalancerDnsName, {
-  protocolPolicy: OriginProtocolPolicy.HTTP_ONLY, // the listener above is HTTP :80 (HttpOrigin defaults to HTTPS)
+alb.connections.allowFrom(ec2.Peer.prefixList(cloudFront.prefixListId), ec2.Port.tcp(443));
+const origin = new HttpOrigin(routerDomainName, {
+  protocolPolicy: OriginProtocolPolicy.HTTPS_ONLY,
   customHeaders: { [ORIGIN_VERIFY_HEADER]: secret },
 });
 ```
