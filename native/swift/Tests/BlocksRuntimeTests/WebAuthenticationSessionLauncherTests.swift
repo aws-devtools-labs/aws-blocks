@@ -555,8 +555,14 @@ final class WebAuthenticationSessionLauncherTests: XCTestCase {
         defer { OIDCMockURLProtocol.reset() }
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
+            // The server signs a state envelope carrying the request's csrf, which sign-in checks.
+            let csrf = requestJSON(request)["csrf"] as? String ?? ""
+            let payload = try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": csrf])
+            let state = payload.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "") + ".sig"
             let body: [String: Any] = url.path.hasSuffix("/authorize-params/google")
-                ? ["authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid", "scopes": ["openid"], "state": "signed-state"]
+                ? ["authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid", "scopes": ["openid"], "state": state]
                 : ["user": ["userId": "u1", "username": "dave"]]
             let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
             return (response, try JSONSerialization.data(withJSONObject: body))
@@ -566,7 +572,12 @@ final class WebAuthenticationSessionLauncherTests: XCTestCase {
         var session: FakeWebAuthenticationSession?
         factory.configure = { fake in
             session = fake
-            fake.onStart = { $0.finish(URL(string: "nativebindings://auth?code=c&state=signed-state"), nil) }
+            fake.onStart = { fake in
+                // The relay carries back the state the sheet was opened with.
+                let state = URLComponents(url: fake.url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "state" }?.value ?? ""
+                fake.finish(URL(string: "nativebindings://auth?code=c&state=\(state)"), nil)
+            }
         }
 
         let user = try await oidc.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: factory.launcher())
@@ -576,7 +587,7 @@ final class WebAuthenticationSessionLauncherTests: XCTestCase {
         XCTAssertEqual(fake.callbackScheme, "nativebindings")
         let opened = try XCTUnwrap(URLComponents(url: fake.url, resolvingAgainstBaseURL: false))
         XCTAssertEqual(opened.host, "idp.example.com")
-        XCTAssertEqual(opened.queryItems?.first { $0.name == "state" }?.value, "signed-state")
+        XCTAssertEqual(opened.queryItems?.first { $0.name == "state" }?.value?.hasSuffix(".sig"), true, "the server's signed state")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.path },
             ["/aws-blocks/auth/authorize-params/google", "/aws-blocks/auth/exchange"]
