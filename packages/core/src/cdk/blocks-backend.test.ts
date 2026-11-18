@@ -330,7 +330,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
 	});
 
 	test('child Scope can use fullId as a construct ID inside a nested stack', async () => {
-		// The fixture mirrors bb-distributed-data: it builds a construct whose ID is
+		// The fixture mirrors bb-database: it builds a construct whose ID is
 		// `${this.fullId}Marker`. If fullId carried a token, synth would throw.
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'Gen2ParentStack');
@@ -650,7 +650,7 @@ describe('gateway is not available during the backend import (BlocksBackend)', (
 });
 
 describe('AWSBlocks template metadata (BlocksBackend.create)', () => {
-	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+	before(() => delete process.env.CDK_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
 	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
 

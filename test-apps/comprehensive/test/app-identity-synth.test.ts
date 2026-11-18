@@ -121,6 +121,58 @@ describe('defaults.appIdentity: every Building Block stays inside the app', () =
     assert.deepStrictEqual(unbounded, [], `roles without a permissions boundary:\n  ${unbounded.join('\n  ')}`);
   });
 
+  /**
+   * The resource types the platform's policies match by the `app` tag (core README,
+   * "Running many apps in one AWS account"), and the property each keeps tags in.
+   * An untagged one fails the deploy under the shared execution policy, or can't
+   * be told apart from another app's.
+   */
+  const TAG_SCOPED: Record<string, string> = {
+    'AWS::SecretsManager::Secret': 'Tags',
+    'AWS::KMS::Key': 'Tags',
+    'AWS::Cognito::UserPool': 'UserPoolTags',
+    'AWS::StepFunctions::StateMachine': 'Tags',
+    'AWS::ApiGateway::RestApi': 'Tags',
+    'AWS::ApiGatewayV2::Api': 'Tags',
+    'AWS::CloudFront::Distribution': 'Tags',
+    'AWS::ECS::Cluster': 'Tags',
+    'AWS::ECS::Service': 'Tags',
+    'AWS::ECS::TaskDefinition': 'Tags',
+    'AWS::Bedrock::KnowledgeBase': 'Tags',
+    'AWS::BedrockAgentCore::Runtime': 'Tags',
+    'AWS::EC2::VPC': 'Tags',
+    'AWS::EC2::Subnet': 'Tags',
+    'AWS::EC2::SecurityGroup': 'Tags',
+    'AWS::DSQL::Cluster': 'Tags',
+  };
+  /** Known gaps, each with its issue. */
+  const UNTAGGED_KNOWN: Record<string, string> = {
+    // DistributedDatabase creates the cluster as a raw CfnResource, which Tags.of() doesn't reach.
+    'AWS::DSQL::Cluster': 'https://github.com/aws-devtools-labs/aws-blocks/issues/1467',
+  };
+
+  test('every tag-scoped resource in every template carries app=<id>', () => {
+    const appTag = (tags: unknown): unknown =>
+      Array.isArray(tags)
+        ? (tags as { Key?: string; Value?: unknown }[]).find((t) => t.Key === 'app')?.Value
+        : tags && typeof tags === 'object'
+          ? (tags as Record<string, unknown>).app
+          : undefined;
+    const checked: string[] = [];
+    const missing: string[] = [];
+    for (const { file, template } of templates()) {
+      for (const [id, r] of Object.entries(template.Resources ?? {})) {
+        const key = TAG_SCOPED[r.Type];
+        if (!key || r.Type in UNTAGGED_KNOWN) continue;
+        checked.push(r.Type);
+        const tag = appTag((r.Properties as Record<string, unknown> | undefined)?.[key]);
+        if (tag !== APP_ID) missing.push(`${file}: ${id} (${r.Type}) → ${JSON.stringify(tag ?? 'NONE')}`);
+      }
+    }
+    assert.ok(checked.length >= 5, `expected the app's tag-scoped resources, found only ${checked.length}: ${checked}`);
+    assert.deepStrictEqual(missing, [], `tag-scoped resources without app=${APP_ID}:\n  ${missing.join('\n  ')}`);
+  });
+
   test("every stack and every AWS::IAM::Role is named under the app's prefix", () => {
     // A role without a `RoleName` gets a CloudFormation-generated name that starts
     // with its stack's name, so the stack names must be under the prefix too.

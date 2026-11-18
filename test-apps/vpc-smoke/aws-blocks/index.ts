@@ -14,7 +14,7 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { Auth } from '@aws-blocks/bb-auth';
-import { Database, sql } from '@aws-blocks/bb-data';
+import { Database, sql } from '@aws-blocks/bb-database';
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
 import { Tracer } from '@aws-blocks/bb-tracer';
@@ -57,10 +57,10 @@ const rt = new Realtime(scope, 'events', {
 const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
-// `secretRotation: true` because this app runs on the sandbox preset, which
-// leaves rotation off: the lane exists to prove the rotation Lambda reaches the
-// shared VPC's Secrets Manager endpoint, which needs rotation actually on.
-const db = new Database(scope, 'db', { secretRotation: true });
+// Owns an Aurora DSQL cluster. The cluster has no VPC resources: the Lambda in
+// the VPC reaches its public endpoint through the VPC's egress route (the block
+// declares `requiresEgress`), and authenticates with an IAM token.
+const db = new Database(scope, 'db');
 
 const logger = new Logger(scope, 'log', { level: 'info' });
 const metrics = new Metrics(scope, 'metrics', { namespace: 'vpc-smoke' });

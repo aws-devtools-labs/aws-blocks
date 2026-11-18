@@ -5,7 +5,7 @@
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, DatabaseCluster, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -17,13 +17,12 @@ import { Secret } from '@aws-blocks/bb-secret';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
-import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
-import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
 import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
-import { type Generated, Kysely, sql as kyselySql } from 'kysely';
+import { Kysely, sql as kyselySql } from 'kysely';
 import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+import type { Tables as DbxTables } from './dbx.types.js';
+import type { Tables as DbxcTables } from './dbxc.types.js';
 
 
 const scope = new Scope('test-app');
@@ -616,44 +615,28 @@ export const realtime = new Realtime(scope, 'collab', {
   },
 });
 
-// Database - SQL database (Aurora Serverless v2 via Data API)
-const db = new Database(scope, 'db', {
-  migrationsPath: './aws-blocks/migrations',
-  // `true` because this app runs on the sandbox preset, which leaves rotation
-  // off; the rotation path needs a deploy to be covered at all. It is covered
-  // here, at the cost of the rotation Lambda's network interfaces slowing this
-  // lane's teardown, because the vpc-smoke lane that also asserts it does not
-  // run yet (issue #987). Move it there once that lane is back on.
-  secretRotation: true,
-});
-
-// DistributedDatabase - Aurora DSQL (serverless, multi-region PostgreSQL)
-const dsql = new DistributedDatabase(scope, 'dsql', {
-  migrationsPath: './aws-blocks/dsql-migrations',
-  removalPolicy: 'destroy',
-});
-
 // bb-database: one Database block, running on a cluster.
 // `dbx` owns an Aurora DSQL cluster; its migrations default to
 // ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
-const dbx = new SqlDatabase(scope, 'dbx');
+const dbx = new Database(scope, 'dbx');
 // A result schema: the row type derives from this value, and every row is validated against it.
 const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
+// Kysely on `dbx` through the block's dialect: the same typed builder on a `dsql` cluster.
+// `DbxTables` is written by `npm run db -- types --block dbx --out aws-blocks/dbx.types.ts`.
+const dbxKysely = new Kysely<DbxTables>({ dialect: new DatabaseDialect(dbx) });
 // `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
 // check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
 const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
-const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
-const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
+const dbxa = new Database(scope, 'dbxa', { cluster: sharedDsql });
+const dbxb = new Database(scope, 'dbxb', { cluster: sharedDsql });
 // `dbxc` runs on an Aurora PostgreSQL cluster created with the express configuration (`type: 'aurora'`):
 // full PostgreSQL, so its migration uses SERIAL, a plain CREATE INDEX and a trigger in PL/pgSQL, and a
 // transaction may change any number of rows. Scales to zero between requests.
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
-const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+const dbxc = new Database(scope, 'dbxc', { cluster: sharedAurora });
 // Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
-interface DbxcTables {
-  tasks: { id: Generated<number>; title: string; done: Generated<boolean>; updated_at: Generated<Date> };
-}
+// `DbxcTables` is written by `npm run db -- types --block dbxc --type aurora --out aws-blocks/dbxc.types.ts`.
 const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
 const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
@@ -2174,7 +2157,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { rowCount };
   },
 
-  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as QueryFailed.
+  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as ForeignKeyViolation.
   async dbxcAddComment(taskId: number, body: string) {
     try {
       const row = await dbxc.queryOne<{ id: number }>(
@@ -2307,8 +2290,46 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return row ? { big: kind(row.big), num: kind(row.num), at: kind(row.at), n: kind(row.n) } : null;
   },
 
-  // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
-  // missing privilege (42501, QueryFailed) when deployed.
+  // Row Level Security through asUser(): `owner` writes a note, then both users and a statement with no user
+  // read it, through SQL and through Kysely. An app passes the result of auth.requireAuth(context) to
+  // asUser(); the test names its two users.
+  async dbxcUserNotes(owner: string, other: string, body: string) {
+    const asOwner = dbxc.asUser({ userId: owner });
+    const asOther = dbxc.asUser({ userId: other });
+    await asOwner.execute(sql`INSERT INTO user_notes (owner_id, body) VALUES (${owner}, ${body})`);
+    const find = sql`SELECT id FROM user_notes WHERE body = ${body}`;
+    const seenByOwner = await asOwner.query<{ id: number }>(find);
+    const seenByOther = await asOther.query<{ id: number }>(find);
+    const seenWithNoUser = await dbxc.query<{ id: number }>(find);
+    const ownerKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(asOwner) });
+    const otherKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(asOther) });
+    const seenByOwnerKysely = await ownerKysely.selectFrom('user_notes').select('id').where('body', '=', body).execute();
+    const seenByOtherInTransaction = await otherKysely
+      .transaction()
+      .execute((trx) => trx.selectFrom('user_notes').select('id').where('body', '=', body).execute());
+    // A row for another user fails the policy's check.
+    let refused: string | null = null;
+    try {
+      await asOther.execute(sql`INSERT INTO user_notes (owner_id, body) VALUES (${owner}, ${body})`);
+    } catch (e) {
+      refused = e instanceof Error ? e.name : String(e);
+    }
+    const deletedByOther = await asOther.execute(sql`DELETE FROM user_notes WHERE body = ${body}`);
+    const deletedByOwner = await asOwner.execute(sql`DELETE FROM user_notes WHERE body = ${body}`);
+    return {
+      owner: seenByOwner.length,
+      other: seenByOther.length,
+      noUser: seenWithNoUser.length,
+      kysely: seenByOwnerKysely.length,
+      kyselyOtherInTransaction: seenByOtherInTransaction.length,
+      refused,
+      deletedByOther: deletedByOther.rowCount,
+      deletedByOwner: deletedByOwner.rowCount,
+    };
+  },
+
+  // DDL and TRUNCATE on the app connection of an aurora cluster: the role's missing privilege (42501,
+  // QueryFailed), locally and when deployed.
   async dbxcRejectDdl() {
     try {
       await dbxc.execute(sql`CREATE TABLE dbxc_should_not_exist (id INT PRIMARY KEY)`);
@@ -2375,9 +2396,62 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     );
   },
 
+  async dbxUpdate(id: string, value: number) {
+    const { rowCount } = await dbx.execute(sql`UPDATE dbx_items SET value = ${value} WHERE id = ${id}`);
+    return { rowCount };
+  },
+
   async dbxDelete(id: string) {
     const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
     return { rowCount };
+  },
+
+  // A constraint the caller's statement violates, thrown out of the handler uncaught: it must reach the
+  // client as a named NotNullViolation whose message carries no row values, not as a nameless 500.
+  async dbxNotNullViolation(id: string) {
+    await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${null}, ${1})`);
+  },
+
+  // Kysely through DatabaseDialect on a `dsql` cluster: typed inserts and projections.
+  async dbxKyselyInsertAndGet(id: string, name: string, value: number) {
+    await dbxKysely.insertInto('dbx_items').values({ id, name, value, category: 'kysely' }).execute();
+    const row = await dbxKysely.selectFrom('dbx_items').selectAll().where('id', '=', id).executeTakeFirst();
+    return row ?? null;
+  },
+
+  // The typed projection is checked at compile time by the harness tsc run: an unknown column, or a
+  // column compared as the wrong type, does not build.
+  async dbxKyselySelect(minValue: number) {
+    return await dbxKysely
+      .selectFrom('dbx_items')
+      .select(['id', 'name', 'value'])
+      .where('value', '>=', minValue)
+      .orderBy('name', 'asc')
+      .execute();
+  },
+
+  async dbxKyselyDelete(id: string) {
+    const deleted = await dbxKysely.deleteFrom('dbx_items').where('id', '=', id).executeTakeFirst();
+    return { deleted: Number(deleted.numDeletedRows) };
+  },
+
+  // A balance transfer run entirely through a Kysely transaction: the debit and the credit commit
+  // together, and a throw after both rolls both back.
+  async dbxKyselyTransfer(fromId: string, toId: string, amount: number, fail: boolean) {
+    await dbxKysely.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('dbx_items')
+        .set((eb) => ({ value: eb('value', '-', amount) }))
+        .where('id', '=', fromId)
+        .execute();
+      await trx
+        .updateTable('dbx_items')
+        .set((eb) => ({ value: eb('value', '+', amount) }))
+        .where('id', '=', toId)
+        .execute();
+      if (fail) throw new ApiError('forced failure after the debit and the credit', 409);
+    });
+    return { success: true };
   },
 
   // A read-modify-write with no side effects: safe to re-run on a conflict.
@@ -2450,8 +2524,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
-  // DDL on the app connection of a distributed cluster: the mock's guard
-  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  // DDL on the app connection of a distributed cluster: the app role's missing
+  // privilege (42501 → QueryFailed), locally and when deployed.
   async dbxRejectDdl() {
     try {
       await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
@@ -2573,270 +2647,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const a = await dbxa.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
     const b = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
     return { dbxa: a?.n ?? 0, dbxb: b?.n ?? 0 };
-  },
-
-  // ------------------------------------------------------------------------
-  // Database Tests
-  // ------------------------------------------------------------------------
-
-  // Exercises raw DDL execution independently of the migration system.
-  // The table already exists from migrations — IF NOT EXISTS makes this a no-op,
-  // but it verifies that db.execute() works for DDL statements.
-  async dbSetup() {
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS test_items (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      value INTEGER NOT NULL DEFAULT 0
-    )`);
-    return { success: true };
-  },
-
-  async dbInsert(id: string, name: string, value: number) {
-    const { rowCount } = await db.execute(
-      sql`INSERT INTO test_items (id, name, value) VALUES (${id}, ${name}, ${value})`
-    );
-    return { rowCount };
-  },
-
-  async dbGet(id: string) {
-    return await db.queryOne<{ id: string; name: string; value: number; category: string }>(
-      sql`SELECT * FROM test_items WHERE id = ${id}`
-    );
-  },
-
-  async dbList() {
-    return await db.query<{ id: string; name: string; value: number; category: string }>(
-      sql`SELECT * FROM test_items ORDER BY id`
-    );
-  },
-
-  async dbUpdate(id: string, value: number) {
-    const { rowCount } = await db.execute(
-      sql`UPDATE test_items SET value = ${value} WHERE id = ${id}`
-    );
-    return { rowCount };
-  },
-
-  async dbDelete(id: string) {
-    const { rowCount } = await db.execute(
-      sql`DELETE FROM test_items WHERE id = ${id}`
-    );
-    return { rowCount };
-  },
-
-  async dbTransfer(fromId: string, toId: string, amount: number) {
-    await db.transaction(async (tx) => {
-      const sender = await tx.queryOne<{ value: number }>(
-        sql`SELECT value FROM test_items WHERE id = ${fromId}`
-      );
-      if (!sender || sender.value < amount) {
-        throw new Error('Insufficient balance');
-      }
-      await tx.execute(sql`UPDATE test_items SET value = value - ${amount} WHERE id = ${fromId}`);
-      await tx.execute(sql`UPDATE test_items SET value = value + ${amount} WHERE id = ${toId}`);
-    });
-    return { success: true };
-  },
-
-  async dbDuplicateInsert(id: string) {
-    try {
-      await db.execute(sql`INSERT INTO test_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
-  // Request errors: each statement is rejected by Postgres for something the
-  // caller did (a constraint, a foreign key, a row-level-security policy or a
-  // missing grant), and must reach the client as a named 4xx, not a 500.
-  async dbCheckViolation(id: string) {
-    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
-  },
-
-  async dbNotNullViolation(id: string) {
-    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
-  },
-
-  async dbForeignKeyViolation(id: string) {
-    await db.execute(
-      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
-    );
-  },
-
-  // Positive control for the two RLS cases below: withRLS() must actually reach
-  // the 'authenticated' role, so their 403 comes from the policy or the grant
-  // and not from a refused role switch.
-  async dbRlsCurrentRole() {
-    const scoped = await db.withRLS({ userId: 'user-a' });
-    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
-  },
-
-  async dbRlsViolation(id: string) {
-    const scoped = await db.withRLS({ userId: 'user-a' });
-    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
-  },
-
-  async dbMissingGrant(id: string) {
-    const scoped = await db.withRLS({ userId: 'user-a' });
-    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
-  },
-
-  // Kysely transaction atomicity on the real (pooled / Data API) engine.
-  // Runs a balance transfer entirely through Kysely's `.transaction()`. If the
-  // adapter does not drive a real engine transaction, the debit and credit do not
-  // share a transaction scope, so a mid-transaction throw will NOT roll back the
-  // debit. The e2e asserts both that a successful transfer commits and that a
-  // failing one rolls back atomically.
-  async dbKyselyTransfer(fromId: string, toId: string, amount: number, fail: boolean) {
-    interface KyselySchema {
-      test_items: { id: string; name: string; value: number; category: string };
-    }
-    // Database.getEngine() is async (SSM resolution); the adapter wants a sync
-    // getEngine(), so resolve once and wrap it.
-    const engine = await db.getEngine();
-    const kysely = createKyselyAdapter<KyselySchema>({ getEngine: () => engine });
-    await kysely.transaction().execute(async (trx) => {
-      await trx
-        .updateTable('test_items')
-        .set((eb) => ({ value: eb('value', '-', amount) }))
-        .where('id', '=', fromId)
-        .execute();
-      await trx
-        .updateTable('test_items')
-        .set((eb) => ({ value: eb('value', '+', amount) }))
-        .where('id', '=', toId)
-        .execute();
-      if (fail) throw new Error('Forced failure after debit+credit');
-    });
-    return { success: true };
-  },
-
-  // Kysely typed-query coverage — the typed projection below is enforced at
-  // compile time by the harness tsc check (selecting an unknown column or using
-  // a column as the wrong type would fail to build). Runtime just returns rows.
-  async dbKyselySelect(minValue: number) {
-    interface KyselySchema {
-      test_items: { id: string; name: string; value: number; category: string };
-    }
-    const engine = await db.getEngine();
-    const kysely = createKyselyAdapter<KyselySchema>({ getEngine: () => engine });
-    return kysely
-      .selectFrom('test_items')
-      .select(['id', 'name', 'value'])
-      .where('value', '>=', minValue)
-      .execute();
-  },
-
-  // ------------------------------------------------------------------------
-  // DSQL Database Tests
-  // ------------------------------------------------------------------------
-
-  async dsqlSetup() {
-    // Table is created by the migration Lambda (001_create_dsql_items.sql).
-    // The app Lambda only has dsql:DbConnect (DML-only, no DDL).
-    return { success: true };
-  },
-
-  async dsqlInsert(id: string, name: string, value: number) {
-    const { rowCount } = await dsql.execute(
-      sql`INSERT INTO dsql_items (id, name, value) VALUES (${id}, ${name}, ${value})`
-    );
-    return { rowCount };
-  },
-
-  async dsqlGet(id: string) {
-    return await dsql.queryOne<{ id: string; name: string; value: number; category: string }>(
-      sql`SELECT * FROM dsql_items WHERE id = ${id}`
-    );
-  },
-
-  async dsqlList() {
-    return await dsql.query<{ id: string; name: string; value: number; category: string }>(
-      sql`SELECT * FROM dsql_items ORDER BY id`
-    );
-  },
-
-  async dsqlUpdate(id: string, value: number) {
-    const { rowCount } = await dsql.execute(
-      sql`UPDATE dsql_items SET value = ${value} WHERE id = ${id}`
-    );
-    return { rowCount };
-  },
-
-  async dsqlDelete(id: string) {
-    const { rowCount } = await dsql.execute(
-      sql`DELETE FROM dsql_items WHERE id = ${id}`
-    );
-    return { rowCount };
-  },
-
-  async dsqlTransfer(fromId: string, toId: string, amount: number) {
-    await dsql.transaction(async (tx) => {
-      const sender = await tx.queryOne<{ value: number }>(
-        sql`SELECT value FROM dsql_items WHERE id = ${fromId}`
-      );
-      if (!sender || sender.value < amount) {
-        throw new Error('Insufficient balance');
-      }
-      await tx.execute(sql`UPDATE dsql_items SET value = value - ${amount} WHERE id = ${fromId}`);
-      await tx.execute(sql`UPDATE dsql_items SET value = value + ${amount} WHERE id = ${toId}`);
-    });
-    return { success: true };
-  },
-
-  async dsqlTransferWithRetry(fromId: string, toId: string, amount: number) {
-    await dsql.transaction(async (tx) => {
-      const sender = await tx.queryOne<{ value: number }>(
-        sql`SELECT value FROM dsql_items WHERE id = ${fromId}`
-      );
-      if (!sender || sender.value < amount) {
-        throw new Error('Insufficient balance');
-      }
-      await tx.execute(sql`UPDATE dsql_items SET value = value - ${amount} WHERE id = ${fromId}`);
-      await tx.execute(sql`UPDATE dsql_items SET value = value + ${amount} WHERE id = ${toId}`);
-    }, { retryOnConflict: true, maxRetries: 3 });
-    return { success: true };
-  },
-
-  async dsqlDuplicateInsert(id: string) {
-    try {
-      await dsql.execute(sql`INSERT INTO dsql_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
-  async dsqlRejectTruncate() {
-    try {
-      await dsql.execute(sql`TRUNCATE TABLE dsql_items`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
-  // Kysely adapter e2e — typed queries against the real DSQL engine.
-  async dsqlKyselySelect() {
-    interface Schema { dsql_items: { id: string; name: string; value: number; category: string } }
-    const k = createKyselyAdapter<Schema>(dsql);
-    return k.selectFrom('dsql_items').select(['id', 'name', 'value']).orderBy('name', 'asc').execute();
-  },
-
-  async dsqlKyselyInsertAndGet(id: string, name: string, value: number) {
-    interface Schema { dsql_items: { id: string; name: string; value: number; category: string } }
-    const k = createKyselyAdapter<Schema>(dsql);
-    await k.insertInto('dsql_items').values({ id, name, value, category: 'kysely' }).execute();
-    const row = await k.selectFrom('dsql_items').selectAll().where('id', '=', id).executeTakeFirst();
-    return row ?? null;
-  },
-
-  async dsqlKyselyDelete(id: string) {
-    interface Schema { dsql_items: { id: string; name: string; value: number; category: string } }
-    const k = createKyselyAdapter<Schema>(dsql);
-    await k.deleteFrom('dsql_items').where('id', '=', id).execute();
-    return { success: true };
   },
 
   // ------------------------------------------------------------------------
@@ -3387,8 +3197,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async zodDbInsert(rawInput: unknown) {
     const { id, name, value } = DbInsertInput.parse(rawInput);
-    const { rowCount } = await db.execute(
-      sql`INSERT INTO test_items (id, name, value) VALUES (${id}, ${name}, ${value})`
+    const { rowCount } = await dbx.execute(
+      sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`
     );
     return { rowCount };
   },

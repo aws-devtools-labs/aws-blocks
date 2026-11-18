@@ -36,12 +36,11 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
 | `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
-Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
@@ -53,8 +52,8 @@ To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic n
 
 ## For Agents
 
-Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all data persistence and cloud abstractions (they mock locally and deploy to AWS automatically).
 
-Start in `aws-blocks/index.ts` (backend) and `src/index.ts` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.greet"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `TROUBLESHOOTING.md` in `node_modules/@aws-blocks/blocks/docs` for curl examples.
+Start in `aws-blocks/index.ts` (backend) and `src/index.ts` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.greet"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.

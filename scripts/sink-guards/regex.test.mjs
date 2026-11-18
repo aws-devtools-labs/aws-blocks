@@ -26,7 +26,7 @@ import {
 
 const ALLOWLIST = [
 	{
-		at: 'packages/blocks/src/cli/config.ts:228',
+		at: 'packages/blocks/src/cli/config.ts:242',
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
 	},
 	{
@@ -87,6 +87,23 @@ describe('regex sink detector', () => {
 		assert.deepEqual(find('function f(o: string) { return new RegExp(`^${escapeRegExp(o)}$`); }'), []);
 		assert.deepEqual(find("function f(o: string) { const e = o.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'); return new RegExp(e); }"), []);
 		assert.deepEqual(find('for (const a of ["br", "gzip"]) new RegExp(`\\\\.includes\\\\("${a}"\\\\)`);'), []);
+	});
+
+	it('recognizes escaped alternatives without trusting other maps or separators', () => {
+		const findAlternation = (expr, params = 'words: string[]') => find([
+			'function escapeRegExp(s: string) { return s.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"); }',
+			`function f(${params}) {`,
+			`  const alternatives = ${expr};`,
+			'  return new RegExp(`^(${alternatives})$`);',
+			'}',
+		].join('\n'));
+		const escaped = 'words.map(escapeRegExp).join("|")';
+		assert.deepEqual(findAlternation(escaped), []);
+		assert.deepEqual(findAlternation('words.join("|")'), [4]);
+		assert.deepEqual(findAlternation('words.map(escapeRegExp).join(separator)'), [4]);
+		assert.deepEqual(findAlternation('words.map(util.escapeRegExp).join("|")'), [4]);
+		assert.deepEqual(findAlternation(escaped, 'words: Mapper'), [4]);
+		assert.deepEqual(findAlternation(escaped, 'words: string[], escapeRegExp: Transform'), [4]);
 	});
 
 	it('resolves a name through its own scope, not another declaration of it', () => {

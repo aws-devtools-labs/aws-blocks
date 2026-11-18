@@ -10,11 +10,12 @@
  * deployment's stack name), so two Blocks apps in the same account + region +
  * stage get distinct names and cannot overwrite each other's credentials.
  *
- * Two call sites compute the name: the pre-deploy writer (`ensure-secrets`) and
- * the `db pull` generated wiring at synth. Both pass the result of
- * `getStackName({ sandbox, projectRoot })` into this function, so they produce
- * the same name by construction. The runtime Lambda does not call this function;
- * it reads the name recorded at synth.
+ * One call site computes the name: the sandbox cleanup (`deleteSandboxSecrets`
+ * in `scripts/ensure-secrets.ts`). It passes the result of
+ * `getStackName({ sandbox: true, projectRoot })` into this function. The
+ * `Database` block derives the same string for the default connection name
+ * (`/<stackName>-<name>` with the name `db-url`), and `npm run db -- connect
+ * --stage` writes it. The runtime Lambda does not call this function.
  */
 
 /**
@@ -41,13 +42,21 @@ export function extractDbRef(connectionString: string): string {
   throw new Error('Cannot extract database identifier from connection string.');
 }
 
+/** The connection name that `DatabaseCluster.fromExisting()` and `npm run db` use when none is given. */
+export const DEFAULT_DB_CONNECTION_NAME = 'db-url';
+
 /**
  * SSM SecureString parameter name for a deployment's external database
  * connection string.
  *
  * Pure string transform: `/<stackName>-db-url`. The caller is responsible for
  * computing the stack name via `getStackName({ sandbox, projectRoot })`.
+ *
+ * `name` is the connection's short name; a `Database` on an existing database
+ * derives its parameter with the same function, so the name that
+ * `npm run db -- connect --stage` writes and the name the sandbox cleanup
+ * deletes cannot differ.
  */
-export function dbConnectionParameterName(stackName: string): string {
-  return `/${stackName}-db-url`;
+export function dbConnectionParameterName(stackName: string, name: string = DEFAULT_DB_CONNECTION_NAME): string {
+  return `/${stackName}-${name}`;
 }

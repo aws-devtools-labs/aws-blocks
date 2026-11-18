@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import BlocksRuntime
 import SwiftUI
 
 // MARK: - Configuration
@@ -33,6 +34,8 @@ final class AppState: ObservableObject {
     var authApi: AuthApi { blocks.authApi }
 
     @Published var authState: AuthState?
+    /// The providers the OIDC client signs in with: one sign-in button each.
+    @Published var federatedProviders: [String] = []
     @Published var error: String?
 
     var isSignedIn: Bool {
@@ -46,7 +49,50 @@ final class AppState: ObservableObject {
     func refreshAuth() async {
         do {
             authState = try await authApi.getAuthState()
+            federatedProviders = try await oidc().providers
             error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Where the backend relays a federated sign-in back to. The backend lists it in
+    /// `redirects.allowedRelayOrigins`.
+    static let relayTo = "blocksdemo://auth"
+
+    /// The `Auth` block's OIDC client from `oidcAuthApi.getClient()`, fetched on first use and kept
+    /// for the app's lifetime. It carries the block's routes and provider ids.
+    private var oidcClient: OIDCClient<String>?
+
+    private func oidc() async throws -> OIDCClient<String> {
+        if let oidcClient {
+            return oidcClient
+        }
+        let client = try await blocks.oidcAuthApi.getClient()
+        oidcClient = client
+        return client
+    }
+
+    /// A provider's sign-in button: sign in through the backend's relay, then read the new state.
+    func federatedSignIn(provider: String) async {
+        do {
+            // Opens the system sign-in sheet (`WebAuthenticationSessionLauncher` at its defaults).
+            _ = try await oidc().signIn(provider: provider, relayTo: Self.relayTo)
+            await refreshAuth()
+        } catch OIDCError.cancelled {
+            // The user closed the sign-in sheet: nothing to report.
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// A federated user's `signOut` action: sign out, open the provider's logout page, then read the new state.
+    func federatedSignOut() async {
+        do {
+            if let logoutURL = try await oidc().signOut() {
+                await UIApplication.shared.open(logoutURL)
+            }
+            await refreshAuth()
         } catch {
             self.error = error.localizedDescription
         }

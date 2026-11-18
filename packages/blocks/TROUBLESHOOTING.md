@@ -104,8 +104,8 @@ The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `t
 
 | Message | Cause | Fix |
 |---------|-------|-----|
-| `❌ a dev server of this app is already running on :3000 (pid …).` `Not starting a second one.` | Another dev server for this app is running (or still `starting`), on any port | Use the running one, or stop it with the command the message prints (`npx --no -- cdk-blocks dev stop`, plus `--port <port>` when it isn't on 3000), then start again |
-| `❌ port 3000 is in use by …` | A process that is not this app's dev server holds the port (or the frontend port), so the dev server doesn't start | Run the `kill …` the message prints (or find the holder with `lsof -i :3000`), or choose another port with `--port` (`--frontend-port` for the frontend port) |
+| `❌ a dev server of this app is already running on :3000 (pid …).` `Not starting a second one.` | Another dev server for this app is running (or still `starting`), on any port | Use the running server, or stop it with `npm run dev:stop` before starting another. For a nondefault port, pass the port shown in the message, for example `npm run dev:stop -- --port 4000`. |
+| `❌ port 3000 is in use by …` | A process that is not this app's dev server holds the port (or the frontend port), so the dev server doesn't start | Run the `kill …` the message prints (or find the holder with `lsof -i :3000`), or choose another port with `npm run dev -- --port 4000` (use `--frontend-port` for the frontend port) |
 | `⚠️  Port 3000 is still in use after N attempts to bind it.`, then `❌ port 3000 is still in use.` | Something took the port between the startup check and the bind, and kept it through the retries | As above: stop the process the message names, or choose another port with `--port` |
 
 ```bash
@@ -124,7 +124,7 @@ The dev server listens on one port (3000 by default). It answers the API (`POST 
 |---------|-------|-----|
 | Startup log `Frontend did not start: Frontend server on port 3100 did not start within 30000ms`, then `(API only — frontend unavailable)` | The frontend command failed or is still starting, or it listens on a different port | Read the frontend's error output above that line and fix it; the proxy reaches the frontend as soon as it listens on the frontend port |
 | `Frontend dev server exited (…) and exceeded 5 restarts within 10s — leaving it down.` | The frontend crashes on start (a build or config error) | Fix the error printed above it, then restart `npm run dev` |
-| Warning `the frontend command "…" does not contain the frontend port 3100` | A custom `blocks.dev.frontendCommand` starts the frontend on its own port, which `--frontend-port` does not change | Put the frontend port in the command, or remove `frontendCommand` so `cdk-blocks dev` detects Next.js or Vite and starts it on that port |
+| Warning `the frontend command "…" does not contain the frontend port 3100` | A custom `blocks.dev.frontendCommand` starts the frontend on its own port, which `--frontend-port` does not change | Put the frontend port in the command, or remove `frontendCommand` so `npm run dev` detects Next.js or Vite and starts it on that port |
 
 Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` dependency) there is no proxy: those requests get an empty 404 instead.
 

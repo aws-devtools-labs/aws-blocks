@@ -37,8 +37,12 @@ extension XCTestCase {
 
     /// Builds `Models.swift` + `API.swift` as module `Generated` against this run's BlocksRuntime, then
     /// type-checks `consumer` as a separate module importing it. `moduleFlags` go to the generated module's
-    /// compile (e.g. `-warnings-as-errors`, as an app that treats warnings as errors builds it).
-    func typecheckConsumer(models: String, api: String, consumer: String, moduleFlags: [String] = []) throws {
+    /// compile (e.g. `-warnings-as-errors`, as an app that treats warnings as errors builds it), `consumerFlags` replace the
+    /// consumer's `-typecheck` (e.g. `-emit-sil -o /dev/null -swift-version 6`: concurrency checking that runs after
+    /// type-checking, like sending a non-`Sendable` value across actors, needs SIL).
+    func typecheckConsumer(
+        models: String, api: String, consumer: String, moduleFlags: [String] = [], consumerFlags: [String] = []
+    ) throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
             throw XCTSkip("xcrun is not available")
         }
@@ -65,7 +69,10 @@ extension XCTestCase {
         XCTAssertEqual(module.status, 0, "The generated module didn't compile:\n\(module.output)")
         guard module.status == 0 else { return }
 
-        let check = try swiftc(["-typecheck", "-module-name", "Consumer", "-I", dir.path, "-I", runtimeDir.path, consumerFile.path])
+        let check = try swiftc(
+            ["-module-name", "Consumer", "-I", dir.path, "-I", runtimeDir.path]
+                + (consumerFlags.isEmpty ? ["-typecheck"] : consumerFlags) + [consumerFile.path]
+        )
         XCTAssertEqual(check.status, 0, "The consumer module didn't compile:\n\(check.output)")
     }
 

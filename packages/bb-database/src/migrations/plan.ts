@@ -3,11 +3,11 @@
 
 import { createHash } from 'node:crypto';
 import { blocksError } from '@aws-blocks/core';
-import { splitStatements } from '@aws-blocks/data-common/core';
+import { splitStatements } from '../common/split-statements.js';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
 import { ASYNC_DDL, findStatementIssues, inspectStatement, stripLiteralsAndComments } from '../dialect/validation.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
-import type { ClusterType } from '../types.js';
+import type { ClusterKind } from '../types.js';
 
 export interface StatementStep {
 	kind: 'statement';
@@ -36,7 +36,7 @@ export interface FilePlan {
 
 export interface MigrationPlan {
 	/** The cluster kind the steps were sequenced for. */
-	kind: ClusterType;
+	kind: ClusterKind;
 	files: FilePlan[];
 }
 
@@ -113,7 +113,10 @@ function auroraIssues(sql: string): string[] {
  * forms (`ASYNC`, `sys.wait_for_job`), which PostgreSQL would otherwise reject with a bare syntax error, and for the
  * statements PostgreSQL refuses inside a transaction block (`CONCURRENTLY`, `VACUUM`, …), since each file is one.
  */
-export function lintMigrationFiles(migrations: Record<string, string>, kind: ClusterType): void {
+export function lintMigrationFiles(migrations: Record<string, string>, kind: ClusterKind): void {
+	// An existing database gets no check of the block's own: its files may predate the block, an applied file
+	// cannot be changed, and PostgreSQL reports what it refuses with the statement in the message.
+	if (kind === 'external') return;
 	const errors: string[] = [];
 	for (const file of Object.keys(migrations).sort()) {
 		if (kind === 'dsql') {
@@ -141,7 +144,7 @@ const transactionalStatement = (sql: string): PlanStep[] => [{ kind: 'statement'
  * The steps of each file for a cluster of `kind`: on `dsql`, DDL alone per transaction with a wait after each
  * `ASYNC` statement; on `aurora`, every statement of a file in one transaction.
  */
-export function buildMigrationPlan(migrations: Record<string, string>, kind: ClusterType): MigrationPlan {
+export function buildMigrationPlan(migrations: Record<string, string>, kind: ClusterKind): MigrationPlan {
 	const sequence = kind === 'dsql' ? sequenceStatement : transactionalStatement;
 	const files: FilePlan[] = Object.keys(migrations)
 		.sort()

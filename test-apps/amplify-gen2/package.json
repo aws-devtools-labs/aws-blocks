@@ -35,7 +35,7 @@
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
     "@aws-blocks/bb-kv-store": "*",
-    "@aws-blocks/bb-distributed-data": "*",
+    "@aws-blocks/bb-database": "*",
     "@aws-blocks/bb-auth": "*"
   },
   "workspaces": [

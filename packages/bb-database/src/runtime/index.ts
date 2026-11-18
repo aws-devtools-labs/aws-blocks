@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isWireSafeError } from '@aws-blocks/core';
-import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common/core';
+import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
+import { type SqlQuery, unwrapQuery } from '../common/sql.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import {
 	AUTOCOMMIT_CONFLICT_BACKOFF_MS,

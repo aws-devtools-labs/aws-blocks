@@ -19,8 +19,7 @@
     "@aws-blocks/bb-auth": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
-    "@aws-blocks/bb-distributed-data": "*",
-    "@aws-blocks/data-common": "*",
+    "@aws-blocks/bb-database": "*",
     "vite": "^6.4.5"
   }
 }

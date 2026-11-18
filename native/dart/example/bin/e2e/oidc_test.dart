@@ -16,9 +16,10 @@
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
 ///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client comes from
-///                    oidcAuthApi.getClient() on the RPC URL and cuts the
-///                    origin itself.
+///                    (/aws-blocks/api). The client is the one the
+///                    backend's `oidcAuthApi.getClient()` returns
+///                    (`Auth.createOidcApi()`), on the RPC URL; it cuts
+///                    the origin itself.
 ///   - state machine: oidcAuthStateApi.getAuthState for the signed-in state;
 ///                    the sign-in button comes from the client's `providers`.
 ///

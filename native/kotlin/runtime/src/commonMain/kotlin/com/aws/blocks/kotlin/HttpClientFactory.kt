@@ -14,12 +14,19 @@ import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.header
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.util.AttributeKey
 
 /** Default time allowed to establish a connection. */
 internal const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 30_000L
 
 /** Default maximum inactivity between two data packets on a connection. */
 internal const val DEFAULT_SOCKET_TIMEOUT_MILLIS = 60_000L
+
+/**
+ * Where a client built by [defaultHttpClient] keeps its cookie jar, so code that holds only the
+ * client (an OIDC client signing out locally) can remove one cookie from it.
+ */
+internal val CookieJarKey = AttributeKey<CookiesStorage>("BlocksCookieJar")
 
 /**
  * A null [cookiesStorage] installs no cookie jar at all, which is what the clients talking to a
@@ -52,5 +59,7 @@ internal fun defaultHttpClient(
             json()
         }
     }
-    return if (engine == null) HttpClient(configure) else HttpClient(engine, configure)
+    val client = if (engine == null) HttpClient(configure) else HttpClient(engine, configure)
+    if (cookiesStorage != null) client.attributes.put(CookieJarKey, cookiesStorage)
+    return client
 }
