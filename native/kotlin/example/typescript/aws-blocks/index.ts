@@ -30,8 +30,8 @@ const auth = new Auth(scope, 'auth', {
       clientSecret: googleClientSecret,
     },
   },
-  // Lets native clients authenticate with `Authorization: Bearer <access token>`
-  // (the Swift and Dart SDKs do). The Kotlin apps use the session cookie.
+  // Lets a client that holds an access token authenticate with
+  // `Authorization: Bearer <access token>`. The Kotlin apps use the session cookie.
   allowBearerAuth: true,
   redirects: {
     allowedRelayOrigins: [relayOrigin('blocks.testapp://oidcRedirect')],
