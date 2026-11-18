@@ -99,7 +99,8 @@ class OidcMultiBlockE2ETest {
 
         // The IdP was sent the block's own callback, from the descriptor, not the default name.
         val redirectUri = Url(launcher.authorizeUrls.single()).parameters["redirect_uri"].shouldNotBeNull()
-        Url(redirectUri).encodedPath shouldBe "/aws-blocks/auth/sso/return"
+        // A deployed API URL carries the API Gateway stage before /aws-blocks, so check the suffix.
+        Url(redirectUri).encodedPath shouldEndWith "/aws-blocks/auth/sso/return"
         client.authState.value shouldBe OidcAuthState.SignedIn(user)
         val me = api.ssoRequireAuth()
         me.userId shouldBe user.userId
