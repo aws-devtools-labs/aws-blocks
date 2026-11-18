@@ -53,7 +53,7 @@ Open http://localhost:3000 after `npm run dev`.
   it); `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
-- **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both
+- **Database** — an atomic SQL money `transfer` between accounts; both
   balance updates commit together or roll back together inside one transaction.
   Accounts belong to the signed-in user (an `owner` column every query filters
   on), so a caller can only move money between their own accounts.

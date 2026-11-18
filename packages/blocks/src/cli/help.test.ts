@@ -96,8 +96,8 @@ describe('command help', () => {
 		}
 		const alias = await runCli(['help', 'typegen'], { cwd });
 		assert.match(alias.stdout, /Usage: cdk-blocks generate types/);
-		const db = await runCli(['db', '--help'], { cwd });
-		assert.match(db.stdout, /Usage: cdk-blocks db <verb> \[args\.\.\.\]/);
+		const vendorize = await runCli(['vendorize', '--help'], { cwd });
+		assert.match(vendorize.stdout, /Usage: cdk-blocks vendorize <package> \[options\.\.\.\]/);
 		const unknown = await runCli(['help', 'deplyo'], { cwd });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /Did you mean "deploy"\?/);

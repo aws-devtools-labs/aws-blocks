@@ -595,7 +595,7 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 - `@aws-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
 - `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
 - `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
-- `@aws-blocks/bb-data` — SQL database
+- `@aws-blocks/bb-database` — SQL database
 - `@aws-blocks/bb-realtime` — Real-time pub/sub
 
 ### withAuth (SSR cookie forwarding)

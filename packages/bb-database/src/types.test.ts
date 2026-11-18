@@ -7,7 +7,7 @@ import assert from 'node:assert';
 import { test } from 'node:test';
 import type { Scope } from '@aws-blocks/core';
 import type { DatabaseCluster as DatabaseClusterType, Database as DatabaseType } from './index.mock.js';
-import type { ClusterType } from './types.js';
+import type { ClusterKind, ScopedDatabase } from './types.js';
 
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
@@ -29,7 +29,7 @@ function typeChecks(): void {
 
 	void onShared.query;
 	void owned.transaction;
-	type _Ref = Expect<Equal<typeof onShared.cluster.kind, ClusterType>>;
+	type _Ref = Expect<Equal<typeof onShared.cluster.kind, ClusterKind>>;
 	type _RefId = Expect<Equal<typeof onShared.cluster.id, string>>;
 
 	// @ts-expect-error: capacity options do not belong to a DSQL cluster
@@ -65,8 +65,24 @@ function typeChecks(): void {
 	new Database(scope, 'b1', { cluster: shared, removalPolicy: 'destroy' });
 	// @ts-expect-error: a cluster must be a DatabaseCluster
 	new Database(scope, 'b2', { cluster: { kind: 'dsql' } });
-	// @ts-expect-error: no RLS surface in this release
+	// @ts-expect-error: the method is asUser()
 	void owned.withRLS;
+
+	const scoped = onAurora.asUser({ userId: 'u1' }, { org_id: 'o1' });
+	type _Scoped = Expect<Equal<typeof scoped, ScopedDatabase>>;
+	// The exits of a scoped database. A new one needs a case in as-user.test.ts that it carries the user.
+	type _Exits = Expect<
+		Equal<keyof ScopedDatabase, 'cluster' | 'schemaName' | 'query' | 'queryOne' | 'execute' | 'transaction'>
+	>;
+	// The result of an auth block's requireAuth() passes as it is.
+	const authUser = { userId: 'u1', username: 'ada' };
+	onAurora.asUser(authUser);
+	// @ts-expect-error: a scoped database cannot be scoped again
+	void scoped.asUser;
+	// @ts-expect-error: the user needs a userId
+	onAurora.asUser({ id: 'u1' });
+	// @ts-expect-error: the user id is not a bare string, which invites passing request input
+	onAurora.asUser('u1');
 
 	void ownedWithOptions;
 }

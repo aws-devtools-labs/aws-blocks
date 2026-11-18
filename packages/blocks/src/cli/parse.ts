@@ -7,8 +7,8 @@
  * `cdk-blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]`
  *
  * Global options may come before the command, between the words of its path
- * (`cdk-blocks generate --debug client`) or after it. A passthrough command (`db`,
- * `secret`, `config`, `vendorize`) forwards the tokens after its name to its
+ * (`cdk-blocks generate --debug client`) or after it. A passthrough command
+ * (`secret`, `config`, `vendorize`) forwards the tokens after its name to its
  * tool, except the CLI's global options before a `--`: those apply to the run.
  */
 
@@ -58,7 +58,7 @@ export interface ParsedInvocation {
 	passthrough: string[];
 	/**
 	 * For help on a passthrough command: the verb whose own help to show
-	 * (`migrate` in `cdk-blocks db migrate ./dir --help`). Only `<verb> --help` is
+	 * (`remove` in `cdk-blocks secret remove KEY --help`). Only `<verb> --help` is
 	 * forwarded to the tool, never the other arguments.
 	 */
 	helpVerb?: string;

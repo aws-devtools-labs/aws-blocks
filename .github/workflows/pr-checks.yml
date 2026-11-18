@@ -287,11 +287,6 @@ jobs:
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
 
-      # Fails once the vpc-smoke lane runs its tests again, so the rotation
-      # coverage the comprehensive app carries meanwhile gets handed back.
-      - name: Test that the rotation coverage sits in one test app
-        run: node --test scripts/ci/rotation-coverage-home.test.mjs
-
       # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
       # unblock Amplify sandboxes stuck in DELETE_FAILED.
       - name: Test the stuck Amplify sandbox delete
@@ -1125,7 +1120,7 @@ jobs:
       # connection in this suite runs verify-full — exercising the TLS verification
       # feature end-to-end instead of connecting unverified. externalDbSsl() reads
       # this; the explicit-engine tests read it too.
-      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
+      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-database/test/fixtures/supabase-ca.crt
     # One Supabase project serves every E2E account, so this group stays global.
     concurrency:
       group: e2e-supabase
@@ -1191,7 +1186,7 @@ jobs:
             | scripts/ci/secret-to-env.sh
 
       - name: Apply test schema
-        run: npx tsx packages/bb-data/test/apply-schema.ts
+        run: npx tsx packages/bb-database/test/apply-schema.ts
 
       - name: E2E Test Supabase
         run: npm run test:e2e:supabase

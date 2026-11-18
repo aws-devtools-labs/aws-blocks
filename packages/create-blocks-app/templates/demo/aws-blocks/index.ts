@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, Auth, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, DistributedDatabase, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, Auth, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, Database, sql } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -136,14 +136,13 @@ const todos = new KVStore(scope, 'todos', {
   }
 });
 
-// DistributedDatabase: a relational, strongly-consistent SQL database (Aurora
-// DSQL on deploy; PGlite locally via the mock, no AWS). Unlike KVStore
+// Database: a relational, strongly-consistent SQL database (Aurora DSQL on
+// deploy; PGlite locally via the mock, no AWS). Unlike KVStore
 // (key-value), it runs multi-row SQL transactions atomically — used here for a
 // money transfer between accounts that must move both balances or neither.
-// Schema lives in aws-blocks/dsql-migrations/*.sql, applied automatically.
-const ledger = new DistributedDatabase(scope, 'ledger', {
-  migrationsPath: './aws-blocks/dsql-migrations',
-});
+// Schema lives in aws-blocks/migrations/ledger/*.sql (the directory is named
+// after the block id), applied automatically.
+const ledger = new Database(scope, 'ledger');
 
 // Simple hello world API for testing CDK deployment
 export const hello = new ApiNamespace(scope, 'hello', (context) => ({
@@ -342,7 +341,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // ── Protected (requireAuth) — DistributedDatabase (SQL) demo: atomic money transfer ─
+  // ── Protected (requireAuth) — Database (SQL) demo: atomic money transfer ─
   // Accounts belong to the signed-in user (the `owner` column) and every
   // statement filters on it, so a caller can only open, read, and move money
   // between their own accounts.

@@ -42,7 +42,7 @@ export {
 	stopDevServer,
 	stopMessage,
 } from './dev-server.js';
-export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
+export { loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
 export { CLOSED_OUTPUT_CODES, ignoreClosedOutput, log } from './log.js';

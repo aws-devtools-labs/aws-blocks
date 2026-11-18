@@ -65,7 +65,7 @@ export interface InternalAppSettingOptions<T = string> extends AppSettingOptions
 	 *
 	 * Precondition: the parameter MUST already exist at deploy time — this construct
 	 * does not create it, so if the external provisioner did not run (e.g. a raw
-	 * `cdk deploy` that skipped `ensureSecrets`) the deploy succeeds but the app
+	 * `cdk deploy` before `cdk-blocks db connect --stage`) the deploy succeeds but the app
 	 * fails at runtime with `ParameterNotFound`.
 	 */
 	external?: boolean;
