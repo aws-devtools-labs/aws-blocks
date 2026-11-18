@@ -652,4 +652,100 @@ extension OIDCClientTests {
 
         XCTAssertEqual(events, [])
     }
+
+    // MARK: - Cancellation
+
+    func testACancelledRestoreThrowsCancellationErrorAndChangesNothing() async throws {
+        let client = makeClient(session: Self.hangingSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        let events = await states(of: client) {
+            let error = await Self.errorOfACancelledCall { _ = try await client.restore() }
+            XCTAssertTrue(error is CancellationError, "got \(String(describing: error))")
+        }
+
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
+        XCTAssertEqual(events, [])
+        let state = await client.authState
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testACancelledRefreshThrowsCancellationErrorAndKeepsTheTokens() async throws {
+        let client = makeClient(session: Self.hangingSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "expired")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        await store.set(tokenKey("expires_at"), value: "0")
+
+        let events = await states(of: client) {
+            let error = await Self.errorOfACancelledCall { try await client.refresh() }
+            XCTAssertTrue(error is CancellationError, "got \(String(describing: error))")
+        }
+
+        let access = await store.get(tokenKey("access_token"))
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(access, "expired")
+        XCTAssertEqual(refresh, "rt")
+        XCTAssertEqual(events, [])
+    }
+
+    /// Cancelling one caller of a shared refresh leaves the refresh running: the other caller gets its result,
+    /// and the tokens it stores are kept.
+    func testACancelledRefreshCallerLeavesTheSharedRefreshToTheOtherCaller() async throws {
+        let started = DispatchSemaphore(value: 0)
+        let answer = DispatchSemaphore(value: 0)
+        OIDCMockURLProtocol.handler = { request in
+            started.signal()
+            _ = answer.wait(timeout: .now() + 5)
+            let body = ["accessToken": "at2", "refreshToken": "rt2", "expiresIn": 3_600] as [String: Any]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        let cancelled = Task { try await client.refresh() }
+        await Task.detached { started.wait() }.value
+        let shared = Task { try await client.refresh() }
+        // Let the second caller join the in-flight refresh before the first one is cancelled.
+        try await Task.sleep(for: .milliseconds(50))
+        cancelled.cancel()
+        let cancelledResult = await cancelled.result
+        XCTAssertThrowsError(try cancelledResult.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
+
+        answer.signal()
+        try await shared.value
+
+        let access = await store.get(tokenKey("access_token"))
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(access, "at2")
+        XCTAssertEqual(refresh, "rt2")
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "one shared refresh request")
+    }
+
+    /// A session whose requests never answer, and time out after a second so the abandoned request ends.
+    static func hangingSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HangingURLProtocol.self]
+        config.timeoutIntervalForRequest = 1
+        return URLSession(configuration: config)
+    }
+
+    /// Runs `call` in a task, cancels it once its request is in flight, and returns what it threw.
+    static func errorOfACancelledCall(_ call: @escaping @Sendable () async throws -> Void) async -> Error? {
+        let started = DispatchSemaphore(value: 0)
+        HangingURLProtocol.onStart = { started.signal() }
+        defer { HangingURLProtocol.onStart = nil }
+        let task = Task { try await call() }
+        await Task.detached { _ = started.wait(timeout: .now() + 5) }.value
+        task.cancel()
+        do {
+            try await task.value
+            return nil
+        } catch {
+            return error
+        }
+    }
 }

@@ -15,4 +15,6 @@ A refresh now ends the session only when the refresh route refuses it (an `ApiEr
 the tokens and the state, so a later refresh can retry: no network or a response without an access
 token (a `TransportError`), a server error (an `ApiError` with another status), a cancellation or a
 closed client. `getAccessToken()` and `onAuthFailure()` keep the tokens on such a failure too. A refresh
-that a sign-in or sign-out on the same client overtook stores nothing.
+that a sign-in or sign-out on the same client overtook stores nothing. Concurrent callers share one
+refresh: a caller whose task is cancelled throws `CancellationError` at once, and the shared refresh
+keeps running for the others.

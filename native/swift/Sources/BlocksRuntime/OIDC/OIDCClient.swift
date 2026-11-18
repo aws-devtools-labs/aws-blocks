@@ -7,6 +7,7 @@
 
 import Foundation
 import CryptoKit
+import os
 
 /// A provider an `OIDCClient` signs in with: the enum generated from the spec's provider names, or
 /// `String` when the spec doesn't name them.
@@ -394,16 +395,38 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Token refresh
 
+    /// Refreshes the bearer tokens. Concurrent callers share one in-flight refresh. A caller whose task is
+    /// cancelled throws `CancellationError` at once and leaves the shared refresh running, so other callers
+    /// still get its result and whatever it stores is kept.
     public func refresh() async throws {
-        // Dedupe concurrent refresh requests — only one network call in flight.
+        // Dedupe concurrent refresh requests: only one network call in flight.
+        let task: Task<Void, Error>
         if let existing = inflightRefresh {
-            try await existing.value
-            return
+            task = existing
+        } else {
+            // Isolated to this actor, so it can't start before `inflightRefresh` is set, and it clears
+            // `inflightRefresh` itself: a cancelled caller that started it doesn't end it.
+            task = Task<Void, Error> {
+                defer { self.inflightRefresh = nil }
+                try await self.performRefresh()
+            }
+            inflightRefresh = task
         }
-        let task = Task<Void, Error> { try await self.performRefresh() }
-        inflightRefresh = task
-        defer { inflightRefresh = nil }
-        try await task.value
+        try await Self.result(of: task)
+    }
+
+    /// Waits for `task`, but throws `CancellationError` as soon as the calling task is cancelled, without
+    /// cancelling `task`.
+    private static func result(of task: Task<Void, Error>) async throws {
+        let waiter = CancellableWaiter()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiter.start(continuation)
+                Task { waiter.finish(await task.result) }
+            }
+        } onCancel: {
+            waiter.finish(.failure(CancellationError()))
+        }
     }
 
     /// Refreshes the bearer tokens. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
@@ -837,5 +860,44 @@ extension Data {
             base64 += String(repeating: "=", count: 4 - remainder)
         }
         self.init(base64Encoded: base64)
+    }
+}
+
+/// Resumes one continuation once: with the awaited task's result, or with `CancellationError` when the
+/// waiting caller is cancelled first, even before the continuation exists.
+private final class CancellableWaiter: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Void, Error>?
+        var outcome: Result<Void, Error>?
+        var resumed = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func start(_ continuation: CheckedContinuation<Void, Error>) {
+        let outcome: Result<Void, Error>? = state.withLock { state in
+            guard !state.resumed else { return nil }
+            if let outcome = state.outcome {
+                state.resumed = true
+                return outcome
+            }
+            state.continuation = continuation
+            return nil
+        }
+        if let outcome { continuation.resume(with: outcome) }
+    }
+
+    func finish(_ outcome: Result<Void, Error>) {
+        let continuation: CheckedContinuation<Void, Error>? = state.withLock { state in
+            guard !state.resumed, state.outcome == nil else { return nil }
+            guard let continuation = state.continuation else {
+                state.outcome = outcome
+                return nil
+            }
+            state.resumed = true
+            state.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: outcome)
     }
 }
