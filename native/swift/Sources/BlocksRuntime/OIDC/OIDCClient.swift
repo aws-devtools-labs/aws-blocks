@@ -568,9 +568,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   (or `nil`) is returned.
     /// - Throws: `ApiError` with `status` 404 when the backend serves no session route: an `Auth` block
     ///   without federated providers, or a custom block that doesn't serve `sessionPath`.
-    ///   `TransferableError.invalidDescriptor` when the response has no `user`. Any other failure,
-    ///   including a `TransportError` or `ClientClosedError`, is thrown and leaves the state and stored
-    ///   tokens as they were.
+    ///   `TransportError` with `statusCode` 200 when the response has no `user`, or one without a
+    ///   `userId` or `username`. Any other failure, including a `TransportError` or `ClientClosedError`,
+    ///   is thrown and leaves the state and stored tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
         let generation = sessionGeneration
@@ -599,10 +599,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
                 name: error.name
             )
         }
-        guard let userJSON = json["user"] as? [String: Any] else {
-            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "user")
+        // No usable result, as for a refresh without an access token.
+        guard let userJSON = json["user"] as? [String: Any], let user = try? OIDCUser.fromJSON(userJSON) else {
+            throw TransportError(message: "Response from \(sessionPath) has no usable user", statusCode: 200)
         }
-        let user = try OIDCUser.fromJSON(userJSON)
         guard generation == sessionGeneration else { return currentUser }
         emit(.signedIn(user))
         return user

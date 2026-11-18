@@ -11,8 +11,8 @@ token when there is one that hasn't expired. `sessionPath` is the descriptor's `
 descriptor names none. On 200 it emits `.signedIn` with the server's user and returns it. On 401 it
 clears stored tokens, emits `.signedOut` and returns `nil`. On 404 (the backend's `Auth` block has
 no federated providers, so it serves no session route) it throws an `ApiError` with `status` 404
-that says so. A response without a `user` throws `TransferableError.invalidDescriptor`, as an
-exchange response's incomplete user does. Any other failure (an `ApiError`, a `TransportError`, a
+that says so. A response without a usable `user` (none, or one without a `userId` or `username`)
+throws a `TransportError` with `statusCode` 200, as a refresh response without an access token does. Any other failure (an `ApiError`, a `TransportError`, a
 `CancellationError` or a `ClientClosedError`) is thrown and leaves the state and stored tokens
 unchanged. A custom block whose method returns an `oidc/client` must now serve that session route
 for `restore()` to work.

@@ -629,28 +629,30 @@ extension OIDCClientTests {
         XCTAssertEqual(events, [])
     }
 
-    func testRestoreWithoutAUserInTheResponseThrowsInvalidDescriptor() async throws {
-        OIDCMockURLProtocol.handler = { request in
-            (okResponse(for: request.url!), Data("{}".utf8))
-        }
-        let client = makeClient(session: makeMockSession())
-
-        let events = await states(of: client) {
-            do {
-                _ = try await client.restore()
-                XCTFail("Expected invalidDescriptor")
-            } catch let error as TransferableError {
-                guard case .invalidDescriptor(let blocksType, let missingField) = error else {
-                    return XCTFail("Expected invalidDescriptor, got \(error)")
-                }
-                XCTAssertEqual(blocksType, "oidc")
-                XCTAssertEqual(missingField, "user")
-            } catch {
-                XCTFail("Expected TransferableError, got \(error)")
+    /// A 2xx session response without a usable user, missing or one `OIDCUser` rejects, is no usable
+    /// result: a `TransportError` with status 200, as for a refresh without an access token.
+    func testRestoreWithoutAUsableUserThrowsATransportError() async throws {
+        for body in [#"{}"#, #"{"user":{"username":"alice"}}"#] {
+            OIDCMockURLProtocol.reset()
+            OIDCMockURLProtocol.handler = { request in
+                (okResponse(for: request.url!), Data(body.utf8))
             }
-        }
+            let client = makeClient(session: makeMockSession())
 
-        XCTAssertEqual(events, [])
+            let events = await states(of: client) {
+                do {
+                    _ = try await client.restore()
+                    XCTFail("Expected TransportError for \(body)")
+                } catch let error as TransportError {
+                    XCTAssertEqual(error.statusCode, 200, body)
+                    XCTAssertTrue(error.message.contains("/auth/session"), error.message)
+                } catch {
+                    XCTFail("Expected TransportError for \(body), got \(error)")
+                }
+            }
+
+            XCTAssertEqual(events, [], body)
+        }
     }
 
     // MARK: - Cancellation
