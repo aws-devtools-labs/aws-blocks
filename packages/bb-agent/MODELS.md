@@ -4,28 +4,19 @@ Model presets, guardrails, health checks, API keys and Bedrock access for [`Agen
 
 ## Bedrock Presets
 
-Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
+A preset names a capability; the model behind it can change between releases. Set one as the model: `model: { deployed: BedrockModels.SMART }`. `BedrockModels` is exported by `@aws-cdk-blocks/bb-agent`.
 
-All the presets are **Anthropic** models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription — see [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
+The presets use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html): a request can be routed to any supported AWS Region. If your workload has data residency requirements, set a region-scoped inference profile as `modelId` instead of a preset.
 
-```typescript
-import { Agent, BedrockModels} from '@aws-cdk-blocks/bb-agent';
-
-const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: BedrockModels.BALANCED,
-  },
-  systemPrompt: '...',
-});
-```
+All the presets are Anthropic models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription: see [Bedrock model access](#bedrock-model-access).
 
 | Preset | Current Model | Notes |
 |--------|---------------|-------|
-| `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Great tool use, balanced cost. Recommended default for most workloads. |
-| `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
-| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
+| `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Default when `model.deployed` is omitted. |
+| `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability. |
+| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency. |
 
-> **Migrating?** `DEFAULT` → `BALANCED` (or `SMART` for highest capability). `BUDGET`/`MICRO` → `FAST`. The old presets are still available but deprecated. Please consider upgrading!
+Deprecated aliases: `DEFAULT` (use `BALANCED`), `BUDGET` and `MICRO` (use `FAST`).
 
 Override inference settings with spread:
 ```typescript
@@ -36,14 +27,13 @@ model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 
 
 Convenience shortcuts for local development using [Ollama](https://ollama.com/). Requires Ollama installed and running (`ollama serve`), model pulled (`ollama pull <model-id>`). Uses the default endpoint `http://localhost:11434/v1`.
 
+Set `model.local` to a preset:
+
 ```typescript
-import { Agent, BedrockModels, OllamaModels} from '@aws-cdk-blocks/bb-agent';
+import { Agent, BedrockModels, OllamaModels } from '@aws-cdk-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
-  model: {
-    deployed: BedrockModels.BALANCED, 
-    local: OllamaModels.SMALL,
-  },
+  model: { deployed: BedrockModels.BALANCED, local: OllamaModels.SMALL },
   systemPrompt: '...',
 });
 ```
@@ -60,7 +50,6 @@ Custom endpoint or specific model? Use `openai-api` directly:
 ```typescript
 model: { local: { provider: 'openai-api', modelId: 'llama3.1:8b', endpoint: 'http://custom-host:11434/v1', apiKey: 'ollama' } }
 ```
-See [Ollama Presets](#ollama-presets) and [Local Development](./README.md#local-development) for more options.
 
 ## Bedrock Guardrails
 
@@ -75,7 +64,7 @@ const agent = new Agent(scope, 'agent', {
 });
 ```
 
-`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS CDK Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The older `guardrails` field is deprecated: no provider ever applied it, and the agent now logs a warning when it is set.
+`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS CDK Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The `guardrails` field (plural) is deprecated: it has no effect, and the agent logs a warning when it is set.
 
 ## Health Checks
 
@@ -85,15 +74,14 @@ Before selecting a model, the agent verifies its availability:
 - **OpenAI-compatible:** Pings `GET /v1/models` and checks if the specified model ID is in the response.
 - **Canned:** Always available (no external dependency).
 
-Health checks verify the model *exists* but cannot guarantee invoke access (e.g., EULA not accepted, Anthropic use case details not submitted, AWS Marketplace subscription not activated, model not available for the account, quota limits). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
+A passing health check shows that the model exists, not that the account may invoke it (for example EULA not accepted, quota limits, or one of the cases in [Bedrock model access](#bedrock-model-access)). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
 
-To see detailed health check logs, pass a logger with `info` level:
+Health-check details are logged at `info`. To see them, pass a logger at that level:
 
 ```typescript
 import { Logger } from '@aws-cdk-blocks/bb-logger';
 
 const agent = new Agent(scope, 'agent', {
-  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: '...',
   logger: new Logger(scope, 'agent-log', { level: 'info' }),
 });
@@ -125,28 +113,38 @@ const agent = new Agent(scope, 'agent', {
 // apiKey: 'sk-...'
 ```
 
-## AWS Credentials (Bedrock)
+## Bedrock model access
 
 The `bedrock` provider uses your configured AWS credentials. See [Strands quickstart](https://strandsagents.com/docs/user-guide/quickstart/typescript/#configuring-credentials) for setup instructions.
 
-**Bedrock invoke permissions are already granted.** The deployed agent's runtime role grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads), so the agent can call any model your account has access to.
+The deployed agent's runtime role grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads), so the agent can call any model your account has access to.
 
-**Most Bedrock models are enabled by default.** Access to most serverless models in Amazon Bedrock is enabled for every account, provided the AWS Marketplace permissions described below are in place for models sold through AWS Marketplace. Two one-time, per-account steps can still stand between a new account and the [Bedrock presets](#bedrock-presets), which are all Anthropic models. See [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+Access to most serverless models in Amazon Bedrock is enabled for every account, provided the AWS Marketplace permissions described below are in place for models sold through AWS Marketplace (see [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)).
 
-**Anthropic models need a one-time use case details form.** First-time customers submit **use case details** once per AWS account, either from the model catalog in the Amazon Bedrock console or with the [`PutUseCaseForModelAccess`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html) API. Submitting it once from an AWS Organizations management account covers its member accounts. Until it is submitted, the agent's health check still passes (the inference profile exists), but invoking the model fails with *"Model use case details have not been submitted for this account"*. After submission, access can take several minutes to become active and invocation may keep returning `AccessDeniedException` meanwhile; [`GetFoundationModelAvailability`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationModelAvailability.html) reports the current status. Models from other providers (for example Amazon Nova or OpenAI gpt-oss) do not need this form. In opt-in Regions the form must be submitted again.
+The [Bedrock presets](#bedrock-presets) are Anthropic models, which need two one-time steps per AWS account: the use case details form and the AWS Marketplace subscription.
 
-**Marketplace-sold models need a one-time subscription.** Models sold through AWS Marketplace — including all Anthropic models — are subscribed for an account the first time they are invoked by a principal that has the `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe`, and `aws-marketplace:ViewSubscriptions` permissions. The agent's runtime role has only the Bedrock invoke permissions above, so until the subscription exists, invoking the model fails with *"… not authorized to perform the required AWS Marketplace actions …"*. Activate it once per account by invoking the model (for example, from the Amazon Bedrock console playground) as a principal with those Marketplace permissions; after that, the runtime role can invoke it.
+Until a step is done, the agent's health check still passes (the inference profile exists) and invoking the model fails.
 
-**"Not available for this account" is an entitlement.** Some models (often the newest ones) are not available to every account; invoking one returns *"… is not available for this account"*, sometimes with a suggestion to contact AWS Sales. Choose a different model or preset, or contact AWS to make the model available to your account.
-
-These invoke-time refusals surface as an `error` chunk carrying an actionable message, and `complete()` rejects with `AgentErrors.ModelUnavailable` (`createChat`'s and `useChat`'s `onError` receive the same branded error as their `cause` argument). A model that fails the health check and has no other candidate also throws `AgentErrors.ModelUnavailable`.
-
-A **global** inference profile (`global.…`, used by the [Bedrock presets](#bedrock-presets)) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles** — a model being usable through a regional profile does not guarantee the global one is. If a preset is reported unavailable but you know the model works in your account, confirm the **`global.`** profile specifically, or pass an explicit regional `modelId` your account can invoke:
+| Invoking the model fails with | Cause | Fix |
+|---|---|---|
+| *"Model use case details have not been submitted for this account"* | Anthropic models need a use case details form, submitted once per AWS account. | Submit it from the model catalog in the Amazon Bedrock console or with the [`PutUseCaseForModelAccess`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html) API. |
+| *"… not authorized to perform the required AWS Marketplace actions …"* | Models sold through AWS Marketplace, including all Anthropic models, need a subscription, activated once per account. The agent's runtime role has only the Bedrock invoke permissions, so it cannot activate it. | Invoke the model once (for example, from the Amazon Bedrock console playground) as a principal with `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions`. After that, the runtime role can invoke it. |
+| *"… is not available for this account"*, sometimes with a suggestion to contact AWS Sales | The model (often one of the newest) is not available to every account. | Choose a different model or preset, or contact AWS to make the model available to your account. |
+| A preset is reported unavailable, but the model works in your account | A global inference profile (`global.…`, used by the presets) and a regional one (`us.…`, `eu.…`, `apac.…`) are separate profiles. Access through one does not guarantee the other. | Confirm access to the `global.` profile, or pass a regional `modelId` your account can invoke, as in the snippet under this table. |
 
 ```typescript
 // Explicit regional profile instead of a global-profile preset
 model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-opus-4-8' } }
 ```
+
+The use case details form:
+
+- Submitting it once from an AWS Organizations management account covers its member accounts.
+- In opt-in Regions it must be submitted again.
+- After submission, access can take several minutes to become active, and invocation may keep returning `AccessDeniedException` meanwhile. [`GetFoundationModelAvailability`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationModelAvailability.html) reports the current status.
+- Models from other providers (for example Amazon Nova or OpenAI gpt-oss) do not need it.
+
+These invoke-time refusals surface as an `error` chunk carrying an actionable message, and `complete()` rejects with `AgentErrors.ModelUnavailable` (`createChat`'s and `useChat`'s `onError` receive the same branded error as their `cause` argument). A model that fails the health check and has no other candidate also throws `AgentErrors.ModelUnavailable`.
 
 ## Bedrock via Mantle
 
