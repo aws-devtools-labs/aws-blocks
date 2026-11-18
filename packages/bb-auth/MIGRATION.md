@@ -424,7 +424,7 @@ Behaviour that changes for your users and your code:
 - **Cognito's default sender sends at most 50 emails a day.** That covers confirmation, password-reset and email-MFA codes, which is enough for development but not for production. To send at volume, give the pool an Amazon SES sender with `email: { fromAddress }` ([README](./README.md#sign-up-and-email-delivery)). Adding it later is an in-place update.
 - **`codeDelivery` runs locally only.** On AWS, Cognito sends the codes; your hook no longer runs there.
 - **The password policy defaults are stricter.** `Auth` requires upper case, lower case, digits and symbols unless you turn them off. `AuthBasic` required none of them. `requireSpecialChars` is now `requireSymbols`. The codemod writes `false` for each of the four your `passwordPolicy` left unset (all four when you set none), so the passwords your users could pick before are still accepted.
-- **The default session lifetime** is 400 days in `Auth` and was 24 hours in `AuthBasic`. The codemod carries `sessionDuration` over when you set it, and writes `session: { ttlSeconds: 86_400 }` when you didn't, so sessions keep lasting 24 hours.
+- **The default session lifetime** is 30 days in `Auth` and was 24 hours in `AuthBasic`. The codemod carries `sessionDuration` over when you set it, and writes `session: { ttlSeconds: 86_400 }` when you didn't, so sessions keep lasting 24 hours.
 - `signIn()` returns `{ status: 'signedIn', user }` or `{ status: 'continueSignIn', nextStep }` instead of the user. `buildApi()` is gone: use `createApi()` with the `Authenticator`. The user type has no `createdAt`.
 - Error names change. See [Error names](#error-names), in particular the split of `InvalidCodeException`.
 
