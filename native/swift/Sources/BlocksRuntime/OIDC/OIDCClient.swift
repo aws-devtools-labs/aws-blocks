@@ -67,6 +67,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// and applies its result only if it is unchanged, so a late result can't overwrite a sign-in or
     /// sign-out that finished meanwhile.
     private var sessionGeneration = 0
+    /// Whether a sign-in, sign-out, restore or refresh is writing the session (tokens, cookie names and the
+    /// emitted state). The actor is reentrant at every token-store call, so these writes take turns through
+    /// ``withSessionWrites(_:)``: one that checked `sessionGeneration` can't be overtaken while it writes.
+    private var sessionWriting = false
+    private var sessionWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
     /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
@@ -377,24 +382,26 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw OIDCError.malformedExchangeResponse
         }
 
-        sessionGeneration += 1
-        // The cookies this block's exchange set: a failed sign-out removes only these when the
-        // descriptor names no `sessionCookieName`.
-        if !cookieNames.isEmpty {
-            await storeToken(Self.sessionCookiesKey, cookieNames.joined(separator: ","))
-        }
-        if let accessToken = json["accessToken"] as? String {
-            await storeToken("access_token", accessToken)
-            if let refreshToken = json["refreshToken"] as? String {
-                await storeToken("refresh_token", refreshToken)
+        return try await withSessionWrites {
+            sessionGeneration += 1
+            // The cookies this block's exchange set: a failed sign-out removes only these when the
+            // descriptor names no `sessionCookieName`.
+            if !cookieNames.isEmpty {
+                await storeToken(Self.sessionCookiesKey, cookieNames.joined(separator: ","))
             }
-            await storeToken("expires_at", Self.expiresAt(json))
-            await storeToken("provider", provider)
-        }
+            if let accessToken = json["accessToken"] as? String {
+                await storeToken("access_token", accessToken)
+                if let refreshToken = json["refreshToken"] as? String {
+                    await storeToken("refresh_token", refreshToken)
+                }
+                await storeToken("expires_at", Self.expiresAt(json))
+                await storeToken("provider", provider)
+            }
 
-        let user = try OIDCUser.fromJSON(userJSON)
-        emit(.signedIn(user))
-        return user
+            let user = try OIDCUser.fromJSON(userJSON)
+            emit(.signedIn(user))
+            return user
+        }
     }
 
     // MARK: - Token refresh
@@ -452,9 +459,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             if let provider = await storedToken("provider") { body["provider"] = provider }
             json = try await client.postRawRoute(path: refreshPath, body: body)
         } catch let error as ApiError where error.status == 400 || error.status == 401 {
-            guard generation == sessionGeneration else { return }
-            await clearTokens()
-            emit(.signedOut)
+            await withSessionWrites {
+                guard generation == sessionGeneration else { return }
+                await clearTokens()
+                emit(.signedOut)
+            }
             return
         }
         guard generation == sessionGeneration else { return }
@@ -464,10 +473,13 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw TransportError(message: "Response from \(refreshPath) has no accessToken", statusCode: 200)
         }
 
-        await storeToken("access_token", accessToken)
-        await storeToken("expires_at", Self.expiresAt(json))
-        if let newRefresh = json["refreshToken"] as? String {
-            await storeToken("refresh_token", newRefresh)
+        await withSessionWrites {
+            guard generation == sessionGeneration else { return }
+            await storeToken("access_token", accessToken)
+            await storeToken("expires_at", Self.expiresAt(json))
+            if let newRefresh = json["refreshToken"] as? String {
+                await storeToken("refresh_token", newRefresh)
+            }
         }
     }
 
@@ -504,17 +516,21 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         } catch {
             // The server didn't end the session (or, for `SignOutIncompleteException`, only cleared the
             // cookie), so sign out locally: this block's tokens and session cookie go, then the error.
-            sessionGeneration += 1
-            if !Self.isSignOutIncomplete(error) {
-                await removeSessionCookies()
+            await withSessionWrites {
+                sessionGeneration += 1
+                if !Self.isSignOutIncomplete(error) {
+                    await removeSessionCookies()
+                }
+                await clearTokens()
+                emit(.signedOut)
             }
-            await clearTokens()
-            emit(.signedOut)
             throw error
         }
-        sessionGeneration += 1
-        await clearTokens()
-        emit(.signedOut)
+        await withSessionWrites {
+            sessionGeneration += 1
+            await clearTokens()
+            emit(.signedOut)
+        }
         return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
     }
 
@@ -566,10 +582,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         do {
             json = try await client.getRawRoute(path: sessionPath, headers: headers)
         } catch let error as ApiError where error.status == 401 {
-            guard generation == sessionGeneration else { return currentUser }
-            await clearTokens()
-            emit(.signedOut)
-            return nil
+            return await withSessionWrites {
+                guard generation == sessionGeneration else { return currentUser }
+                await clearTokens()
+                emit(.signedOut)
+                return nil
+            }
         } catch let error as ApiError where error.status == 404 {
             throw ApiError(
                 message: "\(sessionPath) answered HTTP 404: the backend serves no session route at that path. "
@@ -592,6 +610,26 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private var currentUser: OIDCUser? {
         if case .signedIn(let user) = authState { return user }
         return nil
+    }
+
+    /// Runs `body` once no other session write is running, then lets the next one in, in arrival order.
+    /// Every write that bumps or checks `sessionGeneration` and then awaits the token store goes through
+    /// here, so its check still holds when it emits.
+    private func withSessionWrites<T>(_ body: () async throws -> T) async rethrows -> T {
+        if sessionWriting {
+            // Handed the turn by the writer before it: `sessionWriting` stays true.
+            await withCheckedContinuation { sessionWriteWaiters.append($0) }
+        } else {
+            sessionWriting = true
+        }
+        defer {
+            if sessionWriteWaiters.isEmpty {
+                sessionWriting = false
+            } else {
+                sessionWriteWaiters.removeFirst().resume()
+            }
+        }
+        return try await body()
     }
 
     // MARK: - AuthProvider
@@ -738,7 +776,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private static func expiresAt(_ json: [String: Any]) -> String {
         if let seconds = json["expiresIn"] as? NSNumber {
             let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
-            return String(nowMs + Int64(seconds.doubleValue * 1_000))
+            // An `expiresIn` too large (or not finite) for epoch milliseconds would trap, so it reads as
+            // expired instead.
+            guard let lifetimeMs = Int64(exactly: (seconds.doubleValue * 1_000).rounded()) else { return "0" }
+            let (expiresAt, overflow) = nowMs.addingReportingOverflow(lifetimeMs)
+            return overflow ? "0" : String(expiresAt)
         }
         if let number = json["expiresAt"] as? NSNumber { return number.stringValue }
         if let str = json["expiresAt"] as? String { return str }
