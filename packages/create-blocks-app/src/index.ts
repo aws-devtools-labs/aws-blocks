@@ -337,6 +337,56 @@ function mayIgnore(pattern: string, name: string): boolean {
 }
 
 /**
+ * How the `.gitignore` lines treat a directory called `name` at the project
+ * root: `'ignored'`, `'unignored'` (a negated line reverses the match, an
+ * explicit choice to keep it), or `undefined` when no line matches.
+ *
+ * Git applies the last matching line per path, and can't re-include a file
+ * whose parent directory is excluded. So the directory itself (`name`, `name/`,
+ * a bare `*`) and its contents (`name/*`, `name/**`) are tracked apart:
+ * `!name/*` re-includes the contents after `name/*`, but changes nothing after
+ * `name`, which excludes the directory.
+ *
+ * Only literal forms count: those above, with an optional leading `/` or
+ * double-star segment. Unlike {@link mayIgnore}, this check is biased towards
+ * no match, so the caller adds the line: a wrong match leaves `name`
+ * unignored, while a duplicate line is harmless. So globs and character
+ * classes (`[!n]ode_modules`, `n*s`) do not count, nor does a line with
+ * leading whitespace or a trailing tab, which git reads as part of the pattern,
+ * nor a negation that reverses no earlier match. Pass the raw lines; a pattern
+ * for a path below the root (`packages/site/node_modules`) does not count
+ * either.
+ */
+function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'unignored' | undefined {
+  let directory: 'ignored' | 'unignored' | undefined;
+  let contents: 'ignored' | 'unignored' | undefined;
+  for (const raw of lines) {
+    // Git strips trailing spaces (unless escaped), but not tabs or leading spaces.
+    // A loop rather than / +$/, which backtracks quadratically on a long run of spaces.
+    let end = raw.length;
+    while (end > 0 && raw[end - 1] === ' ') end--;
+    const line = raw.slice(0, end);
+    if (!line || line.startsWith('#')) continue;
+    const negated = line.startsWith('!');
+    const path = (negated ? line.slice(1) : line).replace(/^(\*\*\/|\/)/, '');
+    if (path === name || path === `${name}/`) {
+      directory = negated ? 'unignored' : 'ignored';
+    } else if (path === `${name}/*` || path === `${name}/**`) {
+      if (!negated) contents = 'ignored';
+      // Re-including the contents works only while the directory itself isn't excluded.
+      else if (contents === 'ignored' && directory !== 'ignored') contents = 'unignored';
+    } else if (path === '*' || path === '*/') {
+      // `!*` or `!*/` (an allow-list re-including directories) is no choice about `name`.
+      directory = negated ? undefined : 'ignored';
+      if (negated) contents = undefined;
+    }
+  }
+  if (directory === 'ignored' || contents === 'ignored') return 'ignored';
+  if (directory === 'unignored' || contents === 'unignored') return 'unignored';
+  return undefined;
+}
+
+/**
  * Adds the aws-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
@@ -345,7 +395,8 @@ function mayIgnore(pattern: string, name: string): boolean {
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
  * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
- * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES}
+ * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES},
+ *   and `node_modules` when no existing line ignores or un-ignores it (these steps add dependencies)
  * - Monorepo detection and file: path rewriting
  * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
  *   (published CLI only; a range the project already lists in `dependencies`
@@ -454,10 +505,20 @@ async function addBlocksWorkspace(targetDir: string, options: {
     const name = exception.slice(1).replace(/\/$/, '');
     return !patterns.some(pattern => mayIgnore(pattern, name));
   });
-  if (toAdd.length > 0 || secretsToAdd.length > 0) {
+  // The dependencies added above make the next install create `node_modules`.
+  // The templates ignore it in their `gitignore`; a project that has no line
+  // for it (often one with no `.gitignore` at all) gets the same. A project
+  // that un-ignores it (vendored dependencies) is left as it is.
+  const nodeModulesState = rootDirectoryIgnoreState(gitignore.split(/\r?\n/), 'node_modules');
+  if (nodeModulesState === 'unignored') {
+    console.log('  ℹ Left node_modules as your .gitignore configures it (un-ignored)');
+  }
+  const dependencyLines = nodeModulesState === undefined ? ['node_modules'] : [];
+  if (dependencyLines.length > 0 || toAdd.length > 0 || secretsToAdd.length > 0) {
     // Keep a CRLF file CRLF: appending LF-only lines would mix line endings.
     const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
     const secretLines = secretsToAdd.length > 0 ? [...secretsToAdd, ...exceptions] : [];
+    if (dependencyLines.length > 0) gitignore += `${eol}# Dependencies${eol}${dependencyLines.join(eol)}${eol}`;
     if (toAdd.length > 0) gitignore += `${eol}# AWS Blocks${eol}${toAdd.join(eol)}${eol}`;
     if (secretLines.length > 0) {
       gitignore += `${eol}# Secrets and key material — never commit${eol}${secretLines.join(eol)}${eol}`;
@@ -465,7 +526,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     await writeFile(gitignorePath, gitignore);
     // These lines change what the project ignores (`.env.*` also covers
     // `.env.development` / `.env.production`), so list them.
-    console.log(`  ✓ Modified .gitignore (+${[...toAdd, ...secretLines].join(', ')})`);
+    console.log(`  ✓ Modified .gitignore (+${[...dependencyLines, ...toAdd, ...secretLines].join(', ')})`);
   }
 
   // Install dependencies
@@ -726,7 +787,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries and secret and key-material patterns)');
+  console.log('  MODIFY  .gitignore            (adds Blocks entries, node_modules if missing, and secret and key-material patterns)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -968,7 +1029,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  CREATE  aws-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries and secret and key-material patterns)');
+  console.log('  MODIFY  .gitignore            (adds Blocks entries, node_modules if missing, and secret and key-material patterns)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
