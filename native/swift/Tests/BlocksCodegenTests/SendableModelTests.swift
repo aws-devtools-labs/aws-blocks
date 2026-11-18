@@ -164,6 +164,34 @@ final class SendableModelTests: XCTestCase {
         #endif
     }
 
+    /// A union whose arms are component schemas (`$ref Joined | $ref Full`) stores those schemas, so it takes their
+    /// top-level answer: an operation's enum declares nothing named `Joined` for the arm.
+    private var refArmResult: (schemas: String, method: String) {
+        func arm(_ status: String, _ field: String, _ schema: String) -> String {
+            let props = #""status": { "type": "string", "enum": ["\#(status)"] }, "\#(field)": \#(schema)"#
+            return #"{ "type": "object", "properties": { \#(props) }, "required": ["status", "\#(field)"] }"#
+        }
+        let schemas = """
+        { "Joined": \(arm("joined", "channel", channel)), "Full": \(arm("full", "reason", #"{ "type": "string" }"#)) }
+        """
+        let ref = { (name: String) in ##"{ "$ref": "#/components/schemas/\##(name)" }"## }
+        let method = #"{ "name": "chat.join", "params": [], "result": { "name": "R", "schema": { "oneOf": [\#(ref("Joined")), \#(ref("Full"))] } } }"#
+        return (schemas, method)
+    }
+
+    func testAUnionOfComponentArmsTakesTheirAnswer() throws {
+        let output = try generate(methods: [refArmResult.method], schemas: refArmResult.schemas)
+
+        assertContains(output.models, "public nonisolated struct Joined: Codable {")
+        assertContains(output.api, "public enum Result: Codable {")
+        #if os(macOS)
+        try typecheckConsumer(
+            models: output.models, api: output.api, consumer: "import Generated\n",
+            moduleFlags: ["-swift-version", "6", "-warnings-as-errors"]
+        )
+        #endif
+    }
+
     /// A generated type named `Sendable` hides the protocol in its scope, so the conformance is spelled `Swift.Sendable`.
     func testATypeNamedSendableQualifiesTheConformance() throws {
         let inner = #"{ "type": "object", "properties": { "x": { "type": "string" } }, "required": ["x"] }"#

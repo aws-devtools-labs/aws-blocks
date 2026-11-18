@@ -65,7 +65,8 @@ extension SwiftCodeGenerator {
             case .union(let unionName, let variants, _):
                 let declared = name ?? unionName
                 declarations.append(Declaration(scope: scope, name: declared, stored: [.union(name: declared, variants: variants, discriminator: nil)]))
-                for variant in variants {
+                // An arm that carries a named type (`$ref Joined`) declares nothing here; it stores that type.
+                for variant in variants where variant.payloadTypeName == nil {
                     let stored = variant.fields.map(\.type)
                         + [variant.additionalPropertiesType, variant.embeddedUnion].compactMap { $0 }
                     declarations.append(Declaration(scope: scope, name: variant.name, stored: stored))
@@ -133,7 +134,7 @@ extension SwiftCodeGenerator {
                     || additionalPropertiesType.map(check) == true || embeddedUnion.map(check) == true
             case .union(let name, let variants, _):
                 return names(name) || variants.contains { variant in
-                    names(variant.name) || variant.payloadTypeName.map(names) == true
+                    variant.payloadTypeName.map(names) ?? names(variant.name)
                         || variant.valueType.map(check) == true
                 }
             case .list(let element, _): return check(element)
