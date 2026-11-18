@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -49,5 +49,25 @@ void describe('getProjectPackageInfo', () => {
     writePkg(app, '@nuxt/image', '1.0.0');
     assert.strictEqual(projectHasPackage('@nuxt/image', app), true);
     assert.strictEqual(projectHasPackage('@nuxt/not-installed', app), false);
+  });
+
+  void it('finds no package the app lacks, without printing an error', () => {
+    // local-pkg prints, with console.error, any resolve error other than
+    // "module not found". A lookup that fails on the file system shows the
+    // user a stack trace, although the answer ("not installed") is right.
+    const printed = mock.method(console, 'error', () => undefined);
+    try {
+      assert.strictEqual(
+        getProjectPackageInfo('@nuxt/not-installed', app),
+        undefined,
+      );
+      assert.strictEqual(projectHasPackage('@nuxt/not-installed', app), false);
+    } finally {
+      printed.mock.restore();
+    }
+    assert.deepStrictEqual(
+      printed.mock.calls.map((call) => String(call.arguments[0])),
+      [],
+    );
   });
 });
