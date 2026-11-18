@@ -18,6 +18,9 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages, remapItemTooLarge } from './errors.js';
 import {
+	assertNoDuplicateKeys,
+	BATCH_GET_MAX_KEYS,
+	BATCH_WRITE_MAX_REQUESTS,
 	createReader,
 	decodeCursor,
 	deleteCondition,
@@ -65,13 +68,10 @@ export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-// DynamoDB batch API limits and retry tuning.
-// BatchGetItem accepts up to 100 keys per call; BatchWriteItem up to 25 requests.
-// Both can return UnprocessedKeys/UnprocessedItems on partial success (e.g. throttling
+// DynamoDB batch retry tuning. The per-request sizes are shared with the mock in item.ts.
+// Both batch APIs can return UnprocessedKeys/UnprocessedItems on partial success (e.g. throttling
 // or the 16 MB response cap), which the caller must resubmit with backoff.
 // See: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html#Programming.Errors.BatchOperations
-const BATCH_GET_MAX_KEYS = 100;
-const BATCH_WRITE_MAX_REQUESTS = 25;
 const MAX_BATCH_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 50;
 const MAX_BACKOFF_MS = 5000;
@@ -445,6 +445,7 @@ export class KVStore<
 		const results = new Map<string, Item>();
 		const tableName = getSdkIdentifiers(this).tableName;
 		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'getBatch', keyAttrs, BATCH_GET_MAX_KEYS);
 
 		for (const chunk of chunked(keyAttrs, BATCH_GET_MAX_KEYS)) {
 			await this.retryUnprocessed('getBatch', chunk, async (pendingKeys) => {
@@ -485,9 +486,13 @@ export class KVStore<
 	 */
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
 		const items: Item[] = [];
+		const keyAttrs: Record<string, KeyValue>[] = [];
 		for (const entry of entries) {
-			items.push((await prepareItem(this.model, entry.key, entry.value, presentOptions(entry))).item);
+			const prepared = await prepareItem(this.model, entry.key, entry.value, presentOptions(entry));
+			items.push(prepared.item);
+			keyAttrs.push(prepared.keyAttrs);
 		}
+		assertNoDuplicateKeys(this.model, 'putBatch', keyAttrs, BATCH_WRITE_MAX_REQUESTS);
 		const tableName = getSdkIdentifiers(this).tableName;
 
 		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
@@ -525,6 +530,7 @@ export class KVStore<
 	async deleteBatch(keys: KeyOf<Out, K>[]): Promise<void> {
 		const tableName = getSdkIdentifiers(this).tableName;
 		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'deleteBatch', keyAttrs, BATCH_WRITE_MAX_REQUESTS);
 
 		for (const chunk of chunked(keyAttrs, BATCH_WRITE_MAX_REQUESTS)) {
 			await this.retryUnprocessed(

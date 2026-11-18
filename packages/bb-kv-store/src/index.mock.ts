@@ -9,6 +9,9 @@ import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
+	assertNoDuplicateKeys,
+	BATCH_GET_MAX_KEYS,
+	BATCH_WRITE_MAX_REQUESTS,
 	compareByBaseKey,
 	compareKeyValues,
 	createReader,
@@ -31,6 +34,7 @@ import {
 	serializeKey,
 	valueCheckHolds,
 } from './item.js';
+import { dynamoItemSize } from './item-size.js';
 import { loadMockFile, saveMockFile } from './mock-file.js';
 import { nowEpochSeconds } from './ttl.js';
 import type {
@@ -74,14 +78,6 @@ const MAX_ITEM_BYTES = 400 * 1024; // DynamoDB 400 KB limit
  */
 function marshalledCopy(item: Item): Item {
 	return unmarshall(marshall(item, MARSHALL_OPTIONS));
-}
-
-/** The JSON size of an item, counting a Set by its elements (`JSON.stringify` writes a Set as `{}`). */
-function itemBytes(item: Item): number {
-	return Buffer.byteLength(
-		JSON.stringify(item, (_field, value) => (value instanceof Set ? [...value] : value)),
-		'utf8',
-	);
 }
 
 /** A copy of a stored item to hand to a reader, so a caller changing what it read cannot change the store. */
@@ -431,14 +427,11 @@ export class KVStore<
 	 * ```
 	 */
 	async getBatch(keys: KeyOf<Out, K>[]): Promise<(Out | null)[]> {
+		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'getBatch', keyAttrs, BATCH_GET_MAX_KEYS);
 		const now = nowEpochSeconds();
 		return Promise.all(
-			keys.map((key) =>
-				this.reader.value(
-					readCopy(this.data.get(serializeKey(this.model, normalizeKey(this.model, key)))),
-					now,
-				),
-			),
+			keyAttrs.map((attrs) => this.reader.value(readCopy(this.data.get(serializeKey(this.model, attrs))), now)),
 		);
 	}
 
@@ -461,10 +454,16 @@ export class KVStore<
 	 * ```
 	 */
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
-		const prepared: { keyStr: string; item: Item }[] = [];
+		const prepared: { keyAttrs: Record<string, KeyValue>; keyStr: string; item: Item }[] = [];
 		for (const entry of entries) {
 			prepared.push(await this.prepareWrite(entry.key, entry.value, presentOptions(entry)));
 		}
+		assertNoDuplicateKeys(
+			this.model,
+			'putBatch',
+			prepared.map((p) => p.keyAttrs),
+			BATCH_WRITE_MAX_REQUESTS,
+		);
 		for (const { keyStr, item } of prepared) this.data.set(keyStr, item);
 		this.flushToDisk();
 	}
@@ -484,8 +483,9 @@ export class KVStore<
 	 */
 	async deleteBatch(keys: KeyOf<Out, K>[]): Promise<void> {
 		// Check every key first, so that one bad key does not leave the batch half applied.
-		const keyStrs = keys.map((key) => serializeKey(this.model, normalizeKey(this.model, key)));
-		for (const keyStr of keyStrs) this.data.delete(keyStr);
+		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'deleteBatch', keyAttrs, BATCH_WRITE_MAX_REQUESTS);
+		for (const attrs of keyAttrs) this.data.delete(serializeKey(this.model, attrs));
 		this.flushToDisk();
 	}
 
@@ -536,14 +536,14 @@ export class KVStore<
 		key: KeyOf<Out, K>,
 		value: unknown,
 		expiry: Expiry | undefined,
-	): Promise<{ keyStr: string; item: Item }> {
+	): Promise<{ keyAttrs: Record<string, KeyValue>; keyStr: string; item: Item }> {
 		const { keyAttrs, item } = await prepareItem(this.model, key, value, expiry);
 		const stored = marshalledCopy(item);
-		const bytes = itemBytes(stored);
+		const bytes = dynamoItemSize(stored);
 		if (bytes > MAX_ITEM_BYTES) {
 			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
 		}
-		return { keyStr: serializeKey(this.model, keyAttrs), item: stored };
+		return { keyAttrs, keyStr: serializeKey(this.model, keyAttrs), item: stored };
 	}
 
 	/**
