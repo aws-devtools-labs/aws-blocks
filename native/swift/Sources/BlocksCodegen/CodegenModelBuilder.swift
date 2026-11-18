@@ -306,11 +306,12 @@ public struct CodegenModelBuilder {
                 }()
                 let oldNode = buildNestedTypeNodes(from: added).first { $0.name == oldRoot }
                 let addedNames = Set(added.map(\.shortName))
-                // Only a discriminated union is shared: a transparent union's cases are named after the union
-                // (`to_Variant0`), so its old case names couldn't be kept. A type the operation's root scope
-                // declares under the shared name (`figure: { label }` → `Place.Figure`) would hide it from the
+                // Only a union whose every arm is a discriminated object is shared: any other arm's case is named
+                // after the union (`to_Variant2`), so its old case name couldn't be kept. A type the operation's root
+                // scope declares under the shared name (`figure: { label }` → `Place.Figure`) would hide it from the
                 // aliases, so the parameter keeps its nested type then too.
-                if case .union(_, _, let discriminator?) = shared, !discriminator.fieldName.isEmpty,
+                if case .union(_, let variants, let discriminator?) = shared, !discriminator.fieldName.isEmpty,
+                   variants.allSatisfy({ $0.discriminatorValue != nil }),
                    let oldRoot, !addedNames.contains(typeName), rootClaims[typeName] == "#type:\(typeName)",
                    let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }),
                    oldNode != nil || aliasTargets[oldRoot] == typeName {

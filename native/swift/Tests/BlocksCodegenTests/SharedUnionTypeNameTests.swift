@@ -241,6 +241,31 @@ final class SharedUnionTypeNameTests: XCTestCase {
         #endif
     }
 
+    /// A discriminated union with a value arm (`{ action: "user" } | { action: "group" } | string`) names that arm's
+    /// case after the union (`to_Variant2`), so sharing it would rename the case under the old names; it keeps its
+    /// nested type.
+    func testADiscriminatedUnionWithAValueArmIsNotShared() throws {
+        let union = #"{ "oneOf": [\#(arm("user", ["id"])), \#(arm("group", ["id"])), { "type": "string" }], "x-blocks-type-name": "Recipient" }"#
+        let params = #"[{ "name": "to", "required": true, "schema": \#(union) }]"#
+        let method = #"{ "name": "api.send", "params": \#(params), "result": { "name": "R", "schema": { "type": "string" } } }"#
+        let output = try generate([method])
+
+        assertNotContains(output.models, "Recipient")
+        assertContains(output.api, "public func send(to: Send.To) async throws -> String {")
+        #if os(macOS)
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+
+            let old: Api.Send.To = .to_Variant2("everyone")
+            func call(_ api: Api) async throws { _ = try await api.send(to: old) }
+            """,
+            moduleFlags: ["-swift-version", "6", "-warnings-as-errors"]
+        )
+        #endif
+    }
+
     /// A union without a discriminator names its cases after the union (`input_Variant0`), so sharing it would rename
     /// them under the old names; it keeps its nested type.
     func testAUnionWithoutADiscriminatorIsNotShared() throws {
