@@ -109,6 +109,11 @@ class FlutterBrowserLauncher implements BrowserLauncher {
     final limit = timeout;
     Timer? deadline;
     try {
+      // A `cancel` that has already completed only runs its callback after
+      // this point, so let it run, and don't open the browser for a launch
+      // that is already cancelled.
+      if (cancel != null) await Future<void>.delayed(Duration.zero);
+      if (redirect.isCompleted) return await redirect.future;
       if (!await launchUrl(
         authorizeUrl,
         mode: LaunchMode.externalApplication,

@@ -119,6 +119,24 @@ void main() {
       expect(links.hasListener, isFalse);
     });
 
+    test(
+      'a cancel that completed before the launch opens no browser',
+      () async {
+        final launcher = FlutterBrowserLauncher(appLinks: appLinks);
+
+        await expectLater(
+          launcher.launch(
+            _authorizeUrl,
+            callbackScheme: 'myapp',
+            cancel: Future<void>.value(),
+          ),
+          throwsA(isA<OidcCancelledException>()),
+        );
+        expect(opened.isCompleted, isFalse);
+        expect(links.hasListener, isFalse);
+      },
+    );
+
     test('a cancel after the redirect changes nothing', () async {
       final cancel = Completer<void>();
       final launcher = FlutterBrowserLauncher(appLinks: appLinks);

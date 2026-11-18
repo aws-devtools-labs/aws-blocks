@@ -225,7 +225,7 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 
 A sign-in that ends without a redirect throws `OidcCancelledException`, on every platform:
 
-- Pass `cancel:` to `signIn` or `signInDirect` to stop waiting early, for example when the user closes the sign-in dialog: `signIn('google', cancel: dialogClosed.future)`. When it completes before the redirect arrives, the client stops waiting, the loopback listener closes, and a launcher gets the same `cancel` future so it can stop too.
+- Pass `cancel:` to `signIn` or `signInDirect` to stop waiting early, for example when the user closes the sign-in dialog: `signIn(OidcApiGetClientProvider.google, cancel: dialogClosed.future)`. When it completes before the redirect arrives, the client stops waiting, the loopback listener closes, and a launcher gets the same `cancel` future so it can stop too.
 - `FlutterBrowserLauncher` throws it when the app comes back to the foreground without a redirect, which is how it notices that the user closed the browser, and once its optional `timeout` passes: `FlutterBrowserLauncher(timeout: const Duration(minutes: 5))`.
 - The loopback sign-in throws it once `oidc.signInTimeout` passes.
 - A custom `BrowserLauncher` should throw it when its browser is dismissed.
