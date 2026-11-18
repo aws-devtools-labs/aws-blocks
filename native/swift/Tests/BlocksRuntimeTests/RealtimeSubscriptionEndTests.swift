@@ -373,6 +373,25 @@ final class RealtimeSubscriptionEndTests: XCTestCase {
         }
     }
 
+    func testCloseDuringSubscribeLeavesNoListenerOnThePool() async {
+        // `close()` lands after `subscribe()` registers its listener and before the listener joins the socket.
+        let harness = FakeRealtimeHarness()
+        let channel = harness.channel("c")
+        channel.afterRegisteringListener = { channel.close() }
+
+        // Held for the whole test: releasing the stream would run a late termination handler and hide the leak.
+        let stream = channel.subscribe()
+        let recorder = StreamRecorder(stream)
+
+        guard case .finished? = await recorder.ended() else {
+            return XCTFail("Expected a normal finish, got \(String(describing: recorder.end))")
+        }
+        await waitUntil("the socket closes") { harness.sockets.first?.isCancelled ?? true }
+        XCTAssertEqual(harness.session.connectionCount, 0, "a listener left on the pool keeps the socket open")
+        await waitUntil("the keep-alive stops") { harness.clock.pendingDurations.isEmpty }
+        withExtendedLifetime(stream) {}
+    }
+
     func testCloseLeavesOtherHandlesOnTheSocketOpen() async {
         let harness = FakeRealtimeHarness()
         let closing = harness.channel("a")

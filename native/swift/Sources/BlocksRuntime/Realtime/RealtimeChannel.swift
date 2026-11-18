@@ -140,6 +140,9 @@ public final class RealtimeChannel<T> {
     private let lock = NSLock()
     private var activeListeners: [ChannelListener<T>] = []
 
+    /// Runs in `subscribe()` after the listener is registered and before it joins the socket. For tests.
+    var afterRegisteringListener: (() -> Void)?
+
     /// Creates a RealtimeChannel.
     ///
     /// - Parameters:
@@ -294,9 +297,12 @@ public final class RealtimeChannel<T> {
     /// the stream with `RealtimeError.subscriptionEnded`.
     ///
     /// Subscriptions on the same `wsUrl` share one WebSocket, whatever their channel. When a channel's last
-    /// subscription on that socket ends and other channels keep it open, the SDK sends an unsubscribe for the channel. While it has a subscriber, the SDK sends the
-    /// keep-alive `{"action":"ping"}` every 9 minutes, as the web client does. The server re-checks each subscription
-    /// on that ping, and that is how an expired or revoked one is reported.
+    /// subscription on that socket ends and other channels keep it open, the SDK sends an unsubscribe for the
+    /// channel.
+    ///
+    /// While it has a subscriber, the SDK sends the keep-alive `{"action":"ping"}` every 9 minutes, as the web
+    /// client does. The server re-checks each subscription on that ping, and that is how an expired or revoked one is
+    /// reported.
     ///
     /// The stream finishes normally only when the app cancels its iteration or calls ``close()``. Otherwise it
     /// finishes throwing:
@@ -328,6 +334,16 @@ public final class RealtimeChannel<T> {
                 continuation: continuation
             )
 
+            // Set before the listener is registered, so `close()` can't finish the stream before the handler exists.
+            // A handler set after the stream finished doesn't run when it finishes.
+            continuation.onTermination = { @Sendable _ in
+                listener.markTerminated()
+                self.lock.lock()
+                self.activeListeners.removeAll { $0 === listener }
+                self.lock.unlock()
+                webSocketSession.release(wsUrl: wsUrl, listener: listener)
+            }
+
             self.lock.lock()
             if self.closed {
                 self.lock.unlock()
@@ -336,19 +352,17 @@ public final class RealtimeChannel<T> {
             }
             self.activeListeners.append(listener)
             self.lock.unlock()
-
-            // Set before acquiring, so every end, including one that happens during acquire, leaves the pool.
-            continuation.onTermination = { @Sendable _ in
-                self.lock.lock()
-                self.activeListeners.removeAll { $0 === listener }
-                self.lock.unlock()
-                webSocketSession.release(wsUrl: wsUrl, listener: listener)
-            }
+            self.afterRegisteringListener?()
 
             do {
                 try webSocketSession.acquire(wsUrl: wsUrl, listener: listener)
             } catch {
                 continuation.finish(throwing: error)
+                return
+            }
+            // A stream that ended before acquire released a listener that hadn't joined yet. Release it now.
+            if listener.isTerminated {
+                webSocketSession.release(wsUrl: wsUrl, listener: listener)
             }
         }
     }
@@ -382,6 +396,7 @@ private final class ChannelListener<T>: RealtimeSocketListener {
     private let channelName: String
     private let lock = NSLock()
     private var serverEnded = false
+    private var terminated = false
     private let channelToken: String
     private let deserializer: (Data) throws -> T
     private let continuation: AsyncThrowingStream<T, Error>.Continuation
@@ -404,6 +419,20 @@ private final class ChannelListener<T>: RealtimeSocketListener {
         lock.lock()
         defer { lock.unlock() }
         return !serverEnded
+    }
+
+    /// Whether the stream has ended and its termination handler ran.
+    var isTerminated: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminated
+    }
+
+    /// Records that the stream ended. Called by the termination handler before it releases the listener.
+    func markTerminated() {
+        lock.lock()
+        terminated = true
+        lock.unlock()
     }
 
     /// Ends the stream normally. Used by `RealtimeChannel.close()`.
