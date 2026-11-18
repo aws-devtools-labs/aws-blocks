@@ -252,8 +252,8 @@ A Flutter app needs no code for this. Add the dependency:
 
 ```yaml
 dependencies:
-  blocks_runtime: ^1.0.0
-  blocks_runtime_flutter: ^1.0.0
+  blocks_runtime: ^0.2.0
+  blocks_runtime_flutter: ^0.2.0
 ```
 
 and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
