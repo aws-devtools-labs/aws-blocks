@@ -27,6 +27,11 @@ const _sameQuery: Same<KVStore<string>['query'], AwsKVStore<string>['query']> = 
 void _sameGet;
 void _samePut;
 void _sameQuery;
+type Post = { userId: string; postId: string; title: string; tags?: string[]; scores: number[] };
+type PostKey = { partitionKey: 'userId'; sortKey: 'postId' };
+const _sameAppend: Same<KVStore<Post, Post, PostKey>['appendToList'], AwsKVStore<Post, Post, PostKey>['appendToList']> =
+	true;
+void _sameAppend;
 const _sameLegacyGet: Same<LegacyKVStore<string>['get'], AwsLegacyKVStore<string>['get']> = true;
 const _sameLegacyPut: Same<LegacyKVStore<string>['put'], AwsLegacyKVStore<string>['put']> = true;
 const _sameLegacyScan: Same<LegacyKVStore<string>['scan'], AwsLegacyKVStore<string>['scan']> = true;
@@ -364,6 +369,23 @@ async function _contract() {
 	// @ts-expect-error the options are those of a release up to 0.4.0, which has no `protection`
 	new LegacyKVStore(scope, 'bad', { protection: 'retained' });
 
+	// appendToList takes a list field and its element type, and returns the list.
+	const posts = new KVStore(scope, 'posts', {
+		schema: schemaOf<Post>(),
+		key: { partitionKey: 'userId', sortKey: 'postId' },
+	});
+	const postKey = { userId: 'u', postId: 'p' };
+	const tags: string[] = await posts.appendToList(postKey, 'tags', ['a']);
+	const scores: number[] = await posts.appendToList(postKey, 'scores', [1, 2]);
+	void tags;
+	void scores;
+	// @ts-expect-error title is not a list field
+	await posts.appendToList(postKey, 'title', ['x']);
+	// @ts-expect-error the items of tags are strings
+	await posts.appendToList(postKey, 'tags', [1]);
+	// @ts-expect-error a string store has no list field
+	await cache.appendToList('greeting', 'x', ['a']);
+
 	// A rewrite keeps the expiry of each item.
 	for await (const { key, value, expiresAt } of cache.scan()) {
 		await cache.put(key, value.trim(), { ifValueEquals: value, expiresAt });
@@ -372,7 +394,7 @@ async function _contract() {
 	void user;
 }
 
-test('the public types compile with their 51 rejections', () => {
+test('the public types compile with their 54 rejections', () => {
 	// The contract above is checked by the compiler; this test only records that the file built.
 	assert.strictEqual(typeof _contract, 'function');
 });

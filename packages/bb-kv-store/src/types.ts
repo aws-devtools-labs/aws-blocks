@@ -223,6 +223,26 @@ export type ConditionalDeleteOptions<T = unknown> = {
 /** One entry of a `putBatch`: the key (typed from the output type), the value (the input type), and an optional expiry. */
 export type PutBatchEntry<In, Out, K> = { key: KeyOf<Out, K>; value: ValueOf<In, K> } & Expiry;
 
+/**
+ * List fields: the fields that `appendToList` can append to. The field holds an
+ * array in both the value that is stored and the value that a read returns. It
+ * can be optional: `appendToList` starts the list when the field is absent.
+ */
+export type ListField<In, Out> =
+	IsRecord<Out> extends true
+		? {
+				[P in SharedField<In, Out>]-?: [NonNullable<Out[P]> | NonNullable<In[P]>] extends [readonly unknown[]]
+					? P
+					: never;
+			}[SharedField<In, Out>]
+		: never;
+
+/** The element type of the list field `F` of `T`: the type of one item that `appendToList` takes. */
+export type ListItemOf<T, F> = F extends keyof T ? (NonNullable<T[F]> extends readonly (infer E)[] ? E : never) : never;
+
+/** The type of the list field `F` of `T`: what `appendToList` returns. */
+export type ListOf<T, F> = F extends keyof T ? NonNullable<T[F]> : never;
+
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /** Options for `get()`. */

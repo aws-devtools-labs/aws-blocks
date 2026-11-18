@@ -1100,3 +1100,180 @@ describe('the mock measures item size the way DynamoDB does', () => {
 		await store.put({ id: '1' }, { blob: 'x'.repeat(409_600 - 7 - 7), note: undefined, meta: { tag: undefined } });
 	});
 });
+
+// ── appendToList ────────────────────────────────────────────────────────────
+
+describe('appendToList', () => {
+	const options = {
+		schema: z.object({
+			userId: z.string(),
+			postId: z.string(),
+			title: z.string(),
+			status: z.string().optional(),
+			expiresAt: z.number().optional(),
+			tags: z.array(z.string().min(1)).optional(),
+			counts: z.number().optional(),
+		}),
+		key: { partitionKey: 'userId', sortKey: 'postId' },
+		indexes: { byStatus: { partitionKey: 'status' } },
+		ttl: 'expiresAt',
+	};
+	const key = { userId: 'u1', postId: 'p1' };
+
+	test('the mock appends atomically, starts an absent list, and returns the new list', async () => {
+		const scope = testScope();
+		const mock = new KVStore(scope, 'append-mock', options as never) as any;
+		await mock.put(key, { title: 'T' });
+		assert.deepEqual(await mock.appendToList(key, 'tags', ['a']), ['a']);
+		assert.deepEqual(await mock.appendToList(key, 'tags', ['b', 'c']), ['a', 'b', 'c']);
+		assert.deepEqual(await mock.get(key), { userId: 'u1', postId: 'p1', title: 'T', tags: ['a', 'b', 'c'] });
+
+		// Concurrent appends from one process all land, with no lost update.
+		await Promise.all(['d', 'e', 'f', 'g'].map((tag) => mock.appendToList(key, 'tags', [tag])));
+		const tags = (await mock.get(key)).tags;
+		assert.deepEqual([...tags].sort(), ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+
+		// The append survives a reload from disk.
+		const reloaded = new KVStore(scope, 'append-mock', options as never) as any;
+		assert.equal((await reloaded.get(key)).tags.length, 7);
+	});
+
+	test('the AWS runtime sends one UpdateItem with list_append and returns the new list', async () => {
+		const { store, input, sent } = awsStore('append-aws', options, () => ({ Attributes: { tags: ['a', 'b'] } }));
+		assert.deepEqual(await store.appendToList(key, 'tags', ['b', undefined]), ['a', 'b']);
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0].constructor.name, 'UpdateCommand');
+		assert.deepEqual(input(), {
+			Key: { userId: 'u1', postId: 'p1' },
+			UpdateExpression: 'SET #f = list_append(if_not_exists(#f, :empty), :items)',
+			ConditionExpression: 'attribute_exists(#pk) AND attribute_not_exists(#v)',
+			ExpressionAttributeNames: { '#f': 'tags', '#pk': 'userId', '#v': '_bkv_value' },
+			ExpressionAttributeValues: { ':empty': [], ':items': ['b'] },
+			ReturnValues: 'UPDATED_NEW',
+			ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+		});
+	});
+
+	test('both runtimes reject the same bad calls with the same error and message, before any call', async () => {
+		const mock = mockStore('append-bad', options);
+		await mock.put(key, { title: 'T' });
+		const aws = awsStore('append-bad', options);
+		const cases: [unknown, unknown, unknown, string][] = [
+			['u1', 'tags', ['a'], KVStoreErrors.InvalidQuery],
+			[key, '', ['a'], KVStoreErrors.InvalidQuery],
+			[key, 42, ['a'], KVStoreErrors.InvalidQuery],
+			[key, 'userId', ['a'], KVStoreErrors.InvalidQuery],
+			[key, 'postId', ['a'], KVStoreErrors.InvalidQuery],
+			[key, 'status', ['a'], KVStoreErrors.InvalidQuery],
+			[key, 'expiresAt', ['a'], KVStoreErrors.InvalidQuery],
+			[key, 'tags', 'a', KVStoreErrors.InvalidQuery],
+			[key, '_bkv_x', ['a'], KVStoreErrors.ValidationFailed],
+			[key, '__proto__', ['a'], KVStoreErrors.ValidationFailed],
+			[key, 'tags', [JSON.parse('{"__proto__":1}')], KVStoreErrors.ValidationFailed],
+			[key, 'tags', [''], KVStoreErrors.ValidationFailed],
+			[key, 'tags', [1], KVStoreErrors.ValidationFailed],
+			[{ userId: '', postId: 'p1' }, 'tags', ['a'], KVStoreErrors.ValidationFailed],
+		];
+		for (const [k, field, items, name] of cases) {
+			const messages: string[] = [];
+			for (const store of [mock, aws.store]) {
+				messages.push((await rejects(store.appendToList(k, field, items), name)).message);
+			}
+			assert.equal(messages[0], messages[1], `same message for ${JSON.stringify([k, field, items])}`);
+		}
+		assert.equal(aws.sent.length, 0, 'every rejection happens before a DynamoDB call');
+		assert.deepEqual(await mock.get(key), { userId: 'u1', postId: 'p1', title: 'T' });
+	});
+
+	test('a missing key is a 409 ConditionalCheckFailed that is not retriable, in both runtimes', async () => {
+		const mock = mockStore('append-absent', options);
+		const aws = awsStore('append-absent', options, () =>
+			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
+		);
+		for (const store of [mock, aws.store]) {
+			const error = await rejects(store.appendToList(key, 'tags', ['a']), KVStoreErrors.ConditionalCheckFailed);
+			assert.ok(error instanceof ApiError);
+			assert.equal(error.status, 409);
+			assert.equal(error.retriable, false);
+		}
+		assert.equal(await mock.get(key), null, 'the mock creates no item');
+	});
+
+	test('a value that is not an object, and a field that is not a list, fail the same way in both runtimes', async () => {
+		const mock = mockStore('append-shape');
+		await mock.put('s', 'a string');
+		await mock.put('o', { tags: 'not a list' });
+		const awsString = awsStore('append-shape', undefined, () => {
+			const e: any = ddbError('ConditionalCheckFailedException', 'The conditional request failed');
+			e.Item = { _bkv_pk: { S: 's' }, _bkv_value: { S: 'a string' } };
+			return e;
+		});
+		const awsNotList = awsStore('append-shape', undefined, () =>
+			ddbError('ValidationException', 'An operand in the update expression has an incorrect data type'),
+		);
+		const notObject = [
+			(await rejects(mock.appendToList('s', 'tags', ['a']), KVStoreErrors.ValidationFailed)).message,
+			(await rejects(awsString.store.appendToList('s', 'tags', ['a']), KVStoreErrors.ValidationFailed)).message,
+		];
+		assert.equal(notObject[0], notObject[1]);
+		const notList = [
+			(await rejects(mock.appendToList('o', 'tags', ['a']), KVStoreErrors.ValidationFailed)).message,
+			(await rejects(awsNotList.store.appendToList('o', 'tags', ['a']), KVStoreErrors.ValidationFailed)).message,
+		];
+		assert.equal(notList[0], notList[1]);
+		assert.match(notList[0], /'tags' holds a value that is not a list/);
+		assert.equal(await mock.get('s'), 'a string');
+	});
+
+	test('an item that grows past 400 KB is ItemTooLarge in both runtimes', async () => {
+		const mock = mockStore('append-size');
+		await mock.put('k', { blob: [] });
+		const aws = awsStore('append-size', undefined, () =>
+			ddbError('ValidationException', 'Item size to update has exceeded the maximum allowed size'),
+		);
+		const big = ['x'.repeat(410 * 1024)];
+		for (const store of [mock, aws.store]) {
+			await rejects(store.appendToList('k', 'blob', big), KVStoreErrors.ItemTooLarge);
+		}
+		assert.deepEqual(await mock.get('k'), { blob: [] });
+	});
+
+	test('the mock stores a marshalled copy of the appended items and returns a copy of the list', async () => {
+		const mock = mockStore('append-copy');
+		await mock.put('k', { list: [] });
+		const item = { n: 1 };
+		const returned = await mock.appendToList('k', 'list', [item]);
+		item.n = 2;
+		returned.push('changed');
+		returned[0].n = 3;
+		assert.deepEqual(await mock.get('k'), { list: [{ n: 1 }] });
+	});
+
+	test('the mock rejects items the marshaller rejects and leaves the item unchanged', async () => {
+		const mock = mockStore('append-marshal');
+		await mock.put('k', { list: ['x'] });
+		for (const bad of [new Set(), new Date(0), Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+			await assert.rejects(mock.appendToList('k', 'list', [bad]), `append ${String(bad)}`);
+		}
+		assert.deepEqual(await mock.get('k'), { list: ['x'] });
+	});
+
+	test('items that would nest lists or maps more than 32 levels deep fail the same way in both runtimes', async () => {
+		const mock = mockStore('append-nest');
+		await mock.put('k', { list: [] });
+		const aws = awsStore('append-nest');
+		let tooDeep: unknown = [];
+		for (let i = 2; i < 32; i++) tooDeep = [tooDeep];
+		const messages: string[] = [];
+		for (const store of [mock, aws.store]) {
+			messages.push(
+				(await rejects(store.appendToList('k', 'list', [tooDeep]), KVStoreErrors.ValidationFailed)).message,
+			);
+		}
+		assert.equal(messages[0], messages[1]);
+		assert.equal(aws.sent.length, 0, 'the AWS runtime rejects before calling DynamoDB');
+		let deepest: unknown = [];
+		for (let i = 2; i < 31; i++) deepest = [deepest];
+		assert.equal((await mock.appendToList('k', 'list', [deepest])).length, 1);
+	});
+});

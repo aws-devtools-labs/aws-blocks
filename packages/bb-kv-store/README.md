@@ -63,6 +63,7 @@ const store = new KVStore(scope, id, options?)
 | `get(key, options?)` | `Promise<T \| null>` | Read one value. Returns `null` if the key is absent or expired. A consistent read by default. |
 | `put(key, value, options?)` | `Promise<void>` | Store a value. Replaces the old value unless you set a condition. Takes an optional expiry. |
 | `delete(key, options?)` | `Promise<void>` | Remove a value. Takes an optional condition. |
+| `appendToList(key, field, items)` | `Promise<T[F]>` | Append items to a list field of a stored object value, in one atomic step. Returns the new list. |
 | `query(options)` | `Results` | Read the items of one partition, or of one index partition, in sort order. |
 | `scan(options?)` | `Results` | Read every item. The cost grows with the size of the table. |
 | `getBatch(keys)` | `Promise<(T \| null)[]>` | Read many values by key. |
@@ -100,7 +101,7 @@ Match an error by name with `isBlocksError`. See the catch in [Rewrite a store o
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed, or `appendToList` found no value at the key. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value or an expiry is not valid. The causes are listed below. |
 | `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape. The causes are listed below. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
@@ -115,7 +116,7 @@ Match an error by name with `isBlocksError`. See the catch in [Rewrite a store o
 - has a key or indexed field over DynamoDB's size limit (2,048 bytes for a partition key, 1,024 for a sort key)
 - nests lists or maps more than 32 levels deep
 
-It is also thrown for a bad expiry.
+It is also thrown for a bad expiry, and for an `appendToList` to a field that is not a list or to a value that is not an object.
 
 `InvalidQueryException` is thrown for:
 
@@ -131,6 +132,7 @@ It is also thrown for a bad expiry.
 - `ifValueEquals` with an object
 - an empty `ifFieldEquals`
 - a batch that repeats a key within one DynamoDB request (25 writes or 100 reads)
+- an `appendToList` field that is a key, indexed, or `ttl` field
 
 ## Keys
 
@@ -299,6 +301,34 @@ await increment('visits');
 If another writer creates the counter first, the failed create has `retriable: false`. The loop does not repeat that `put()`: it reads the new value and computes a new increment.
 
 Alternatively, write one item per event in a store with a `key` such as `{ partitionKey: 'counterId', sortKey: 'eventId' }`. To get the total, use `query()` on the counter's partition and count the items. Each total reads every event for that counter and is eventually consistent on AWS.
+
+## Append to a list
+
+`appendToList` adds items to the end of a list field of a stored object value, in one atomic step. It returns the new list. Use it in place of a `get` and a `put` of the whole value, where two callers that append at the same time would lose one of the appends.
+
+```typescript
+const posts = new KVStore(scope, 'posts', {
+	schema: z.object({
+		userId: z.string(),
+		postId: z.string(),
+		title: z.string(),
+		tags: z.array(z.string()).optional(),
+	}),
+	key: { partitionKey: 'userId', sortKey: 'postId' },
+});
+
+await posts.put({ userId: 'alice', postId: 'p1' }, { title: 'Hello' });
+const tags = await posts.appendToList({ userId: 'alice', postId: 'p1' }, 'tags', ['news', 'launch']);
+// ['news', 'launch']
+// posts.appendToList({ userId: 'alice', postId: 'p1' }, 'title', ['x']);   compile error: title is not a list
+```
+
+- The value must exist. `appendToList` changes a stored value and does not create one, so the stored value keeps passing the schema. For a key that has no value, it throws `ConditionalCheckFailedException` with status 409 and `retriable: false`. Create the value with `put` first.
+- A field that is absent starts as an empty list. A field that holds something other than a list, or a stored value that is not an object, throws `ValidationFailedException`.
+- The field is a top-level field. It cannot be a key field, an indexed field, or the `ttl` field.
+- With a `schema`, the items are checked against the schema of the field before the call, as a list of their own. A rule on the whole list, such as a maximum length, applies to the items and not to the list that results.
+- The expiry of the value does not change.
+- On AWS, the call is one DynamoDB `UpdateItem` with `list_append`. The local mock reads and writes the item with no `await` in between.
 
 ## Read consistency
 
