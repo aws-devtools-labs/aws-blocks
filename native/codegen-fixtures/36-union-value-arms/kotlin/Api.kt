@@ -5,6 +5,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.filebucket.FileDownloadHandle
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
@@ -29,6 +30,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -51,36 +53,42 @@ public class Api(
   public suspend fun echoCollection(`value`: EchoCollection.Value): EchoCollection.Result {
     val request = BlocksRequest(method = "api.echoCollection", params = listOf(BlocksJson.encodeToJsonElement(value)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.echoCollection")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun echoShape(`value`: EchoShape.Value): EchoShape.Result {
     val request = BlocksRequest(method = "api.echoShape", params = listOf(BlocksJson.encodeToJsonElement(value)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.echoShape")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun echoLiteral(`value`: EchoLiteral.Value): EchoLiteral.Result {
     val request = BlocksRequest(method = "api.echoLiteral", params = listOf(BlocksJson.encodeToJsonElement(value)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.echoLiteral")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun echoTagged(`value`: EchoTagged.Value): EchoTagged.Result {
     val request = BlocksRequest(method = "api.echoTagged", params = listOf(BlocksJson.encodeToJsonElement(value)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.echoTagged")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun echoMoment(`value`: EchoMoment.Value): EchoMoment.Result {
     val request = BlocksRequest(method = "api.echoMoment", params = listOf(BlocksJson.encodeToJsonElement(value)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.echoMoment")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getFile(): GetFile.Result {
     val request = BlocksRequest(method = "api.getFile", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getFile")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

@@ -75,23 +75,42 @@ struct StoredCookie: Codable, Equatable, Sendable {
         self.expiresAt = maxAge.map { now.addingTimeInterval(TimeInterval($0)) } ?? expires
     }
 
-    /// Reads a Keychain item. A value that is not a record was written by an earlier version under
-    /// `host|name`; it is read as what that version sent: `Path=/`, not `Secure`, no expiry.
+    /// Reads a Keychain item: a JSON record under `host|path|name`, or an item written by an earlier
+    /// version (see `isEarlierVersionItem`).
+    ///
+    /// An earlier version's item records the host and name but not the attributes, so it is read as
+    /// `Path=/` and `Secure` with no expiry. The Auth block sets its session cookies with `Path=/`, and
+    /// with `Secure` everywhere but localhost, so these match what the server set, and the cookie is
+    /// only sent over `https`/`wss`. A session only ever used over plain `http` (local development) is
+    /// no longer sent, and the user signs in again. The next `Set-Cookie` of the same name from that
+    /// host replaces the item with a record (see `CookieJar.save`).
     static func decode(account: String, value: String) -> StoredCookie? {
         if let cookie = try? JSONDecoder().decode(StoredCookie.self, from: Data(value.utf8)) {
             return cookie
         }
-        // An earlier version's account is `host|name`; anything else is not a cookie this can read.
-        guard let separator = account.firstIndex(of: "|"),
-              !account[account.index(after: separator)...].contains("|") else { return nil }
+        guard isEarlierVersionAccount(account), let separator = account.firstIndex(of: "|") else { return nil }
         return StoredCookie(
             host: String(account[..<separator]),
             name: String(account[account.index(after: separator)...]),
             value: value,
             path: "/",
-            secure: false,
+            secure: true,
             expiresAt: nil
         )
+    }
+
+    /// Whether a Keychain item was written by an earlier version: keyed by `host|name` and holding the
+    /// bare cookie value, without the attributes the server set.
+    static func isEarlierVersionItem(account: String, value: String) -> Bool {
+        guard (try? JSONDecoder().decode(StoredCookie.self, from: Data(value.utf8))) == nil else { return false }
+        return isEarlierVersionAccount(account)
+    }
+
+    /// An earlier version's account has one `|`; this version's has two, so a record of this version
+    /// that fails to decode (a damaged item) is left alone rather than taken for an earlier one.
+    private static func isEarlierVersionAccount(_ account: String) -> Bool {
+        guard let separator = account.firstIndex(of: "|") else { return false }
+        return !account[account.index(after: separator)...].contains("|")
     }
 
     /// The record stored as the Keychain item's value.

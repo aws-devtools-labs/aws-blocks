@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `Auth`)
+- The resource type already has a Blocks BB (`KVStore`, `FileBucket`, `Database`, `Auth`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -232,8 +232,7 @@ Today this is supported by:
 
 | BB | Factory | Wraps |
 |---|---|---|
-| `KVStore` | `KVStore.fromExisting(tableName)` | Existing DynamoDB table |
-| `DistributedTable` | `DistributedTable.fromExisting(tableName)` | Existing DynamoDB table (skips GSI provisioning — customer owns indexes) |
+| `KVStore` | `KVStore.fromExisting(tableName)` with a matching `key` option | Existing DynamoDB table (skips GSI provisioning — customer owns indexes and TTL) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
 | `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
 | `Auth` | `Auth.fromExisting(userPoolId, clientId?)`, passed as the `userPool` option | Existing Cognito User Pool |
@@ -259,17 +258,27 @@ registerConfig(blocksStack, 'LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
 ```ts
 // index.ts
 import { Scope, KVStore, ApiNamespace } from '@aws-blocks/blocks';
+import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
+// `key` names the key attributes of the existing table (here: partition key `token`).
 const sessions = new KVStore(scope, 'sessions', {
+  schema: z.object({ token: z.string(), userId: z.string() }),
+  key: { partitionKey: 'token' },
   table: KVStore.fromExisting(process.env.LEGACY_SESSIONS_TABLE!),
 });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
-  getSession: (token: string) => sessions.get(token),
+  getSession: (token: string) => sessions.get({ token }),
 }));
 ```
+
+Pass the `key` that matches the key schema of the existing table, and a `schema`
+for its items. `KVStore` reads and writes each top-level field of an item as one
+attribute, so it works with a table that another system filled. Without `key`,
+the block uses its own string partition key `_bkv_pk`, which only a table that
+a `KVStore` created has.
 
 > **IAM is handled for you.** When you pass `fromExisting(...)`, the BB still
 > calls `grantReadWriteData` / `grantReadWrite` on the bound resource and
@@ -638,7 +647,7 @@ Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 
 Some blocks also deploy helper Lambdas of their own: `Auth` (the user-pool
 immutability guard, and the identity-provider registration for
-Cognito-federated sign-in), `DistributedTable` (the GSI manager, for a table
+Cognito-federated sign-in), `KVStore` (the GSI manager, for a store
 with indexes), and `Database` / `DistributedDatabase` (the migration runner).
 In a vendored copy these are bundled from `vendor/<package>/src/` at synth with
 your app's `esbuild`, so edits to those handlers deploy too.
@@ -765,7 +774,7 @@ of them — one per CDK shape from Pattern 1:
 
 | Harness | What it covers |
 |---|---|
-| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (KVStore + DistributedTable `fromExisting`), Pattern 3 (custom `bb-queue` BB). |
+| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (`KVStore.fromExisting` over a legacy table), Pattern 3 (custom `bb-queue` BB). |
 | [`test-apps/extending-blocks-guide-blocksbackend/`](../../test-apps/extending-blocks-guide-blocksbackend) | Pattern 1 via `BlocksBackend.create(...)` dropped into a user-owned outer `cdk.Stack`. |
 | [`test-apps/comprehensive/test/vendorize.test.ts`](../../test-apps/comprehensive/test/vendorize.test.ts) | Pattern 4 (vendorize). |
 
@@ -789,6 +798,5 @@ shape:
 ```bash
 npm test -w @aws-blocks/bb-kv-store
 npm test -w @aws-blocks/bb-file-bucket
-npm test -w @aws-blocks/bb-distributed-table
 npm test -w @aws-blocks/core    # includes BlocksBackend synth-shape tests
 ```

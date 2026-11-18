@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
@@ -308,4 +308,30 @@ test('CDK: no bedrock-mantle grant for non-Mantle openai-api, explicit apiKey, o
 	]);
 	assert.ok(!JSON.stringify(statements).includes('bedrock-mantle:'), `unexpected bedrock-mantle grant: ${JSON.stringify(statements)}`);
 	assert.ok(!JSON.stringify((await synth()).toJSON()).includes('bedrock-mantle:'), 'the default Agent has no bedrock-mantle grant');
+});
+
+// The key attribute types are probed from the conversation and message schemas.
+// Pin them, so a change to the probe cannot change the provisioned tables.
+test('CDK: the conversation and message tables keep their key schemas (string keys)', async () => {
+	const template = await synth();
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		KeySchema: [
+			{ AttributeName: 'userId', KeyType: 'HASH' },
+			{ AttributeName: 'conversationId', KeyType: 'RANGE' },
+		],
+		AttributeDefinitions: Match.arrayWith([
+			{ AttributeName: 'userId', AttributeType: 'S' },
+			{ AttributeName: 'conversationId', AttributeType: 'S' },
+		]),
+	});
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		KeySchema: [
+			{ AttributeName: 'conversationId', KeyType: 'HASH' },
+			{ AttributeName: 'messageId', KeyType: 'RANGE' },
+		],
+		AttributeDefinitions: Match.arrayWith([
+			{ AttributeName: 'conversationId', AttributeType: 'S' },
+			{ AttributeName: 'messageId', AttributeType: 'S' },
+		]),
+	});
 });

@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getCoords() async throws -> GetCoords.Result {
         let request = BlocksRequest(method: "api.getCoords", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getCoords") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getCoords") }
         return try JSONDecoder().decode(GetCoords.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getPair() async throws -> GetPair.Result {
         let request = BlocksRequest(method: "api.getPair", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getPair") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getPair") }
         return try JSONDecoder().decode(GetPair.Result.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
         if let cursor { _params.append(cursor) }
         let request = BlocksRequest(method: "api.queryRange", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.queryRange") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.queryRange") }
         return try JSONDecoder().decode(QueryRange.Result.self, from: result)
     }
 
@@ -43,7 +43,7 @@ public final nonisolated class Api: Sendable {
     public func getShortTuples(one: [String]) async throws -> GetShortTuples.Result {
         let request = BlocksRequest(method: "api.getShortTuples", params: [one], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getShortTuples") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getShortTuples") }
         return try JSONDecoder().decode(GetShortTuples.Result.self, from: result)
     }
 

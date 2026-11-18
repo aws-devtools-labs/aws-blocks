@@ -1,12 +1,16 @@
 name: Upgrade-in-place E2E
 
-# Proves an existing `AuthCognito` deployment survives switching to the unified
-# `Auth` block: deploys the pre-refactor revision, seeds a user and a session,
-# deploys the PR revision ON TOP OF THE SAME STACK (no destroy in between), then
-# asserts the stack reached UPDATE_COMPLETE, the user pool / client / sessions
-# table / session secret keep their CloudFormation physical ids, the seeded user
-# signs in with the same userSub, and the pre-upgrade session cookie still
-# authenticates. Harness: test-apps/comprehensive/test/upgrade-in-place.ts (its
+# Proves an existing `AuthCognito` deployment upgrades to the unified `Auth`
+# block with one successful deploy: deploys the pre-refactor revision, seeds a
+# user and a session, deploys the PR revision ON TOP OF THE SAME STACK (no
+# destroy in between), then asserts the stack reached UPDATE_COMPLETE, the user
+# pool / client / session secret keep their CloudFormation physical ids, and the
+# seeded user signs in with the same userSub. The session store is a clean
+# break: the sessions are in a NEW table, the old sessions table is no longer a
+# resource of the stack (deleted: the app deploys with a Delete removal policy),
+# the pre-upgrade session cookie gets the signed-out answer (401, not a server
+# error) and is cleared, and a fresh sign-in works.
+# Harness: test-apps/comprehensive/test/upgrade-in-place.ts (its
 # header lists the AWS actions it needs; all are in the e2e role's grants).
 #
 # WHY THIS IS GATED (label or manual dispatch — never part of the default PR checks):

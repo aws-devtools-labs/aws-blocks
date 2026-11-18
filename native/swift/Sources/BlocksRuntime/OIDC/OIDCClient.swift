@@ -45,11 +45,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     public nonisolated let providers: [String]
     public nonisolated let providerConfigs: [String: OIDCProviderConfig]
     public nonisolated let baseUrl: String
-    /// The IdP `redirect_uri` path: the descriptor's `callbackPath`, or `exchangePath` with
-    /// `/exchange` replaced by `/callback` when the descriptor has none.
+    /// The IdP `redirect_uri` path: the descriptor's `callbackPath` (or `init`'s), or `exchangePath` with
+    /// `/exchange` replaced by `/callback` when neither names one.
     public nonisolated let callbackPath: String
     /// The directory the authorize-params routes sit in (`<base>/authorize-params`): the descriptor's
-    /// `authorizeParamsBasePath`, or one derived from `exchangePath` when the descriptor has none.
+    /// `authorizeParamsBasePath` (or `init`'s), or one derived from `exchangePath` when neither names one.
     public nonisolated let authorizeParamsBasePath: String
     /// The session route `restore()` reads: the descriptor's `sessionPath`, or `<base>/session` when
     /// the descriptor has none, where `<base>` is the directory of `callbackPath`.
@@ -73,6 +73,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// launch after `restore()`: `if case .signedIn(let user) = await client.authState { ... }`.
     public private(set) var authState: OIDCAuthState = .loading
 
+    /// - Parameters:
+    ///   - authorizeParamsBasePath: Defaults to `exchangePath` with its `/exchange` segment replaced by
+    ///     `/authorize-params`, the `Auth` block's layout.
+    ///   - callbackPath: Defaults to `exchangePath` with `/exchange` replaced by `/callback`. Pass the backend's
+    ///     `redirects.callbackPath` when it doesn't end in `/callback`.
     public init(
         exchangePath: String,
         refreshPath: String,
@@ -80,7 +85,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         providers: [String],
         providerConfigs: [String: OIDCProviderConfig],
         baseUrl: String,
-        client: BlocksClient
+        client: BlocksClient,
+        authorizeParamsBasePath: String? = nil,
+        callbackPath: String? = nil
     ) {
         self.init(
             exchangePath: exchangePath,
@@ -90,7 +97,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             providerConfigs: providerConfigs,
             baseUrl: baseUrl,
             client: client,
-            callbackPath: nil
+            callbackPath: callbackPath,
+            authorizeParamsBasePath: authorizeParamsBasePath,
+            sessionPath: nil,
+            sessionCookieName: nil
         )
     }
 
@@ -103,9 +113,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         baseUrl: String,
         client: BlocksClient,
         callbackPath: String?,
-        authorizeParamsBasePath: String? = nil,
-        sessionPath: String? = nil,
-        sessionCookieName: String? = nil
+        authorizeParamsBasePath: String?,
+        sessionPath: String?,
+        sessionCookieName: String?
     ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
@@ -114,7 +124,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.providerConfigs = providerConfigs
         self.baseUrl = baseUrl
         self.client = client
-        // A descriptor without these fields predates them: derive them from `exchangePath`, as before.
+        // A descriptor without these fields predates them, and `init` may omit them: derive them from
+        // `exchangePath`, as before.
         self.callbackPath = callbackPath ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
         self.authorizeParamsBasePath = authorizeParamsBasePath
             ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params")
@@ -209,20 +220,34 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
         let authorizeParamsPath = "\(authorizeParamsBasePath)/\(Self.encodeURIComponent(provider))"
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
-        let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        let paramsJSON: [String: Any]
+        do {
+            paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.callbackError(
+                "Failed to fetch authorize params: \((error as? BlocksError)?.message ?? error.localizedDescription)",
+                error
+            )
+        }
 
         // A missing field is named, never the response itself: it carries the signed state and the nonce.
         guard let authorizeUrl = paramsJSON["authorizeUrl"] as? String else {
-            throw OIDCError.callbackError("authorize-params response has no authorizeUrl")
+            throw OIDCError.callbackError("authorize-params response has no authorizeUrl", nil)
         }
         guard let clientId = paramsJSON["clientId"] as? String else {
-            throw OIDCError.callbackError("authorize-params response has no clientId")
+            throw OIDCError.callbackError("authorize-params response has no clientId", nil)
         }
         guard let scopes = paramsJSON["scopes"] as? [String] else {
-            throw OIDCError.callbackError("authorize-params response has no scopes")
+            throw OIDCError.callbackError("authorize-params response has no scopes", nil)
         }
         guard let signedState = paramsJSON["state"] as? String else {
-            throw OIDCError.callbackError("authorize-params response has no state")
+            throw OIDCError.callbackError("authorize-params response has no state", nil)
         }
         let nonce = paramsJSON["nonce"] as? String
 
@@ -283,7 +308,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         if let error = resultParams["error"] {
             let desc = resultParams["error_description"] ?? ""
-            throw OIDCError.callbackError("\(error): \(desc)")
+            throw OIDCError.callbackError("\(error): \(desc)", nil)
         }
 
         guard let code = resultParams["code"] else {
@@ -329,7 +354,19 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         ]
         if let iss { body["iss"] = iss }
 
-        let (json, cookieNames) = try await client.postRawRouteRecordingCookies(path: exchangePath, body: body)
+        let json: [String: Any]
+        let cookieNames: [String]
+        do {
+            (json, cookieNames) = try await client.postRawRouteRecordingCookies(path: exchangePath, body: body)
+        } catch let error as ClientClosedError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as OIDCError {
+            throw error
+        } catch {
+            throw OIDCError.exchangeFailed((error as? BlocksError)?.message ?? error.localizedDescription, error)
+        }
 
         guard let userJSON = json["user"] as? [String: Any] else {
             throw OIDCError.malformedExchangeResponse
@@ -369,10 +406,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         try await task.value
     }
 
-    /// Refreshes the bearer tokens. Only a refusal from the refresh route (HTTP 400 or 401) ends the session:
-    /// it clears the stored tokens and emits `.signedOut`. Any other failure (offline, a server error, a
-    /// response without an access token) is thrown and leaves the tokens and the state as they were. A result
-    /// that a sign-in or sign-out on this client overtook while it was in flight is ignored.
+    /// Refreshes the bearer tokens. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
+    /// ends the session: it clears the stored tokens and emits `.signedOut`. Any other failure (a
+    /// `TransportError` when offline or for a response without an access token, another `ApiError`, a
+    /// `CancellationError`, a `ClientClosedError`) is thrown and leaves the tokens and the state as they were.
+    /// A result that a sign-in or sign-out on this client overtook while it was in flight is ignored.
     private func performRefresh() async throws {
         let generation = sessionGeneration
         guard let refreshToken = await storedToken("refresh_token") else {
@@ -386,7 +424,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             // Required by a backend with two or more providers.
             if let provider = await storedToken("provider") { body["provider"] = provider }
             json = try await client.postRawRoute(path: refreshPath, body: body)
-        } catch let error as RawRouteError where error.statusCode == 400 || error.statusCode == 401 {
+        } catch let error as ApiError where error.status == 400 || error.status == 401 {
             guard generation == sessionGeneration else { return }
             await clearTokens()
             emit(.signedOut)
@@ -395,7 +433,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         guard generation == sessionGeneration else { return }
 
         guard let accessToken = json["accessToken"] as? String else {
-            throw OIDCError.malformedRefreshResponse
+            // No usable result, as for a 2xx body that isn't a JSON object.
+            throw TransportError(message: "Response from \(refreshPath) has no accessToken", statusCode: 200)
         }
 
         await storeToken("access_token", accessToken)
@@ -416,13 +455,13 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
     ///   own session, so the next sign-in asks which account to use.
     /// - Throws: Any failure, after signing out locally: the stored tokens are cleared and `.signedOut`
-    ///   is emitted first. That covers a `RawRouteError` named `SignOutIncompleteException` (HTTP 503),
+    ///   is emitted first. That covers an `ApiError` named `SignOutIncompleteException` (HTTP 503),
     ///   when the server cleared the cookie but could not remove its session, and every other failure
-    ///   (a transport error, a cancellation, another non-2xx), for which the client also removes this
-    ///   block's session cookie, and only this block's. The client knows that cookie by the
-    ///   descriptor's `sessionCookieName`. From a backend that doesn't send it, the client falls back
-    ///   to the names this block's sign-in response set, kept in the token store with the tokens, so
-    ///   after a relaunch with an in-memory token store it can't remove the cookie.
+    ///   (a `TransportError`, a `CancellationError`, an `ApiError` with another status or name), for
+    ///   which the client also removes this block's session cookie, and only this block's. The client
+    ///   knows that cookie by the descriptor's `sessionCookieName`. From a backend that doesn't send it,
+    ///   the client falls back to the names this block's sign-in response set, kept in the token store
+    ///   with the tokens, so after a relaunch with an in-memory token store it can't remove the cookie.
     ///   `ClientClosedError` changes nothing: the request was never sent.
     @discardableResult
     public func signOut() async throws -> URL? {
@@ -466,8 +505,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// Whether `error` is the server's `SignOutIncompleteException` (HTTP 503): the session cookie was cleared
     /// but the server-side session was not removed.
     private static func isSignOutIncomplete(_ error: Error) -> Bool {
-        guard let error = error as? RawRouteError else { return false }
-        return error.statusCode == 503 && error.errorName == "SignOutIncompleteException"
+        guard let error = error as? ApiError else { return false }
+        return error.status == 503 && error.name == "SignOutIncompleteException"
     }
 
     // MARK: - Restore session
@@ -482,10 +521,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   sign-in or sign-out on this client finished while the request was in flight, the response is
     ///   out of date: it is ignored, nothing is emitted or cleared, and the current ``authState``'s user
     ///   (or `nil`) is returned.
-    /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route: an
-    ///   `Auth` block without federated providers, or a custom block that doesn't serve
-    ///   `sessionPath`. Any other failure, including a transport error or `ClientClosedError`, is
-    ///   thrown and leaves the state and stored tokens as they were.
+    /// - Throws: `ApiError` with `status` 404 when the backend serves no session route: an `Auth` block
+    ///   without federated providers, or a custom block that doesn't serve `sessionPath`.
+    ///   `TransferableError.invalidDescriptor` when the response has no `user`. Any other failure,
+    ///   including a `TransportError` or `ClientClosedError`, is thrown and leaves the state and stored
+    ///   tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
         let generation = sessionGeneration
@@ -498,22 +538,22 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let json: [String: Any]
         do {
             json = try await client.getRawRoute(path: sessionPath, headers: headers)
-        } catch let error as RawRouteError where error.statusCode == 401 {
+        } catch let error as ApiError where error.status == 401 {
             guard generation == sessionGeneration else { return currentUser }
             await clearTokens()
             emit(.signedOut)
             return nil
-        } catch let error as RawRouteError where error.statusCode == 404 {
-            throw RawRouteError(
+        } catch let error as ApiError where error.status == 404 {
+            throw ApiError(
                 message: "\(sessionPath) answered HTTP 404: the backend serves no session route at that path. "
                     + "An Auth block serves one only when it has federated providers; "
                     + "a custom block must serve GET \(sessionPath).",
-                statusCode: 404,
-                errorName: error.errorName
+                status: 404,
+                name: error.name
             )
         }
         guard let userJSON = json["user"] as? [String: Any] else {
-            throw OIDCError.invalidResponse
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "user")
         }
         let user = try OIDCUser.fromJSON(userJSON)
         guard generation == sessionGeneration else { return currentUser }
@@ -581,10 +621,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         client: BlocksClient
     ) throws -> OIDCClient {
         guard let exchangePath = descriptor["exchangePath"] as? String else {
-            throw OIDCError.malformedDescriptor("exchangePath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "exchangePath")
         }
         guard let signOutPath = descriptor["signOutPath"] as? String else {
-            throw OIDCError.malformedDescriptor("signOutPath")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "signOutPath")
         }
         let refreshPath = (descriptor["refreshPath"] as? String) ?? "\(exchangePath)/refresh"
         let providers = (descriptor["providers"] as? [String]) ?? []
@@ -741,18 +781,20 @@ extension OIDCClient: Codable {
 
 // MARK: - Errors
 
-public enum OIDCError: BlocksError, Equatable {
+public enum OIDCError: BlocksError {
     case unknownProvider(String)
     case invalidAuthorizeURL(String)
-    case invalidURL(String)
     case stateMismatch
     case missingAuthorizationCode
-    case missingPKCEState
     case malformedExchangeResponse
-    case malformedRefreshResponse
-    case malformedDescriptor(String)
-    case invalidResponse
-    case callbackError(String)
+    /// The sign-in callback failed: the IdP reported an error, or the authorize parameters could not
+    /// be fetched. When a request failed, its `ApiError` or `TransportError` is the cause, so the
+    /// app can tell a retry-later failure from a misconfigured one.
+    case callbackError(String, Error?)
+    /// The code exchange was rejected. The server's error is the cause.
+    case exchangeFailed(String, Error?)
+    /// The user dismissed the sign-in flow. A `BrowserLauncher` throws this.
+    case cancelled
 
     public var message: String {
         switch self {
@@ -760,24 +802,25 @@ public enum OIDCError: BlocksError, Equatable {
             return "Unknown OIDC provider: \(name)"
         case .invalidAuthorizeURL(let url):
             return "Invalid authorize URL: \(url)"
-        case .invalidURL(let url):
-            return "Invalid URL: \(url)"
         case .stateMismatch:
             return "OIDC state mismatch — possible CSRF attack"
         case .missingAuthorizationCode:
             return "Missing authorization code in callback URL"
-        case .missingPKCEState:
-            return "Missing PKCE state in token store"
         case .malformedExchangeResponse:
             return "Malformed exchange response — missing accessToken or refreshToken"
-        case .malformedRefreshResponse:
-            return "Malformed refresh response — missing accessToken"
-        case .malformedDescriptor(let field):
-            return "Malformed OIDC descriptor — missing or invalid field: \(field)"
-        case .invalidResponse:
-            return "Invalid JSON response"
-        case .callbackError(let detail):
+        case .callbackError(let detail, _):
             return "OIDC callback error: \(detail)"
+        case .exchangeFailed(let detail, _):
+            return "OIDC exchange failed: \(detail)"
+        case .cancelled:
+            return "Sign-in cancelled"
+        }
+    }
+
+    public var underlyingError: Error? {
+        switch self {
+        case .callbackError(_, let error), .exchangeFailed(_, let error): return error
+        default: return nil
         }
     }
 }

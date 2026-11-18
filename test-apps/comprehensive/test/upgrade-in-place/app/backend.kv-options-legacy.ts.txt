@@ -1,0 +1,22 @@
+// Fixture of `upgrade-legacy-kv-store.ts --mode options`. Each store of `backend.kv-options-release`, as a
+// `LegacyKVStore` with the same id and the same options. The third deploy is this file without those lines.
+import { KVStore, LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('upgrade');
+new LegacyKVStore(scope, 's0'); // legacy
+new LegacyKVStore(scope, 's1', { ttl: true }); // legacy
+new LegacyKVStore(scope, 's2', { removalPolicy: 'retain' }); // legacy
+new LegacyKVStore(scope, 's3', { removalPolicy: 'destroy' }); // legacy
+new LegacyKVStore(scope, 's4', { deletionProtection: true }); // legacy
+new LegacyKVStore(scope, 's5', { pointInTimeRecovery: true }); // legacy
+new LegacyKVStore(scope, 's6', { pointInTimeRecovery: { retentionDays: 7 } }); // legacy
+new LegacyKVStore(scope, 's7', { encryption: 'customer-managed' }); // legacy
+new LegacyKVStore(scope, 's8', { encryption: KVStore.fromKmsKey('arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab') }); // legacy
+new LegacyKVStore(scope, 's9', { ttl: true, removalPolicy: 'retain', deletionProtection: true, pointInTimeRecovery: true }); // legacy
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async ping() {
+		return 'pong';
+	},
+}));

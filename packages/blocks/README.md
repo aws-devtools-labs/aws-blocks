@@ -64,14 +64,14 @@ Blocks compose. Here's the same API gated behind authentication and backed by a 
 
 ```typescript
 // aws-blocks/index.ts
-import { Scope, ApiNamespace, Auth, DistributedTable } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace, Auth, KVStore } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 const auth = new Auth(scope, 'auth', { emailPassword: { passwordPolicy: { minLength: 8 } } });
 
-const notes = new DistributedTable(scope, 'notes', {
+const notes = new KVStore(scope, 'notes', {
   schema: z.object({ userId: z.string(), noteId: z.string(), text: z.string() }),
   key: { partitionKey: 'userId', sortKey: 'noteId' },
 });
@@ -83,12 +83,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async addNote(text: string) {
     const user = await auth.requireAuth(context);          // 401s if not signed in
     const noteId = crypto.randomUUID();
-    await notes.put({ userId: user.userSub, noteId, text });
+    await notes.put({ userId: user.userSub, noteId }, { text });
     return { noteId };
   },
   async listNotes() {
     const user = await auth.requireAuth(context);
-    return await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
+    const entries = await Array.fromAsync(notes.query({ where: { userId: { equals: user.userSub } } }));
+    return entries.map((entry) => entry.value);
   },
 }));
 ```
@@ -114,8 +115,8 @@ A frontend served from another origin than the API signs in with a federated pro
 Start from what you need:
 
 - **Store data**
-  - Simple key → value (caches, flags, user prefs) → `KVStore` (bb-kv-store)
-  - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
+  - Values that you read by one key (caches, flags, user preferences) → `KVStore` (bb-kv-store) with no options
+  - Records that you list or query, with indexes → `KVStore` (bb-kv-store) with a `schema` and a `key` — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
   - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
   - A single config value → `AppSetting` (bb-app-setting)
@@ -142,7 +143,7 @@ Start from what you need:
 
 ### Choosing a data block
 
-Default to `DistributedTable` for your data models unless your domain specifically requires SQL engine capabilities.
+Default to `KVStore` for your data models unless your domain specifically requires SQL engine capabilities. Give a store a `schema` and a `key` for records that you list or query as a collection; use it with no options for values that you read by one key. Decide before you create the store: a store cannot change its key.
 
 Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
 
@@ -187,11 +188,10 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
 | bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
-| bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
 | bb-email-client | Transactional email sending via Amazon SES. | — |
 | bb-file-bucket | File storage backed by Amazon S3. | — |
 | bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
-| bb-kv-store | Simple key-value storage backed by DynamoDB. | — |
+| bb-kv-store | Key-value and document storage backed by DynamoDB, with optional secondary indexes. | — |
 | bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
 | bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
@@ -310,7 +310,7 @@ Errors print as `Error: <what failed>`, then where it failed and a `Try:` line w
 
 `port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort` (default `3100`). `host` sets the interface to bind (default `127.0.0.1`); a `host` you set (or `--host`) is also exported to the dev server as `BLOCKS_DEV_HOST` (unless `BLOCKS_DEV_HOST` is already set, which then wins), which opts the local realtime WebSocket (`/realtime`) into that host's origins. Without `frontendCommand`, the frontend is detected from the app's dependencies and started on `frontendPort`: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>`, `vite` runs `npx vite --port <frontendPort> --strictPort`, and neither runs the backend only. `"frontend": false` runs the backend only even when `next` or `vite` is installed, as `--no-frontend` does; it cannot be combined with `frontendCommand` or `frontendPort`. Set `frontendCommand` only for a frontend that detection does not know. It must listen on `frontendPort` itself, so `--frontend-port` does not move it: `cdk-blocks dev` warns when the command does not contain the frontend port. Flags override both: `npm run dev -- --port 4000` serves the app on http://localhost:4000.
 
-The lifecycle commands run the app's TypeScript with `tsx`. The CLI runs its runners and client generation (`cdk-blocks generate client`, and the client step of `cdk-blocks deploy` and `cdk-blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `cdk-blocks dev` runs under `tsx watch`, which restarts it on a change; the other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `cdk-blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `cdk-blocks deploy` and `cdk-blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
+The lifecycle commands run the app's TypeScript with `tsx`. The CLI runs its runners and client generation (`cdk-blocks generate client`, and the client step of `cdk-blocks deploy` and `cdk-blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `cdk-blocks dev` runs under `tsx watch`, which restarts it on a change. When the dev server crashes after it started (an uncaught exception outside any request, a `process.exit(1)` in the backend), `cdk-blocks dev` prints its exit code and starts it again after a backoff of 500 ms that doubles up to 5 s; after 5 restarts within 60 s, the next crash ends `cdk-blocks dev` with exit code 1. A failed start is not restarted: a failed first start, or a failed start of a restarted dev server, ends `cdk-blocks dev`, and a failed reload waits for the next change as before. A dev server that a signal killed (`kill -9`, out of memory) is not restarted either. The other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `cdk-blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `cdk-blocks deploy` and `cdk-blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
 
 ### Migrating an app from `aws-blocks/scripts`
 
@@ -366,7 +366,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
-- **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
+- **`Database` when `KVStore` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations
@@ -410,7 +410,9 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 
 ## Reference
 
-- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) and `docs/<block>/PRODUCTION.md` (production settings, scaling & cost) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
+- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) and `docs/<block>/PRODUCTION.md` (production settings, scaling & cost) where present — e.g. `docs/bb-kv-store/README.md`. The catalog + decision tree live in `docs/README.md`.
+- **What to import from where:** [IMPORTS.md](./IMPORTS.md) (`docs/IMPORTS.md`) lists every app-facing entry (`@aws-blocks/blocks`, `/client`, `/ui`, `/theme`, `/server`, `/utils`, and `/cdk`, `/lambda-handler`, `/scripts`, which the generated `aws-blocks/index.cdk.ts` and `index.handler.ts` import), where it runs, and every name it exports. Code run under the `browser` condition (browser bundles, and the templates' `tsx -C browser` e2e tests) imports no values from the root entry, the only one with that condition: it uses `/client`, `/ui` and `/theme` (the e2e tests also `/utils`), and takes a block's error constants from its own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`).
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
+- **Test helpers** (`@aws-blocks/blocks/utils`, Node only: tests and scripts, including the templates' `tsx -C browser` e2e tests, since the entry has no `browser` condition; not browser bundles): `installCookieJar(): () => void` keeps `Set-Cookie` across `fetch` calls, so a signed-in session persists between API calls; call it once before `await import('aws-blocks')` (it returns a function that restores `fetch`). `createTestClient(clients)` returns the same typed clients bound to a cookie jar of their own, for several signed-in users in one test. `getLastAuthCode(username, options?): Promise<string>` reads the verification code the local `Auth` pool last sent (local only). `totpCodeFor(sharedSecret, time?): string` computes an authenticator-app (TOTP) code. `isServerRunning(port = 3000): Promise<boolean>` checks whether a dev server is already listening, so test setup can skip starting one.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

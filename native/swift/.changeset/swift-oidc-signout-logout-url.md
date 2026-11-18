@@ -6,13 +6,14 @@ fix(swift): `OIDCClient.signOut()` returns the identity provider's logout URL an
 
 **Source-breaking (pre-1.0):** `signOut()` is now `@discardableResult func signOut() async throws -> URL?`.
 Call it with `try`. It POSTs `<signOutPath>?format=json` and returns the provider's logout URL, or
-`nil` when there is none, or when a custom block's route answers with an empty 2xx body. Open that URL with your launcher to end the provider's own session; the
-client doesn't open it. When the server cleared the cookie but could not remove its session, it
-signs out locally and throws a `RawRouteError` named `SignOutIncompleteException` (HTTP 503). Any
-other failure (a transport error, a cancellation, another non-2xx) also signs out locally before it
-throws: the client clears the block's stored tokens, removes the block's session cookie (and no other block's), and emits `.signedOut`. The client
-knows that cookie by the `oidc/client` descriptor's `sessionCookieName`; from a backend that
-doesn't send it, by the cookie names the block's sign-in response set. A sign-out on a closed client throws
+`nil` when there is none, or when a custom block's route answers with an empty 2xx body. Open that
+URL with your launcher to end the provider's own session; the client doesn't open it. When the server cleared the cookie but could not remove its session, it
+signs out locally and throws an `ApiError` named `SignOutIncompleteException` (HTTP 503). Any
+other failure (a `TransportError`, a `CancellationError`, an `ApiError` with another status) also
+signs out locally before it throws: the client clears the block's stored tokens, removes the
+block's session cookie (and no other block's), and emits `.signedOut`. The client knows that cookie
+by the `oidc/client` descriptor's `sessionCookieName`; from a backend that doesn't send it, by the
+cookie names the block's sign-in response set. A sign-out on a closed client throws
 `ClientClosedError` and changes nothing.
 
 Previously the server's empty 204 response failed to parse, the failure was ignored, and the logout

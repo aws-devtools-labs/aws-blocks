@@ -113,11 +113,11 @@ func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throw
 }
 ```
 
-`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme.
+`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme. Have it throw `OIDCError.cancelled` when the user closes the sheet, so the app can tell a dismissal from a failed sign-in.
 
 Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
 
-- **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also sets the client's `authState` and emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws (HTTP 404).
+- **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also sets the client's `authState` and emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws an `ApiError` with `status` 404.
 - **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
 - **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it to end the provider's own session; otherwise the next sign-in can pick the same account without asking.
 - **Passkeys.** Hide actions whose `capability` is set (`webauthn-get`, `webauthn-create`): they need platform WebAuthn APIs the runtime doesn't call yet.

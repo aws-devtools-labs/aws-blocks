@@ -17,7 +17,7 @@ public final nonisolated class AlphaApi: Sendable {
     public func setState(input: SetState.Input) async throws -> Bool {
         let request = BlocksRequest(method: "alphaApi.setState", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for alphaApi.setState") }
+        guard let result else { throw TransportError(message: "Unexpected null result for alphaApi.setState") }
         return try JSONDecoder().decode(Bool.self, from: result)
     }
 
@@ -155,7 +155,7 @@ public final nonisolated class BetaApi: Sendable {
     public func setState(input: SetState.Input) async throws -> Bool {
         let request = BlocksRequest(method: "betaApi.setState", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for betaApi.setState") }
+        guard let result else { throw TransportError(message: "Unexpected null result for betaApi.setState") }
         return try JSONDecoder().decode(Bool.self, from: result)
     }
 

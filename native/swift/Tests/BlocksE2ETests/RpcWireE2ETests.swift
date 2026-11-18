@@ -50,4 +50,10 @@ final class RpcWireE2ETests: BlocksE2ETestCase {
         XCTAssertEqual(firstTwo.middle, "b")
         XCTAssertNil(firstTwo.last)
     }
+
+    /// The server answers a method that returns nothing with `"result": null`. A response with no `result` field
+    /// made the client throw "Missing result field in JSON-RPC response".
+    func testVoidMethodReturns() async throws {
+        try await api.voidResult()
+    }
 }

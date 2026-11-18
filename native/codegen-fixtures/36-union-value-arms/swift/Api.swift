@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func echoCollection(value: EchoCollection.Value) async throws -> EchoCollection.Value {
         let request = BlocksRequest(method: "api.echoCollection", params: [value], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echoCollection") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echoCollection") }
         return try JSONDecoder().decode(EchoCollection.Value.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func echoShape(value: EchoShape.Value) async throws -> EchoShape.Value {
         let request = BlocksRequest(method: "api.echoShape", params: [value], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echoShape") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echoShape") }
         return try JSONDecoder().decode(EchoShape.Value.self, from: result)
     }
 
@@ -41,7 +41,7 @@ public final nonisolated class Api: Sendable {
     public func echoLiteral(value: EchoLiteral.Value) async throws -> EchoLiteral.Result {
         let request = BlocksRequest(method: "api.echoLiteral", params: [value], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echoLiteral") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echoLiteral") }
         return try JSONDecoder().decode(EchoLiteral.Result.self, from: result)
     }
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
     public func echoTagged(value: EchoTagged.Value) async throws -> EchoTagged.Value {
         let request = BlocksRequest(method: "api.echoTagged", params: [value], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echoTagged") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echoTagged") }
         return try JSONDecoder().decode(EchoTagged.Value.self, from: result)
     }
 
@@ -57,7 +57,7 @@ public final nonisolated class Api: Sendable {
     public func echoMoment(value: EchoMoment.Value) async throws -> EchoMoment.Value {
         let request = BlocksRequest(method: "api.echoMoment", params: [value], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.echoMoment") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.echoMoment") }
         return try client.makeDecoder().decode(EchoMoment.Value.self, from: result)
     }
 
@@ -65,7 +65,7 @@ public final nonisolated class Api: Sendable {
     public func getFile() async throws -> GetFile.Result {
         let request = BlocksRequest(method: "api.getFile", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getFile") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getFile") }
         return try JSONDecoder().decode(GetFile.Result.self, from: result)
     }
 

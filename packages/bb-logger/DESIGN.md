@@ -15,14 +15,14 @@ exist for every compute.
 
 Because logging is unconditional, the CDK `Logger` is a **no-op placeholder**:
 its constructor just lets `new Logger(scope, id)` resolve in a CDK app. Any
-number of Loggers can coexist freely (they own nothing to collide over). The
-two things a Logger *used* to carry now live elsewhere:
+number of Loggers can coexist freely (they own nothing to collide over). Two
+settings that might look like Logger options live elsewhere:
 
 - **Retention** is a **compute-level setting**, not a Logger option. A compute's
   handler log group takes its retention from that compute's `logRetention` prop
   (e.g. `LambdaCompute`'s `logRetention`), falling back to the stack-wide
   `defaults.logRetention`. Set retention where the compute is constructed, not
-  on a Logger. (The `retention` option was removed from `LoggingOptions`.)
+  on a Logger. (`LoggingOptions` has no `retention` option.)
 - **Log level** is purely per-instance *runtime* behavior. A `Logger`'s `level`
   is applied by the logger instance itself; a logger without an explicit `level`
   defaults to `'info'` (see *Log Level Resolution* below). Blocks does **not**

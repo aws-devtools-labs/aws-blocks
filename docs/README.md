@@ -3,7 +3,7 @@
 ## Guides
 
 - **[guides/extending-with-existing-aws-resources.md](./guides/extending-with-existing-aws-resources.md)** — Brownfield interop: `BlocksStack`, `BlocksBackend`, `fromExisting`, custom BBs, vendorize
-- **[guides/upgrading-older-apps.md](./guides/upgrading-older-apps.md)** — Edits an app scaffolded from an older `create-blocks-app` template needs to synth on the current release, and how to give its backend a TypeScript project of its own
+- **[guides/upgrading-older-apps.md](./guides/upgrading-older-apps.md)** — Edits an app scaffolded from an older `create-blocks-app` template needs to synth on the current release, how to move a `KVStore` of release 0.4.0 or earlier past `custom-named resource requires replacing`, and how to give its backend a TypeScript project of its own
 
 ## Design
 

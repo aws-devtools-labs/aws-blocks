@@ -9,7 +9,12 @@
 //     $GITHUB_ENV except through that script;
 //   - a workflow that runs on pull requests grants `id-token: write` only to the
 //     jobs that assume an AWS role, never at workflow scope, so a job that builds
-//     PR code without needing AWS can't request an OIDC token.
+//     PR code without needing AWS can't request an OIDC token;
+//   - .github/actions/e2e-aws-credentials assumes the E2E role with the inline
+//     session policy from its session-policy.json: valid JSON, under the STS size
+//     limit with the role ARN added, no Allow of every action on every resource,
+//     role assumption only into the CDK bootstrap roles, and no changes to those
+//     roles or to the E2E role itself.
 //
 // Everything runs locally; nothing reaches AWS.
 // Run: node --test scripts/ci/workflow-secrets.test.mjs
@@ -332,4 +337,149 @@ describe('workflow OIDC scope', () => {
 			}
 		});
 	}
+});
+
+describe('E2E credentials session policy', () => {
+	const ACTION_DIR = fileURLToPath(new URL('../../.github/actions/e2e-aws-credentials/', import.meta.url));
+	const action = parse(readFileSync(join(ACTION_DIR, 'action.yml'), 'utf8'));
+	const steps = action.runs.steps;
+	const pick = steps.find((s) => s.id === 'pick');
+	const assume = steps.find((s) => s.uses?.startsWith('aws-actions/configure-aws-credentials@'));
+	const BOOTSTRAP_ROLES = 'arn:aws:iam::*:role/cdk-hnb659fds-*';
+	// STS rejects a session policy whose plaintext is longer than this.
+	const MAX_POLICY_CHARS = 2048;
+	// Longer than any E2E role ARN, so the size check leaves room for the real one.
+	const ROLE = `arn:aws:iam::${'0'.repeat(12)}:role/${'e2e/'.repeat(8)}${'r'.repeat(64)}`;
+	// The pick step pins role assumption to the selected role's account.
+	const ACCOUNT = ROLE.split(':')[4];
+	const ACCOUNT_BOOTSTRAP_ROLES = `arn:aws:iam::${ACCOUNT}:role/cdk-hnb659fds-*`;
+
+	/** Runs the pick step with the policy file it reads in the action. */
+	function runPick(roleArns, policyFile = join(ACTION_DIR, 'session-policy.json')) {
+		const out = join(tmp, `output-${runs++}`);
+		writeFileSync(out, '');
+		const result = spawnSync('bash', ['-e', '-c', pick.run], {
+			encoding: 'utf8',
+			env: {
+				PATH: process.env.PATH,
+				GITHUB_OUTPUT: out,
+				ROLE_ARNS: JSON.stringify(roleArns),
+				INDEX: '0',
+				ACCOUNTS: '',
+				POLICY_FILE: policyFile,
+			},
+		});
+		return { ...result, outputs: parseEnvFile(readFileSync(out, 'utf8')) };
+	}
+
+	const list = (v) => [v ?? []].flat();
+
+	it('passes the session policy from the pick step to the role assumption', () => {
+		assert.ok(pick && assume, 'expected the pick step and the configure-aws-credentials step');
+		assert.equal(assume.with['inline-session-policy'], '${{ steps.pick.outputs.session-policy }}');
+		assert.equal(pick.env.POLICY_FILE, '${{ github.action_path }}/session-policy.json');
+	});
+
+	it('writes the policy as compact JSON under the STS size limit', () => {
+		const { status, stderr, outputs } = runPick([ROLE]);
+		assert.equal(status, 0, stderr);
+		const text = outputs['session-policy'];
+		assert.ok(text, 'expected a session-policy output');
+		assert.ok(!text.includes('\n'), 'the policy must be a single line');
+		assert.ok(text.length <= MAX_POLICY_CHARS, `policy is ${text.length} characters`);
+		assert.equal(JSON.parse(text).Version, '2012-10-17');
+	});
+
+	it('fails when the policy is over the STS size limit', () => {
+		const big = join(tmp, 'big-policy.json');
+		const policy = JSON.parse(readFileSync(join(ACTION_DIR, 'session-policy.json'), 'utf8'));
+		policy.Statement[0].NotAction.push(...Array.from({ length: 200 }, (_, i) => `iam:Padding${i}`));
+		writeFileSync(big, JSON.stringify(policy));
+		const { status, stdout } = runPick([ROLE], big);
+		assert.notEqual(status, 0);
+		assert.match(stdout, /::error::.*2048/);
+	});
+
+	it('masks the account ID of the selected role', () => {
+		const { status, stderr, stdout } = runPick([ROLE]);
+		assert.equal(status, 0, stderr);
+		assert.ok(masks(stdout).includes(ACCOUNT), 'expected the account ID to be masked');
+	});
+
+	for (const arn of ['arn:aws:iam:::role/e2e', 'arn:aws:iam::not-an-account:role/e2e', 'e2e-role']) {
+		it(`fails when the role ARN has no account ID: ${arn}`, () => {
+			const { status, stdout, outputs } = runPick([arn]);
+			assert.notEqual(status, 0);
+			assert.match(stdout, /::error::.*account ID/);
+			assert.equal(outputs['session-policy'], undefined);
+		});
+	}
+
+	describe('the policy', () => {
+		const { outputs } = runPick([ROLE]);
+		const policy = JSON.parse(outputs['session-policy'] ?? '{"Statement":[]}');
+		const allows = policy.Statement.filter((s) => s.Effect === 'Allow');
+
+		it('never allows every action on every resource', () => {
+			assert.ok(allows.length > 0);
+			for (const s of allows) {
+				assert.ok(
+					!(list(s.Action).includes('*') && list(s.Resource).includes('*')),
+					`${s.Sid} allows "*" on "*"`,
+				);
+				assert.equal(s.NotResource, undefined, `${s.Sid} uses NotResource`);
+			}
+		});
+
+		it("allows role assumption only into the CDK bootstrap roles of the selected role's account", () => {
+			for (const s of allows) {
+				if (s.NotAction) {
+					for (const a of ['sts:AssumeRole', 'sts:TagSession']) {
+						assert.ok(list(s.NotAction).includes(a), `${s.Sid} allows ${a} on any role`);
+					}
+				}
+				if (list(s.Action).some((a) => a.startsWith('sts:'))) {
+					assert.deepEqual(list(s.Resource), [ACCOUNT_BOOTSTRAP_ROLES]);
+				}
+			}
+		});
+
+		it('keeps IAM user, access key and identity provider changes out of the broad allow', () => {
+			const broad = allows.find((s) => s.NotAction);
+			assert.ok(broad, 'expected the NotAction allow');
+			const kept = ['iam:*User*', 'iam:*AccessKey*', 'iam:*LoginProfile*', 'iam:*OpenIDConnectProvider*', 'organizations:*'];
+			for (const a of kept) {
+				assert.ok(list(broad.NotAction).includes(a), `expected ${a} in NotAction`);
+			}
+		});
+
+		it('keeps turning off CloudTrail and AWS Config recording out of the broad allow', () => {
+			const broad = allows.find((s) => s.NotAction);
+			assert.ok(broad, 'expected the NotAction allow');
+			const kept = [
+				'cloudtrail:DeleteTrail',
+				'cloudtrail:PutEventSelectors',
+				'cloudtrail:StopLogging',
+				'cloudtrail:UpdateTrail',
+				'cloudtrail:DeleteEventDataStore',
+				'cloudtrail:StopEventDataStoreIngestion',
+				'cloudtrail:UpdateEventDataStore',
+				'cloudtrail:PutInsightSelectors',
+				'config:StopConfigurationRecorder',
+				'config:DeleteConfigurationRecorder',
+			];
+			for (const a of kept) {
+				assert.ok(list(broad.NotAction).includes(a), `expected ${a} in NotAction`);
+			}
+		});
+
+		it('denies changes to the bootstrap roles and to the E2E role itself', () => {
+			const deny = policy.Statement.find((s) => s.Effect === 'Deny' && list(s.Resource).includes(BOOTSTRAP_ROLES));
+			assert.ok(deny, 'expected a Deny on the bootstrap roles');
+			assert.ok(list(deny.Resource).includes(ROLE), 'expected the E2E role in the Deny');
+			for (const a of ['iam:Put*', 'iam:Attach*', 'iam:Update*', 'iam:Delete*']) {
+				assert.ok(list(deny.Action).includes(a), `expected ${a} in the Deny`);
+			}
+		});
+	});
 });

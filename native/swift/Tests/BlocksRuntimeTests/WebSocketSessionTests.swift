@@ -40,10 +40,10 @@ final class WebSocketSessionTests: XCTestCase {
 
         XCTAssertThrowsError(try session.acquire(wsUrl: "", token: "tok", listener: delegate)) { error in
             if let realtimeError = error as? RealtimeError {
-                if case .websocket(let msg, _) = realtimeError {
+                if case .connectionFailed(let msg, _) = realtimeError {
                     XCTAssertTrue(msg.contains("Invalid WebSocket URL"))
                 } else {
-                    XCTFail("Expected .websocket error")
+                    XCTFail("Expected .connectionFailed error")
                 }
             } else {
                 XCTFail("Expected RealtimeError")

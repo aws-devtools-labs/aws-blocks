@@ -10,8 +10,8 @@ class OidcUnknownProviderException(val provider: String) :
 class OidcExchangeException(message: String, cause: Throwable? = null) :
     OidcException(message, cause)
 
-class OidcCallbackException(message: String) :
-    OidcException(message)
+class OidcCallbackException(message: String, cause: Throwable? = null) :
+    OidcException(message, cause)
 
 class OidcCancelledException(message: String = "Sign-in cancelled") :
     OidcException(message)

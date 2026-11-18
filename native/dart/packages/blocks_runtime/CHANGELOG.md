@@ -1,5 +1,7 @@
 ## Unreleased
 
+These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` removal and the sign-out below.
+
 - **Breaking:** remove `toJson()` from `RealtimeChannel`, `FileDownloadHandle`,
   `FileUploadHandle`, `OidcClient` and `UnknownTransferable`, which 0.2.0
   added. Transferables are read-only again: the server sends them, but never
@@ -7,6 +9,19 @@
   app shouldn't send a transferable to the server. Code that calls `toJson()`
   on one of these types no longer compiles, and `jsonEncode` of one throws
   `JsonUnsupportedObjectError`. Send the plain values the method needs instead.
+- **Signs out users whose cookies are still in the format written before
+  0.2.0:** `PersistentSessionStore` no longer reads the name → value map:
+  `load()` deletes it and the cookies it held are not used. This applies to
+  apps upgrading from a version before 0.2.0 whose stored cookies have not
+  been replaced by a `Set-Cookie` since; those users are signed out once and
+  sign in again. A stored cookie record without a `secure` field is read as
+  `Secure`.
+- `BlocksClient` now sends `x-blocks-user-agent` on web too, so a browser
+  app's RPC calls appear in client traffic metrics. The web build dropped the
+  header because the Blocks server's CORS preflight did not allow it, which
+  `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
+  (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
+  download and the WebSocket upgrade are unchanged.
 
 ## 0.2.0
 

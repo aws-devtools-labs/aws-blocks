@@ -10,8 +10,9 @@ exchange and `0` on refresh, so a token always read as expired. Refresh still re
 a response has no `expiresIn`. The client also stores the provider it signed in with and sends it on
 refresh, which a backend with two or more providers requires, and keeps the rotated refresh token.
 
-A refresh now ends the session only when the refresh route refuses it (HTTP 400 or 401): it clears
-the stored tokens and emits `.signedOut`. Any other failure, such as no network, a server error or a
-response without an access token, is thrown and keeps the tokens and the state, so a later refresh
-can retry. `getAccessToken()` and `onAuthFailure()` keep the tokens on such a failure too. A refresh
+A refresh now ends the session only when the refresh route refuses it (an `ApiError` with status
+400 or 401): it clears the stored tokens and emits `.signedOut`. Any other failure is thrown and keeps
+the tokens and the state, so a later refresh can retry: no network or a response without an access
+token (a `TransportError`), a server error (an `ApiError` with another status), a cancellation or a
+closed client. `getAccessToken()` and `onAuthFailure()` keep the tokens on such a failure too. A refresh
 that a sign-in or sign-out on the same client overtook stores nothing.

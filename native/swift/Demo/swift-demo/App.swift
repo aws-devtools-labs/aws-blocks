@@ -79,6 +79,8 @@ final class AppState: ObservableObject {
         do {
             _ = try await oidc().signIn(provider: provider, relayTo: Self.relayTo, launcher: WebAuthenticationLauncher())
             await refreshAuth()
+        } catch OIDCError.cancelled {
+            // The user closed the sign-in sheet: nothing to report.
         } catch {
             self.error = error.localizedDescription
         }
@@ -125,8 +127,11 @@ final class WebAuthenticationLauncher: NSObject, BrowserLauncher, ASWebAuthentic
             let session = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: callbackScheme) { url, error in
                 if let url {
                     continuation.resume(returning: url)
+                } else if let error, (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
+                    continuation.resume(throwing: error)
                 } else {
-                    continuation.resume(throwing: error ?? URLError(.cancelled))
+                    // The user closed the sheet: the client's catch site tells this from a failure.
+                    continuation.resume(throwing: OIDCError.cancelled)
                 }
             }
             session.presentationContextProvider = self

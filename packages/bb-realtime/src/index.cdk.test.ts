@@ -10,6 +10,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -22,7 +23,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Realtime } from './index.cdk.js';
 
 test('CDK: calling a runtime method throws an actionable error (not a cryptic TypeError)', () => {
-	// Unlike KVStore/DistributedTable tests which instantiate the construct directly,
+	// Unlike the KVStore tests which instantiate the construct directly,
 	// Realtime's constructor requires complex shared infrastructure (WebSocket API,
 	// DynamoDB connections table, AppSetting) that is impractical to stand up in a
 	// unit test. We access the prototype directly instead — the synth-guard stubs
@@ -181,4 +182,69 @@ test('CDK: distinct Realtime blocks in one stack synthesize (setup already adds 
 	new Realtime(stack, 'rt2', { namespaces: { chat: Realtime.namespace(passthroughSchema) } });
 	// Shared per-stack infra: still one WebSocket API.
 	Template.fromStack(stack).resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+});
+
+// ── Connections table key schema ────────────────────────────────────────────
+// The key attribute types are probed from the connections schema. Pin them, so a
+// change to the probe or to the schema cannot change the provisioned table.
+
+/**
+ * Synth a Realtime stack in a child process started with `--conditions=cdk` and return
+ * its DynamoDB tables and custom resources.
+ *
+ * Needed because this file imports `./index.cdk.js` directly, which leaves the
+ * nested `KVStore` resolving to its mock entry: that emits no CloudFormation.
+ * Only the condition-based resolution shows the table that a customer deploys.
+ */
+function synthUnderCdkConditions(): { type: string; properties: any }[] {
+	const probe = join(tmpDir, 'key-schema-probe.mjs');
+	writeFileSync(
+		probe,
+		`
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { Realtime } from '@aws-blocks/bb-realtime';
+
+const stack = await BlocksStack.create(new cdk.App(), 'KeySchemaProbeStack', {
+	backendHandlerPath: ${JSON.stringify(handlerPath)},
+	backendCDKPath: ${JSON.stringify(backendPath)},
+	defaults: BlocksPresets.production,
+	defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute'),
+});
+new Realtime(stack, 'rt', {
+	namespaces: { chat: Realtime.namespace({ '~standard': { version: 1, vendor: 'blocks-test', validate: (value) => ({ value }) } }) },
+});
+const resources = Object.values(Template.fromStack(stack).toJSON().Resources)
+	.filter((r) => r.Type === 'AWS::DynamoDB::Table' || r.Type === 'AWS::CloudFormation::CustomResource')
+	.map((r) => ({ type: r.Type, properties: r.Properties }));
+console.log('__RESOURCES__' + JSON.stringify(resources));
+`,
+	);
+	const result = spawnSync(process.execPath, ['--conditions=cdk', probe], { encoding: 'utf8' });
+	assert.strictEqual(result.status, 0, result.stderr);
+	const line = result.stdout.split('\n').find((l) => l.startsWith('__RESOURCES__'));
+	assert.ok(line, `the probe printed no resources: ${result.stdout}`);
+	return JSON.parse(line.slice('__RESOURCES__'.length));
+}
+
+test('CDK: the connections table is keyed by connectionId (S) + channel (S), with channel-index and TTL on expiresAt', () => {
+	const resources = synthUnderCdkConditions();
+	const tables = resources.filter((r) => r.type === 'AWS::DynamoDB::Table');
+	assert.strictEqual(tables.length, 1, 'Realtime provisions one table');
+	assert.deepStrictEqual(tables[0].properties.KeySchema, [
+		{ AttributeName: 'connectionId', KeyType: 'HASH' },
+		{ AttributeName: 'channel', KeyType: 'RANGE' },
+	]);
+	assert.deepStrictEqual(tables[0].properties.AttributeDefinitions, [
+		{ AttributeName: 'connectionId', AttributeType: 'S' },
+		{ AttributeName: 'channel', AttributeType: 'S' },
+	]);
+	assert.deepStrictEqual(tables[0].properties.TimeToLiveSpecification, { AttributeName: 'expiresAt', Enabled: true });
+	const indexResources = resources.filter((r) => r.type === 'AWS::CloudFormation::CustomResource');
+	assert.strictEqual(indexResources.length, 1);
+	assert.deepStrictEqual(indexResources[0].properties.Indexes, {
+		'channel-index': { partitionKey: 'channel', sortKey: 'connectionId', partitionKeyType: 'S', sortKeyType: 'S' },
+	});
 });

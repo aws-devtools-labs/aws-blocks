@@ -8,7 +8,7 @@ npm install @aws-blocks/bb-database
 
 **When to use:** relational data, joins, foreign keys, views, and multi-statement transactions, on a cluster with no VPC to manage.
 
-**When not to use:** data that one key or one table pattern can serve. `KVStore` and `DistributedTable` have no cluster to manage.
+**When not to use:** data that one key or one table pattern can serve. `KVStore` has no cluster to manage.
 
 **Which cluster:** the default `dsql` cluster for most apps. Triggers, PL/pgSQL, extensions, Row Level Security on raw SQL, and transactions over 3,000 rows need full PostgreSQL: put the block on an `aurora` cluster (`new DatabaseCluster(scope, 'main', { type: 'aurora' })`). It is created in seconds, scales to zero, needs no VPC, and runs the PostgreSQL migration files you already have. Its storage is encrypted with an AWS-owned key (the express configuration accepts no customer managed KMS key) and the first request after five idle minutes waits about 20 seconds for the cluster to resume unless `minCapacity` is at least `0.5`.
 
@@ -124,7 +124,7 @@ Cluster options:
 | `type` | `'dsql' \| 'aurora'` | Required. `dsql` is Aurora DSQL. `aurora` is Aurora PostgreSQL Serverless v2 created with the express configuration: all of PostgreSQL, no VPC, IAM authentication, scales to zero. |
 | `removalPolicy` | `'retain' \| 'destroy' \| 'snapshot'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. `snapshot` (an `aurora` cluster only) takes a final snapshot before deleting it. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
 | `minCapacity` | `number` | `aurora` only. The floor in Aurora Capacity Units, in 0.5 steps. Default `0`: the cluster pauses after five idle minutes and costs nothing while paused; the first connection afterwards takes about 20 seconds. `0.5` keeps it warm. |
-| `maxCapacity` | `number` | `aurora` only. The ceiling in ACUs, 1 to 256 in 0.5 steps. Default `2`. Raised in place, without replacing the cluster. |
+| `maxCapacity` | `number` | `aurora` only. The ceiling in ACUs, 1 to 256 in 0.5 steps. Default `2`. Raised in place, without replacing the cluster. The ceiling bounds throughput: a cluster under sustained load stays at the ceiling and does not go faster, so raise `maxCapacity` when the load needs more than the default. |
 | `pointInTimeRecovery` | `boolean \| { retentionDays }` | `aurora` only. Automated backups, which are Aurora's point-in-time recovery window: `true` keeps 15 days, `{ retentionDays: n }` pins the window (1 to 35), `false` keeps the one day the service always keeps. Defaults to the stack-wide `defaults.pointInTimeRecovery`: on in production, off in a sandbox. |
 
 Block options:
@@ -223,7 +223,7 @@ On a `dsql` cluster the file resumes where it stopped. A failed index build or c
 
 DSQL uses [optimistic concurrency](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-concurrency-control.html): a transaction never waits on a lock. Two transactions that change the same row both run to the end. Then one commit fails with `SerializationFailure` (SQLSTATE `40001`, HTTP 409, flagged retriable). `SELECT … FOR UPDATE` is supported and makes a read conflict with concurrent writes, which is how a read-modify-write stays correct.
 
-- Pass `{ retryOnConflict: true }` to re-run the callback on a conflict. It is off by default because a callback may have side effects. `maxRetries` defaults to 3. A single `query` or `execute` outside a transaction is always retried (see [Errors](#errors)).
+- Pass `{ retryOnConflict: true }` to re-run the callback on a conflict. It is off by default because a callback may have side effects. `maxRetries` defaults to 8. Before each re-run the block waits a random time between 0 and a ceiling: 50 ms for the first retry, doubled with each retry, 2,000 ms at most. The random wait keeps transactions that conflicted together from re-running together. With the default, the waits add up to 7.15 seconds at most; set a smaller `maxRetries` when the caller cannot wait that long. Pass `signal: context.request.signal` to stop the retries at the request deadline: without it, a retry can commit after the caller received a timeout. The wait is the same in local mode and on AWS. A single `query` or `execute` outside a transaction is always retried (see [Errors](#errors)).
 - A transaction may change at most 3,000 rows (cascaded deletes included) and 10 MiB of data. Past either it fails with `TransactionRowLimitExceeded` and nothing is kept. Split bulk work into batches.
 - A throw inside the callback rolls the transaction back. An `ApiError`, a branded Blocks error or a `DatabaseErrors` error reaches the caller unchanged. Any other error becomes `TransactionFailed` and its text stays on the server.
 - Inside the callback, `shop.query()`, `shop.queryOne()` and `shop.execute()` on the block that opened the transaction run in it, as `tx` does. Prefer `tx`: it shows the transaction where the statement is written.
@@ -276,7 +276,7 @@ Query and transaction failures carry a `DatabaseErrors` name. Match them with `i
 | `ConnectionFailed` | The connection to the cluster failed or was lost (SQLSTATE class `08`) | A single `query` or `execute`: once, on a fresh connection. Inside a transaction: no |
 | `TransactionFailed` | The callback threw an error that is not an `ApiError`, a Blocks error or a database error, or a statement reached the transaction after it ended (a promise the callback did not await) | No |
 | `UniqueConstraintViolation` | SQLSTATE `23505` (HTTP 409) | No |
-| `SerializationFailure` | SQLSTATE `40001`, usually at commit (HTTP 409, retriable) | A single `query` or `execute`: three times. A `transaction()` callback: only with `retryOnConflict: true` |
+| `SerializationFailure` | SQLSTATE `40001`, usually at commit (HTTP 409, retriable) | A single `query` or `execute`: three times. A `transaction()` callback: only with `retryOnConflict: true` (see [Transactions](#transactions)) |
 | `TransactionRowLimitExceeded` | More than 3,000 rows changed (cascades included) or more than 10 MiB written in one transaction, locally and on DSQL (SQLSTATE `54000`) | No; split the work |
 | `ResultValidationFailed` | A row did not match the `schema` passed to `query()` or `queryOne()`. The message, which reaches the client, names the row index and the first issue's path; the library's issue messages stay on the server-side `cause` | No; fix the schema or the query |
 
