@@ -1085,8 +1085,12 @@ export interface SecretRef {
 
 // @public
 export interface SessionOptions {
+    accessTokenValiditySeconds?: number;
     crossDomain?: boolean;
     freshAgeSeconds?: number;
+    idTokenValiditySeconds?: number;
+    refreshTokenRotation?: boolean;
+    refreshTokenValiditySeconds?: number;
     ttlSeconds?: number;
 }
 

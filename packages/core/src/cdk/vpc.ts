@@ -45,7 +45,7 @@ export function setVpcContext(scope: Construct, context: VpcContext): void {
 
 /**
  * Get the VPC context from a scope by walking up the construct tree.
- * Used by BBs (e.g., bb-data) to discover the shared VPC.
+ * Used by BBs to discover the shared VPC.
  * @internal
  */
 export function getVpcContext(scope: Construct): VpcContext | undefined {
@@ -91,8 +91,7 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
  *
  * VPC is a **derived** resource: when a Building Block (or, later, a container
  * compute) requires one and the customer didn't bring their own, Blocks
- * materializes a sensible default here — the same create-if-absent pattern
- * `bb-data` uses for Aurora, lifted to the framework so the whole app shares a
+ * materializes a sensible default here, so the whole app shares a
  * single VPC. Keyed by a Symbol on the stack so it's a true singleton: the first
  * caller creates, everyone else reuses. Passing a customer VPC (`vpc:` prop)
  * pre-seeds this via {@link initializeVpc}, so this default is only built when
@@ -261,8 +260,8 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	if (options.provisionEndpoints === false) {
 		// The customer owns the endpoints, so Blocks can't admit BB-provisioned
 		// compute on them. Say which SGs need admitting rather than let the
-		// compute (e.g. a Database's rotation Lambda) fail at runtime with a
-		// Secrets Manager timeout. The SG is named by construct path, since
+		// compute fail at runtime with a
+		// timeout. The SG is named by construct path, since
 		// `securityGroupId` is a deploy-time token that would render as
 		// `${Token[...]}` in the synth output. A BB that registers the same SG
 		// twice warns once: `Annotations` drops a message equal to one the scope

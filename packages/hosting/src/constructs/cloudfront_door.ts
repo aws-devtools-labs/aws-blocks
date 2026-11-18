@@ -39,7 +39,12 @@ export const cloudFrontDoor = defineFrontDoor<CloudFrontDoorInput, CloudFrontDoo
   service: 'cloudfront',
 
   build(scope: Construct, input) {
-    const cdn = new CdnConstruct(scope, 'Cdn', input.cdnProps);
+    const cdn = new CdnConstruct(scope, 'Cdn', {
+      ...input.cdnProps,
+      // The server as built: a buffered Lambda handler is integrated without
+      // streaming (as on the API Gateway REST door).
+      serverStreaming: input.origins.server?.streaming ?? true,
+    });
     return {
       url: cdn.distributionUrl,
       originHandle: { domainName: cdn.distribution.distributionDomainName, protocol: 'https' },

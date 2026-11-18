@@ -80,8 +80,7 @@ export interface VpcRequirements {
 	 * provision resources into) a VPC regardless of whether the customer asked
 	 * for one. When any registered requirement sets this and no `vpc` was
 	 * provided, the framework **lazily derives** a default VPC (see
-	 * `getOrCreateVpc`) rather than erroring — mirroring how bb-data creates its
-	 * own VPC when no shared one exists.
+	 * `getOrCreateVpc`) rather than erroring.
 	 *
 	 * Most BBs leave this unset: they reach AWS services from the AWS-managed
 	 * Lambda network and only *benefit* from a VPC (endpoints) when one is present.
@@ -118,7 +117,7 @@ export interface VpcRequirements {
 	/**
 	 * Security groups of compute the BB provisions **itself** (not the shared
 	 * Blocks runtime) that must reach the Blocks-managed interface endpoints —
-	 * e.g. the rotation Lambda a `Database` places in the shared VPC. The endpoint
+	 * e.g. a Lambda the BB places in the shared VPC. The endpoint
 	 * security group admits only the Blocks Lambda SG by default (see
 	 * `finalizeVpc`), so without this registration such compute cannot reach the
 	 * endpoints and fails at runtime. Each listed security group gets a 443
@@ -142,9 +141,9 @@ export interface VpcRequirements {
 	/**
 	 * Constructs of the BB that must not be created before its registered
 	 * `endpointClientSecurityGroups` can reach the endpoints — e.g. a
-	 * `Database`'s rotation schedule, which rotates as soon as it exists and has
-	 * no route until the endpoint and the ingress rule admitting the rotation
-	 * Lambda are in place. `finalizeVpc` orders each one after the endpoints and
+	 * schedule that invokes that compute as soon as it exists, which has
+	 * no route until the endpoint and the ingress rule admitting the compute
+	 * are in place. `finalizeVpc` orders each one after the endpoints and
 	 * that rule.
 	 *
 	 * Register the construct itself only if nothing the endpoint security group

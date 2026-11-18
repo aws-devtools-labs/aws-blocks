@@ -16,7 +16,6 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'CronJob',
   'Dashboard',
   'Database',
-  'DistributedDatabase',
   'EmailClient',
   'FileBucket',
   'KVStore',

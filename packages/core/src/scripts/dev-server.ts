@@ -30,7 +30,6 @@ import { MAX_RPC_BODY_BYTES, errorResponse, payloadTooLargeResponse } from '../r
 import { redactToJson } from '../redact.js';
 import { isIpLiteral, isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
-import { applyDevMigrations } from './external-migrations-step.js';
 import {
   claimDevPidfile,
   DEV_SESSION_ENV,
@@ -956,15 +955,15 @@ export function devStopCommand(port: number): string {
   return port === 3000 ? 'npx --no -- cdk-blocks dev stop' : `npx --no -- cdk-blocks dev stop --port ${port}`;
 }
 
-/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/data-common`). */
+/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/bb-database`). */
 const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
 
 /** How long {@link closeLocalEngines} waits for the engines: within `tsx watch`'s 5 s, with the frontend's teardown. */
 const ENGINE_CLOSE_TIMEOUT_MS = 3000;
 
 /**
- * Close every local data engine of this process (PGlite for `bb-data` and the
- * DSQL mock), as their `beforeExit` hook would: the dev server ends with
+ * Close every local data engine of this process (the PGlite of each local
+ * `Database`), as their `beforeExit` hook would: the dev server ends with
  * `process.exit()`, which skips that hook. A closed engine shuts PostgreSQL
  * down and removes its `postmaster.pid`. Waits at most `timeoutMs`; never throws.
  */
@@ -1123,11 +1122,6 @@ export async function startDevServer(options: DevServerOptions) {
   try { process.loadEnvFile('.env.local'); } catch (e: any) {
     if (e.code !== 'ENOENT') throw e;
   }
-
-  // Apply pending external-database migrations to the dev database so the schema
-  // change is live locally and the generated types are refreshed from it.
-  // No-op for managed/PGlite apps; refuses if .env.local points at production.
-  await applyDevMigrations();
 
   // Resolve path and convert to file URL for dynamic import
   const resolvedPath = resolve(backendPath);

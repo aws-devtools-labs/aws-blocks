@@ -393,3 +393,34 @@ void describe('astroAdapter — remote image allowlist with no image function', 
     assert.strictEqual(manifest.imageRemoteSources, undefined);
   });
 });
+
+void describe('astroAdapter — app build environment', () => {
+  let tmp: string;
+  let savedNodeOptions: string | undefined;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-adapter-build-env-'));
+    savedNodeOptions = process.env.NODE_OPTIONS;
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'astro'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'node_modules', 'astro', 'package.json'), JSON.stringify({ name: 'astro', version: '5.0.0' }));
+    fs.writeFileSync(path.join(tmp, 'astro.config.mjs'), "export default { output: 'static' };\n");
+  });
+  afterEach(() => {
+    mock.restoreAll();
+    if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = savedNodeOptions;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('runs the app build without the cdk condition a synth sets in NODE_OPTIONS', () => {
+    let buildEnv: NodeJS.ProcessEnv | undefined;
+    mock.method(spawn, 'sync', (_bin: string, _args: readonly string[], opts: { env?: NodeJS.ProcessEnv }) => {
+      buildEnv = opts.env;
+      fs.mkdirSync(path.join(tmp, 'dist'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'dist', 'index.html'), '<html></html>');
+    });
+    process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=4096';
+    astroAdapter({ projectDir: tmp });
+    assert.equal(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
+    assert.equal(buildEnv?.PATH, process.env.PATH);
+  });
+});
