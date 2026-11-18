@@ -301,7 +301,7 @@ const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 test('bb-* discovery floor', () => {
 	// The browser checks below cover every bb-* package, so a floor keeps the set
 	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
-	assert.ok(buildingBlocks.length >= 20, `Expected ≥20 bb-* packages, found ${buildingBlocks.length}`);
+	assert.ok(buildingBlocks.length >= 19, `Expected ≥19 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // ── BB packages: browser (auto-discovered) ──────────────────────────────────

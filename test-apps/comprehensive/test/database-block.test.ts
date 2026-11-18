@@ -5,8 +5,9 @@ import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
 import type { api as apiType } from 'aws-blocks';
@@ -39,13 +40,15 @@ type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 type DbxKyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
 type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; value: number }>>;
 
+// The `cdk-blocks` entry of @aws-blocks/blocks, by path: npm links a bin only when its file exists at install
+// time, and this repository builds after it installs.
+const CDK_BLOCKS = join(dirname(fileURLToPath(import.meta.resolve('@aws-blocks/blocks'))), 'cli', 'bin.js');
+
 /** One `cdk-blocks db` run in the app directory; returns the JSON object the tool prints. */
 function cdkBlocksDb(...args: string[]): unknown {
-  const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const stdout = execFileSync(npx, ['--no', '--', 'cdk-blocks', 'db', ...args, '--', '--output', 'json'], {
+  const stdout = execFileSync(process.execPath, [CDK_BLOCKS, 'db', ...args, '--', '--output', 'json'], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    shell: process.platform === 'win32',
   });
   return JSON.parse(stdout);
 }
