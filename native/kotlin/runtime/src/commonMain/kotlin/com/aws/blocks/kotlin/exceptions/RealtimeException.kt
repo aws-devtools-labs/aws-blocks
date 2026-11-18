@@ -35,7 +35,9 @@ class RealtimeConnectionException(message: String, cause: Throwable? = null) :
  *   that returned it and subscribe to the new handle.
  * - `access_revoked` and `principal_mismatch`: the user lost access, or the token belongs to
  *   another user. Don't retry as the same user.
- * - `null`: the server refused the subscribe.
+ * - `null`: the server refused the subscribe, for example because the token is invalid or
+ *   expired. A channel handle the app has held for a while can get this, because its token
+ *   expired before the subscribe, so get the channel again.
  *
  * @property channel the channel whose subscription ended
  * @property code the server's code, or `null` when it sent none

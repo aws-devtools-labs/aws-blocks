@@ -81,7 +81,7 @@ throws a `RealtimeException`:
 
 | Exception | When | What to do |
 |---|---|---|
-| `RealtimeSubscriptionEndedException` | The server refused the subscribe or ended it. `code` is the server's code: `token_expired`, `access_revoked`, `principal_mismatch`, or `null` for a refused subscribe. | On `token_expired`, call the API method that returned the channel again and subscribe to the new handle. On the others, don't retry as the same user. |
+| `RealtimeSubscriptionEndedException` | The server refused the subscribe or ended it. `code` is the server's code: `token_expired`, `access_revoked`, `principal_mismatch`, or `null` when the server refused the subscribe, for example because the token is invalid or expired. | On `token_expired`, call the API method that returned the channel again and subscribe to the new handle. On `null`, do the same if the handle has been held for a while, since its token can expire before the subscribe. On `access_revoked` and `principal_mismatch`, don't retry as the same user. |
 | `RealtimeConnectionException` | The socket couldn't open, failed, or was closed by the server or the gateway. | Get the channel again and subscribe to the new handle. |
 
 A message the deserializer can't decode ends the flow with the deserializer's error.
@@ -93,14 +93,29 @@ the `token_expired` error arrives.
 
 ```kotlin
 suspend fun followCursors(blocks: Blocks) {
+    var backoff = 1.seconds
     while (true) {
         try {
-            blocks.api.realtimeGetChannel("room-1").subscribe().collect { cursor -> draw(cursor) }
+            blocks.api.realtimeGetChannel("room-1").subscribe().collect { cursor ->
+                backoff = 1.seconds
+                draw(cursor)
+            }
             return
         } catch (e: RealtimeSubscriptionEndedException) {
-            if (e.code != "token_expired") throw e
+            // A fresh channel has a fresh token. Any other code means the user lost access.
+            if (e.code != "token_expired" && e.code != null) throw e
+            // A refusal with no code repeats if the new token is refused too, so back off.
+            if (e.code == null) backoff = waitAndGrow(backoff)
+        } catch (e: RealtimeConnectionException) {
+            // The socket dropped, for example when the network did.
+            backoff = waitAndGrow(backoff)
         }
     }
+}
+
+suspend fun waitAndGrow(backoff: Duration): Duration {
+    delay(backoff)
+    return (backoff * 2).coerceAtMost(30.seconds)
 }
 ```
 
