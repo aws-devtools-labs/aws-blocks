@@ -1,18 +1,18 @@
 import Foundation
 
 
-public nonisolated enum Capability: String, Codable {
+public nonisolated enum AuthActionCapability: String, Codable, Sendable {
     case webauthnGet = "webauthn-get"
     case webauthnCreate = "webauthn-create"
 }
 
-public nonisolated enum AuthActionMethod: String, Codable {
+public nonisolated enum AuthActionMethod: String, Codable, Sendable {
     case get = "GET"
     case post = "POST"
 }
 
-public nonisolated struct AuthAction: Codable {
-    public let capability: Capability?
+public nonisolated struct AuthAction: Codable, Sendable {
+    public let capability: AuthActionCapability?
     public let fields: [AuthField]
     public let label: String
     public let method: AuthActionMethod?
@@ -41,7 +41,7 @@ public nonisolated struct AuthAction: Codable {
         try c.encodeIfPresent(self.url, forKey: .url)
     }
 
-    public init(capability: Capability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, unavailable: String? = nil, url: String? = nil) {
+    public init(capability: AuthActionCapability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, unavailable: String? = nil, url: String? = nil) {
         self.capability = capability
         self.fields = fields
         self.label = label
@@ -52,7 +52,7 @@ public nonisolated struct AuthAction: Codable {
     }
 }
 
-public nonisolated enum AuthFieldType: String, Codable {
+public nonisolated enum AuthFieldType: String, Codable, Sendable {
     case number
     case password
     case email
@@ -61,7 +61,7 @@ public nonisolated enum AuthFieldType: String, Codable {
     case hidden
 }
 
-public nonisolated struct AuthField: Codable {
+public nonisolated struct AuthField: Codable, Sendable {
     public let defaultValue: String?
     public let label: String
     public let name: String
@@ -94,7 +94,7 @@ public nonisolated struct AuthField: Codable {
     }
 }
 
-public nonisolated enum AuthStateState: String, Codable {
+public nonisolated enum AuthStateState: String, Codable, Sendable {
     case signedOut
     case signedIn
     case confirmingSignUp
@@ -103,7 +103,7 @@ public nonisolated enum AuthStateState: String, Codable {
     case confirmingPasswordReset
 }
 
-public nonisolated struct AuthState: Codable {
+public nonisolated struct AuthState: Codable, Sendable {
     public let actions: [AuthAction]
     public let error: String?
     public let errorName: String?
@@ -140,7 +140,7 @@ public nonisolated struct AuthState: Codable {
     }
 }
 
-public nonisolated struct AuthUser: Codable {
+public nonisolated struct AuthUser: Codable, Sendable {
     public let displayName: String?
     public let userId: String
     public let username: String
@@ -165,7 +165,7 @@ public nonisolated struct AuthUser: Codable {
     }
 }
 
-public nonisolated struct Todo: Codable {
+public nonisolated struct Todo: Codable, Sendable {
     public let completed: Bool
     public let createdAt: Double
     public let priority: Double

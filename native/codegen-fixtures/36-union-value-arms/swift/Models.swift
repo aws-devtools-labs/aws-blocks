@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Point: Codable {
+public nonisolated struct Point: Codable, Sendable {
     public let x: Double
     public let y: Double
 

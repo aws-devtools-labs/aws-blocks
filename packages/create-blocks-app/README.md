@@ -40,6 +40,8 @@ This writes `aws-blocks/tsconfig.json`, a TypeScript project that checks the bac
 
 In an npm workspaces monorepo, the app's `aws-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["aws-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/aws-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
 
+It also adds to your `.gitignore` (or creates one): the AWS Blocks build and local-data paths, secret and key-material patterns such as `.env` and `*.pem`, and `node_modules` unless a line such as `node_modules`, `node_modules/` or `/node_modules` already ignores it. A `.gitignore` that un-ignores it (`!node_modules`) is left as it is. Lines you already have are kept, and the CLI prints the ones it adds.
+
 ### Add Blocks to an Amplify Gen 2 Project
 
 Already have an Amplify Gen 2 app? Run from your project root:
@@ -128,26 +130,35 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
-Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`: `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings live in `package.json#blocks.dev`.
+The app runs its installed `@aws-blocks/blocks/run` entry through npm scripts. Run `npm run help` for the command list or `npm run help sandbox destroy` for one task. The dev server settings live in `package.json#blocks.dev`.
 
 ```json
 {
   "scripts": {
-    "dev": "cdk-blocks dev",
-    "dev:stop": "cdk-blocks dev stop",
-    "sandbox": "cdk-blocks sandbox",
-    "sandbox:deploy": "cdk-blocks sandbox deploy",
-    "sandbox:preview": "cdk-blocks sandbox preview",
-    "sandbox:destroy": "cdk-blocks sandbox destroy",
-    "sandbox:console": "cdk-blocks sandbox console",
-    "cleanup": "cdk-blocks dev stop --all",
-    "deploy": "cdk-blocks deploy",
-    "destroy": "cdk-blocks destroy",
-    "secret": "cdk-blocks secret",
-    "typegen": "cdk-blocks generate types",
-    "spec": "cdk-blocks generate spec",
-    "vendorize": "cdk-blocks vendorize",
-    "prebuild": "cdk-blocks generate client",
+    "docs": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --api",
+    "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- help",
+    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
+    "telemetry": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- telemetry",
+    "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
+    "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
+    "dev": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev",
+    "dev:stop": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev stop",
+    "sandbox": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox",
+    "sandbox:deploy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox deploy",
+    "sandbox:preview": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox preview",
+    "sandbox:destroy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox destroy",
+    "sandbox:console": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox console",
+    "cleanup": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev stop --all",
+    "deploy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- deploy",
+    "destroy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- destroy",
+    "secret": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- secret",
+    "typegen": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate types",
+    "spec": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate spec",
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize",
+    "prebuild": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
     "typecheck": "tsc -b --force",
     "build": "tsc -b --force && vite build"
   },
@@ -157,11 +168,11 @@ Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `
 }
 ```
 
-No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `cdk-blocks dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `cron`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `cdk-blocks dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only`, `cron` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`cdk-blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false, "generateClient": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`. `"generateClient": false` stops the dev server from replacing that client's `aws-blocks/client.js` with the generic one.
+No template sets `frontendCommand`: `npm run dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --host 127.0.0.1 --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `npm run dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `cron`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `npm run dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only`, `cron` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`npm run dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`. If an overlay keeps an existing script name, find the Blocks task in `package.json` under `scripts` by its `@aws-blocks/blocks/run` entry and trailing command, then use that script name in the examples.
 
-`npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question.
+`npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question. For structured tasks such as docs, terminal output defaults to text and redirected or piped stdout defaults to JSON. Use `npm run -s docs KVStore | jq .` to keep npm banners out of the pipe; pass `-- --output text` to request text instead.
 
-Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `aws-blocks/scripts/*.ts` wrappers. Run `npx --no -- cdk-blocks migrate` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `aws-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
+Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `aws-blocks/scripts/*.ts` wrappers. Run `node --input-type=module -e "import '@aws-blocks/blocks/run'" -- migrate` from the app root after updating `@aws-blocks/blocks` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `aws-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
 
 ### `@aws-blocks/*` Dependency Versions
 

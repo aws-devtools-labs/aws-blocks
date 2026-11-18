@@ -473,8 +473,7 @@ class PublicResultTests(unittest.TestCase):
         cases = {
             'kv_store': {backend: 'const todos = new KVStore<Todo>(scope, "todos");'},
             'distributed_table': {'todo-app/aws-blocks/lib/store.ts': 'new DistributedTable<Todo>(this, "t", {})'},
-            'database': {backend: 'const db = new Database(scope, "db");'},
-            'distributed_database': {backend: 'const db = new  DistributedDatabase(scope, "db");'},
+            'database': {backend: 'const db = new  Database(scope, "db");'},
             'file_bucket': {backend: 'const files = new FileBucket(scope, "files");'},
             'multiple': {backend: 'new KVStore(scope, "a")', 'todo-app/aws-blocks/files.ts': 'new FileBucket(s, "f")'},
             # Imports and types are not use; generated JS, dependencies and frontend code are not the backend.

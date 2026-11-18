@@ -14,6 +14,8 @@ export const authBasicApi = __BLOCKS_ApiNamespaceClient__('authBasicApi');
 export const authCognitoApi = __BLOCKS_ApiNamespaceClient__('authCognitoApi');
 export const oidcAuthApi = __BLOCKS_ApiNamespaceClient__('oidcAuthApi');
 export const oidcAuthStateApi = __BLOCKS_ApiNamespaceClient__('oidcAuthStateApi');
+export const ssoAuthStateApi = __BLOCKS_ApiNamespaceClient__('ssoAuthStateApi');
+export const ssoOidcApi = __BLOCKS_ApiNamespaceClient__('ssoOidcApi');
 
 export const generateClient = (config) => ({
     api: __BLOCKS_ApiNamespaceClient__('api', config),
@@ -21,4 +23,6 @@ export const generateClient = (config) => ({
     authCognitoApi: __BLOCKS_ApiNamespaceClient__('authCognitoApi', config),
     oidcAuthApi: __BLOCKS_ApiNamespaceClient__('oidcAuthApi', config),
     oidcAuthStateApi: __BLOCKS_ApiNamespaceClient__('oidcAuthStateApi', config),
+    ssoAuthStateApi: __BLOCKS_ApiNamespaceClient__('ssoAuthStateApi', config),
+    ssoOidcApi: __BLOCKS_ApiNamespaceClient__('ssoOidcApi', config),
 });

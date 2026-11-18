@@ -90,7 +90,7 @@ function declarationInList(list, name) {
 function resolve(node, name) {
 	for (let scope = node.parent; scope; scope = scope.parent) {
 		if (ts.isFunctionLike(scope)) {
-			for (const p of scope.parameters ?? []) if (bindingNames(p.name).includes(name)) return { kind: 'other' };
+			for (const p of scope.parameters ?? []) if (bindingNames(p.name).includes(name)) return { kind: 'parameter', param: p };
 			if (scope.name && ts.isIdentifier(scope.name) && scope.name.text === name && !ts.isFunctionDeclaration(scope)) {
 				return { kind: 'function', fn: scope };
 			}
@@ -212,6 +212,25 @@ function isInlineRegexEscape(call) {
 	return !!m && REGEX_META.every((c) => m[1].includes(c === '\\\\' ? '\\\\' : `\\${c}`) || m[1].includes(c));
 }
 
+/** A string-array parameter mapped through a locally declared regex escape helper, then joined with `|`. */
+function isEscapedAlternation(join) {
+	if (!ts.isPropertyAccessExpression(join.expression) || join.expression.name.text !== 'join') return false;
+	const [separator] = join.arguments;
+	if (join.arguments.length !== 1 || !ts.isStringLiteral(separator) || separator.text !== '|') return false;
+	const map = join.expression.expression;
+	if (!ts.isCallExpression(map) || !ts.isPropertyAccessExpression(map.expression) || map.expression.name.text !== 'map') return false;
+	const [escape] = map.arguments;
+	if (map.arguments.length !== 1 || !ts.isIdentifier(escape) || !REGEX_SAFE_CALLS.test(escape.text)) return false;
+	const helper = resolve(escape, escape.text)?.fn;
+	if (!helper || !ts.isFunctionDeclaration(helper)) return false;
+	// An arbitrary object's map method need not apply its callback to each item.
+	const words = map.expression.expression;
+	if (!ts.isIdentifier(words)) return false;
+	const param = resolve(words, words.text)?.param;
+	return !!param && ts.isIdentifier(param.name) && !!param.type &&
+		ts.isArrayTypeNode(param.type) && param.type.elementType.kind === ts.SyntaxKind.StringKeyword;
+}
+
 /**
  * Whether `node` is a compile-time constant: a literal, a template or `+` of
  * constants, a `const` bound to a constant, or a value that passes through one
@@ -285,7 +304,11 @@ export const REGEX_SAFE_CALLS = /^(?:escapeRegExp|escapeRegex)$/;
  */
 export function findRegexSinks(file, text) {
 	const sf = parseSource(file, text);
-	const ctx = { seen: new Set(), safeCalls: REGEX_SAFE_CALLS, inlineEscape: isInlineRegexEscape };
+	const ctx = {
+		seen: new Set(),
+		safeCalls: REGEX_SAFE_CALLS,
+		inlineEscape: (call) => isInlineRegexEscape(call) || isEscapedAlternation(call),
+	};
 	const found = [];
 	walk(sf, (node) => {
 		if (!(ts.isNewExpression(node) || ts.isCallExpression(node))) return;

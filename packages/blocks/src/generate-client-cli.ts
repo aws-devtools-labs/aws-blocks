@@ -3,14 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CLI wrapper that regenerates the app's typed client (`aws-blocks/client.js`).
- * Exposed as the `blocks-generate-client` bin on `@aws-blocks/blocks`, so any
- * Blocks app can wire it as a `prebuild` hook:
- *
- *     "prebuild": "blocks-generate-client"
- *
- * Usage:
- *   blocks-generate-client [foundationPath] [outputPath]
+ * Internal helper for `npm run generate-client [foundationPath] [outputPath]`.
+ * It regenerates the app's typed client (`aws-blocks/client.js`).
  *
  * Defaults:
  *   foundationPath = ./aws-blocks/index.ts
@@ -20,9 +14,9 @@
  * register their client middleware when the backend is imported, and which
  * middleware registers depends on the active Node export conditions. Under the
  * default conditions Realtime registers `mock-middleware`; production bundles
- * need `aws-middleware`. This CLI therefore always spawns the generator worker
+ * need `aws-middleware`. The helper therefore always spawns the generator worker
  * in a child process with `--conditions=aws-runtime`, so the emitted
- * `client.js` is correct regardless of how the hook itself was invoked.
+ * `client.js` is correct regardless of how the task was invoked.
  *
  * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
  * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
@@ -56,7 +50,7 @@ function resolveTsxLoader(): string | undefined {
 }
 
 if (!existsSync(foundationPath)) {
-	console.error(`blocks-generate-client: cannot find ${foundationPath}`);
+	console.error(`generate-client: cannot find ${foundationPath}`);
 	process.exit(2);
 }
 
@@ -71,7 +65,7 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
 	if (!loader) {
 		console.error(
 			[
-				`blocks-generate-client: cannot load TypeScript entry "${foundationPath}" — \`tsx\` is not installed.`,
+				`generate-client: cannot load TypeScript entry "${foundationPath}" — \`tsx\` is not installed.`,
 				`Install it as a devDependency:`,
 				`    npm install -D tsx`,
 			].join('\n'),
@@ -100,7 +94,7 @@ const worker = spawn(process.execPath, [...nodeArgs, workerPath, foundationPath,
 	env: workerEnv(),
 });
 
-// A signal sent to this process alone (`kill <pid>`, a supervisor, the `cdk-blocks` CLI
+// A signal sent to this process alone (`kill <pid>`, a supervisor, the package task runner
 // forwarding one) goes on to the worker, and this process ends after it, so the
 // worker never outlives it and writes the client after a reported failure.
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
@@ -108,7 +102,7 @@ const forward = (signal: NodeJS.Signals) => worker.kill(signal);
 for (const signal of SIGNALS) process.on(signal, forward);
 
 worker.on('error', (error) => {
-	console.error(`blocks-generate-client: cannot start the client generator: ${error.message}`);
+	console.error(`generate-client: cannot start the client generator: ${error.message}`);
 	process.exit(1);
 });
 
@@ -117,5 +111,5 @@ worker.on('exit', (code, signal) => {
 	// End as the worker did: by its signal, so the caller sees the interruption, or with its exit code.
 	if (signal) process.kill(process.pid, signal);
 	else if (code !== 0) process.exit(code ?? 1);
-	else console.log(`blocks-generate-client: wrote ${outputPath}`);
+	else console.log(`generate-client: wrote ${outputPath}`);
 });

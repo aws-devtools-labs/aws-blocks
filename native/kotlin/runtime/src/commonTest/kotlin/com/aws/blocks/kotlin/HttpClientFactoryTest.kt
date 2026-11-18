@@ -57,6 +57,15 @@ class HttpClientFactoryTest {
     }
 
     @Test
+    fun `a client exposes the cookie jar it was given and none without one`() {
+        val jar = AcceptAllCookiesStorage()
+        val engine = MockEngine { respond("{}") }
+
+        defaultHttpClient(engine, jar).attributes.getOrNull(CookieJarKey) shouldBe jar
+        defaultHttpClient(engine).attributes.getOrNull(CookieJarKey).shouldBeNull()
+    }
+
+    @Test
     fun `a client given no storage keeps no cookies`() = runTest {
         // What the realtime channel and the file handles get. Each authenticates with the
         // credential on its own URL, and the jar belongs to a Blocks instance they cannot reach,

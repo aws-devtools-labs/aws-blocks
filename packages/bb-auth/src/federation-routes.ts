@@ -136,6 +136,10 @@ export interface FederationRoutePaths {
 	session: string;
 	/** `<exchange>/refresh` — the Swift and Dart SDKs' default refresh path. */
 	refreshCompat: string;
+	/** `<base>/signin`: the server-initiated sign-in routes' directory. */
+	signInBase: string;
+	/** `<base>/authorize-params`: the relay sign-in parameters' directory. */
+	authorizeParamsBase: string;
 	signIn(providerId: string): string;
 	authorizeParams(providerId: string): string;
 	/** `redirects.postSignInPath`, normalised by `safeRedirectPath` — the form emitted as `Location`. */
@@ -189,6 +193,8 @@ export function federationRoutePaths(options: ResolvedAuthOptions): FederationRo
 		refresh: `${base}/refresh`,
 		refreshCompat: `${base}/exchange/refresh`,
 		session: `${base}/session`,
+		signInBase: `${base}/signin`,
+		authorizeParamsBase: `${base}/authorize-params`,
 		signIn: (id) => `${base}/signin/${encodeURIComponent(id)}`,
 		authorizeParams: (id) => `${base}/authorize-params/${encodeURIComponent(id)}`,
 		postSignIn,
@@ -674,6 +680,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 					});
 					return;
 				}
+				// `state` is required for wire compatibility but not verified here: PKCE binds the code, and the client checks the CSRF.
 				const iss = str(body, 'iss');
 				const { user, identity } = await host.completeExchange(ctx, providerId, {
 					code,
@@ -813,7 +820,7 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 				const body = await jsonBody(ctx);
 				const refreshToken = body && str(body, 'refreshToken');
 				// `provider` may be omitted when only one provider is configured
-				// (the Swift and Dart SDKs send only the refresh token).
+				// (the Swift and Dart SDKs can send only the refresh token).
 				const providerId =
 					(body && str(body, 'provider')) ??
 					(host.providers.length === 1 ? host.providers[0].provider.id : undefined);

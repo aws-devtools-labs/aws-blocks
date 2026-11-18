@@ -50,8 +50,8 @@ export function getStackId(projectRoot?: string): string {
  *
  * Get-or-create (lazy init): returns the existing id, or generates and persists
  * one on first call. The file is the shared sync point — once written, every
- * later caller and every process reads the same id, so the secret writer
- * (`ensureSecrets`) and synth derive identical names.
+ * later caller and every process reads the same id, so the scripts and synth
+ * derive identical names.
  */
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
@@ -79,8 +79,7 @@ export function getSandboxId(projectRoot?: string): string {
  * — D-012) and resolves the sandbox id via {@link getSandboxId} (get-or-create):
  * the first caller materializes `.blocks-sandbox/sandbox-id.txt`, every later
  * caller reads the same value. Because that file persists and is shared across
- * processes, the secret writer (`ensureSecrets`) and synth resolve identical
- * names. Production does not use the sandbox id.
+ * processes, the scripts and synth resolve identical names. Production does not use the sandbox id.
  */
 export function getStackName(opts: { sandbox: boolean; projectRoot?: string }): string {
   const base = getStackId(opts.projectRoot);
