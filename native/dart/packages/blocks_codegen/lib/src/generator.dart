@@ -123,7 +123,10 @@ class DartCodeGenerator {
 
     for (final MapEntry(key: alias, value: target)
         in model.deprecatedAliases.entries) {
-      buf.writeln("@Deprecated('Use $target')\ntypedef $alias = $target;\n");
+      // A Dart identifier, but it can hold a `$` (`Map$`, `$Action`), which
+      // the message string would read as an interpolation.
+      final escaped = target.replaceAll(r'$', r'\$');
+      buf.writeln("@Deprecated('Use $escaped')\ntypedef $alias = $target;\n");
     }
 
     // Emit namespace API classes with their single-use types grouped nearby

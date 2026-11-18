@@ -487,12 +487,15 @@ class CodegenModelBuilder {
           DiscriminatedUnionRef(:final typeName) => typeName,
           _ => null,
         };
-        final type = _resolveType(
-          p.schema,
-          typeName ?? computed,
-          false,
-          '${method.name}#param:${p.name}',
-        );
+        final path = '${method.name}#param:${p.name}';
+        // Its arms, and the types nested in them, keep the names they had
+        // (`StartInput` for `run(input: Command)`), so naming the union
+        // renames nothing else.
+        final type = switch (p.schema) {
+          final DiscriminatedUnionRef ref when typeName != null =>
+            _resolveDiscriminatedUnion(ref, typeName, path, const {}, computed),
+          _ => _resolveType(p.schema, computed, false, path),
+        };
         if (type is SealedClassType && type.name == typeName) {
           _hintedUnions.putIfAbsent(type, () => computed);
         }
@@ -617,21 +620,44 @@ class CodegenModelBuilder {
 
   /// A spec-named param union whose name another type already has keeps the
   /// name it would have had without one (`<Namespace><Method><Param>`).
+  /// Of distinct unions the spec gives one name, the one with the smallest
+  /// canonical key (its smallest `<method>#param:<name>` origin) keeps it and
+  /// the rest fall back, as in [_resolveNamingCollisions], so spec order
+  /// doesn't matter.
   void _fallBackFromCollidingTypeNames() {
-    for (final MapEntry(key: union, value: old) in _hintedUnions.entries) {
+    final ranks = Map<SealedClassType, String>.identity();
+    for (final o in _origins) {
+      if (o.type case final SealedClassType u
+          when _hintedUnions.containsKey(u)) {
+        final rank = ranks[u];
+        if (rank == null || o.canonicalKey.compareTo(rank) < 0) {
+          ranks[u] = o.canonicalKey;
+        }
+      }
+    }
+    final unions = _hintedUnions.keys.toList()
+      ..sort((a, b) => (ranks[a] ?? a.name).compareTo(ranks[b] ?? b.name));
+    final kept = <String, SealedClassType>{};
+    for (final union in unions) {
+      final old = _hintedUnions[union]!;
       final name = union.name;
       final collides =
+          kept.containsKey(name) ||
           _schemaTypes.containsKey(name) ||
           _origins.any(
             (o) =>
                 !identical(o.type, union) &&
-                (o.name == name ||
+                // A union the spec gives this name too contends by rank.
+                ((o.name == name && !_hintedUnions.containsKey(o.type)) ||
                     (o.type is SealedClassType &&
                         (o.type as SealedClassType).variants.any(
                           (v) => v.className == name,
                         ))),
           );
-      if (!collides) continue;
+      if (!collides) {
+        kept[name] = union;
+        continue;
+      }
       _renameType(union, old);
       if (identical(_types[name], union)) _types.remove(name);
       _types[old] = union;
@@ -639,6 +665,10 @@ class CodegenModelBuilder {
         'Naming conflict: union $name is generated as $old, since another '
         'type is named $name.',
       );
+    }
+    // A later union of the name may have taken the keeper's table entry.
+    for (final MapEntry(key: name, value: union) in kept.entries) {
+      _types[name] = union;
     }
     _hintedUnions.removeWhere((union, old) => union.name == old);
   }
@@ -921,11 +951,14 @@ class CodegenModelBuilder {
     };
   }
 
+  /// [armBase], when set, names the arms in place of [hint]: a union the
+  /// spec names keeps the arm names its old name gave it.
   ResolvedType _resolveDiscriminatedUnion(
     DiscriminatedUnionRef ref,
     String? hint, [
     String? path,
     Set<String> enclosingKeys = const {},
+    String? armBase,
   ]) {
     final name = hint ?? '_Union${_anonCounter++}';
 
@@ -944,7 +977,7 @@ class CodegenModelBuilder {
       // (e.g. `IsUpdatedTrue`/`IsUpdatedFalse`), mirroring the Kotlin output.
       final className = ref.discriminantIsBoolean
           ? '${_capitalize(ref.discriminant)}${_capitalize(discValue)}'
-          : '${_capitalize(discValue)}${_inferSuffix(name)}';
+          : '${_capitalize(discValue)}${_inferSuffix(armBase ?? name)}';
       final variantPath = path == null ? null : '$path>$discValue';
 
       final List<RecordField> fields;

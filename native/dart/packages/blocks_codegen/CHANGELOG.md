@@ -62,7 +62,12 @@
   renamed it. The old name stays as a deprecated typedef of
   `AuthActionInput`, so existing code compiles with a deprecation warning.
   Any parameter union the spec names this way takes the name, unless another
-  generated type already has it.
+  generated type already has it. Its arm classes and the types nested in them
+  keep their names (`SignInInput`, and `StartInput` for a union named
+  `Command`), so only the union's own name changes. When distinct unions are
+  given one name, the one whose `<namespace>.<method>` and parameter sort
+  first takes it and the others keep their old names, whatever their order in
+  the spec.
 
 ## 0.2.0
 

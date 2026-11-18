@@ -52,6 +52,64 @@ CodegenModel _build(String spec) =>
 String _generate(String spec) =>
     const DartCodeGenerator().generate(_build(spec));
 
+/// One `<ns>.run(input)` method per entry of [unions]: the namespace, the
+/// `kind` values of its union's arms, and the name the spec gives the union.
+/// The first arm of each has a `mode` enum field, so it nests a type.
+String _runSpec(
+  List<(String, List<String>, String?)> unions, {
+  Map<String, dynamic> schemas = const {},
+}) => jsonEncode({
+  'openrpc': '1.3.2',
+  'info': {'title': 'test', 'version': '1.0.0'},
+  'methods': [
+    for (final (ns, kinds, typeName) in unions)
+      {
+        'name': '$ns.run',
+        'params': [
+          {
+            'name': 'input',
+            'required': true,
+            'schema': {
+              'oneOf': [
+                for (final (i, kind) in kinds.indexed)
+                  {
+                    'type': 'object',
+                    'properties': {
+                      'kind': {
+                        'type': 'string',
+                        'enum': [kind],
+                      },
+                      if (i == 0)
+                        'mode': {
+                          'type': 'string',
+                          'enum': ['fast', 'slow'],
+                        },
+                    },
+                    'required': ['kind'],
+                  },
+              ],
+              'x-blocks-type-name': ?typeName,
+            },
+          },
+        ],
+        'result': {
+          'name': 'RunResult',
+          'schema': {'type': 'boolean'},
+        },
+      },
+  ],
+  'components': {'schemas': schemas},
+});
+
+/// Every class, enum and typedef name [source] declares.
+Set<String> _declaredNames(String source) => {
+  for (final m in RegExp(
+    r'^(?:sealed |final )?(?:class|enum|typedef) (\S+?)\b',
+    multiLine: true,
+  ).allMatches(source))
+    m.group(1)!,
+};
+
 void main() {
   group('x-blocks-type-name on a param union', () {
     test('names the union, whatever namespace comes first', () {
@@ -142,6 +200,96 @@ void main() {
       final model = _build(jsonEncode(spec));
       expect(model.types['AlphaApiSetStateInput'], isA<SealedClassType>());
       expect(model.deprecatedAliases, isEmpty);
+    });
+
+    test('keeps the arm and nested names when the name does not end in '
+        'Input', () {
+      final unnamed = _generate(
+        _runSpec([
+          ('todoApi', ['start', 'stop'], null),
+        ]),
+      );
+      final named = _generate(
+        _runSpec([
+          ('todoApi', ['start', 'stop'], 'Command'),
+        ]),
+      );
+      expect(named, contains('sealed class Command {'));
+      expect(named, contains('class StartInput extends Command {'));
+      expect(named, contains('class StopInput extends Command {'));
+      expect(named, contains('enum StartInputMode {'));
+      expect(named, isNot(contains('StartCommand')));
+      // Every name generated without the key is still declared.
+      expect(_declaredNames(named), containsAll(_declaredNames(unnamed)));
+    });
+
+    test('a union that falls back keeps its arm names too', () {
+      final source = _generate(
+        _runSpec(
+          [
+            ('todoApi', ['start', 'stop'], 'Command'),
+          ],
+          schemas: {
+            'Command': {
+              'type': 'object',
+              'properties': {
+                'id': {'type': 'string'},
+              },
+              'required': ['id'],
+            },
+          },
+        ),
+      );
+      expect(source, contains('sealed class TodoApiRunInput {'));
+      expect(source, contains('class StartInput extends TodoApiRunInput {'));
+      expect(source, contains('enum StartInputMode {'));
+      expect(source, isNot(contains('StartCommand')));
+    });
+
+    test('of distinct unions given one name, the smallest canonical key keeps '
+        'it, whatever the spec order', () {
+      const alpha = ('alphaApi', ['start', 'stop'], 'Shared');
+      const beta = ('betaApi', ['open', 'close'], 'Shared');
+      for (final unions in [
+        [alpha, beta],
+        [beta, alpha],
+      ]) {
+        final model = _build(_runSpec(unions));
+        final shared = model.types['Shared'];
+        expect(shared, isA<SealedClassType>());
+        expect((shared! as SealedClassType).variants.map((v) => v.className), [
+          'StartInput',
+          'StopInput',
+        ]);
+        expect(model.types['BetaApiRunInput'], isA<SealedClassType>());
+        expect(model.types, isNot(contains('AlphaApiRunInput')));
+        expect(model.deprecatedAliases, {'AlphaApiRunInput': 'Shared'});
+        expect(
+          model.warnings,
+          contains(contains('union Shared is generated as BetaApiRunInput')),
+        );
+      }
+    });
+
+    test(r'escapes a `$` in the deprecated alias message', () {
+      for (final (typeName, target) in [
+        ('Map', r'Map$'),
+        (r'$Action', r'$Action'),
+      ]) {
+        final source = _generate(
+          _runSpec([
+            ('todoApi', ['start', 'stop'], typeName),
+          ]),
+        );
+        final escaped = target.replaceAll(r'$', r'\$');
+        expect(
+          source,
+          contains(
+            "@Deprecated('Use $escaped')\n"
+            'typedef TodoApiRunInput = $target;',
+          ),
+        );
+      }
     });
 
     test('drops a deprecated alias named like an OIDC provider enum', () {
