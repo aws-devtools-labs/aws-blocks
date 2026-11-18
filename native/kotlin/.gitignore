@@ -62,5 +62,5 @@ node_modules/
 
 # Blocks local caches
 **/.bb-data
-**/.blocks-sandbox
+**/.cdk-blocks-sandbox
 **/aws-blocks/client.js

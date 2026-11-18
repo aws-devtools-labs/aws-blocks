@@ -51,8 +51,8 @@ export type DeployStage = 'sandbox' | 'production';
  * production's values for the sandbox.
  */
 export const OUTPUTS_FILE: Readonly<Record<DeployStage, string>> = Object.freeze({
-	sandbox: '.blocks-sandbox/outputs.json',
-	production: '.blocks-sandbox/outputs.production.json',
+	sandbox: '.cdk-blocks-sandbox/outputs.json',
+	production: '.cdk-blocks-sandbox/outputs.production.json',
 });
 
 /** The command that writes a given stage's outputs file, named in every reason string. */

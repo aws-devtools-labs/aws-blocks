@@ -13,7 +13,7 @@
  *   later deploy of the same stage replaces it and a failed one can blank it.
  *
  * After a successful deploy the runner writes its stage's entry to
- * `.blocks-sandbox/last-deploy.json`; the CLI reads that entry for the
+ * `.cdk-blocks-sandbox/last-deploy.json`; the CLI reads that entry for the
  * `--output json` result, instead of asking AWS with its own, possibly
  * different, environment, or reading that stage's outputs document again.
  */
@@ -22,7 +22,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
 
-export const LAST_DEPLOY_FILE = join('.blocks-sandbox', 'last-deploy.json');
+export const LAST_DEPLOY_FILE = join('.cdk-blocks-sandbox', 'last-deploy.json');
 
 export type DeployStage = 'production' | 'sandbox';
 

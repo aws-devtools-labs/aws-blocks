@@ -566,7 +566,7 @@ export interface SandboxSession {
  * The `npm run sandbox` session running in the app at `root`, if any: a live
  * dev-server record (see {@link recordLiveness}) whose `sandbox` process is
  * alive too. Its `cdk watch` deploys every change and writes the app's
- * `.blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
+ * `.cdk-blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
  * must not run beside it.
  */
 export function liveSandboxSession(root: string, deps: Partial<ClaimPidfileDeps> = {}): SandboxSession | null {

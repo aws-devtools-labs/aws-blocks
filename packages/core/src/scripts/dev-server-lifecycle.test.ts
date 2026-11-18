@@ -213,7 +213,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
   });
 
   it("gives its frontend BLOCKS_API_URL = its own front door, whatever a deploy recorded", async () => {
-    // A Next.js Server Component resolves the API from BLOCKS_API_URL before .blocks-sandbox/config.json,
+    // A Next.js Server Component resolves the API from BLOCKS_API_URL before .cdk-blocks-sandbox/config.json,
     // which a deploy used to point at AWS while `npm run dev` ran.
     const dir = makeApp();
     const [port, frontendPort] = [await freePort(), await freePort()];
@@ -223,14 +223,14 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
       "import { createServer } from 'node:http';\n" +
         "createServer((_q, r) => r.end(String(process.env.BLOCKS_API_URL))).listen(Number(process.argv[2]), '127.0.0.1');\n",
     );
-    mkdirSync(join(dir, '.blocks-sandbox'));
+    mkdirSync(join(dir, '.cdk-blocks-sandbox'));
     writeFileSync(
-      join(dir, '.blocks-sandbox', 'config.production.json'),
+      join(dir, '.cdk-blocks-sandbox', 'config.production.json'),
       JSON.stringify({ apiUrl: 'https://prod.example/aws-blocks/api', environment: 'production' }),
     );
     // And the config.json a deploy from core 0.8.0 or earlier wrote: the dev server replaces it with its own.
     writeFileSync(
-      join(dir, '.blocks-sandbox', 'config.json'),
+      join(dir, '.cdk-blocks-sandbox', 'config.json'),
       JSON.stringify({ apiUrl: 'https://stub.example/aws-blocks/api', environment: 'production' }),
     );
     const frontend = `${quote(process.execPath)} ${quote(script)} ${frontendPort}`;
@@ -238,7 +238,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const dev = startDev(dir, { port, frontendPort, frontendCommand: frontend }, { env: { BLOCKS_API_URL: '' } });
     const seen = await waitFor('the frontend', () => fetchText(port).then((t) => t?.startsWith('http') && t), [dev]);
     assert.strictEqual(seen, `http://localhost:${port}/aws-blocks/api`);
-    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.blocks-sandbox', 'config.json'), 'utf-8')), {
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.cdk-blocks-sandbox', 'config.json'), 'utf-8')), {
       apiUrl: `http://localhost:${port}/aws-blocks/api`,
       environment: 'local',
     });
@@ -264,7 +264,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     await waitFor('npm run dev to exit', () => run.child.exitCode !== null || run.child.signalCode !== null, [run]);
     assert.match(run.out.stderr, /could not listen on 127\.0\.0\.1:1: .*EACCES/);
     assert.match(readFileSync(failureFile, 'utf-8'), /EACCES/);
-    assert.ok(!existsSync(join(dir, '.blocks-sandbox', 'dev-server.1.pid')), 'the failed start leaves no pidfile');
+    assert.ok(!existsSync(join(dir, '.cdk-blocks-sandbox', 'dev-server.1.pid')), 'the failed start leaves no pidfile');
   });
 
   it('keeps its pidfile through a reload, so a dev stop right after an edit stops it', async () => {
@@ -513,7 +513,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const dev = startDev(makeApp(), { port, host });
     await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
     assert.ok(dev.out.stdout.includes(`running on http://${host}:${port}`), dev.out.stdout);
-    const config = await fetch(`http://${host}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
+    const config = await fetch(`http://${host}:${port}/.cdk-blocks-sandbox/config.json`).then((r) => r.json());
     assert.deepStrictEqual(config, { apiUrl: `http://${host}:${port}/aws-blocks/api`, environment: 'local' });
     const page = `http://${host}:5173`;
     const response = await fetch(`http://${host}:${port}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: page } });
@@ -529,10 +529,10 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const dev = startDev(dir, { port, host: '0.0.0.0' });
     await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
     // A page opened at the machine address calls the API at that address, not at localhost.
-    const config = await fetch(`http://${lan}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
+    const config = await fetch(`http://${lan}:${port}/.cdk-blocks-sandbox/config.json`).then((r) => r.json());
     assert.deepStrictEqual(config, { apiUrl: '/aws-blocks/api', environment: 'local' });
     // Node.js readers of the file need an origin, so the file keeps the absolute URL.
-    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.blocks-sandbox', 'config.json'), 'utf-8')), {
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.cdk-blocks-sandbox', 'config.json'), 'utf-8')), {
       apiUrl: `http://localhost:${port}/aws-blocks/api`,
       environment: 'local',
     });

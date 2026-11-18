@@ -26,9 +26,9 @@ let authApi: typeof AuthApiType;
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
 // API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
-// a deploy, which records its URL in .blocks-sandbox/config.<stage>.json, never redirects these tests.
+// a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
 
 // The canned-provider assertions below only hold in the local mock runtime; a
 // deployed sandbox runs a real Bedrock model whose text is non-deterministic.

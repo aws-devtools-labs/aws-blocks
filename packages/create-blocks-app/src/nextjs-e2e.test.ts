@@ -187,7 +187,7 @@ describe('Next.js template E2E assertions', () => {
       let configRequests = 0;
       const apiRequests: unknown[] = [];
       const server = createServer(async (req, res) => {
-        if (req.url === '/.blocks-sandbox/config.json') {
+        if (req.url === '/.cdk-blocks-sandbox/config.json') {
           configRequests++;
           res.writeHead(scenario.configStatus, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/aws-blocks/api' : `http://${req.headers.host}/aws-blocks/api` }));
