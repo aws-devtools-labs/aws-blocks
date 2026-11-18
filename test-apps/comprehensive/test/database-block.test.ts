@@ -5,9 +5,8 @@ import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
 import type { api as apiType } from 'aws-blocks';
@@ -40,13 +39,9 @@ type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 type DbxKyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
 type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; value: number }>>;
 
-// The `cdk-blocks` entry of @aws-blocks/blocks, by path: npm links a bin only when its file exists at install
-// time, and this repository builds after it installs.
-const CDK_BLOCKS = join(dirname(fileURLToPath(import.meta.resolve('@aws-blocks/blocks'))), 'cli', 'bin.js');
-
-/** One `cdk-blocks db` run in the app directory; returns the JSON object the tool prints. */
+/** Run the installed database task from the app directory and parse its structured result. */
 function cdkBlocksDb(...args: string[]): unknown {
-  const stdout = execFileSync(process.execPath, [CDK_BLOCKS, 'db', ...args, '--', '--output', 'json'], {
+  const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--', 'db', ...args, '--', '--output', 'json'], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -57,7 +52,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
     // The Kysely table types the backend imports are generated from the migration files. Generating them
     // again must give the committed files, while the dev server holds the local databases.
-    test('cdk-blocks db types --block writes the Tables files the backend imports', () => {
+    test('npm run db -- types --block writes the Tables files the backend imports', () => {
       const dir = mkdtempSync(join(tmpdir(), 'bb-comprehensive-types-'));
       try {
         for (const [block, ...options] of [['dbx'], ['dbxc', '--type', 'aurora']]) {
@@ -66,7 +61,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
           assert.strictEqual(
             readFileSync(out, 'utf-8'),
             readFileSync(join('aws-blocks', `${block}.types.ts`), 'utf-8'),
-            `aws-blocks/${block}.types.ts is stale: run cdk-blocks db types --block ${block} ${options.join(' ')}`,
+            `aws-blocks/${block}.types.ts is stale: run npm run db -- types --block ${block} ${options.join(' ')}`,
           );
         }
       } finally {
@@ -74,7 +69,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       }
     });
 
-    test('cdk-blocks db status --block lists the files of a block in its local database', { skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local' }, async () => {
+    test('npm run db -- status --block lists the files of a block in its local database', { skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local' }, async () => {
       // A statement first, so the block has applied its files.
       await getApi().dbxcCommentCount(0);
       assert.deepStrictEqual(cdkBlocksDb('status', '--block', 'dbxc', '--cluster', 'sharedaurora'), {

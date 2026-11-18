@@ -6,7 +6,7 @@ import { ssmConnectionLabel } from './connection.js';
 
 /**
  * A stored value as the application reads it. `AppSetting.put()` and `Secret.put()` store a value as JSON, so a
- * string is held in quotes; `cdk-blocks db connect --stage` stores the string as it is. Both read the same here.
+ * string is held in quotes; `npm run db -- connect --stage` stores the string as it is. Both read the same here.
  */
 export function decodeStoredValue(raw: string | null | undefined): string | null {
 	if (raw === null || raw === undefined) return null;

@@ -22,9 +22,9 @@ import type { BlockFlags } from './cli/owned.js';
 import { DEFAULT_CONNECTION_NAME, DEFAULT_SCHEMA } from './constants.js';
 import { causeChain } from './errors.js';
 
-// The name in the usage text: `bb-database`, or the command of a wrapper that runs this file (`cdk-blocks db`).
+// The name in the usage text: `bb-database`, or the task that runs this file (`npm run db --`).
 const COMMAND = process.env.BB_DATABASE_COMMAND || 'bb-database';
-// A wrapper runs this file from the project root; a path the user typed is relative to their own directory.
+// A wrapper runs this file from the project root; explicit paths are relative to its starting directory.
 const START_DIR = process.env.BB_DATABASE_START_DIR;
 const fromCaller = (path: string | undefined): string | undefined =>
 	path === undefined || !START_DIR ? path : resolve(START_DIR, path);

@@ -698,11 +698,11 @@ describe('assertAwsCredentials', () => {
 	});
 
 	it('names the command the user ran in every message, when the caller passes it', async () => {
-		const invocation = 'cdk-blocks deploy --profile prod';
+		const invocation = 'npm run deploy -- --profile prod';
 		const warn = mock.method(console, 'warn', () => {});
 		try {
 			await assertAwsCredentials({ command: 'deploy', invocation, env, projectRoot: directory, probe: async () => undefined });
-			for (const error of [namedError('ThrottlingException'), namedError('TimeoutError')]) {
+			for (const error of [namedError('ThrottlingException'), namedError('TimeoutError'), namedError('AccessDenied')]) {
 				await assertAwsCredentials({
 					command: 'deploy',
 					invocation,
@@ -712,9 +712,10 @@ describe('assertAwsCredentials', () => {
 				});
 			}
 			const messages = warn.mock.calls.map((call) => String(call.arguments[0]));
-			assert.match(messages[0], /Skipping the AWS credential pre-check for `cdk-blocks deploy --profile prod`: no Region/);
-			assert.match(messages[1], /Could not verify AWS credentials for `cdk-blocks deploy --profile prod`/);
-			assert.match(messages[2], /Could not reach AWS to verify credentials for `cdk-blocks deploy --profile prod`/);
+			assert.match(messages[0], /Skipping the AWS credential pre-check for `npm run deploy -- --profile prod`: no Region/);
+			assert.match(messages[1], /Could not verify AWS credentials for `npm run deploy -- --profile prod`/);
+			assert.match(messages[2], /Could not reach AWS to verify credentials for `npm run deploy -- --profile prod`/);
+			assert.match(messages[3], /AWS denied access while checking credentials for `npm run deploy -- --profile prod`/);
 		} finally {
 			warn.mock.restore();
 		}
@@ -729,8 +730,8 @@ describe('assertAwsCredentials', () => {
 			() => assert.fail('expected a credential failure'),
 			(error: Error) => error.message,
 		);
-		assert.match(rejected, /^AWS credentials could not be verified for `cdk-blocks deploy --profile prod`/);
-		assert.match(rejected, /Then re-run `cdk-blocks deploy --profile prod`\.$/);
-		assert.doesNotMatch(rejected, /npm run/);
+		assert.match(rejected, /^AWS credentials could not be verified for `npm run deploy -- --profile prod`/);
+		assert.match(rejected, /Then re-run `npm run deploy -- --profile prod`\.$/);
+		assert.doesNotMatch(rejected, /`npm run deploy`/);
 	});
 });

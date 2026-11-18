@@ -7,7 +7,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import {
 	answerDocs,
 	type DocPart,
@@ -409,7 +408,7 @@ before(() => {
 
 after(() => rmSync(root, { recursive: true, force: true }));
 
-describe('cdk-blocks docs <block>', () => {
+describe('npm run docs <block>', () => {
 	it('names a block by class, folder or short name, in any case, and prints its README under a header', () => {
 		const expected = render(['bb-distributed-table']);
 		assert.ok(expected.startsWith('# bb-distributed-table/README.md\n# DistributedTable'));
@@ -447,7 +446,7 @@ describe('cdk-blocks docs <block>', () => {
 		fails(
 			() => render(['DistributedTabel']),
 			ExitCode.Usage,
-			/Did you mean "DistributedTable"\?[\s\S]*--search "DistributedTabel"/,
+			/Did you mean "DistributedTable"\?[\s\S]*docs:search "DistributedTabel"/,
 		);
 	});
 
@@ -476,7 +475,7 @@ describe('cdk-blocks docs <block>', () => {
 	});
 });
 
-describe('cdk-blocks docs <export or option>', () => {
+describe('npm run docs <export or option>', () => {
 	it('prints an export: its import, its declaration without report comments, and the section that documents it', () => {
 		const out = render(['ApiError']);
 		const lines = out.split('\n');
@@ -615,7 +614,7 @@ describe('cdk-blocks docs <export or option>', () => {
 		for (const name of ['ui', '@aws-blocks/blocks/ui']) {
 			assert.strictEqual(
 				render([name]),
-				"@aws-blocks/blocks/ui (3 names): import { <name> } from '@aws-blocks/blocks/ui';\n  Authenticator, AuthStateApi, onAuthChange\nA name's declaration: npx --no -- cdk-blocks docs <name>\n",
+				"@aws-blocks/blocks/ui (3 names): import { <name> } from '@aws-blocks/blocks/ui';\n  Authenticator, AuthStateApi, onAuthChange\nA name's declaration: npm run docs <name>\n",
 			);
 		}
 	});
@@ -736,7 +735,7 @@ describe('cdk-blocks docs <export or option>', () => {
 		fails(
 			() => render(['KVStore.put']),
 			ExitCode.Usage,
-			/^KVStore has no member "put" in its API report\. Did you mean "KVStore\.get"\?\nIts members: get\nnpx --no -- cdk-blocks docs KVStore$/,
+			/^KVStore has no member "put" in its API report\. Did you mean "KVStore\.get"\?\nIts members: get\nnpm run docs KVStore$/,
 		);
 	});
 
@@ -771,7 +770,7 @@ describe('cdk-blocks docs <export or option>', () => {
 		fails(
 			() => render(['Auth.protekt']),
 			ExitCode.Usage,
-			/^Auth has no member "protekt" in its API report\. Did you mean "Auth\.protect"\?\nIts members: from AuthBase: admin, protect; from AuthRoot: userPoolId\nnpx --no -- cdk-blocks docs Auth$/,
+			/^Auth has no member "protekt" in its API report\. Did you mean "Auth\.protect"\?\nIts members: from AuthBase: admin, protect; from AuthRoot: userPoolId\nnpm run docs Auth$/,
 		);
 		// Bases that extend each other end the walk.
 		fails(
@@ -783,23 +782,23 @@ describe('cdk-blocks docs <export or option>', () => {
 
 	it('prints at most three blocks of a member in full and names the others with their lookup', () => {
 		const out = render(['shared']);
-		assert.match(out, /^Also in bb-w4: npx --no -- cdk-blocks docs W4Options\.shared$/m);
+		assert.match(out, /^Also in bb-w4: npm run docs W4Options\.shared$/m);
 		assert.deepStrictEqual(out.match(/^# \S+\/API\.md/gm), ['# bb-w1/API.md', '# bb-w2/API.md', '# bb-w3/API.md']);
 	});
 });
 
-describe('cdk-blocks docs --section, bare and with a topic', () => {
+describe('npm run docs --section, bare and with a topic', () => {
 	it('lists the headings with slugs and line ranges, skipping # lines in code', () => {
 		const out = render(['core'], { toc: true });
-		assert.match(out, /^core\/README\.md: 16 lines; npx --no -- cdk-blocks docs core --section <topic>$/m);
+		assert.match(out, /^core\/README\.md: 16 lines; npm run docs core -- --section <topic>$/m);
 		// A doc path's headings name the doc path, the way to print that file again.
 		assert.strictEqual(
 			render(['bb-distributed-table/DESIGN.md'], { toc: true }).split('\n')[0],
-			'bb-distributed-table/DESIGN.md: 4 lines; npx --no -- cdk-blocks docs bb-distributed-table/DESIGN.md --section <topic>',
+			'bb-distributed-table/DESIGN.md: 4 lines; npm run docs bb-distributed-table/DESIGN.md -- --section <topic>',
 		);
 		assert.match(
 			render(['core'], { toc: true, api: true }),
-			/^core\/API\.md: \d+ lines; npx --no -- cdk-blocks docs core --api --section <topic>$/m,
+			/^core\/API\.md: \d+ lines; npm run docs:api core -- --section <topic>$/m,
 		);
 		assert.match(out, /^ {2}Errors {2}\[errors\] {2}lines 10-14$/m);
 		assert.match(out, /^ {4}Throwing {2}\[throwing\] {2}lines 12-14$/m);
@@ -924,7 +923,7 @@ describe('cdk-blocks docs --section, bare and with a topic', () => {
 		fails(
 			() => render(['KVStore'], { sections: ['Conditional Operations'] }),
 			ExitCode.Usage,
-			/^Other blocks have it: npx --no -- cdk-blocks docs bb-distributed-table --section conditional-operations$/m,
+			/^Other blocks have it: npm run docs bb-distributed-table -- --section conditional-operations$/m,
 		);
 		assert.match(
 			render(['DistributedTable'], { sections: ['Quick'] }),
@@ -967,7 +966,7 @@ describe('cdk-blocks docs --section, bare and with a topic', () => {
 		fails(
 			() => render(['core'], { sections: ['erors'] }),
 			ExitCode.Usage,
-			/no section "erors"\. Did you mean "errors"\?\nIts sections: namespaces, errors, throwing, testing\n[\s\S]*, or npx --no -- cdk-blocks docs core --section$/,
+			/no section "erors"\. Did you mean "errors"\?\nIts sections: namespaces, errors, throwing, testing\n[\s\S]*, or npm run docs core -- --section$/,
 		);
 		const both = render(['core', 'DistributedTable'], { sections: ['errors|queries'] });
 		assert.match(both, /^# core\/README\.md\n\(lines 10-\d+\)\n## Errors$/m);
@@ -975,7 +974,7 @@ describe('cdk-blocks docs --section, bare and with a topic', () => {
 	});
 });
 
-describe('cdk-blocks docs --exports', () => {
+describe('npm run docs --exports', () => {
 	it("lists by package every name @aws-blocks/blocks exports, its own declarations over a wildcard's, then each entry's", () => {
 		const out = render([], { exports: true });
 		assert.match(
@@ -995,7 +994,7 @@ describe('cdk-blocks docs --exports', () => {
 					"The other entries' names: import { <name> } from '<entry>';",
 					'  @aws-blocks/blocks/client (7): ApiError, ApiNamespaceClient, BlocksContext, BlocksRequest, isBlocksError, Scope, ScopeOptions',
 					'  @aws-blocks/blocks/ui (3): Authenticator, AuthStateApi, onAuthChange',
-					'Its declaration and docs: npx --no -- cdk-blocks docs <name>',
+					'Its declaration and docs: npm run docs <name>',
 					'',
 				].join('\n'),
 			),
@@ -1027,7 +1026,7 @@ describe('cdk-blocks docs --exports', () => {
 		const ui = [
 			"@aws-blocks/blocks/ui (3 names): import { <name> } from '@aws-blocks/blocks/ui';",
 			'  Authenticator, AuthStateApi, onAuthChange',
-			"A name's declaration: npx --no -- cdk-blocks docs <name>",
+			"A name's declaration: npm run docs <name>",
 			'',
 		].join('\n');
 		assert.strictEqual(render(['ui'], { exports: true }), ui);
@@ -1041,7 +1040,7 @@ describe('cdk-blocks docs --exports', () => {
 	});
 });
 
-describe('cdk-blocks docs --exports, when no export has the filter', () => {
+describe('npm run docs --exports, when no export has the filter', () => {
 	it('names the declarations it does not re-export, the members and the names from other packages that have it', () => {
 		assert.match(
 			render(['kvkey'], { exports: true }),
@@ -1053,14 +1052,14 @@ describe('cdk-blocks docs --exports, when no export has the filter', () => {
 				'@aws-blocks/blocks exports no name containing "iffield" or "standard".',
 				'Members that contain it: ifFieldEquals (of PutOptions)',
 				'Names from other packages: StandardSchemaV1 (from @standard-schema/spec)',
-				"A name's declaration and docs: npx --no -- cdk-blocks docs <name>",
+				"A name's declaration and docs: npm run docs <name>",
 				'',
 			].join('\n'),
 		);
 	});
 });
 
-describe('cdk-blocks docs --search', () => {
+describe('npm run docs --search', () => {
 	it('prints each matching line with its file, line and section, in every doc or only the named blocks', () => {
 		const all = render([], { search: 'limit' });
 		assert.match(
@@ -1122,7 +1121,7 @@ describe('cdk-blocks docs --search', () => {
 	});
 });
 
-describe('cdk-blocks docs (no name)', () => {
+describe('npm run docs (no name)', () => {
 	it('lists every block with its classes, purpose and other files, then the framework docs as files', () => {
 		const out = render([]);
 		assert.match(out, /^AWS Blocks docs for @aws-blocks\/blocks 1\.2\.3\n/);
@@ -1142,8 +1141,8 @@ describe('cdk-blocks docs (no name)', () => {
 	it('names the forms and options of --help in its usage block, and no removed option', () => {
 		const out = render([]);
 		const usage = out.slice(out.indexOf('Usage:'), out.indexOf('\nBlocks ('));
-		assert.ok(usage.startsWith('Usage: npx --no -- cdk-blocks docs [name...] [options]\n'), usage);
-		for (const form of ['npx --no -- cdk-blocks docs <block>...', 'npx --no -- cdk-blocks docs <name>...']) {
+		assert.ok(usage.startsWith('Usage: npm run docs [name...] [-- options]\n'), usage);
+		for (const form of ['npm run docs <block>...', 'npm run docs <name>...']) {
 			assert.ok(usage.includes(`\n  ${form} `), form);
 		}
 		for (const option of [
@@ -1151,15 +1150,18 @@ describe('cdk-blocks docs (no name)', () => {
 			'--section <topic>',
 			'--exports [filter...]',
 			'--search <term>',
-			'--output json',
+			'--output text|json',
 		]) {
 			assert.match(usage, new RegExp(`^ {2}${option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} +\\S`, 'm'), option);
 		}
 		assert.doesNotMatch(out, /--(?:source|toc|design)\b/);
+		for (const example of ['npm run docs:api KVStore', 'npm run docs:search withAuth', 'npm run -s docs KVStore |']) {
+			assert.ok(usage.includes(example), example);
+		}
 	});
 });
 
-describe('cdk-blocks docs output names no path on disk', () => {
+describe('npm run docs output names no path on disk', () => {
 	// The package as an app installs it: inside node_modules, with its blocks' type files in a nested node_modules.
 	let installed: DocsIndex;
 	let app: string;
@@ -1255,7 +1257,7 @@ describe('cdk-blocks docs output names no path on disk', () => {
 	});
 });
 
-describe('cdk-blocks docs --output json', () => {
+describe('npm run docs --output json', () => {
 	const answer = (names: string[], options: Partial<DocsRequest> = {}) =>
 		answerDocs(index, { names, api: false, toc: false, sections: [], ...options }, '1.2.3');
 	const json = (names: string[], options: Partial<DocsRequest> = {}) => answer(names, options).json;
@@ -1402,15 +1404,15 @@ describe('cdk-blocks docs --output json', () => {
 	});
 });
 
-describe('cdk-blocks docs through the CLI', () => {
-	it('prints the shipped docs from any directory as Markdown, also when stdout is not a terminal', async () => {
-		const run = await runCli(['docs', 'KVStore', '--api'], { cwd: tmpdir() });
+describe('npm run docs through the CLI', () => {
+	it('prints the shipped docs from any directory as Markdown, when text is requested on a pipe', async () => {
+		const run = await runCli(['docs', '--output', 'text', 'KVStore', '--api'], { cwd: tmpdir() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.match(run.stdout, /^# bb-kv-store\/API\.md\n/);
 	});
 
-	it('prints the answer as one JSON document with --output json, and a field of it with --query', async () => {
-		const run = await runCli(['docs', 'core', '--output', 'json'], { cwd: tmpdir() });
+	it('prints the answer as one JSON document by default on a pipe, and a field of it with --query', async () => {
+		const run = await runCli(['docs', 'core'], { cwd: tmpdir(), stdoutIsTTY: false });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [readme] = JSON.parse(run.stdout).docs as DocPart[];
 		assert.strictEqual(readme.doc, 'core/README.md');
@@ -1432,22 +1434,22 @@ describe('cdk-blocks docs through the CLI', () => {
 	});
 
 	it('reads a bare --section at the end of the line as the headings', async () => {
-		const run = await runCli(['docs', 'KVStore', '--section'], { cwd: tmpdir() });
+		const run = await runCli(['docs', '--output', 'text', 'KVStore', '--section'], { cwd: tmpdir() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.match(
 			run.stdout,
-			/^bb-kv-store\/README\.md: \d+ lines; npx --no -- cdk-blocks docs bb-kv-store --section <topic>\n/,
+			/^bb-kv-store\/README\.md: \d+ lines; npm run docs bb-kv-store -- --section <topic>\n/,
 		);
 	});
 
 	it('reads a bare --section before another option as the headings, and still parses that option', async () => {
-		const api = await runCli(['docs', 'KVStore', '--section', '--api'], { cwd: tmpdir() });
+		const api = await runCli(['docs', '--output', 'text', 'KVStore', '--section', '--api'], { cwd: tmpdir() });
 		assert.strictEqual(api.code, 0, api.stderr);
 		assert.match(
 			api.stdout,
-			/^bb-kv-store\/API\.md: \d+ lines; npx --no -- cdk-blocks docs bb-kv-store --api --section <topic>\n/,
+			/^bb-kv-store\/API\.md: \d+ lines; npm run docs:api bb-kv-store -- --section <topic>\n/,
 		);
-		const search = await runCli(['docs', 'core', '--section', '--search', 'withAuth'], { cwd: tmpdir() });
+		const search = await runCli(['docs', '--output', 'text', 'core', '--section', '--search', 'withAuth'], { cwd: tmpdir() });
 		assert.strictEqual(search.code, 0, search.stderr);
 		assert.match(search.stdout, /^search "withAuth" in /);
 		assert.match(search.stdout, /^core\/README\.md:\d+ \[withauth/m);
@@ -1455,7 +1457,7 @@ describe('cdk-blocks docs through the CLI', () => {
 
 	it("finds bb-auth's Auth.protect and Auth.admin on AuthBase, which Auth extends", async () => {
 		for (const member of ['protect', 'admin']) {
-			const run = await runCli(['docs', `Auth.${member}`], { cwd: tmpdir() });
+			const run = await runCli(['docs', '--output', 'text', `Auth.${member}`], { cwd: tmpdir() });
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.match(
 				run.stdout,
@@ -1474,7 +1476,7 @@ describe('cdk-blocks docs through the CLI', () => {
 			assert.match(
 				run.stderr,
 				new RegExp(
-					`^Error: unknown option "${flag}" for "cdk-blocks docs"\\.(?: Did you mean "--[a-z]+"\\?)?\\nTry: npx --no -- cdk-blocks docs --help\\n$`,
+					`^Error: unknown option "${flag}" for "npm run docs"\\.(?: Did you mean "--[a-z]+"\\?)?\\nTry: npm run docs -- --help\\n$`,
 				),
 				flag,
 			);
@@ -1486,7 +1488,7 @@ describe('cdk-blocks docs through the CLI', () => {
 		for (const conditions of [[], ['--conditions=cdk'], ['--conditions=browser']]) {
 			const run = spawnSync(
 				process.execPath,
-				[...conditions, fileURLToPath(new URL('./bin.js', import.meta.url)), 'docs', 'Secret.get'],
+				[...conditions, '--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--', 'docs', 'Secret.get', '--output', 'text'],
 				{ cwd: tmpdir(), encoding: 'utf8' },
 			);
 			assert.strictEqual(run.status, 0, `${conditions.join(' ')}: ${run.stderr}`);
@@ -1500,7 +1502,7 @@ describe('cdk-blocks docs through the CLI', () => {
 			['docs', '--search', '-in', 'consistentRead', 'KVStore'],
 			['docs', 'KVStore', '--search', '--', 'consistentRead'],
 		]) {
-			const run = await runCli(argv, { cwd: tmpdir() });
+			const run = await runCli(['--output', 'text', ...argv], { cwd: tmpdir() });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
 			assert.match(run.stdout, /^search "consistentRead" in /, argv.join(' '));
 			assert.match(run.stdout, /^bb-kv-store\/README\.md:\d+ /m, argv.join(' '));
@@ -1513,7 +1515,7 @@ describe('cdk-blocks docs through the CLI', () => {
 	});
 
 	it('reads arguments after -- as names, as POSIX does', async () => {
-		const run = await runCli(['docs', '--exports', '--', 'Error'], { cwd: tmpdir() });
+		const run = await runCli(['docs', '--output', 'text', '--exports', '--', 'Error'], { cwd: tmpdir() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.match(
 			run.stdout,

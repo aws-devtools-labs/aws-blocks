@@ -82,7 +82,7 @@ function writeCaModule(name: string, pem: string): string {
 	mkdirSync(dirname(module), { recursive: true });
 	writeFileSync(
 		module,
-		'// Written by `cdk-blocks db connect --ca`. The certificate authority that signed the database server\n' +
+		'// Written by `npm run db -- connect --ca`. The certificate authority that signed the database server\n' +
 			'// certificate: a public certificate, safe to commit. Pass it as `ca` to DatabaseCluster.fromExisting().\n' +
 			`export const DATABASE_CA = ${JSON.stringify(pem)};\n`,
 	);

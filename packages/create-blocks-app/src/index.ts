@@ -394,7 +394,7 @@ function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'u
  * - Adding "aws-blocks" to workspaces (array or Yarn Classic object format)
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
- * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
+ * - Adding CDK Blocks task settings (`package.json#blocks`) when the project has none
  * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES},
  *   and `node_modules` when no existing line ignores or un-ignores it (these steps add dependencies)
  * - Monorepo detection and file: path rewriting
@@ -407,13 +407,13 @@ async function addBlocksWorkspace(targetDir: string, options: {
   devDeps: Record<string, string>;
   deps: Record<string, string>;
   scripts: Record<string, string>;
-  /** `package.json#blocks`, read by the `cdk-blocks` CLI (for example `{ dev: { port: 3001 } }`). */
+  /** `package.json#blocks`, read by CDK Blocks tasks (for example `{ dev: { port: 3001 } }`). */
   blocksConfig?: Record<string, unknown>;
   gitignoreEntries: string[];
   skipInstall?: boolean;
   /** The npm workspace root the project is a workspace of, from {@link enclosingWorkspaceRoot}; it installs there. */
   workspaceRoot?: string;
-}): Promise<void> {
+}): Promise<Record<string, string>> {
   const { scripts, blocksConfig, gitignoreEntries, skipInstall, workspaceRoot } = options;
   const deps = { ...options.deps };
   const devDeps = { ...options.devDeps };
@@ -465,13 +465,23 @@ async function addBlocksWorkspace(targetDir: string, options: {
     }
   }
 
-  // Add scripts
-  if (!pkg.scripts) pkg.scripts = {};
+  const installedScripts: Record<string, string> = {};
+  const hostScripts = pkg.scripts ??= {};
   for (const [name, cmd] of Object.entries(scripts)) {
-    if (!pkg.scripts[name]) pkg.scripts[name] = cmd;
+    const fallback = name.startsWith('blocks:') ? name : `blocks:${name}`;
+    let actual = name;
+    // Preserve host scripts and avoid triggering unrelated npm lifecycle hooks.
+    for (let suffix = actual === fallback ? 2 : 1;
+      (Object.hasOwn(hostScripts, actual) && hostScripts[actual] !== cmd) ||
+      Object.hasOwn(hostScripts, `pre${actual}`) || Object.hasOwn(hostScripts, `post${actual}`);
+      suffix++) {
+      actual = suffix === 1 ? fallback : `${fallback}:${suffix}`;
+    }
+    hostScripts[actual] = cmd;
+    installedScripts[name] = actual;
   }
 
-  // Add the `cdk-blocks` CLI settings, without overriding any the project already has
+  // Add CDK Blocks task settings without overriding any the project already has.
   if (blocksConfig) {
     if (!pkg.blocks || typeof pkg.blocks !== 'object') pkg.blocks = {};
     for (const [key, value] of Object.entries(blocksConfig)) {
@@ -531,6 +541,33 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
   // Install dependencies
   if (!skipInstall) installDependencies(targetDir, workspaceRoot);
+  return installedScripts;
+}
+
+/** Reuse the selected template's CDK Blocks tasks, not its frontend or lifecycle scripts. */
+function templateTasks(scripts: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(scripts).filter(([name, command]) =>
+    name !== 'prebuild' && command.startsWith(`node --input-type=module -e "import '@aws-blocks/blocks/run'" -- `),
+  ));
+}
+
+function printTaskNames(scripts: Record<string, string>): void {
+  const renamed = Object.entries(scripts).filter(([name, actual]) => name !== actual);
+  if (renamed.length === 0) return;
+  console.log('\nCDK Blocks tasks renamed to preserve your existing scripts:');
+  for (const [name, actual] of renamed) console.log(`  ${name} → ${actual}`);
+}
+
+/** These files are newly copied template sources, never host-authored files. */
+async function tailorTaskExamples(dir: string, scripts: Record<string, string>, files: string[]): Promise<void> {
+  if (!Object.entries(scripts).some(([name, actual]) => name !== actual)) return;
+  for (const file of files) {
+    const path = join(dir, file);
+    const original = await readFile(path, 'utf-8');
+    const updated = original.replace(/(npm run (?:-s )?)([\w:-]+)/g, (match, prefix, name) =>
+      Object.hasOwn(scripts, name) ? `${prefix}${scripts[name]}` : match);
+    if (updated !== original) await writeFile(path, updated);
+  }
 }
 
 // ─── Template discovery ─────────────────────────────────────────────────────
@@ -751,7 +788,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   if (!skipInstall) installDependencies(targetDir, workspaceRoot);
   
-  // The local server port the template's `cdk-blocks dev` listens on: 3001 for the backend-only templates.
+  // The template's local dev port: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
@@ -765,7 +802,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   } else {
     console.log(`\nThen open http://localhost:${devPort}`);
   }
-  console.log(`\nEvery npm script calls the cdk-blocks CLI; run \`npx --no -- cdk-blocks --help\` to see all commands.`);
+  console.log('\nRun `npm run help` to see available CDK Blocks tasks.');
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 
@@ -885,7 +922,9 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   }
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
-  await addBlocksWorkspace(targetDir, {
+  const standalone = JSON.parse(await readFile(join(__dirname, '../templates/default/package.json'), 'utf-8'));
+  const clientScript = 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts';
+  const scripts = await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     deps: { '@aws-blocks/blocks': '*' },
     devDeps: {
@@ -897,14 +936,16 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     scripts: {
       'sandbox': 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox',
       'sandbox:delete': 'cross-env NODE_OPTIONS="--conditions=cdk" npx ampx sandbox delete --yes',
-      'blocks:dev': 'cdk-blocks dev',
-      'blocks:stop': 'cdk-blocks dev stop',
-      // The CLI's `cdk-blocks generate client` has no Amplify preamble (auth middleware and
-      // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
-      'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
+      'blocks:dev': standalone.scripts.dev,
+      'blocks:stop': standalone.scripts['dev:stop'],
+      // Keep Cognito middleware and the API URL from amplify_outputs.json.
+      'blocks:generate-client': clientScript,
+      'generate-client': clientScript,
+      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'telemetry', 'help', 'db', 'migrate']
+        .map(name => [name, standalone.scripts[name]])),
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
-    // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
+    // so `"frontend": false` stops the dev task from detecting the app's vite or next.
     // `"generateClient": false` keeps the overlay's own aws-blocks/client.js (the Cognito token
     // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
     blocksConfig: { dev: { port: 3001, frontend: false, generateClient: false } },
@@ -912,21 +953,25 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     skipInstall,
     workspaceRoot,
   });
+  await tailorTaskExamples(awsBlocksDest, scripts, ['scripts/generate-client.ts']);
 
   // 5. Handle amplify.yml
   await handleAmplifyYml(targetDir);
 
   console.log('\n✓ Blocks integrated with your Amplify Gen 2 app!\n');
   console.log('Next steps:');
-  console.log('  npm run sandbox               # Deploy Amplify + Blocks to sandbox');
-  console.log('  npm run blocks:dev            # Run Blocks local dev server\n');
+  console.log(`  npm run ${scripts.sandbox}  # Deploy Amplify + Blocks to sandbox`);
+  console.log(`  npm run ${scripts['blocks:dev']}  # Run Blocks local dev server`);
+  console.log(`  npm run ${scripts['generate-client']}  # Regenerate the Amplify-aware client`);
+  console.log(`  npm run ${scripts.help}  # List CDK Blocks tasks`);
+  printTaskNames(scripts);
   console.log('Your Blocks API is available at the /api endpoint alongside your Amplify backend.');
   console.log('');
   printTypeScriptSteps(amplifyPkg);
-  printMigrationInstructions();
+  printMigrationInstructions(scripts.sandbox, standalone.scripts.sandbox);
 }
 
-function printMigrationInstructions() {
+function printMigrationInstructions(sandboxTask: string, standaloneSandboxScript: string) {
   console.log('─── Migration to Blocks-native (optional) ────────────────────────');
   console.log('');
   console.log('To make your app "Blocks-native with Amplify as a guest":');
@@ -935,8 +980,9 @@ function printMigrationInstructions() {
   console.log('   - Use BlocksStack.create() instead of BlocksBackend.create()');
   console.log('   - Import Amplify resources into the Blocks stack');
   console.log('');
-  console.log('2. Run the sandbox through Blocks: change the `sandbox` script (now `npx ampx sandbox`)');
-  console.log('   to `cdk-blocks sandbox`, then use `npm run sandbox`');
+  console.log(`2. Run the sandbox through Blocks: replace the Amplify command in the \`${sandboxTask}\` script with:`);
+  console.log(`   ${standaloneSandboxScript}`);
+  console.log(`   Then use \`npm run ${sandboxTask}\`.`);
   console.log('   - Blocks sandbox uses CDK directly (no Amplify CLI dependency)');
   console.log('');
   console.log('3. Update amplify.yml to use CDK deploy directly:');
@@ -1009,7 +1055,7 @@ frontend:
  * The template's `blocks` settings that suit any existing project: the dev server
  * `port` and the backend-only `frontend: false`. The template's frontend settings
  * describe the template's own frontend, not the project's, so they are left out and
- * `cdk-blocks dev` detects the project's frontend dev server from its dependencies.
+ * the dev task detects the project's frontend dev server from its dependencies.
  * `undefined` when nothing is left to copy.
  */
 function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined {
@@ -1022,6 +1068,9 @@ function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined 
 }
 
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
+  if (templateName === 'amplify') {
+    throw new Error('The amplify template requires an existing Amplify Gen 2 project (amplify/backend.ts).');
+  }
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
@@ -1045,7 +1094,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const blocksDeps = { '@aws-blocks/blocks': '*' };
   if (!(await isLocalMonorepo())) stampBlocksVersions({ ...blocksDeps }, await loadStampedVersions());
 
-  // 1. Copy aws-blocks/ from the requested template. `cdk-blocks dev` detects the
+  // 1. Copy aws-blocks/ from the requested template. The dev task detects the
   // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
   // so only the template's backend settings are copied below.
   const templateDir = join(__dirname, '../templates', templateName);
@@ -1083,37 +1132,34 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   // Source devDeps versions from the template's package.json — single source of truth.
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
-  await addBlocksWorkspace(targetDir, {
+  const tasks = templateTasks(templatePkg.scripts);
+  const scripts = await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     // The copied aws-blocks/ backend validates its API input with zod, at the template's version.
     deps: { ...blocksDeps, ...(templatePkg.dependencies?.zod && { zod: templatePkg.dependencies.zod }) },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
+      'aws-cdk': tplDevDeps['aws-cdk'] || '^2.1147.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',
       'tsx': tplDevDeps['tsx'] || '^4.7.0',
       'esbuild': tplDevDeps['esbuild'] || '^0.27.1',
       '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
     },
-    scripts: {
-      'sandbox': 'cdk-blocks sandbox',
-      'sandbox:destroy': 'cdk-blocks sandbox destroy',
-      'sandbox:console': 'cdk-blocks sandbox console',
-      'deploy': 'cdk-blocks deploy',
-      'destroy': 'cdk-blocks destroy',
-      'dev:server': 'cdk-blocks dev',
-      'dev:stop': 'cdk-blocks dev stop',
-    },
+    scripts: { ...tasks, 'dev:server': tasks.dev },
     blocksConfig: backendDevConfig(templatePkg.blocks),
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });
+  await tailorTaskExamples(awsBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
 
   console.log('\n✓ AWS Blocks backend added to your project!\n');
   console.log('Next steps:');
-  console.log('  npm run sandbox         # Deploy backend to your AWS sandbox');
-  console.log('  npm run dev:server      # Run local dev server');
-  console.log('  npx --no -- cdk-blocks --help  # Every command of the cdk-blocks CLI (--no: never install from npm)');
+  console.log(`  npm run ${scripts.sandbox}  # Deploy backend to your AWS sandbox`);
+  console.log(`  npm run ${scripts['dev:server']}  # Run local dev server`);
+  console.log(`  npm run ${scripts.help}  # List CDK Blocks tasks`);
+  console.log(`  npm run ${scripts.docs}  # Browse Building Block documentation`);
+  printTaskNames(scripts);
   console.log('');
   console.log('Import your API in frontend code:');
   console.log('  import { api } from \'aws-blocks\'');

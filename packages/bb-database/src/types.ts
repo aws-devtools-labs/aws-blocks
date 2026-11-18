@@ -47,8 +47,8 @@ export interface ExistingClusterOptions {
 	/**
 	 * A short name for the connection string. On AWS the block reads the SSM
 	 * SecureString `/<stackName>-<name>`, so each stage has its own value;
-	 * `cdk-blocks db connect --name <name> --stage <stage>` stores it. In local
-	 * mode the block reads the value that `cdk-blocks db connect --name <name>`
+	 * `npm run db -- connect --name <name> --stage <stage>` stores it. In local
+	 * mode the block reads the value that `npm run db -- connect --name <name>`
 	 * stored under `.bb-data/`.
 	 */
 	name?: string;

@@ -578,7 +578,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests
+      - name: Template E2E and docs task upgrade
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   # Same local template suite as e2e-templates, on Windows — the OS where
@@ -622,7 +622,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests (Windows)
+      - name: Template E2E and docs task upgrade (Windows)
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   e2e-sandbox:

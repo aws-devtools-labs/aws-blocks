@@ -84,7 +84,7 @@ random ID, and asserts it was created correctly.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
-- **Consent CLI**: `blocks-telemetry` --help, --disable, --enable, --status,
+- **Consent CLI**: `telemetry` task: help, disable, enable, status,
   --global variants.
 
 ## Running

@@ -39,7 +39,7 @@ export interface DeployOptions {
    * longer can, since each stage now writes its own document.
    */
   onDeployed?: (deployed: DeployedStack) => void;
-  /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
+  /** How the user runs the deploy, in the guidance. Default: `npm run deploy`. */
   invocation?: string;
 }
 

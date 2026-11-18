@@ -161,7 +161,7 @@ function buildEngine(cluster: ClusterEnv, schemaName: string): DatabaseEngine {
 	});
 }
 
-// The connection string of an existing database, read where `cdk-blocks db connect --stage` (or the app) put it.
+// The connection string of an existing database, read where `npm run db -- connect --stage` (or the app) put it.
 // It is held in memory for this invocation and never logged. The SDK clients are loaded here: a migration
 // function of a cluster the block provisions never reads one.
 async function readConnectionString(props: MigrationProperties): Promise<{ value: string | null; label: string }> {

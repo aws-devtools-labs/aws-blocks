@@ -39,7 +39,7 @@ export interface ValueCliOptions {
 	stage?: string;
 	/** AWS region to write/read in. Defaults to the SDK's resolved region (`AWS_REGION`, profile, …). */
 	region?: string;
-	/** Command label shown in usage text (e.g. `'cdk-blocks secret'`, `'hosting-config'`). */
+	/** Command label shown in usage text (e.g. `'npm run secret --'`, `'hosting-config'`). */
 	label?: string;
 	/**
 	 * Whether the CLI may prompt. `false` (for example `--no-input` or `CI` in the
@@ -54,7 +54,7 @@ export interface ValueCliOptions {
 /**
  * A usage error of the secret/config CLI: a missing argument, an unknown
  * subcommand, a missing flag value, or input or a confirmation the run cannot
- * give. Callers map it to their usage exit code (the `cdk-blocks` CLI exits 2).
+ * give. Callers map it to their usage exit code (the task runner exits 2).
  */
 export class ValueCliUsageError extends Error {
 	constructor(message: string) {
@@ -475,7 +475,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 					? `stage '${effStage}'`
 					: 'the shared namespace (every stage, including production)';
 				throw new ValueCliUsageError(
-					`Refusing to force-delete ${label} '${key}' in ${where} without confirmation: the delete is immediate and cannot be recovered. Re-run with --yes to confirm, or drop --force for a recoverable delete.`,
+					`Refusing to force-delete ${kind} '${key}' in ${where} without confirmation: the delete is immediate and cannot be recovered. Re-run with --yes to confirm, or drop --force for a recoverable delete.`,
 				);
 			}
 			await removeValue(kind, key, { prefix: effPrefix, stage: effStage, region: effRegion, force });
@@ -484,7 +484,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		default:
 			throw new ValueCliUsageError(
 				subcommand === undefined
-					? `${label} needs a subcommand: set, list or remove.`
+					? `Missing subcommand. Use \`${label} <set|list|remove>\`.`
 					: `Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
 			);
 	}
